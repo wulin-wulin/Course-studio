@@ -1,0 +1,84 @@
+{
+  "id": "paged-attention-eff",
+  "title": "PagedAttention",
+  "clusterId": "llm",
+  "shortSummary": "就像操作系统把内存分成页面来管理，PagedAttention把KV缓存也分成小页，需要时再分配，避免浪费，还能让不同对话共享相同的前缀页。",
+  "coreIdea": "PagedAttention的核心思想是将连续的KV缓存逻辑块映射到非连续的物理块（页），从而灵活管理内存。在自回归解码中，每个请求的KV缓存大小随序列长度动态增长，传统方法会预分配最大长度空间导致大量内部碎片。PagedAttention通过分页，使得物理内存仅按需分配，并通过块表（block table）维护逻辑到物理的映射。关键操作：在注意力计算时，先根据逻辑块索引查询块表得到物理块地址，再读取对应的KV向量。这允许不同序列共享相同物理块（如前缀共享），进一步节省内存。例如，在vLLM系统中，一个请求的KV缓存被分割成固定大小的块（如16个token），物理块可以分散在不同位置，解码时按页读取。公式上，注意力计算仍为$softmax(QK^T/\\sqrt{d})V$，但K和V的读取变为分页式。",
+  "principles": [
+    "PagedAttention的核心思想是将连续的KV缓存逻辑块映射到非连续的物理块（页），从而灵活管理内存",
+    "在自回归解码中，每个请求的KV缓存大小随序列长度动态增长，传统方法会预分配最大长度空间导致大量内部碎片",
+    "PagedAttention通过分页，使得物理内存仅按需分配，并通过块表（block table）维护逻辑到物理的映射",
+    "关键操作：在注意力计算时，先根据逻辑块索引查询块表得到物理块地址，再读取对应的KV向量",
+    "讲解 PagedAttention 时，先用一个可手算或可画图的小例子建立直觉，再回到公式、流程或模型结构。"
+  ],
+  "keyTerms": [
+    "PagedAttention",
+    "注意力机制",
+    "query-key-value",
+    "上下文建模",
+    "Transformer",
+    "vLLM",
+    "KV缓存",
+    "推理"
+  ],
+  "applications": [
+    "vLLM推理引擎，显著提升LLM服务吞吐量",
+    "多轮对话场景，复用历史KV缓存减少重复计算",
+    "长文本生成任务，有效管理超长序列的内存占用"
+  ],
+  "difficulty": "中等",
+  "importance": 0.059,
+  "comparisons": [
+    "dim_memory_efficiency: 极高（接近100%，无内部碎片）",
+    "dim_computation_overhead: 低（增加块表查询，但可忽略）",
+    "dim_shared_prefix_support: 原生支持（通过物理块共享）"
+  ],
+  "formula": "无新增公式，沿用标准缩放点积注意力：$\\text{Attention}(Q,K,V)=\\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}}\\right)V$，其中K和V通过分页机制从物理内存中获取。",
+  "aliases": [
+    "分页KV缓存",
+    "vLLM",
+    "分页注意力",
+    "kp_paged_attention"
+  ],
+  "intuition": "就像操作系统把内存分成页面来管理，PagedAttention把KV缓存也分成小页，需要时再分配，避免浪费，还能让不同对话共享相同的前缀页。",
+  "misconceptions": [
+    "PagedAttention 不是只需要记住名称；学习时要同时看清它的输入、输出、核心假设和失效条件。"
+  ],
+  "history": "PagedAttention由Kwon等人在2023年提出，并作为vLLM推理系统的核心技术。其灵感来源于操作系统中的虚拟内存分页机制，旨在解决LLM推理中KV缓存的内存碎片问题。在此之前，KV缓存管理通常采用连续内存分配，导致大量浪费。PagedAttention的提出使得LLM服务可以支持更大的批处理大小和更长的序列，成为高效推理的重要里程碑。",
+  "yearIntroduced": 2023,
+  "prosCons": {
+    "pros": [
+      "消除KV缓存的内部碎片，内存利用率接近100%",
+      "支持跨请求的KV缓存共享（如前缀缓存），减少重复计算",
+      "允许动态内存分配，无需预先分配最大长度空间"
+    ],
+    "cons": [
+      "引入额外的块表查询开销，增加注意力计算的延迟",
+      "对于极短序列，分页管理可能带来不必要的复杂性",
+      "共享缓存时需要处理写时复制（copy-on-write）等一致性机制"
+    ]
+  },
+  "qa": [
+    {
+      "q": "PagedAttention如何解决KV缓存的内存碎片问题？",
+      "a": "PagedAttention将KV缓存划分为固定大小的块（页），并允许这些块在物理内存中非连续存储。通过块表维护逻辑到物理的映射，解码时按需分配物理块，从而消除了因预分配最大长度而产生的内部碎片。同时，不同请求可以共享相同的物理块（如公共前缀），进一步减少内存占用。"
+    },
+    {
+      "q": "PagedAttention与Flash Attention的主要区别是什么？",
+      "a": "PagedAttention主要关注KV缓存的内存管理优化，通过分页减少碎片并支持共享，不改变注意力计算本身；而Flash Attention通过分块和重计算优化GPU显存访问，减少HBM读写，加速注意力计算。两者可以互补：PagedAttention管理KV缓存的存储，Flash Attention加速计算过程。"
+    },
+    {
+      "q": "PagedAttention在vLLM中如何实现KV缓存共享？",
+      "a": "vLLM利用PagedAttention的块表机制，当多个请求共享相同的前缀（如系统提示或对话历史）时，它们可以映射到相同的物理块。新请求只需为后续生成部分分配新块，而共享块通过引用计数管理。当某个请求修改共享块时，触发写时复制，确保数据隔离。"
+    }
+  ],
+  "prerequisites": [
+    "self-attention",
+    "kv-cache"
+  ],
+  "pos": [
+    587.9,
+    1312
+  ],
+  "scale": 0.68
+}

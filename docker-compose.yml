@@ -1,0 +1,49 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: packages/backend/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    environment:
+      COURSE_AGENT_ROOT: /app
+      # The canonical course catalog is mounted below.  OpenCode runs on the
+      # host and receives host-side course paths via OPENCODE_COURSE_HOST_ROOT.
+      COURSE_DATA_DIR: /app/course-data/courses
+      # Required only when backend is in Docker and OpenCode runs on the host.
+      # Define the host-visible absolute path in .env.
+      OPENCODE_COURSE_HOST_ROOT: ${OPENCODE_COURSE_HOST_ROOT:-}
+      OPENCODE_BASE_URL: http://host.docker.internal:4096
+    volumes:
+      - ./packages/backend/src:/app/src
+      # The host OpenCode process and backend must see the same staged
+      # per-conversation workspaces.
+      - ./packages/backend/generated:/app/generated
+      # The backend validates staged Agent edits and synchronizes them into
+      # this canonical catalog.
+      - ./course-data:/app/course-data
+      - ./.env:/app/.env:ro
+      - ./models.json:/app/models.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: packages/frontend/Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      # Vite's proxy runs inside this container; the WebSocket URL runs in
+      # the browser and therefore uses the host-published backend port.
+      COURSE_FOREST_ENV_DIR: /app
+      VITE_API_URL: http://backend:8000
+      VITE_WS_URL: ws://localhost:8000
+    volumes:
+      - ./packages/frontend/src:/app/src
+    depends_on:
+      - backend
+    restart: unless-stopped

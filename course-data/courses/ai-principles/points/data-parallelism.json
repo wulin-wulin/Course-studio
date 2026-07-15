@@ -1,0 +1,77 @@
+{
+  "id": "data-parallelism",
+  "title": "数据并行",
+  "clusterId": "llm",
+  "shortSummary": "数据并行就像多个学生各自做同一份试卷的不同题目，做完后互相核对答案，确保每个人最终学到的知识一致。",
+  "coreIdea": "数据并行的核心思想是：每个设备（GPU）复制一份完整的模型参数，将全局batch size均分给各设备，每个设备处理其子集数据，前向传播计算损失，反向传播得到本地梯度，然后通过AllReduce操作聚合所有设备的梯度（通常取平均），最后各设备用相同梯度更新本地参数。\n\n关键公式：\n- 全局梯度：$\\bar{g} = \\frac{1}{N} \\sum_{i=1}^N g_i$，其中N为设备数，$g_i$为第i个设备的梯度。\n- 参数更新：$\\theta \\leftarrow \\theta - \\eta \\bar{g}$伪代码思路：\n```\nfor each iteration:\n    $data_batch =split_global_batch(num_devices) for each device i in parallel: local_grad =compute_gradients(data_batch[i],model_params) allreduce(local_grads$)  # 聚合梯度\n    $update_model_params$($avg_grad$)\n```\n\n直观例子：训练GPT-3时，将batch size 1024分配到32个GPU上，每个GPU处理32个样本，独立计算梯度后通过AllReduce同步，等效于单机大batch训练。",
+  "principles": [
+    "数据并行的核心思想是：每个设备（GPU）复制一份完整的模型参数，将全局batch size均分给各设备，每个设备处理其子集数据，前向传播计算损失，反向传播得到本地梯度，然后通过AllReduce操作聚合所有设备的梯度（通常取平均），最后各设备用相同梯度更新本地参数",
+    "关键公式：",
+    "- 全局梯度：$\\bar{g} = \\frac{1}{N} \\sum_{i=1}^N g_i$，其中N为设备数，$g_i$为第i个设备的梯度",
+    "- 参数更新：$\\theta \\leftarrow \\theta - \\eta \\bar{g}$伪代码思路：",
+    "讲解 数据并行 时，先用一个可手算或可画图的小例子建立直觉，再回到公式、流程或模型结构。"
+  ],
+  "keyTerms": [
+    "数据并行",
+    "Data Parallelism",
+    "核心概念",
+    "输入输出",
+    "适用条件",
+    "局限性",
+    "训练",
+    "分布式"
+  ],
+  "applications": [
+    "PyTorch DistributedDataParallel (DDP) 框架",
+    "TensorFlow MirroredStrategy 多GPU训练",
+    "Horovod 跨节点数据并行训练"
+  ],
+  "difficulty": "中等",
+  "importance": 0.022,
+  "comparisons": [
+    "dim_parallel_strategy: 数据并行",
+    "dim_communication_cost: 高（梯度全量聚合）",
+    "dim_memory_efficiency: 低（每卡存完整模型）"
+  ],
+  "aliases": [
+    "数据并行训练"
+  ],
+  "intuition": "数据并行就像多个学生各自做同一份试卷的不同题目，做完后互相核对答案，确保每个人最终学到的知识一致。",
+  "misconceptions": [
+    "数据并行 不是只需要记住名称；学习时要同时看清它的输入、输出、核心假设和失效条件。"
+  ],
+  "history": "数据并行是最早的分布式训练范式之一。2014年，Dean等人提出DistBelief系统，采用异步SGD实现数据并行。2016年，Goyal等人提出同步数据并行训练ResNet-50，通过线性缩放学习率实现高效加速。2017年，NVIDIA推出NCCL库，优化AllReduce通信。2019年，PyTorch DDP成为主流数据并行框架。2020年后，随着模型规模增长，纯数据并行逐渐被混合并行取代。",
+  "yearIntroduced": 2014,
+  "prosCons": {
+    "pros": [
+      "实现简单，每个设备只需维护一份完整模型，无需修改模型结构。",
+      "在数据量远大于模型参数时，通信开销相对可控，线性加速比接近理想。"
+    ],
+    "cons": [
+      "每个设备需存储完整模型，显存占用大，不适合超大模型（如百亿参数）。",
+      "梯度聚合通信量随设备数线性增长，在跨节点场景下可能成为瓶颈。"
+    ]
+  },
+  "qa": [
+    {
+      "q": "数据并行中同步更新和异步更新各有什么优缺点？",
+      "a": "同步更新：所有设备计算完梯度后统一聚合，更新一致，收敛稳定，但存在straggler问题（慢设备拖慢整体）。异步更新：设备独立更新参数，无需等待，吞吐量高，但梯度陈旧可能导致收敛不稳定或次优解。实践中，同步更新更常用，配合梯度累积和负载均衡缓解straggler。"
+    },
+    {
+      "q": "数据并行中AllReduce通信如何实现？常用的算法有哪些？",
+      "a": "AllReduce将各设备的梯度求和（或平均）后广播回所有设备。常用算法：Ring AllReduce（将设备连成环，分scatter-reduce和allgather两阶段，通信量O(N)），以及Tree AllReduce（二叉树结构，通信量O(logN)）。Ring AllReduce在带宽受限时表现优异，被NCCL采用。"
+    },
+    {
+      "q": "数据并行在大模型训练中面临哪些挑战？如何解决？",
+      "a": "主要挑战：1）显存瓶颈：每个设备需存储完整模型参数、梯度和优化器状态，对于百亿参数模型，单卡显存不足。2）通信开销：梯度聚合通信量随模型参数线性增长。解决方案：混合并行（数据并行+模型并行+流水线并行），如DeepSpeed ZeRO将数据并行与参数分片结合，减少显存占用；同时使用梯度压缩、通信重叠等技术降低通信开销。"
+    }
+  ],
+  "prerequisites": [
+    "sgd"
+  ],
+  "pos": [
+    1221.4,
+    1212.8
+  ],
+  "scale": 0.63
+}
