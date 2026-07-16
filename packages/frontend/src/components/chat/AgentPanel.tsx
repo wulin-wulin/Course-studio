@@ -1,25 +1,39 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
+import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
+  BookPlus,
   Bot,
   Brain,
-  BookOpen,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  CircleHelp,
+  Database,
+  History,
   ImagePlus,
   Loader2,
+  MessageCircle,
   PanelRightClose,
+  RefreshCw,
   Send,
+  ShieldCheck,
+  Sparkles,
+  SquarePen,
   Terminal,
+  Trash2,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { useChatStore } from "@/stores/chatStore";
+import type { ChatMode } from "@/stores/chatStore";
 import { getBackendWsUrl } from "@/utils/backendWs";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
+import { ModelControls } from "./ModelControls";
 
 type AgentEntry = {
   id: string;
@@ -39,6 +53,48 @@ type AgentRunStatus = {
 };
 
 type ConnectionState = "connecting" | "connected" | "disconnected";
+type AgentWorkflow = "default" | "course-create";
+
+type AgentQuestionOption = {
+  label: string;
+  description: string;
+};
+
+type AgentQuestionItem = {
+  header: string;
+  question: string;
+  options: AgentQuestionOption[];
+  multiple: boolean;
+  custom: boolean;
+};
+
+type AgentQuestionRequest = {
+  requestId: string;
+  conversationId: string;
+  questions: AgentQuestionItem[];
+};
+
+type ConversationSummary = {
+  id: string;
+  title: string;
+  mode: ChatMode;
+  workflow: AgentWorkflow;
+  model: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  preview: string;
+};
+
+type ConversationDetail = Omit<ConversationSummary, "message_count" | "preview"> & {
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant" | "system" | "error";
+    content: string;
+    images: string[];
+    created_at: string;
+  }>;
+};
 
 type HandlerCtx = {
   setEntries: Dispatch<SetStateAction<AgentEntry[]>>;
@@ -46,16 +102,64 @@ type HandlerCtx = {
   setRunStatus: Dispatch<SetStateAction<AgentRunStatus | null>>;
   streamingIdRef: RefObject<string | null>;
   thinkingIdRef: RefObject<string | null>;
+  modeRef: RefObject<ChatMode>;
+  workflowRef: RefObject<AgentWorkflow>;
+  setPendingQuestion: Dispatch<SetStateAction<AgentQuestionRequest | null>>;
 };
 
 type AgentPanelProps = {
   onCollapse?: () => void;
 };
 
+const MODE_COPY: Record<
+  ChatMode,
+  {
+    shortLabel: string;
+    description: string;
+    bannerClass: string;
+    emptyTitle: string;
+    emptyDescription: string;
+    placeholder: string;
+  }
+> = {
+  chat: {
+    shortLabel: "只读问答",
+    description: "Chat 只读取课程数据，用于查询、解释和学习建议，不会提交任何内容修改。",
+    bannerClass: "border-primary/15 bg-primary-light/70 text-primary",
+    emptyTitle: "和课程知识对话",
+    emptyDescription: "询问课程结构、知识点内容或学习路径。当前模式不会改动课程数据。",
+    placeholder: "询问课程内容、概念或学习建议…",
+  },
+  agent: {
+    shortLabel: "课程编辑",
+    description: "Agent 可以修改课程 JSON；完成后仍需通过后端结构校验与冲突检查。",
+    bannerClass: "border-amber-200 bg-amber-50 text-amber-800",
+    emptyTitle: "向 Agent 描述修改需求",
+    emptyDescription: "创建课程、补充知识点或调整已有内容。执行过程和提交结果会显示在这里。",
+    placeholder: "描述希望 Agent 对课程内容做出的修改…",
+  },
+};
+
+const CHAT_SUGGESTIONS = [
+  "介绍一下当前课程的整体知识结构",
+  "我应该按照什么顺序学习这门课程？",
+  "解释一个知识点，并说明它的前置知识",
+];
+
+const AGENT_SUGGESTIONS = [
+  "检查当前课程是否有内容不完整的知识点",
+  "为指定知识点补充核心思想和应用场景",
+  "调整一个知识点的摘要并保持索引同步",
+];
+
 export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const selectedModel = useChatStore((s) => s.selectedModel);
+  const setModel = useChatStore((s) => s.setModel);
+  const mode = useChatStore((s) => s.mode);
+  const setMode = useChatStore((s) => s.setMode);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
   const createConversation = useChatStore((s) => s.createConversation);
+  const setActiveConversation = useChatStore((s) => s.setActiveConversation);
   const [entries, setEntries] = useState<AgentEntry[]>([]);
   const [input, setInput] = useState("");
   const [images, setImages] = useState<string[]>([]);
@@ -63,11 +167,22 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const [runStatus, setRunStatus] = useState<AgentRunStatus | null>(null);
   const [clock, setClock] = useState(Date.now());
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
+  const [workflow, setWorkflow] = useState<AgentWorkflow>("default");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionRequest | null>(null);
+  const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  const [questionError, setQuestionError] = useState("");
+  const [modeInfoOpen, setModeInfoOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const wsUrlRef = useRef(getBackendWsUrl("/api/agent/ws"));
   const lastActiveConversationIdRef = useRef<string | null>(activeConversationId);
+  const modeRef = useRef<ChatMode>(mode);
+  const workflowRef = useRef<AgentWorkflow>("default");
   const streamingIdRef = useRef<string | null>(null);
   const thinkingIdRef = useRef<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -115,6 +230,9 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
             setRunStatus,
             streamingIdRef,
             thinkingIdRef,
+            modeRef,
+            workflowRef,
+            setPendingQuestion,
           });
         } catch {
           setEntries((prev) => [
@@ -138,6 +256,9 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         settleActiveEntries(setEntries, "error");
         setIsRunning(false);
         setRunStatus(null);
+        setPendingQuestion(null);
+        setQuestionSubmitting(false);
+        setQuestionError("");
         streamingIdRef.current = null;
         thinkingIdRef.current = null;
         reconnectTimerRef.current = window.setTimeout(connect, 1200);
@@ -154,11 +275,25 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   }, []);
 
   useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    setQuestionError("");
+    setQuestionSubmitting(false);
+  }, [pendingQuestion?.requestId]);
+
+  useEffect(() => {
     if (!activeConversationId || activeConversationId === lastActiveConversationIdRef.current) return;
     lastActiveConversationIdRef.current = activeConversationId;
     setEntries([]);
     setIsRunning(false);
     setRunStatus(null);
+    setPendingQuestion(null);
+    setQuestionSubmitting(false);
+    setQuestionError("");
+    setWorkflow("default");
+    workflowRef.current = "default";
     streamingIdRef.current = null;
     thinkingIdRef.current = null;
     stickToBottomRef.current = true;
@@ -169,7 +304,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     const container = scrollContainerRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [entries, isRunning, runStatus]);
+  }, [entries, isRunning, pendingQuestion, runStatus]);
 
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -179,12 +314,179 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     stickToBottomRef.current = distanceFromBottom <= 24;
   }, []);
 
+  const resetConversationView = useCallback(() => {
+    setEntries([]);
+    setInput("");
+    setImages([]);
+    setIsRunning(false);
+    setRunStatus(null);
+    setPendingQuestion(null);
+    setQuestionSubmitting(false);
+    setQuestionError("");
+    setWorkflow("default");
+    workflowRef.current = "default";
+    streamingIdRef.current = null;
+    thinkingIdRef.current = null;
+    stickToBottomRef.current = true;
+  }, []);
+
+  const loadConversationHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const response = await fetch("/api/conversations", { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { conversations?: ConversationSummary[] };
+      setConversations(Array.isArray(data.conversations) ? data.conversations : []);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : "加载历史对话失败");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (historyOpen) void loadConversationHistory();
+  }, [historyOpen, loadConversationHistory]);
+
+  const openHistoricalConversation = useCallback(async (conversationId: string) => {
+    if (isRunning) return;
+    setHistoryLoading(true);
+    setHistoryError("");
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const conversation = await response.json() as ConversationDetail;
+      const restoredMode: ChatMode = conversation.mode === "chat" ? "chat" : "agent";
+      const restoredWorkflow: AgentWorkflow = conversation.workflow === "course-create"
+        ? "course-create"
+        : "default";
+
+      lastActiveConversationIdRef.current = conversation.id;
+      setActiveConversation(conversation.id);
+      setMode(restoredMode);
+      modeRef.current = restoredMode;
+      setWorkflow(restoredWorkflow);
+      workflowRef.current = restoredWorkflow;
+      if (conversation.model) setModel(conversation.model);
+      setInput("");
+      setImages([]);
+      setRunStatus(null);
+      setPendingQuestion(null);
+      setQuestionSubmitting(false);
+      setQuestionError("");
+      setEntries(conversation.messages.map((message) => ({
+        id: message.id,
+        role: message.role === "assistant" ? "agent" : message.role,
+        title: message.role === "user"
+          ? "你"
+          : message.role === "assistant"
+            ? "课程助手"
+            : message.role === "error"
+              ? "错误"
+              : "系统",
+        content: message.content,
+        images: message.images.length ? message.images : undefined,
+        status: message.role === "error" ? "error" : "success",
+      })));
+      stickToBottomRef.current = true;
+      setHistoryOpen(false);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : "恢复历史对话失败");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [isRunning, setActiveConversation, setMode, setModel]);
+
+  const deleteHistoricalConversation = useCallback(async (
+    event: React.MouseEvent,
+    conversation: ConversationSummary
+  ) => {
+    event.stopPropagation();
+    if (isRunning || !window.confirm(`删除历史对话“${conversation.title}”？`)) return;
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(conversation.id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+      setConversations((prev) => prev.filter((item) => item.id !== conversation.id));
+      if (activeConversationId === conversation.id) {
+        const nextId = createConversation();
+        lastActiveConversationIdRef.current = nextId;
+        resetConversationView();
+      }
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : "删除历史对话失败");
+    }
+  }, [activeConversationId, createConversation, isRunning, resetConversationView]);
+
+  const startNewConversation = useCallback(() => {
+    if (isRunning) return;
+    const conversationId = createConversation();
+    lastActiveConversationIdRef.current = conversationId;
+    resetConversationView();
+  }, [createConversation, isRunning, resetConversationView]);
+
+  const switchMode = useCallback((nextMode: ChatMode) => {
+    if (nextMode === mode || isRunning) return;
+    setMode(nextMode);
+    modeRef.current = nextMode;
+    const conversationId = createConversation();
+    lastActiveConversationIdRef.current = conversationId;
+    resetConversationView();
+  }, [createConversation, isRunning, mode, resetConversationView, setMode]);
+
   useEffect(() => {
     if (!isRunning) return;
     setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [isRunning]);
+
+  const submitRequest = useCallback((
+    conversationId: string,
+    message: string,
+    requestImages: string[],
+    requestWorkflow: AgentWorkflow,
+    displayContent?: string,
+    replaceEntries = false
+  ) => {
+    streamingIdRef.current = null;
+    thinkingIdRef.current = null;
+    stickToBottomRef.current = true;
+    const entry: AgentEntry = {
+      id: crypto.randomUUID(),
+      role: "user",
+      title: "你",
+      content: displayContent ?? (message || (requestImages.length > 0 ? `已发送 ${requestImages.length} 张图片` : "")),
+      images: requestImages.length > 0 ? [...requestImages] : undefined,
+    };
+    setEntries((prev) => replaceEntries ? [entry] : [...prev, entry]);
+    setIsRunning(true);
+    setRunStatus(
+      mode === "chat"
+        ? makeRunStatus("正在思考", "正在只读检索课程信息")
+        : requestWorkflow === "course-create"
+          ? makeRunStatus("正在启动课程创建流程", "正在加载课程创建 Skill")
+          : makeRunStatus("Agent 启动中", "正在准备课程数据工作区")
+    );
+    wsRef.current?.send(
+      JSON.stringify({
+        type: "agent_request",
+        payload: {
+          conversation_id: conversationId,
+          request_id: entry.id,
+          message,
+          images: requestImages,
+          model: selectedModel,
+          mode,
+          workflow: requestWorkflow,
+        },
+      })
+    );
+  }, [mode, selectedModel]);
 
   const send = useCallback(() => {
     const message = input.trim();
@@ -196,35 +498,101 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       lastActiveConversationIdRef.current = conversationId;
     }
 
-    streamingIdRef.current = null;
-    thinkingIdRef.current = null;
-    stickToBottomRef.current = true;
-    setEntries((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: "user",
-        title: "你",
-        content: message || (images.length > 0 ? `已发送 ${images.length} 张图片` : ""),
-        images: images.length > 0 ? [...images] : undefined,
-      },
-    ]);
+    submitRequest(conversationId, message, images, workflow);
     setInput("");
     setImages([]);
-    setIsRunning(true);
-    setRunStatus(makeRunStatus("Agent 启动中", "正在准备课程数据工作区"));
-    wsRef.current.send(
-      JSON.stringify({
-        type: "agent_request",
-        payload: {
-          conversation_id: conversationId,
-          message,
-          images,
-          model: selectedModel,
-        },
-      })
+  }, [activeConversationId, createConversation, images, input, isRunning, submitRequest, workflow]);
+
+  const startCourseCreation = useCallback(() => {
+    if (mode !== "agent" || isRunning || workflow === "course-create" || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    const conversationId = createConversation();
+    lastActiveConversationIdRef.current = conversationId;
+    resetConversationView();
+    setWorkflow("course-create");
+    workflowRef.current = "course-create";
+    submitRequest(
+      conversationId,
+      "开始创建课程。如果我还没有提供课程或领域名称，请先询问我。",
+      [],
+      "course-create",
+      "创建课程",
+      true
     );
-  }, [activeConversationId, createConversation, images, input, isRunning, selectedModel]);
+  }, [createConversation, isRunning, mode, resetConversationView, submitRequest, workflow]);
+
+  const submitQuestionAnswers = useCallback(async (answers: string[][]) => {
+    const question = pendingQuestion;
+    if (!question || questionSubmitting) return;
+    setQuestionSubmitting(true);
+    setQuestionError("");
+    try {
+      const response = await fetch(
+        `/api/agent/questions/${encodeURIComponent(question.requestId)}/reply`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversation_id: question.conversationId,
+            answers,
+          }),
+        }
+      );
+      const payload = await response.json().catch(() => ({})) as { content?: string; detail?: string };
+      if (!response.ok) throw new Error(payload.detail || `提交失败（${response.status}）`);
+      const content = payload.content || formatQuestionAnswers(question.questions, answers);
+      setEntries((current) => [
+        ...current,
+        {
+          id: `question-reply:${question.requestId}`,
+          role: "user",
+          title: "你",
+          content,
+          status: "success",
+        },
+      ]);
+      setPendingQuestion(null);
+      updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
+      stickToBottomRef.current = true;
+    } catch (error) {
+      setQuestionError(error instanceof Error ? error.message : "提交确认失败");
+    } finally {
+      setQuestionSubmitting(false);
+    }
+  }, [pendingQuestion, questionSubmitting]);
+
+  const rejectQuestion = useCallback(async () => {
+    const question = pendingQuestion;
+    if (!question || questionSubmitting) return;
+    setQuestionSubmitting(true);
+    setQuestionError("");
+    try {
+      const response = await fetch(
+        `/api/agent/questions/${encodeURIComponent(question.requestId)}/reject`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversation_id: question.conversationId }),
+        }
+      );
+      const payload = await response.json().catch(() => ({})) as { content?: string; detail?: string };
+      if (!response.ok) throw new Error(payload.detail || `取消失败（${response.status}）`);
+      setEntries((current) => [
+        ...current,
+        {
+          id: `question-reject:${question.requestId}`,
+          role: "user",
+          title: "你",
+          content: payload.content || "暂不回答当前确认问题",
+        },
+      ]);
+      setPendingQuestion(null);
+      stickToBottomRef.current = true;
+    } catch (error) {
+      setQuestionError(error instanceof Error ? error.message : "取消确认失败");
+    } finally {
+      setQuestionSubmitting(false);
+    }
+  }, [pendingQuestion, questionSubmitting]);
 
   const handleImageUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -253,17 +621,22 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
 
   const isConnected = connectionState === "connected";
   const elapsedSeconds = runStatus ? Math.max(0, Math.floor((clock - runStatus.startedAt) / 1000)) : 0;
+  const modeCopy = MODE_COPY[mode];
+  const suggestions = mode === "chat" ? CHAT_SUGGESTIONS : AGENT_SUGGESTIONS;
+  const inputPlaceholder = workflow === "course-create"
+    ? "回答课程创建流程的问题…"
+    : modeCopy.placeholder;
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-surface text-text-primary">
-      <div className="px-3 py-2 border-b border-border bg-cream/70 flex items-center justify-between">
+    <div className="relative flex h-full flex-col overflow-hidden bg-surface text-text-primary">
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3.5 py-2.5">
         <div className="min-w-0 flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md border border-border bg-surface flex items-center justify-center">
-            <BookOpen className="w-4 h-4 text-primary" />
+          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary text-white shadow-sm">
+            <Sparkles className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-sm font-medium truncate">课程智能体</div>
-            <div className="text-[11px] text-text-secondary truncate">OpenCode · 课程数据工作区</div>
+            <div className="truncate text-sm font-semibold">课程助手</div>
+            <div className="truncate text-[11px] text-text-secondary">OpenCode · {modeCopy.shortLabel}</div>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -277,6 +650,30 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
             <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-primary" : "bg-warning"}`} />
             {status}
           </span>
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((value) => !value)}
+            disabled={isRunning}
+            aria-label="历史对话"
+            title="历史对话"
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+              historyOpen
+                ? "bg-primary-light text-primary"
+                : "text-text-secondary hover:bg-cream-dark hover:text-text-primary"
+            }`}
+          >
+            <History className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={startNewConversation}
+            disabled={isRunning}
+            aria-label="新建对话"
+            title="新建对话"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-cream-dark hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <SquarePen className="h-4 w-4" />
+          </button>
           {onCollapse && (
             <button
               type="button"
@@ -293,18 +690,183 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         </div>
       </div>
 
+      {historyOpen && (
+        <div className="absolute inset-x-0 bottom-0 top-[53px] z-30 flex flex-col bg-surface">
+          <div className="flex items-center justify-between border-b border-border bg-cream/45 px-3.5 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">历史对话</h3>
+              <p className="mt-0.5 text-[11px] text-text-secondary">保存在本机后端，不依赖账号登录</p>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => void loadConversationHistory()}
+                disabled={historyLoading}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary hover:bg-cream-dark hover:text-text-primary disabled:opacity-40"
+                title="刷新"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${historyLoading ? "animate-spin" : ""}`} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary hover:bg-cream-dark hover:text-text-primary"
+                title="关闭"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3">
+            {historyError && (
+              <div className="mb-3 rounded-lg border border-error/20 bg-error/5 px-3 py-2 text-xs text-error">
+                {historyError}
+              </div>
+            )}
+            {historyLoading && conversations.length === 0 ? (
+              <div className="flex h-36 items-center justify-center gap-2 text-xs text-text-secondary">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                正在加载历史对话
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="flex h-48 flex-col items-center justify-center text-center text-text-secondary">
+                <History className="mb-2 h-6 w-6 opacity-50" />
+                <p className="text-xs font-medium text-text-primary">还没有历史对话</p>
+                <p className="mt-1 text-[11px]">发送第一条消息后会自动保存</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {conversations.map((conversation) => (
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    key={conversation.id}
+                    onClick={() => void openHistoricalConversation(conversation.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        void openHistoricalConversation(conversation.id);
+                      }
+                    }}
+                    className={`group w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      activeConversationId === conversation.id
+                        ? "border-primary/30 bg-primary-light/70"
+                        : "border-border bg-cream/45 hover:border-primary/20 hover:bg-cream"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-xs font-semibold text-text-primary">
+                            {conversation.title}
+                          </span>
+                          {conversation.workflow === "course-create" && (
+                            <span className="shrink-0 rounded bg-primary-light px-1.5 py-0.5 text-[9px] font-medium text-primary">
+                              创建课程
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-text-secondary">
+                          {conversation.preview || "暂无消息摘要"}
+                        </p>
+                        <div className="mt-2 flex items-center gap-2 text-[10px] text-text-secondary/80">
+                          <span>{conversation.mode === "chat" ? "Chat" : "Agent"}</span>
+                          <span>·</span>
+                          <span>{conversation.message_count} 条消息</span>
+                          <span>·</span>
+                          <span>{formatConversationTime(conversation.updated_at)}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(event) => void deleteHistoricalConversation(event, conversation)}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-secondary opacity-0 transition-all hover:bg-error/10 hover:text-error group-hover:opacity-100 focus:opacity-100"
+                        title="删除历史对话"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="border-b border-border bg-cream/45 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="grid w-[142px] shrink-0 grid-cols-2 rounded-lg border border-border bg-surface p-0.5 shadow-sm">
+            <ModeButton
+              active={mode === "chat"}
+              disabled={isRunning}
+              icon={MessageCircle}
+              label="Chat"
+              onClick={() => switchMode("chat")}
+            />
+            <ModeButton
+              active={mode === "agent"}
+              disabled={isRunning}
+              icon={WandSparkles}
+              label="Agent"
+              onClick={() => switchMode("agent")}
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <ModelControls
+              selectedModel={selectedModel}
+              onSelectModel={setModel}
+              disabled={isRunning}
+              compact
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setModeInfoOpen((current) => !current)}
+            aria-expanded={modeInfoOpen}
+            title="查看当前模式说明"
+            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+              modeInfoOpen
+                ? "border-primary/25 bg-primary-light text-primary"
+                : "border-border bg-surface text-text-secondary hover:border-primary/30 hover:text-primary"
+            }`}
+          >
+            <CircleHelp className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {modeInfoOpen && (
+          <div className={`mt-2 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${modeCopy.bannerClass}`}>
+            {mode === "chat" ? <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <Database className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <span>{modeCopy.description}</span>
+          </div>
+        )}
+      </div>
+
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto px-3 py-3 space-y-2 bg-surface"
+        className="flex-1 space-y-2 overflow-y-auto bg-surface px-3.5 py-4"
       >
         {entries.length === 0 && (
-          <div className="h-full flex flex-col justify-center text-center px-5 text-text-secondary">
-            <div className="mx-auto w-10 h-10 rounded-md bg-cream border border-border flex items-center justify-center mb-3">
-              <Terminal className="w-5 h-5 text-primary" />
+          <div className="flex h-full flex-col justify-center px-3 text-center text-text-secondary">
+            <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl border border-primary/15 bg-primary-light text-primary">
+              {mode === "chat" ? <MessageCircle className="h-5 w-5" /> : <WandSparkles className="h-5 w-5" />}
             </div>
-            <h3 className="text-sm font-medium text-text-primary mb-1">Agent 会话</h3>
-            <p className="text-xs leading-relaxed">创建课程、填充知识点，或维护现有课程内容。</p>
+            <h3 className="mb-1 text-sm font-semibold text-text-primary">{modeCopy.emptyTitle}</h3>
+            <p className="mx-auto max-w-xs text-xs leading-relaxed">{modeCopy.emptyDescription}</p>
+            <div className="mx-auto mt-4 grid w-full max-w-sm gap-2">
+              {suggestions.map((suggestion) => (
+                <button
+                  type="button"
+                  key={suggestion}
+                  onClick={() => setInput(suggestion)}
+                  className="rounded-xl border border-border bg-cream/55 px-3 py-2.5 text-left text-xs text-text-secondary transition-colors hover:border-primary/25 hover:bg-primary-light hover:text-text-primary"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -313,12 +875,21 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         ))}
 
         {isRunning && (
-          <AgentRunStatusView status={runStatus} elapsedSeconds={elapsedSeconds} />
+          <AgentRunStatusView status={runStatus} elapsedSeconds={elapsedSeconds} mode={mode} />
         )}
       </div>
 
-      <div className="p-3 border-t border-border bg-surface">
-        <div className="rounded-lg bg-cream border border-border overflow-hidden shadow-sm">
+      <div className="border-t border-border bg-surface p-3">
+        {pendingQuestion ? (
+          <AgentQuestionCard
+            request={pendingQuestion}
+            submitting={questionSubmitting}
+            error={questionError}
+            onSubmit={submitQuestionAnswers}
+            onReject={rejectQuestion}
+          />
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-border bg-cream/55 shadow-sm transition-colors focus-within:border-primary/45 focus-within:bg-surface focus-within:shadow-md">
           {images.length > 0 && (
             <div className="flex gap-2 flex-wrap px-3 pt-3">
               {images.map((img, index) => (
@@ -339,7 +910,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
               ))}
             </div>
           )}
-          <div className="flex items-end gap-2 px-3 py-2">
+          <div className="flex items-end gap-2 px-3 py-2.5">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -365,25 +936,285 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
                   send();
                 }
               }}
-              placeholder="例如：为课程新增一个知识点，或修改某个知识点内容"
-              rows={3}
-              className="flex-1 resize-none bg-transparent px-0 py-1 text-sm text-text-primary outline-none placeholder:text-text-secondary/60"
+              placeholder={inputPlaceholder}
+              rows={2}
+              className="max-h-40 min-h-14 flex-1 resize-none bg-transparent px-0 py-1.5 text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-secondary/60"
             />
             <button
               onClick={send}
               disabled={!isConnected || isRunning || (!input.trim() && images.length === 0)}
-              className="w-7 h-7 rounded-md bg-primary hover:bg-primary-hover text-white disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
+              className="mb-0.5 flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-white transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
               title="发送"
             >
               {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
-          <div className="flex items-center justify-between px-3 pb-2">
-            <span className="text-[11px] text-text-secondary">Enter 发送 / Shift+Enter 换行</span>
+          <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              {mode === "agent" && (
+                <button
+                  type="button"
+                  onClick={startCourseCreation}
+                  disabled={!isConnected || isRunning || workflow === "course-create"}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary-light px-2 py-1 text-[11px] font-semibold text-primary transition-colors hover:border-primary/35 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  title={workflow === "course-create" ? "当前对话正在创建课程" : "按照引导创建一门新课程"}
+                >
+                  <BookPlus className="h-3.5 w-3.5" />
+                  创建课程
+                </button>
+              )}
+              <span className="truncate text-[11px] text-text-secondary">
+                {workflow === "course-create" ? "课程创建流程进行中" : "Enter 发送 · Shift+Enter 换行"}
+              </span>
+            </div>
+            <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${mode === "chat" ? "bg-primary-light text-primary" : "bg-amber-100 text-amber-700"}`}>
+              {mode === "chat" ? "只读" : "可修改数据"}
+            </span>
+          </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgentQuestionCard({
+  request,
+  submitting,
+  error,
+  onSubmit,
+  onReject,
+}: {
+  request: AgentQuestionRequest;
+  submitting: boolean;
+  error: string;
+  onSubmit: (answers: string[][]) => void;
+  onReject: () => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [selections, setSelections] = useState<string[][]>(() => request.questions.map(() => []));
+  const [customValues, setCustomValues] = useState<string[]>(() => request.questions.map(() => ""));
+
+  useEffect(() => {
+    setActiveIndex(0);
+    setSelections(request.questions.map(() => []));
+    setCustomValues(request.questions.map(() => ""));
+  }, [request]);
+
+  const answers = useMemo(
+    () => request.questions.map((_, index) => {
+      const custom = customValues[index]?.trim();
+      return custom ? [...(selections[index] ?? []), custom] : selections[index] ?? [];
+    }),
+    [customValues, request.questions, selections]
+  );
+  const current = request.questions[activeIndex];
+  const currentAnswers = answers[activeIndex] ?? [];
+  const allAnswered = answers.every((answer) => answer.length > 0);
+  const isLast = activeIndex === request.questions.length - 1;
+
+  if (!current) return null;
+
+  const selectOption = (label: string) => {
+    setSelections((existing) => existing.map((values, index) => {
+      if (index !== activeIndex) return values;
+      if (!current.multiple) return [label];
+      return values.includes(label)
+        ? values.filter((value) => value !== label)
+        : [...values, label];
+    }));
+    if (!current.multiple) {
+      setCustomValues((existing) => existing.map((value, index) => index === activeIndex ? "" : value));
+    }
+  };
+
+  const updateCustomValue = (value: string) => {
+    setCustomValues((existing) => existing.map((currentValue, index) => index === activeIndex ? value : currentValue));
+    if (!current.multiple && value) {
+      setSelections((existing) => existing.map((values, index) => index === activeIndex ? [] : values));
+    }
+  };
+
+  return (
+    <section
+      aria-live="polite"
+      className="max-h-[min(58vh,560px)] overflow-y-auto rounded-2xl border border-primary/25 bg-gradient-to-b from-primary-light/80 to-surface shadow-md"
+    >
+      <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-primary/15 bg-primary-light/95 px-3.5 py-3 backdrop-blur-sm">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary text-white shadow-sm">
+            <CircleHelp className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-primary">需要你的确认</div>
+            <div className="mt-0.5 truncate text-[11px] text-text-secondary">
+              {current.header}
+              {request.questions.length > 1 && ` · ${activeIndex + 1}/${request.questions.length}`}
+            </div>
+          </div>
+        </div>
+        <span className="shrink-0 rounded-md border border-primary/15 bg-surface/75 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+          不会被折叠
+        </span>
+      </div>
+
+      <div className="space-y-3 p-3.5">
+        <p className="text-sm font-medium leading-relaxed text-text-primary">{current.question}</p>
+        {current.multiple && (
+          <p className="text-[11px] text-text-secondary">可以选择多个选项</p>
+        )}
+
+        <div className="grid gap-2">
+          {current.options.map((option) => {
+            const selected = (selections[activeIndex] ?? []).includes(option.label);
+            return (
+              <button
+                type="button"
+                key={option.label}
+                onClick={() => selectOption(option.label)}
+                disabled={submitting}
+                aria-pressed={selected}
+                className={`flex w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                  selected
+                    ? "border-primary/45 bg-primary-light text-text-primary shadow-sm"
+                    : "border-border bg-surface text-text-primary hover:border-primary/25 hover:bg-cream/55"
+                }`}
+              >
+                <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
+                  selected ? "border-primary bg-primary text-white" : "border-border bg-surface"
+                }`}>
+                  {selected && <CheckCircle2 className="h-3 w-3" />}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold">{option.label}</span>
+                  {option.description && (
+                    <span className="mt-0.5 block text-[11px] leading-relaxed text-text-secondary">
+                      {option.description}
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {current.custom && (
+          <label className="block">
+            <span className="mb-1.5 block text-[11px] font-medium text-text-secondary">自定义填写</span>
+            <textarea
+              value={customValues[activeIndex] ?? ""}
+              onChange={(event) => updateCustomValue(event.target.value)}
+              disabled={submitting}
+              rows={2}
+              placeholder="如果上面的选项不合适，可以直接填写…"
+              className="max-h-28 min-h-16 w-full resize-y rounded-xl border border-border bg-surface px-3 py-2 text-xs leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-secondary/60 focus:border-primary/45 disabled:opacity-60"
+            />
+          </label>
+        )}
+
+        {error && (
+          <div className="rounded-lg border border-error/20 bg-error/5 px-3 py-2 text-xs text-error">
+            {error}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-2 border-t border-border/70 pt-3">
+          <button
+            type="button"
+            onClick={onReject}
+            disabled={submitting}
+            className="rounded-lg px-2 py-1.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-cream hover:text-text-primary disabled:opacity-50"
+          >
+            暂不回答
+          </button>
+          <div className="flex items-center gap-2">
+            {activeIndex > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveIndex((index) => Math.max(0, index - 1))}
+                disabled={submitting}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-xs font-medium text-text-secondary hover:border-primary/25 hover:text-primary disabled:opacity-50"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                上一个
+              </button>
+            )}
+            {!isLast ? (
+              <button
+                type="button"
+                onClick={() => setActiveIndex((index) => Math.min(request.questions.length - 1, index + 1))}
+                disabled={submitting || currentAnswers.length === 0}
+                className="inline-flex h-8 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-semibold text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                下一个
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onSubmit(answers)}
+                disabled={submitting || !allAnswered}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-white shadow-sm hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                确认选择
+              </button>
+            )}
           </div>
         </div>
       </div>
-    </div>
+    </section>
+  );
+}
+
+function formatQuestionAnswers(questions: AgentQuestionItem[], answers: string[][]) {
+  const details = answers.map((answer, index) => {
+    const header = questions[index]?.header || `问题 ${index + 1}`;
+    return `${header}：${answer.join("、")}`;
+  });
+  return `确认选择\n${details.join("\n")}`;
+}
+
+function formatConversationTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const sameDay = date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+  return sameDay
+    ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+    : date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
+function ModeButton({
+  active,
+  disabled,
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  disabled: boolean;
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex h-8 items-center justify-center gap-2 rounded-lg text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+        active
+          ? "bg-primary text-white shadow-sm"
+          : "text-text-secondary hover:bg-cream hover:text-text-primary"
+      }`}
+      aria-pressed={active}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
   );
 }
 
@@ -391,8 +1222,19 @@ function handleAgentEvent(
   data: { type: string; payload?: Record<string, unknown> },
   ctx: HandlerCtx
 ) {
-  const { setEntries, setIsRunning, setRunStatus, streamingIdRef, thinkingIdRef } = ctx;
+  const {
+    setEntries,
+    setIsRunning,
+    setRunStatus,
+    streamingIdRef,
+    thinkingIdRef,
+    modeRef,
+    workflowRef,
+    setPendingQuestion,
+  } = ctx;
   const payload = data.payload ?? {};
+  const currentMode = modeRef.current;
+  const isCourseCreation = workflowRef.current === "course-create";
 
   switch (data.type) {
     case "agent_heartbeat":
@@ -400,7 +1242,15 @@ function handleAgentEvent(
       return;
 
     case "agent_start":
-      updateRunStatus(setRunStatus, "Agent 启动中", "正在准备工作环境");
+      updateRunStatus(
+        setRunStatus,
+        currentMode === "chat" ? "正在思考" : isCourseCreation ? "课程创建中" : "Agent 启动中",
+        currentMode === "chat"
+          ? "正在只读检索课程信息"
+          : isCourseCreation
+            ? "正在按照 Skill 工作流推进"
+            : "正在准备工作环境"
+      );
       return;
 
     case "agent_status":
@@ -408,6 +1258,7 @@ function handleAgentEvent(
       return;
 
     case "agent_thinking_delta": {
+      if (currentMode === "chat") return;
       const text = String(payload.text ?? "");
       if (!text) return;
       finalizeThinkingIfMissing(thinkingIdRef, setEntries);
@@ -476,10 +1327,31 @@ function handleAgentEvent(
       return;
     }
 
+    case "agent_question": {
+      const requestId = String(payload.request_id ?? "").trim();
+      const conversationId = String(payload.conversation_id ?? "").trim();
+      const questions = normalizeAgentQuestions(payload.questions);
+      if (!requestId || !conversationId || questions.length === 0) return;
+      finalizeStreaming(streamingIdRef, setEntries);
+      finalizeThinking(thinkingIdRef, setEntries);
+      setPendingQuestion({ requestId, conversationId, questions });
+      setIsRunning(true);
+      updateRunStatus(setRunStatus, "等待你的确认", "选择一个选项或填写自定义答案");
+      return;
+    }
+
+    case "agent_question_resolved": {
+      const requestId = String(payload.request_id ?? "").trim();
+      setPendingQuestion((current) => current?.requestId === requestId ? null : current);
+      updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
+      return;
+    }
+
     case "agent_done": {
       finalizeStreaming(streamingIdRef, setEntries);
       finalizeThinking(thinkingIdRef, setEntries);
       settleActiveEntries(setEntries, Number(payload.return_code) === 0 ? "success" : "error");
+      setPendingQuestion(null);
       setIsRunning(false);
       setRunStatus(null);
       const code = Number(payload.return_code);
@@ -489,7 +1361,7 @@ function handleAgentEvent(
         {
           id: crypto.randomUUID(),
           role: "error",
-          title: "Agent 异常退出",
+          title: currentMode === "chat" ? "Chat 异常退出" : "Agent 异常退出",
           content: `退出码 ${String(payload.return_code ?? "未知")}`,
           status: "error",
         },
@@ -501,6 +1373,7 @@ function handleAgentEvent(
       finalizeStreaming(streamingIdRef, setEntries);
       finalizeThinking(thinkingIdRef, setEntries);
       settleActiveEntries(setEntries, "error");
+      setPendingQuestion(null);
       const message = String(payload.message ?? payload.content ?? "");
       setIsRunning(false);
       setRunStatus(null);
@@ -509,7 +1382,7 @@ function handleAgentEvent(
         {
           id: crypto.randomUUID(),
           role: "error",
-          title: "Agent 错误",
+          title: currentMode === "chat" ? "Chat 错误" : "Agent 错误",
           content: message,
           status: "error",
         },
@@ -522,6 +1395,35 @@ function handleAgentEvent(
   }
 }
 
+function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    if (!isRecord(item) || typeof item.question !== "string" || !item.question.trim()) return [];
+    const options = Array.isArray(item.options)
+      ? item.options.flatMap((option) => {
+          if (!isRecord(option) || typeof option.label !== "string" || !option.label.trim()) return [];
+          return [{
+            label: option.label.trim(),
+            description: typeof option.description === "string" ? option.description.trim() : "",
+          }];
+        })
+      : [];
+    return [{
+      header: typeof item.header === "string" && item.header.trim()
+        ? item.header.trim()
+        : `问题 ${index + 1}`,
+      question: item.question.trim(),
+      options,
+      multiple: item.multiple === true,
+      custom: item.custom !== false,
+    }];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function finalizeStreamingIfMissing(
   streamingIdRef: RefObject<string | null>,
   setEntries: Dispatch<SetStateAction<AgentEntry[]>>
@@ -531,7 +1433,7 @@ function finalizeStreamingIfMissing(
   streamingIdRef.current = id;
   setEntries((prev) => [
     ...prev,
-    { id, role: "agent", title: "Agent", content: "", streaming: true },
+    { id, role: "agent", title: "课程助手", content: "", streaming: true },
   ]);
 }
 
@@ -624,12 +1526,14 @@ function updateRunStatus(
 function AgentRunStatusView({
   status,
   elapsedSeconds,
+  mode,
 }: {
   status: AgentRunStatus | null;
   elapsedSeconds: number;
+  mode: ChatMode;
 }) {
-  const label = status?.label ?? "Agent 工作中";
-  const detail = status?.detail ?? (elapsedSeconds >= 10 ? "正在等待 Agent 输出" : undefined);
+  const label = status?.label ?? (mode === "chat" ? "正在思考" : "Agent 工作中");
+  const detail = status?.detail ?? (elapsedSeconds >= 10 ? "正在等待模型输出" : undefined);
 
   return (
     <div className="rounded-md border border-border bg-cream px-2.5 py-2 text-xs text-text-secondary">

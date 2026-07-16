@@ -966,6 +966,34 @@ class CourseStore:
             self._write_state(state_path, base=current, workspace=workspace_fingerprint)
             return CourseWorkspace(conversation_id, workspace, current)
 
+    def prepare_readonly_workspace(self, conversation_id: str) -> CourseWorkspace:
+        """Create a disposable course snapshot for a read-only Chat turn.
+
+        OpenCode still needs ordinary files so it can search and read course
+        content.  Chat sessions therefore receive a private snapshot, but that
+        snapshot is never eligible for ``commit_workspace``.  It is refreshed
+        before every turn and restored afterwards, so even an unexpected write
+        cannot leak into the canonical course catalog or a later Chat turn.
+        """
+
+        with self._lock:
+            scoped_id = f"chat-{_safe_conversation_id(conversation_id)}"[:80]
+            session_dir = self._workspace_session_dir(scoped_id)
+            workspace = session_dir / "courses"
+            current = self._fingerprint(self.root)
+            self._copy_canonical_to_workspace(workspace)
+            return CourseWorkspace(scoped_id, workspace, current)
+
+    def restore_readonly_workspace(self, workspace: CourseWorkspace) -> None:
+        """Discard all Chat-session file changes and restore its snapshot."""
+
+        with self._lock:
+            session_dir = self._workspace_session_dir(workspace.conversation_id)
+            expected_path = (session_dir / "courses").resolve()
+            if workspace.path.resolve() != expected_path:
+                raise CourseDataError("无效的只读课程工作区")
+            self._copy_canonical_to_workspace(workspace.path)
+
     def commit_workspace(self, workspace: CourseWorkspace) -> dict[str, Any]:
         """Validate a staged OpenCode tree and atomically promote its changes."""
 

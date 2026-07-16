@@ -35,10 +35,10 @@ PERMISSION = {
     # Keep the allow-list narrow enough that AGENTS.md, OpenCode config and
     # every application source file remain immutable to the agent.
     "edit": {
+        "**": "deny",
         "**/course.json": "allow",
         "**/index.json": "allow",
         "**/points/*.json": "allow",
-        "**": "deny",
     },
     # Course-management skills will be added incrementally.  They inherit the
     # JSON-only file policy above, so allowing registered skills here does not
@@ -47,6 +47,30 @@ PERMISSION = {
     "question": "deny",
     "bash": "deny",
     "webfetch": "deny",
+}
+
+COURSE_CREATOR_PERMISSION = {
+    "edit": {
+        "**": "deny",
+        "**/pipeline/*/candidate-points.json": "allow",
+        "**/pipeline/*/clustered-graph.json": "allow",
+    },
+    "skill": {
+        "*": "deny",
+        "candidate-knowledge-point-generator": "allow",
+        "knowledge-cluster-builder": "allow",
+        "knowledge-pipeline-orchestrator": "allow",
+    },
+    "question": "allow",
+    "bash": {
+        "*": "deny",
+        "node *init-course-pipeline.mjs*": "allow",
+        "node *check-dag.mjs*": "allow",
+        "node *check-pipeline.mjs*": "allow",
+        "node *publish-course-pipeline.mjs*": "allow",
+    },
+    "webfetch": "allow",
+    "websearch": "allow",
 }
 
 
@@ -130,6 +154,13 @@ def main() -> int:
         "provider": providers,
         "model": f"{default_id}/{default_id}",
         "permission": PERMISSION,
+        "agent": {
+            "course-creator": {
+                "description": "按照项目 Skill 流程引导用户创建并发布课程",
+                "mode": "primary",
+                "permission": COURSE_CREATOR_PERMISSION,
+            }
+        },
     }
 
     out_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")

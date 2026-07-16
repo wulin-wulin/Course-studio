@@ -4,8 +4,11 @@
 Three.js 知识森林，右侧保留 OpenCode Agent 对话。Agent 管理课程数据；它不
 负责前端交互或渲染代码。
 
-当前内置课程包包含 23 个知识簇和 603 个知识点，来自
-`D:\Project\AI_tree_course` 的已发布数据。
+当前内置两门课程：
+
+- 《人工智能原理》：23 个知识簇、603 个知识点，来自
+  `D:\Project\AI_tree_course` 的已发布数据。
+- 《软件工程》：12 个知识簇、77 个知识点，由仓库 `data/` 中通过校验的预备图谱发布。
 
 ## 数据与 Agent 边界
 
@@ -19,8 +22,8 @@ course-data/courses/<course-id>/
     └── <point-id>.json         # 单个知识点的完整内容
 ```
 
-当前界面加载 `ai-principles`。目录结构已经支持更多课程包；“创建/切换课程”
-的学习者界面会在后续产品迭代中补充。
+课程导览会自动读取 `course-data/courses/` 下通过校验的课程包；新增课程无需修改
+前端代码即可在列表中显示和切换。
 
 OpenCode 在每个会话的暂存副本
 `packages/backend/generated/course_agent_sessions/<conversation>/courses/`
@@ -180,6 +183,50 @@ curl http://127.0.0.1:4096/global/health
 `api_key`。若后端在 Docker 中无法连接 OpenCode，先确认 `OPENCODE_COURSE_HOST_ROOT`
 是运行 OpenCode 的宿主机环境所见的绝对路径，而不是容器内 `/app/...` 路径。
 
+## Agent 创建课程
+
+在前端切换到 **Agent** 模式，点击输入框下方的 **创建课程**。系统会新建一个
+隔离对话，并依次使用仓库 `skills/` 下的候选知识点生成、知识聚类和流水线编排
+三个 Skill：
+
+1. 确认课程范围与目标学习者；
+2. 生成候选知识点并停在 G2 人工审核门；
+3. 用户确认后构建知识簇、前置关系与横向关联，并运行 G4 校验；
+4. 再次获得明确发布确认后，生成正式课程包和 organic 知识地图布局。
+
+G0-G4 中间文件保存在对应会话的 `pipeline/<course-id>/`，不会直接进入正式课程。
+正式发布仍会经过后端课程结构校验和冲突检查；同名课程不会被自动覆盖。
+
+后端与 OpenCode 已启动时，可以运行真实端到端冒烟测试。它会通过 WebSocket 使用
+一个唯一的《正则表达式基础（链路测试）》主题，依次经过 G0-G4、正式发布和后端读取，
+成功后自动删除测试课程：
+
+```powershell
+packages\backend\.venv\Scripts\python.exe -u scripts\smoke_test_course_creation.py
+```
+
+测试会话的中间产物会保留在 `packages/backend/generated/course_agent_sessions/`，便于
+排查门禁和模型输出；该目录不会进入正式课程数据或 Git。
+
+## 历史对话
+
+右侧课程助手标题栏提供历史对话入口。对话元数据、用户消息、助手回复、模式、模型和
+课程创建工作流状态会保存在本机 SQLite 数据库：
+
+```text
+packages/backend/generated/conversations.sqlite3
+```
+
+当前按单用户本地应用设计，不需要账号登录。打开历史记录可恢复消息并继续对话，也可
+删除不再需要的记录。删除历史记录不会删除已经发布的课程。此功能启用前产生的旧对话
+没有进入数据库，无法自动补回；启用后的记录在刷新页面或重启后端后仍可读取。
+
+可使用真实 Chat 请求验证消息写入和历史 API：
+
+```powershell
+packages\backend\.venv\Scripts\python.exe -u scripts\smoke_test_conversation_history.py
+```
+
 ## 课程数据维护约定
 
 - 新课程使用小写 kebab-case 目录和 ID，例如 `data-structures`。
@@ -189,6 +236,23 @@ curl http://127.0.0.1:4096/global/health
   改动它们。
 - 新增、删除或批量生成内容的 Skill 应先校验知识簇引用与前置知识关系，再提交
   课程数据。
+
+## 课程地图布局
+
+使用内置脚本可重新生成任意正式课程的知识簇轮廓、节点坐标和节点缩放，而不改动
+课程内容、配色或知识关系。默认只预览；只有传入 `--apply` 才会写入
+`index.json` 与对应的 `points/*.json`：
+
+```powershell
+# 预览不规则岛屿式布局；同一个 seed 会得到完全相同的结果
+node .\scripts\layout-course-map.mjs software-engineering --style organic --seed se-organic-v1
+
+# 确认后写入课程数据
+node .\scripts\layout-course-map.mjs software-engineering --style organic --seed se-organic-v1 --apply
+```
+
+目前提供 `organic`（岛屿式、不规则）和 `compact`（更紧凑）两种布局风格。新风格可在
+`scripts/layout-course-map.mjs` 的 `MAP_LAYOUT_STYLES` 中扩展。
 
 ## License
 

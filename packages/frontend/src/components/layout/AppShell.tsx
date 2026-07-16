@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { AlertCircle, Loader2, PanelRightOpen } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { CourseCatalog } from "../course/CourseCatalog";
@@ -11,6 +12,33 @@ type AppRoute =
   | { kind: "catalog" }
   | { kind: "forest"; courseId: string }
   | { kind: "reading"; courseId: string; clusterId: string; pointId: string };
+
+const AGENT_PANEL_WIDTH_KEY = "course-studio:agent-panel-width";
+const AGENT_PANEL_MIN_WIDTH = 400;
+const AGENT_PANEL_MAX_WIDTH = 880;
+
+function agentPanelBounds(viewportWidth = window.innerWidth) {
+  return {
+    min: AGENT_PANEL_MIN_WIDTH,
+    max: Math.max(AGENT_PANEL_MIN_WIDTH, Math.min(AGENT_PANEL_MAX_WIDTH, Math.floor(viewportWidth * 0.65))),
+  };
+}
+
+function clampAgentPanelWidth(width: number, viewportWidth = window.innerWidth) {
+  const bounds = agentPanelBounds(viewportWidth);
+  return Math.min(bounds.max, Math.max(bounds.min, Math.round(width)));
+}
+
+function defaultAgentPanelWidth(viewportWidth = window.innerWidth) {
+  return clampAgentPanelWidth(Math.min(680, Math.max(520, viewportWidth * 0.4)), viewportWidth);
+}
+
+function initialAgentPanelWidth() {
+  const stored = Number(window.localStorage.getItem(AGENT_PANEL_WIDTH_KEY));
+  return Number.isFinite(stored) && stored > 0
+    ? clampAgentPanelWidth(stored)
+    : defaultAgentPanelWidth();
+}
 
 /**
  * A tiny hash router keeps the original project's direct-link / browser-back
@@ -40,6 +68,54 @@ function useCourseRoute(): [AppRoute, (path: string) => void] {
 export function AppShell() {
   const [route, navigate] = useCourseRoute();
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(true);
+  const [agentPanelWidth, setAgentPanelWidth] = useState(initialAgentPanelWidth);
+  const [isResizingAgentPanel, setIsResizingAgentPanel] = useState(false);
+
+  useEffect(() => {
+    window.localStorage.setItem(AGENT_PANEL_WIDTH_KEY, String(agentPanelWidth));
+  }, [agentPanelWidth]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setAgentPanelWidth((current) => clampAgentPanelWidth(current));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const beginAgentPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (window.innerWidth < 1024) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = agentPanelWidth;
+    setIsResizingAgentPanel(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      setAgentPanelWidth(clampAgentPanelWidth(startWidth + startX - moveEvent.clientX));
+    };
+    const stopResize = () => {
+      setIsResizingAgentPanel(false);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  }, [agentPanelWidth]);
+
+  const resetAgentPanelWidth = useCallback(() => {
+    setAgentPanelWidth(defaultAgentPanelWidth());
+  }, []);
+
+  const panelStyle = {
+    "--agent-panel-width": `${agentPanelWidth}px`,
+  } as CSSProperties;
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-cream">
@@ -53,12 +129,35 @@ export function AppShell() {
           )}
         </section>
         <aside
-          className={`relative shrink-0 min-h-0 border-l border-border bg-surface transition-[width] duration-200 max-lg:border-l-0 max-lg:border-t ${
+          style={panelStyle}
+          className={`relative shrink-0 min-h-0 border-l border-border bg-surface max-lg:border-l-0 max-lg:border-t ${
+            isResizingAgentPanel ? "" : "transition-[width] duration-200"
+          } ${
             isAgentPanelOpen
-              ? "w-[clamp(340px,29vw,480px)] min-w-[320px] max-lg:w-full max-lg:min-h-[380px]"
+              ? "w-[var(--agent-panel-width)] min-w-[400px] max-lg:!w-full max-lg:min-w-0 max-lg:min-h-[420px]"
               : "w-12 min-w-12 max-lg:w-full max-lg:min-h-12 max-lg:h-12"
           }`}
         >
+          {isAgentPanelOpen && (
+            <div
+              role="separator"
+              aria-label="调整课程助手面板宽度"
+              aria-orientation="vertical"
+              aria-valuemin={agentPanelBounds().min}
+              aria-valuemax={agentPanelBounds().max}
+              aria-valuenow={agentPanelWidth}
+              title="左右拖动调整宽度，双击恢复默认"
+              onPointerDown={beginAgentPanelResize}
+              onDoubleClick={resetAgentPanelWidth}
+              className={`absolute -left-1.5 top-0 z-40 hidden h-full w-3 cursor-col-resize items-center justify-center lg:flex ${
+                isResizingAgentPanel ? "bg-primary/5" : ""
+              }`}
+            >
+              <span className={`h-12 w-1 rounded-full transition-colors ${
+                isResizingAgentPanel ? "bg-primary" : "bg-border hover:bg-primary/65"
+              }`} />
+            </div>
+          )}
           <div id="course-agent-panel" className={isAgentPanelOpen ? "h-full" : "hidden"}>
             <AgentPanel onCollapse={() => setIsAgentPanelOpen(false)} />
           </div>
@@ -74,7 +173,7 @@ export function AppShell() {
               className="flex h-full w-full flex-col items-center justify-start gap-2 px-2 py-3 text-text-secondary transition-colors hover:bg-cream hover:text-text-primary max-lg:flex-row max-lg:justify-center"
             >
               <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
-              <span className="hidden text-xs font-medium max-lg:inline">展开 Agent</span>
+              <span className="hidden text-xs font-medium max-lg:inline">展开课程助手</span>
             </button>
           )}
         </aside>

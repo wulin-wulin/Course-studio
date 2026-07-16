@@ -28,7 +28,7 @@ def _auth() -> tuple[str, str] | None:
 
 
 async def health() -> dict:
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
         resp = await client.get(f"{_base_url()}/global/health", auth=_auth())
         resp.raise_for_status()
         return resp.json()
@@ -38,7 +38,7 @@ async def create_session(directory: str, title: str | None = None) -> str:
     body: dict = {}
     if title:
         body["title"] = title
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
         resp = await client.post(
             f"{_base_url()}/session",
             params={"directory": directory},
@@ -58,6 +58,7 @@ async def prompt(
     parts: list[dict],
     directory: str,
     model_id: str | None = None,
+    agent_name: str | None = None,
 ) -> None:
     """Send a prompt without waiting for completion; result arrives via /event.
 
@@ -72,7 +73,9 @@ async def prompt(
         },
         "parts": parts,
     }
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    if agent_name:
+        body["agent"] = agent_name
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
         resp = await client.post(
             f"{_base_url()}/session/{session_id}/prompt_async",
             params={"directory": directory},
@@ -87,10 +90,41 @@ async def prompt(
 
 async def abort(session_id: str) -> None:
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             await client.post(f"{_base_url()}/session/{session_id}/abort", auth=_auth())
     except Exception:
         pass
+
+
+async def reply_question(request_id: str, answers: list[list[str]], directory: str) -> None:
+    """Reply to a pending native OpenCode question and resume its session."""
+
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+        resp = await client.post(
+            f"{_base_url()}/question/{request_id}/reply",
+            params={"directory": directory},
+            json={"answers": answers},
+            auth=_auth(),
+        )
+        if resp.status_code != 200:
+            raise OpencodeError(
+                f"opencode question reply 失败：{resp.status_code} {resp.text[:300]}"
+            )
+
+
+async def reject_question(request_id: str, directory: str) -> None:
+    """Dismiss a pending native OpenCode question."""
+
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+        resp = await client.post(
+            f"{_base_url()}/question/{request_id}/reject",
+            params={"directory": directory},
+            auth=_auth(),
+        )
+        if resp.status_code != 200:
+            raise OpencodeError(
+                f"opencode question reject 失败：{resp.status_code} {resp.text[:300]}"
+            )
 
 
 async def events() -> AsyncIterator[dict]:
@@ -102,7 +136,7 @@ async def events() -> AsyncIterator[dict]:
     we yield the whole envelope so the caller can read ``payload.type`` /
     ``payload.properties`` and filter by ``directory``/``sessionID``.
     """
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
         async with client.stream("GET", f"{_base_url()}/global/event", auth=_auth()) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():

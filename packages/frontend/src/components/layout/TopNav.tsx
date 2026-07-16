@@ -27,7 +27,7 @@ export function TopNav({ onGoHome, isCatalog }: TopNavProps) {
       </div>
       <div className="flex items-center gap-2 text-xs text-text-secondary">
         {isCatalog ? <Home className="w-4 h-4 text-primary" /> : <Bot className="w-4 h-4 text-primary" />}
-        <span className="max-sm:hidden">OpenCode Agent</span>
+        <span className="max-sm:hidden">课程助手</span>
       </div>
     </header>
   );

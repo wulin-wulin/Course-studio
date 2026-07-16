@@ -13,10 +13,11 @@ import asyncio
 import contextlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..services.ai import model_config
@@ -28,6 +29,7 @@ from ..services.courses import (
     CourseValidationError,
     get_course_store,
 )
+from ..services.conversations import get_conversation_store
 from ..services.opencode import client as opencode_client
 from ..services.opencode import provision as opencode_provision
 
@@ -47,6 +49,22 @@ _histories: dict[str, list[dict[str, Any]]] = {}
 # OpenCode owns its own memory; this map only lets reconnecting WebSocket turns
 # continue the same OpenCode session.
 _opencode_sessions: dict[str, str] = {}
+# Native OpenCode questions outlive the WebSocket request handler while the
+# model is paused. The browser answers them over a small HTTP endpoint so the
+# same OpenCode turn can resume without starting a second chat turn.
+_pending_questions: dict[str, dict[str, Any]] = {}
+
+InteractionMode = Literal["chat", "agent"]
+AgentWorkflow = Literal["default", "course-create"]
+
+
+class AgentQuestionReply(BaseModel):
+    conversation_id: str
+    answers: list[list[str]] = Field(min_length=1, max_length=8)
+
+
+class AgentQuestionReject(BaseModel):
+    conversation_id: str
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -213,6 +231,122 @@ def _safe_conversation_id(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in value)[:80] or "default"
 
 
+def _pending_question_for(request_id: str, conversation_id: str) -> dict[str, Any]:
+    pending = _pending_questions.get(request_id)
+    if not pending or pending.get("conversation_id") != _safe_conversation_id(conversation_id):
+        raise HTTPException(status_code=404, detail="待确认问题不存在或已经处理")
+    return pending
+
+
+def _normalize_opencode_questions(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    questions: list[dict[str, Any]] = []
+    for index, item in enumerate(value[:8]):
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("question") or "").strip()
+        if not prompt:
+            continue
+        options: list[dict[str, str]] = []
+        raw_options = item.get("options") if isinstance(item.get("options"), list) else []
+        for option in raw_options[:12]:
+            if not isinstance(option, dict):
+                continue
+            label = str(option.get("label") or "").strip()
+            if not label:
+                continue
+            options.append({
+                "label": label,
+                "description": str(option.get("description") or "").strip(),
+            })
+        questions.append({
+            "header": str(item.get("header") or f"问题 {index + 1}").strip(),
+            "question": prompt,
+            "options": options,
+            "multiple": bool(item.get("multiple", False)),
+            "custom": item.get("custom") is not False,
+        })
+    return questions
+
+
+def _normalize_question_answers(
+    pending: dict[str, Any], answers: list[list[str]]
+) -> list[list[str]]:
+    questions = pending.get("questions") if isinstance(pending.get("questions"), list) else []
+    if len(answers) != len(questions):
+        raise HTTPException(status_code=422, detail="回答数量与问题数量不一致")
+
+    normalized: list[list[str]] = []
+    for answer in answers:
+        values = [str(value).strip() for value in answer if str(value).strip()]
+        if not values:
+            raise HTTPException(status_code=422, detail="每个问题都需要至少一个答案")
+        normalized.append(values[:12])
+    return normalized
+
+
+def _question_answer_content(pending: dict[str, Any], answers: list[list[str]]) -> str:
+    questions = pending.get("questions") if isinstance(pending.get("questions"), list) else []
+    lines: list[str] = []
+    for index, answer in enumerate(answers):
+        question = questions[index] if index < len(questions) and isinstance(questions[index], dict) else {}
+        header = str(question.get("header") or f"问题 {index + 1}").strip()
+        lines.append(f"{header}：{'、'.join(answer)}")
+    return "确认选择\n" + "\n".join(lines)
+
+
+def _clear_pending_questions_for_session(session_id: str | None) -> None:
+    if not session_id:
+        return
+    stale = [
+        request_id
+        for request_id, pending in _pending_questions.items()
+        if pending.get("session_id") == session_id
+    ]
+    for request_id in stale:
+        _pending_questions.pop(request_id, None)
+
+
+@router.post("/questions/{request_id}/reply")
+async def reply_to_agent_question(request_id: str, body: AgentQuestionReply):
+    pending = _pending_question_for(request_id, body.conversation_id)
+    answers = _normalize_question_answers(pending, body.answers)
+    content = _question_answer_content(pending, answers)
+    await asyncio.to_thread(
+        get_conversation_store().add_message,
+        pending["conversation_id"],
+        role="user",
+        content=content,
+        message_id=f"question-reply:{request_id}",
+    )
+    try:
+        await opencode_client.reply_question(request_id, answers, pending["directory"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"提交确认失败：{exc}") from exc
+    _pending_questions.pop(request_id, None)
+    return {"ok": True, "content": content}
+
+
+@router.post("/questions/{request_id}/reject")
+async def reject_agent_question(request_id: str, body: AgentQuestionReject):
+    pending = _pending_question_for(request_id, body.conversation_id)
+    content = "暂不回答当前确认问题"
+    await asyncio.to_thread(
+        get_conversation_store().add_message,
+        pending["conversation_id"],
+        role="user",
+        content=content,
+        message_id=f"question-reject:{request_id}",
+    )
+    try:
+        await opencode_client.reject_question(request_id, pending["directory"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"取消确认失败：{exc}") from exc
+    _pending_questions.pop(request_id, None)
+    return {"ok": True, "content": content}
+
+
 def _system_prompt() -> str:
     return COURSE_SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -240,6 +374,35 @@ def _agent_prompt(message: str) -> str:
         f"用户请求：\n{message}\n\n"
         "你是课程知识数据 Agent。使用课程数据工具完成读取、创建、修改或删除；"
         "不要处理界面或 Three.js。修改后简短说明实际变更的数据。"
+    )
+
+
+def _chat_prompt(message: str) -> str:
+    return (
+        f"用户问题：\n{message}\n\n"
+        "当前是只读 Chat 模式。请仅根据课程数据进行查询、解释和回答；"
+        "不得创建、编辑或删除文件。若用户要求修改课程，请提示切换到 Agent 模式。"
+    )
+
+
+def _request_mode(payload: dict[str, Any]) -> InteractionMode:
+    return "chat" if str(payload.get("mode") or "agent").lower() == "chat" else "agent"
+
+
+def _request_workflow(payload: dict[str, Any]) -> AgentWorkflow:
+    if _request_mode(payload) == "agent" and payload.get("workflow") == "course-create":
+        return "course-create"
+    return "default"
+
+
+def _course_creation_prompt(message: str) -> str:
+    return (
+        "当前是 Course Studio 的课程创建工作流。必须加载并遵循 "
+        "knowledge-pipeline-orchestrator Skill，通过多轮对话推进 G0-G4 和最终发布确认。\n\n"
+        f"用户本轮输入：\n{message}\n\n"
+        "需要用户补充信息或确认时必须调用 question 工具提供选项和自定义填写，"
+        "不要只在普通回复末尾提问。不要跳过 G2 人工审核门，也不要在用户明确选择"
+        "确认发布前生成 courses 下的正式课程。"
     )
 
 
@@ -300,10 +463,29 @@ async def agent_websocket(websocket: WebSocket):
             if settings.opencode_enabled:
                 await _run_agent_turn_opencode(websocket, payload, active_opencode_session)
             else:
+                if _request_workflow(payload) == "course-create":
+                    await websocket.send_json({
+                        "type": "agent_error",
+                        "payload": {
+                            "message": "课程创建流程依赖 OpenCode Skill，请先启用并启动 OpenCode 服务。",
+                            "conversation_id": payload.get("conversation_id") or "default",
+                        },
+                    })
+                    continue
+                if _request_mode(payload) == "chat":
+                    await websocket.send_json({
+                        "type": "agent_error",
+                        "payload": {
+                            "message": "只读 Chat 模式需要启用 OpenCode 服务。",
+                            "conversation_id": payload.get("conversation_id") or "default",
+                        },
+                    })
+                    continue
                 await _run_agent_turn(websocket, payload)
     except WebSocketDisconnect:
         session_id = active_opencode_session.get("id")
         if session_id:
+            _clear_pending_questions_for_session(session_id)
             await opencode_client.abort(session_id)
     except Exception as exc:
         with contextlib.suppress(Exception):
@@ -334,7 +516,28 @@ async def _run_agent_turn_opencode(
         return
 
     conversation_id = _safe_conversation_id(payload.get("conversation_id") or "default")
+    mode = _request_mode(payload)
+    workflow = _request_workflow(payload)
+    creating_course = workflow == "course-create"
+    readonly = mode == "chat"
     model = _resolve_opencode_model(payload.get("model"))
+    conversation_store = get_conversation_store()
+    await asyncio.to_thread(
+        conversation_store.ensure_conversation,
+        conversation_id,
+        mode=mode,
+        workflow=workflow,
+        model=model,
+        title_hint=message,
+    )
+    await asyncio.to_thread(
+        conversation_store.add_message,
+        conversation_id,
+        role="user",
+        content=message or (f"发送了 {len(images)} 张图片" if images else ""),
+        images=images,
+        message_id=payload.get("request_id"),
+    )
     configured_model = model_config.get_model(model)
     if not (configured_model and configured_model.base_url and configured_model.api_key):
         await websocket.send_json({
@@ -347,9 +550,16 @@ async def _run_agent_turn_opencode(
         return
 
     try:
-        workspace = opencode_provision.ensure_course_session_assets(conversation_id)
-        directory = opencode_provision.host_course_workspace_dir(workspace)
-    except CourseDataError as exc:
+        if readonly:
+            workspace = opencode_provision.ensure_course_chat_session_assets(conversation_id)
+            directory = opencode_provision.host_course_workspace_dir(workspace)
+        elif creating_course:
+            workspace = opencode_provision.ensure_course_creation_session_assets(conversation_id)
+            directory = opencode_provision.host_course_creation_workspace_dir(workspace)
+        else:
+            workspace = opencode_provision.ensure_course_session_assets(conversation_id)
+            directory = opencode_provision.host_course_workspace_dir(workspace)
+    except (CourseDataError, OSError) as exc:
         await websocket.send_json({
             "type": "agent_error",
             "payload": {"message": str(exc), "conversation_id": conversation_id},
@@ -369,10 +579,21 @@ async def _run_agent_turn_opencode(
         return
 
     try:
-        session_id = _opencode_sessions.get(conversation_id)
+        session_key = f"{mode}:{workflow}:{conversation_id}"
+        session_id = _opencode_sessions.get(session_key) or await asyncio.to_thread(
+            conversation_store.get_opencode_session,
+            conversation_id,
+        )
         if not session_id:
-            session_id = await opencode_client.create_session(directory, title=conversation_id)
-            _opencode_sessions[conversation_id] = session_id
+            session_id = await opencode_client.create_session(
+                directory, title=f"{mode}:{workflow}:{conversation_id}"
+            )
+            await asyncio.to_thread(
+                conversation_store.set_opencode_session,
+                conversation_id,
+                session_id,
+            )
+        _opencode_sessions[session_key] = session_id
     except Exception as exc:
         await websocket.send_json({
             "type": "agent_error",
@@ -383,10 +604,20 @@ async def _run_agent_turn_opencode(
     active_session["id"] = session_id
     await websocket.send_json({
         "type": "agent_start",
-        "payload": {"conversation_id": conversation_id, "model": model},
+        "payload": {
+            "conversation_id": conversation_id,
+            "model": model,
+            "mode": mode,
+            "workflow": workflow,
+        },
     })
-    prompt = _agent_prompt(message) if message else "请根据上传内容维护课程知识数据。"
-    ok = await _run_opencode_prompt(
+    if readonly:
+        prompt = _chat_prompt(message) if message else "请只读分析上传内容并回答问题。"
+    elif creating_course:
+        prompt = _course_creation_prompt(message)
+    else:
+        prompt = _agent_prompt(message) if message else "请根据上传内容维护课程知识数据。"
+    ok, response_text = await _run_opencode_prompt(
         websocket=websocket,
         conversation_id=conversation_id,
         session_id=session_id,
@@ -394,12 +625,52 @@ async def _run_agent_turn_opencode(
         text=prompt,
         images=images,
         model=model,
+        agent_name="course-creator" if creating_course else None,
     )
+    if response_text:
+        await asyncio.to_thread(
+            conversation_store.add_message,
+            conversation_id,
+            role="assistant",
+            content=response_text,
+        )
+
+    if readonly:
+        try:
+            opencode_provision.restore_course_chat_session(workspace)
+        except CourseDataError as exc:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"只读工作区恢复失败：{exc}",
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            ok = False
+
+        await _send_status(
+            websocket,
+            conversation_id,
+            "done" if ok else "error",
+            "回答完成" if ok else "Chat 执行失败",
+        )
+        await websocket.send_json({
+            "type": "agent_done",
+            "payload": {
+                "return_code": 0 if ok else 1,
+                "conversation_id": conversation_id,
+                "mode": mode,
+            },
+        })
+        active_session["id"] = None
+        return
+
     if not ok:
         await _send_status(websocket, conversation_id, "error", "Agent 执行失败")
         await websocket.send_json({
             "type": "agent_done",
-            "payload": {"return_code": 1, "conversation_id": conversation_id},
+            "payload": {"return_code": 1, "conversation_id": conversation_id, "mode": mode},
         })
         active_session["id"] = None
         return
@@ -454,7 +725,7 @@ async def _run_agent_turn_opencode(
     await _send_status(websocket, conversation_id, "done", "完成")
     await websocket.send_json({
         "type": "agent_done",
-        "payload": {"return_code": 0, "conversation_id": conversation_id},
+        "payload": {"return_code": 0, "conversation_id": conversation_id, "mode": mode},
     })
     active_session["id"] = None
 
@@ -482,13 +753,33 @@ async def _run_opencode_prompt(
     text: str,
     images: list[Any],
     model: str | None = None,
-) -> bool:
+    agent_name: str | None = None,
+) -> tuple[bool, str]:
     """Stream OpenCode SSE events into the existing agent WebSocket protocol."""
 
     in_flight = {"active": True}
-    streamed_text = {"any": False}
+    active_text = {"any": False}
+    text_chunks: list[str] = []
     tool_started: set[str] = set()
     result = {"ok": True}
+
+    async def finish_text_segment(*, persist: bool) -> str:
+        content = "".join(text_chunks).strip()
+        text_chunks.clear()
+        if active_text["any"]:
+            await websocket.send_json({
+                "type": "agent_text_done",
+                "payload": {"conversation_id": conversation_id},
+            })
+            active_text["any"] = False
+        if persist and content:
+            await asyncio.to_thread(
+                get_conversation_store().add_message,
+                conversation_id,
+                role="assistant",
+                content=content,
+            )
+        return content
 
     async def send_heartbeat() -> None:
         while in_flight["active"]:
@@ -520,13 +811,51 @@ async def _run_opencode_prompt(
                 continue
             if not matches_session(properties, envelope):
                 continue
+            if event_type == "question.asked":
+                request_id = str(properties.get("id") or "").strip()
+                questions = _normalize_opencode_questions(properties.get("questions"))
+                if not request_id or not questions:
+                    continue
+                await finish_text_segment(persist=True)
+                _pending_questions[request_id] = {
+                    "request_id": request_id,
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "directory": directory,
+                    "questions": questions,
+                }
+                await websocket.send_json({
+                    "type": "agent_question",
+                    "payload": {
+                        "request_id": request_id,
+                        "conversation_id": conversation_id,
+                        "questions": questions,
+                    },
+                })
+                await _send_status(websocket, conversation_id, "waiting", "等待你的确认")
+                continue
+            if event_type in ("question.replied", "question.rejected"):
+                request_id = str(properties.get("requestID") or "").strip()
+                if request_id:
+                    _pending_questions.pop(request_id, None)
+                    await websocket.send_json({
+                        "type": "agent_question_resolved",
+                        "payload": {
+                            "request_id": request_id,
+                            "conversation_id": conversation_id,
+                            "rejected": event_type == "question.rejected",
+                        },
+                    })
+                    await _send_status(websocket, conversation_id, "thinking", "已收到确认，继续处理")
+                continue
             if event_type == "message.part.delta":
                 field = properties.get("field")
                 delta = properties.get("delta")
                 if not delta:
                     continue
                 if field == "text":
-                    streamed_text["any"] = True
+                    active_text["any"] = True
+                    text_chunks.append(str(delta))
                     await websocket.send_json({
                         "type": "agent_text_delta",
                         "payload": {"text": delta, "conversation_id": conversation_id},
@@ -551,8 +880,10 @@ async def _run_opencode_prompt(
                     "payload": {"message": str(error), "conversation_id": conversation_id},
                 })
                 result["ok"] = False
+                _clear_pending_questions_for_session(session_id)
                 return
             if event_type == "session.idle":
+                _clear_pending_questions_for_session(session_id)
                 return
 
     heartbeat_task = asyncio.create_task(send_heartbeat())
@@ -563,7 +894,13 @@ async def _run_opencode_prompt(
         await asyncio.sleep(0.3)
         try:
             parts = await _build_opencode_parts(text, images)
-            await opencode_client.prompt(session_id, parts, directory, model_id=model)
+            await opencode_client.prompt(
+                session_id,
+                parts,
+                directory,
+                model_id=model,
+                agent_name=agent_name,
+            )
         except Exception as exc:
             consume_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -572,14 +909,10 @@ async def _run_opencode_prompt(
                 "type": "agent_error",
                 "payload": {"message": f"发送 OpenCode prompt 失败：{exc}", "conversation_id": conversation_id},
             })
-            return False
+            return False, "".join(text_chunks).strip()
         await consume_task
-        if streamed_text["any"]:
-            await websocket.send_json({
-                "type": "agent_text_done",
-                "payload": {"conversation_id": conversation_id},
-            })
-        return bool(result["ok"])
+        response_text = await finish_text_segment(persist=False)
+        return bool(result["ok"]), response_text
     finally:
         in_flight["active"] = False
         heartbeat_task.cancel()
@@ -680,6 +1013,22 @@ async def _run_agent_turn(websocket: WebSocket, payload: dict[str, Any]) -> None
         return
     conversation_id = _safe_conversation_id(payload.get("conversation_id") or "default")
     model = _resolve_opencode_model(payload.get("model"))
+    conversation_store = get_conversation_store()
+    await asyncio.to_thread(
+        conversation_store.ensure_conversation,
+        conversation_id,
+        mode="agent",
+        workflow="default",
+        model=model,
+        title_hint=message,
+    )
+    await asyncio.to_thread(
+        conversation_store.add_message,
+        conversation_id,
+        role="user",
+        content=message,
+        message_id=payload.get("request_id"),
+    )
     configured_model = model_config.get_model(model)
     api_key = (
         (configured_model.api_key if configured_model else "")
@@ -711,6 +1060,26 @@ async def _run_agent_turn(websocket: WebSocket, payload: dict[str, Any]) -> None
         client=client,
         history=history,
     )
+    if ok:
+        for historical_message in reversed(history):
+            if historical_message.get("role") != "assistant":
+                continue
+            content = historical_message.get("content")
+            if not isinstance(content, list):
+                continue
+            response_text = "".join(
+                str(block.get("text") or "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ).strip()
+            if response_text:
+                await asyncio.to_thread(
+                    conversation_store.add_message,
+                    conversation_id,
+                    role="assistant",
+                    content=response_text,
+                )
+                break
     await _send_status(websocket, conversation_id, "done" if ok else "error", "完成" if ok else "Agent 执行失败")
     await websocket.send_json({
         "type": "agent_done",

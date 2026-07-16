@@ -1,5 +1,3 @@
-import json
-
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -64,7 +62,12 @@ async def update_settings(body: SettingsUpdate):
         default_model = current["default_model"]
 
     if default_model:
-        _persist_models_json(default_model, api_url, api_key)
+        model_config.upsert_model(
+            default_model,
+            api_url,
+            api_key,
+            make_default=True,
+        )
 
     if changes:
         _persist_env(changes)
@@ -118,26 +121,3 @@ def _persist_env(changes: dict[str, str]) -> None:
         lines.append(f"{key}={value}")
 
     ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def _persist_models_json(model_id: str, api_url: str, api_key: str) -> None:
-    """Keep the selectable model list aligned with the simplified settings UI."""
-    if not model_id:
-        return
-
-    data = {
-        "default": model_id,
-        "models": [
-            {
-                "id": model_id,
-                "name": model_id,
-                "base_url": api_url,
-                "api_key": api_key,
-                "vision": True,
-            }
-        ],
-    }
-    model_config.MODELS_FILE.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
