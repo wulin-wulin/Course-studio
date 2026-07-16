@@ -95,11 +95,11 @@ def choose_question_answers(questions: list[dict]) -> list[list[str]]:
         if positive:
             answers.append([positive])
         elif "受众" in prompt or "学习者" in prompt:
-            answers.append(["没有正则经验的开发初学者"])
+            answers.append(["具备基础开发经验的软件工程初学者"])
         elif "深度" in prompt or "时长" in prompt:
             answers.append(["两小时入门"])
         elif "范围" in prompt:
-            answers.append(["仅覆盖正则表达式基础使用与安全回溯"])
+            answers.append(["仅覆盖十个软件工程文档静态元数据字段的定义与填写边界"])
         else:
             safe = next(
                 (
@@ -129,8 +129,17 @@ async def main_async(args: argparse.Namespace) -> int:
     course_id = f"course-creation-smoke-{suffix}"
     conversation_id = f"course-creation-smoke-{uuid.uuid4()}"
     session_root = Path(args.session_root).resolve() / conversation_id
-    candidate_path = session_root / "pipeline" / course_id / "candidate-points.json"
-    graph_path = session_root / "pipeline" / course_id / "clustered-graph.json"
+    pipeline_root = session_root / "pipeline" / course_id
+    content_root = pipeline_root / "course-content"
+    course_path = content_root / "src" / "data" / "course.json"
+    index_path = content_root / "src" / "data" / "index.json"
+    generation_path = content_root / "generation" / "manifest.json"
+    animation_manifest_path = (
+        content_root / "generation" / "animation-manifest.json"
+    )
+    points_root = content_root / "src" / "data" / "points"
+    requests_root = content_root / "generation" / "animation-requests"
+    graph_path = pipeline_root / "clustered-graph.json"
     published = False
 
     print(f"conversation_id={conversation_id}")
@@ -145,12 +154,18 @@ async def main_async(args: argparse.Namespace) -> int:
             websocket,
             conversation_id=conversation_id,
             message=(
-                f"创建一门《正则表达式基础（结构化确认测试）》课程，course-id 必须使用 {course_id}。"
-                "面向没有正则经验的开发初学者，深度为两小时入门；范围只包含字符、字符类、"
-                "量词、分组、锚点、转义、匹配与替换、安全回溯和基础调试，排除特定语言 API、"
-                "高级引擎实现和复杂形式语言理论。使用 model-only 模式，生成 10 个粒度清晰的"
-                "候选知识点。完成 G1 后必须在 G2 使用 question 工具让我确认；确认通过后继续"
-                "G3 和 G4，G4 校验通过后再次使用 question 工具询问是否发布。"
+                f"创建一门《软件工程文档元数据字段词典（v2 全流程测试）》课程，course-id 必须使用 {course_id}。"
+                "使用 full 和 model-only 模式，面向具备基础开发经验的软件工程初学者，深度为两小时入门。"
+                "课程只讲文档上静态记录的元数据字段，知识点必须恰好为：文档标题、文档唯一标识、文档版本号、"
+                "文档作者、文档所有者、文档适用范围、文档语言、文档密级、文档关键词、文档参考资料。"
+                "排除文档创建、修改、审批、发布、流转等过程，排除运行时交互、状态变化、算法执行、时间线演进、"
+                "工具操作和特定厂商格式。严格依次完成 G0_SCOPE 到 G7_RELEASE_READY，并把内容写入 v2 "
+                "course-content 包、把图写入其同级 clustered-graph.json。G1 通过后必须在 "
+                "G2_IDENTITY_REVIEW 使用 question 工具让我确认身份和范围；确认后才能继续 G3-G7。"
+                "动画请求必须对每个知识点按真实动态机制逐点判断：虽然本课程被限定为静态概念辨析，"
+                "但不得为了让测试通过而预设 animationType=none、隐藏真实动画需要或绕过动画契约；"
+                "若确实发现动态机制，应如实生成和验收，让测试断言暴露预期偏差。G7 的全部校验通过后，"
+                "必须再次使用 question 工具询问是否发布，得到确认后才执行项目发布。"
             ),
             model=args.model,
             api_url=args.api_url,
@@ -160,14 +175,88 @@ async def main_async(args: argparse.Namespace) -> int:
         if question_events < 2:
             raise RuntimeError(f"expected at least 2 structured questions, got {question_events}")
         print(f"  structured questions: {question_events}")
-        candidate = load_artifact(candidate_path, "candidate-points/1.0")
-        if len(candidate.get("candidates") or []) != 10:
-            raise RuntimeError("G1 did not generate exactly 10 candidates")
-        print("  artifact: candidate-points.json ok (10 candidates)")
-        graph = load_artifact(graph_path, "clustered-graph/1.0")
-        if len(graph.get("points") or []) != 10:
-            raise RuntimeError("G3 graph did not preserve the 10-point set")
-        print("  artifact: clustered-graph.json ok (10 points)")
+        course_content = load_artifact(course_path, "1.0")
+        index = load_artifact(index_path, "course-content-index/1.0")
+        generation = load_artifact(
+            generation_path,
+            "course-content-generation/1.0",
+        )
+        animation_manifest = load_artifact(
+            animation_manifest_path,
+            "course-content-animations/1.0",
+        )
+
+        index_points = index.get("points") or []
+        if len(index_points) != 10:
+            raise RuntimeError("G1 did not generate exactly 10 index points")
+        index_ids = [str(point.get("id") or "") for point in index_points]
+        if not all(index_ids) or len(set(index_ids)) != 10:
+            raise RuntimeError("G1 index point ids are missing or duplicated")
+        if course_content.get("id") != course_id or index.get("courseId") != course_id:
+            raise RuntimeError("course id is inconsistent across the v2 content package")
+        subject = generation.get("subject") or {}
+        if subject.get("id") != course_id:
+            raise RuntimeError("generation manifest subject id mismatch")
+        if (generation.get("generation") or {}).get("pointCount") != 10:
+            raise RuntimeError("generation manifest pointCount is not 10")
+
+        point_paths = sorted(points_root.glob("*.json"))
+        request_paths = sorted(requests_root.glob("*.json"))
+        if len(point_paths) != 10:
+            raise RuntimeError(f"expected 10 point files, got {len(point_paths)}")
+        if len(request_paths) != 10:
+            raise RuntimeError(
+                f"expected 10 animation request files, got {len(request_paths)}"
+            )
+
+        details = [json.loads(path.read_text(encoding="utf-8")) for path in point_paths]
+        detail_by_id = {str(point.get("id") or ""): point for point in details}
+        if set(detail_by_id) != set(index_ids) or len(detail_by_id) != 10:
+            raise RuntimeError("point files do not match the frozen v2 index point set")
+        if any(point.get("animationType") != "none" for point in details):
+            raise RuntimeError(
+                "the static-concept course unexpectedly produced an animation binding"
+            )
+
+        requests = [
+            load_artifact(path, "animation-request/1.0") for path in request_paths
+        ]
+        request_ids = [str(request.get("pointId") or "") for request in requests]
+        if set(request_ids) != set(index_ids) or len(set(request_ids)) != 10:
+            raise RuntimeError("animation requests do not cover the 10-point set exactly")
+        if any(request.get("needed") is not False for request in requests):
+            raise RuntimeError(
+                "a point was judged to need animation; the smoke expectation must not "
+                "override that real assessment"
+            )
+        if animation_manifest.get("animations") != []:
+            raise RuntimeError("expected an honestly empty animation manifest")
+        print("  artifact: v2 course-content package ok (10 points, 10 requests)")
+
+        graph = load_artifact(graph_path, "clustered-graph/2.0")
+        graph_points = graph.get("points") or []
+        graph_ids = [str(point.get("id") or "") for point in graph_points]
+        if graph_ids != index_ids:
+            raise RuntimeError("G6 graph did not preserve the frozen point order")
+        for graph_point in graph_points:
+            point_id = str(graph_point.get("id") or "")
+            source_point = detail_by_id[point_id]
+            for field, value in source_point.items():
+                if field == "prerequisites":
+                    continue
+                if graph_point.get(field) != value:
+                    raise RuntimeError(
+                        f"G6 graph changed point content: {point_id}.{field}"
+                    )
+            if not graph_point.get("clusterIds"):
+                raise RuntimeError(f"G6 graph omitted clusterIds for {point_id}")
+            if graph_point.get("role") not in {"trunk", "branch", "leaf"}:
+                raise RuntimeError(f"G6 graph has an invalid role for {point_id}")
+            if not isinstance(graph_point.get("related"), list):
+                raise RuntimeError(f"G6 graph omitted related for {point_id}")
+            if not isinstance(graph_point.get("prerequisites"), list):
+                raise RuntimeError(f"G6 graph omitted prerequisites for {point_id}")
+        print("  artifact: clustered-graph.json v2 full-content pass-through ok")
 
     course_url = f"{args.api_url.rstrip('/')}/courses/{course_id}"
     async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
@@ -199,7 +288,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-url", default="http://127.0.0.1:8000/api")
     parser.add_argument("--session-root", default=str(DEFAULT_SESSION_ROOT))
     parser.add_argument("--model")
-    parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--keep", action="store_true")
     return parser.parse_args()
 

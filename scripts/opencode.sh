@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+export COURSE_STUDIO_PROJECT_ROOT="$ROOT_DIR"
 
 # Keep the launcher, generated config and backend on one environment file.
 ENV_FILE="$ROOT_DIR/.env"

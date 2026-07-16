@@ -1,11 +1,11 @@
 """Safe JSON storage for CKDS-compatible course packages.
 
-Course content is deliberately stored as ordinary JSON so that future OpenCode
-skills can reason about it without a database adapter.  This service is the
-single writer for the canonical package directory and provides three safeguards:
+Course content is deliberately stored as ordinary JSON, with optional compiled
+animation assets. This service is the single writer for the canonical package
+directory and provides three safeguards:
 
-* paths are constrained to ``<course-id>/{course,index}.json`` and
-  ``<course-id>/points/<point-id>.json``;
+* paths are constrained to the course JSON contract plus three fixed,
+  integrity-checked files under ``<course-id>/animations``;
 * all candidates are parsed and validated before they reach the canonical tree;
 * writes use temporary files plus ``os.replace`` while holding a process lock.
 
@@ -32,7 +32,12 @@ from ...config import settings
 
 
 _ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_ANIMATION_TYPE_RE = re.compile(r"^[a-z][A-Za-z0-9]*$")
+_COMPONENT_RE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_JSON_BYTES = 8 * 1024 * 1024
+_ANIMATION_RUNTIME_SCHEMA = "course-animation-runtime/1.0"
+_ANIMATION_ASSET_FILES = frozenset({"manifest.json", "runtime.js", "runtime.css"})
 _POINT_META_FIELDS = (
     "id",
     "title",
@@ -159,6 +164,34 @@ class CourseStore:
             raise CourseNotFoundError(f"知识点不存在：{pid}")
         return path
 
+    def _animation_dir(
+        self,
+        course_id: str,
+        *,
+        root: Path | None = None,
+        required: bool = True,
+    ) -> Path:
+        directory = self._course_dir(course_id, root=root, required=required)
+        path = self._within(directory, directory / "animations")
+        if required and (not path.is_dir() or path.is_symlink()):
+            raise CourseNotFoundError(f"课程没有可用动画：{course_id}")
+        return path
+
+    def _animation_asset_path(
+        self,
+        course_id: str,
+        file_name: str,
+        *,
+        root: Path | None = None,
+    ) -> Path:
+        if file_name not in _ANIMATION_ASSET_FILES:
+            raise CourseNotFoundError(f"动画资产不存在：{file_name}")
+        directory = self._animation_dir(course_id, root=root)
+        path = self._within(directory, directory / file_name)
+        if not path.is_file() or path.is_symlink():
+            raise CourseNotFoundError(f"动画资产不存在：{file_name}")
+        return path
+
     def _read_json(self, path: Path, *, root: Path | None = None) -> dict[str, Any]:
         if root is not None:
             self._within(root, path)
@@ -249,6 +282,40 @@ class CourseStore:
         with self._lock:
             point = self._read_json(self._point_path(course_id, point_id), root=self.root)
             return _deepcopy_json(point)
+
+    def read_animation_manifest(self, course_id: str) -> dict[str, Any]:
+        with self._lock:
+            _, _, points = self._load_course_objects(self.root, course_id)
+            self._animation_dir(course_id, root=self.root)
+            validation = self._validate_animation_package(self.root, course_id, points)
+            if not validation.ok:
+                raise CourseValidationError(validation.errors, validation.warnings)
+            manifest = self._read_json(
+                self._animation_asset_path(course_id, "manifest.json", root=self.root),
+                root=self.root,
+            )
+            return _deepcopy_json(manifest)
+
+    def read_animation_definition(self, course_id: str, animation_type: str) -> dict[str, Any]:
+        if not isinstance(animation_type, str) or not _ANIMATION_TYPE_RE.fullmatch(animation_type):
+            raise CourseNotFoundError(f"动画类型不存在：{animation_type}")
+        manifest = self.read_animation_manifest(course_id)
+        for animation in manifest.get("animations") or []:
+            if isinstance(animation, dict) and animation.get("type") == animation_type:
+                return _deepcopy_json(animation)
+        raise CourseNotFoundError(f"动画类型不存在：{animation_type}")
+
+    def read_animation_asset(self, course_id: str, file_name: str) -> bytes:
+        if file_name not in {"runtime.js", "runtime.css"}:
+            raise CourseNotFoundError(f"动画资产不存在：{file_name}")
+        with self._lock:
+            # Validate hashes before serving executable content. A partial or
+            # externally modified package must fail closed instead of running.
+            self.read_animation_manifest(course_id)
+            path = self._animation_asset_path(course_id, file_name, root=self.root)
+            if path.stat().st_size > _MAX_JSON_BYTES:
+                raise CourseDataError(f"动画资产过大：{file_name}")
+            return path.read_bytes()
 
     def revision(self, course_id: str) -> str:
         course = self.read_course(course_id)
@@ -427,6 +494,133 @@ class CourseStore:
                 points[point_id] = self._read_json(path, root=root)
         return course, index, points
 
+    def _validate_animation_package(
+        self,
+        root: Path,
+        course_id: str,
+        points: dict[str, dict[str, Any]],
+    ) -> ValidationResult:
+        """Validate an optional, already-compiled sandbox animation bundle."""
+
+        result = ValidationResult()
+        course_directory = self._course_dir(course_id, root=root)
+        animation_directory = course_directory / "animations"
+        if not animation_directory.exists():
+            return result
+        if not animation_directory.is_dir() or animation_directory.is_symlink():
+            result.errors.append(f"课程 {course_id}: animations 必须是普通目录")
+            return result
+
+        found: set[str] = set()
+        for candidate in animation_directory.iterdir():
+            if candidate.is_symlink() or not candidate.is_file():
+                result.errors.append(f"课程 {course_id}: animations 不允许目录或符号链接 {candidate.name}")
+                continue
+            found.add(candidate.name)
+        missing = sorted(_ANIMATION_ASSET_FILES - found)
+        unexpected = sorted(found - _ANIMATION_ASSET_FILES)
+        if missing:
+            result.errors.append(f"课程 {course_id}: 动画包缺少 {', '.join(missing)}")
+        if unexpected:
+            result.errors.append(f"课程 {course_id}: 动画包包含未授权文件 {', '.join(unexpected)}")
+        if missing or unexpected:
+            return result
+
+        try:
+            manifest = self._read_json(animation_directory / "manifest.json", root=root)
+        except CourseDataError as exc:
+            result.errors.append(f"课程 {course_id}: 动画清单无效：{exc}")
+            return result
+        if manifest.get("schema_version") != _ANIMATION_RUNTIME_SCHEMA:
+            result.errors.append(
+                f"课程 {course_id}: 动画清单 schema_version 必须是 {_ANIMATION_RUNTIME_SCHEMA}"
+            )
+        if manifest.get("format") != "sandboxed-iframe":
+            result.errors.append(f"课程 {course_id}: 动画包只能使用 sandboxed-iframe 格式")
+
+        animations = manifest.get("animations")
+        if not isinstance(animations, list) or not animations:
+            result.errors.append(f"课程 {course_id}: 动画清单 animations 必须是非空数组")
+            animations = []
+        known_types: set[str] = set()
+        bound_points: dict[str, str] = {}
+        for animation in animations:
+            if not isinstance(animation, dict):
+                result.errors.append(f"课程 {course_id}: 动画清单中存在非对象项")
+                continue
+            animation_type = animation.get("type")
+            component = animation.get("component")
+            if not isinstance(animation_type, str) or not _ANIMATION_TYPE_RE.fullmatch(animation_type):
+                result.errors.append(f"课程 {course_id}: 非法 animationType {animation_type}")
+                continue
+            if animation_type in known_types:
+                result.errors.append(f"课程 {course_id}: animationType 重复 {animation_type}")
+            known_types.add(animation_type)
+            if not isinstance(component, str) or not _COMPONENT_RE.fullmatch(component):
+                result.errors.append(f"课程 {course_id}: 动画 {animation_type} 的组件名无效")
+            bindings = animation.get("bindings")
+            if not isinstance(bindings, list) or not bindings:
+                result.errors.append(f"课程 {course_id}: 动画 {animation_type} 缺少 bindings")
+                continue
+            for binding in bindings:
+                point_id = binding.get("pointId") if isinstance(binding, dict) else None
+                if not isinstance(point_id, str) or not _ID_RE.fullmatch(point_id):
+                    result.errors.append(f"课程 {course_id}: 动画 {animation_type} 包含非法 pointId")
+                    continue
+                if point_id in bound_points:
+                    result.errors.append(f"课程 {course_id}: 知识点 {point_id} 被多个动画绑定")
+                bound_points[point_id] = animation_type
+                point = points.get(point_id)
+                if point is None:
+                    result.errors.append(f"课程 {course_id}: 动画绑定了不存在的知识点 {point_id}")
+                elif point.get("animationType") != animation_type:
+                    result.errors.append(
+                        f"课程 {course_id}: {point_id}.animationType 与动画清单不一致"
+                    )
+
+        for point_id, point in points.items():
+            animation_type = point.get("animationType")
+            if isinstance(animation_type, str) and animation_type != "none":
+                if animation_type not in known_types:
+                    result.errors.append(
+                        f"课程 {course_id}: 知识点 {point_id} 引用了未发布动画 {animation_type}"
+                    )
+                elif bound_points.get(point_id) != animation_type:
+                    result.errors.append(
+                        f"课程 {course_id}: 知识点 {point_id} 缺少动画清单绑定"
+                    )
+
+        assets = manifest.get("assets")
+        if not isinstance(assets, dict):
+            result.errors.append(f"课程 {course_id}: 动画清单缺少 assets 完整性信息")
+            assets = {}
+        for file_name in ("runtime.js", "runtime.css"):
+            metadata = assets.get(file_name)
+            if not isinstance(metadata, dict):
+                result.errors.append(f"课程 {course_id}: 动画清单缺少 {file_name} 完整性信息")
+                continue
+            asset_path = animation_directory / file_name
+            try:
+                value = asset_path.read_bytes()
+            except OSError as exc:
+                result.errors.append(f"课程 {course_id}: 无法读取动画资产 {file_name}：{exc}")
+                continue
+            expected_bytes = metadata.get("bytes")
+            expected_hash = metadata.get("sha256")
+            if (
+                not isinstance(expected_bytes, int)
+                or isinstance(expected_bytes, bool)
+                or expected_bytes != len(value)
+            ):
+                result.errors.append(f"课程 {course_id}: {file_name} 字节数与清单不一致")
+            if (
+                not isinstance(expected_hash, str)
+                or not _SHA256_RE.fullmatch(expected_hash)
+                or hashlib.sha256(value).hexdigest() != expected_hash
+            ):
+                result.errors.append(f"课程 {course_id}: {file_name} 完整性校验失败")
+        return result
+
     def _course_ids_in(self, root: Path) -> list[str]:
         if not root.exists():
             return []
@@ -457,14 +651,21 @@ class CourseStore:
             )
             result.errors.extend(child.errors)
             result.warnings.extend(child.warnings)
+            animation_child = self._validate_animation_package(root, course_id, points)
+            result.errors.extend(animation_child.errors)
+            result.warnings.extend(animation_child.warnings)
         return result
 
     def validate_course(self, course_id: str, *, strict_details: bool = False) -> ValidationResult:
         with self._lock:
             course, index, points = self._load_course_objects(self.root, course_id)
-            return self._validate_course_objects(
+            result = self._validate_course_objects(
                 course_id, course, index, points, strict_details=strict_details
             )
+            animation_result = self._validate_animation_package(self.root, course_id, points)
+            result.errors.extend(animation_result.errors)
+            result.warnings.extend(animation_result.warnings)
+            return result
 
     # ------------------------------------------------------------------
     # Atomic writer helpers
@@ -474,6 +675,13 @@ class CourseStore:
     def _allowed_relative_path(relative: Path) -> bool:
         parts = relative.parts
         if len(parts) == 2 and _ID_RE.fullmatch(parts[0]) and parts[1] in {"course.json", "index.json"}:
+            return True
+        if (
+            len(parts) == 3
+            and _ID_RE.fullmatch(parts[0]) is not None
+            and parts[1] == "animations"
+            and parts[2] in _ANIMATION_ASSET_FILES
+        ):
             return True
         return (
             len(parts) == 3
@@ -515,7 +723,7 @@ class CourseStore:
         return self._fingerprint_from_tree(self._tree_bytes(root))
 
     def _atomic_sync_tree(self, destination: Path, desired: dict[Path, bytes]) -> None:
-        """Synchronise permitted JSON files with rollback on a failed replace.
+        """Synchronise permitted package files with rollback on a failed replace.
 
         Individual filesystem replacements are atomic.  A process-wide lock and
         rollback make a multi-file course update behave transactionally for
@@ -592,6 +800,15 @@ class CourseStore:
         # Start from the full canonical tree.  A CRUD operation on one course
         # must never erase a different course package.
         desired = self._tree_bytes(self.root)
+        animation_assets = {
+            relative: content
+            for relative, content in desired.items()
+            if (
+                len(relative.parts) == 3
+                and relative.parts[0] == course_id
+                and relative.parts[1] == "animations"
+            )
+        }
         for relative in list(desired):
             if relative.parts and relative.parts[0] == course_id:
                 del desired[relative]
@@ -601,6 +818,10 @@ class CourseStore:
         })
         for point_id, point in points.items():
             desired[Path(course_id) / "points" / f"{point_id}.json"] = _json_bytes(point)
+        desired.update(animation_assets)
+        validation = self._validate_root_from_tree(desired)
+        if not validation.ok:
+            raise CourseValidationError(validation.errors, validation.warnings)
         self._atomic_sync_tree(self.root, desired)
 
     # ------------------------------------------------------------------

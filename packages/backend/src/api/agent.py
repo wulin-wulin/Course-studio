@@ -398,11 +398,11 @@ def _request_workflow(payload: dict[str, Any]) -> AgentWorkflow:
 def _course_creation_prompt(message: str) -> str:
     return (
         "当前是 Course Studio 的课程创建工作流。必须加载并遵循 "
-        "knowledge-pipeline-orchestrator Skill，通过多轮对话推进 G0-G4 和最终发布确认。\n\n"
+        "knowledge-pipeline-orchestrator Skill，通过多轮对话推进 v2 的 G0-G7 门禁和最终发布确认。\n\n"
         f"用户本轮输入：\n{message}\n\n"
         "需要用户补充信息或确认时必须调用 question 工具提供选项和自定义填写，"
-        "不要只在普通回复末尾提问。不要跳过 G2 人工审核门，也不要在用户明确选择"
-        "确认发布前生成 courses 下的正式课程。"
+        "不要只在普通回复末尾提问。不要跳过 G2 身份复核或 G5 动画验收，也不要在用户明确选择"
+        "确认发布且 G7 校验通过前生成 courses 下的正式课程。不得生成或继续使用 v1 中间产物。"
     )
 
 

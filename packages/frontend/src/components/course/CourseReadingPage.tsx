@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   ChevronLeft,
@@ -303,6 +303,14 @@ function ReadingArticle({
         </section>
       )}
 
+      {point.animationType && point.animationType !== "none" && (
+        <CourseAnimationFrame
+          courseId={course.id}
+          animationType={point.animationType}
+          pointTitle={point.title}
+        />
+      )}
+
       <div className="course-reader__reference-grid">
         {(point.keyTerms?.length ?? 0) > 0 && <TagSection title="关键词" items={point.keyTerms ?? []} />}
         {(point.prerequisites?.length ?? 0) > 0 && (
@@ -372,6 +380,96 @@ function ReadingArticle({
       {visualNotes.length > 0 && <ListSection title="图示与动画提示" items={visualNotes} />}
       {point.ideologicalElement && <TextSection title="延伸思考" content={point.ideologicalElement} />}
     </article>
+  );
+}
+
+function CourseAnimationFrame({
+  courseId,
+  animationType,
+  pointTitle,
+}: {
+  courseId: string;
+  animationType: string;
+  pointTitle: string;
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [status, setStatus] = useState<"checking" | "ready" | "unavailable" | "error">("checking");
+  const [height, setHeight] = useState(560);
+  const courseApi = `/api/courses/${encodeURIComponent(courseId)}`;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setStatus("checking");
+    setHeight(560);
+    void fetch(`${courseApi}/animations/manifest`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (response.status === 404) {
+          setStatus("unavailable");
+          return;
+        }
+        if (!response.ok) throw new Error(`动画清单请求失败（${response.status}）`);
+        const payload: unknown = await response.json();
+        if (!isRecord(payload) || !Array.isArray(payload.animations)) {
+          throw new Error("动画清单格式无效");
+        }
+        const available = payload.animations.some(
+          (item) => isRecord(item) && item.type === animationType,
+        );
+        setStatus(available ? "ready" : "unavailable");
+      })
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setStatus("error");
+      });
+    return () => controller.abort();
+  }, [animationType, courseApi]);
+
+  useEffect(() => {
+    const receiveRuntimeMessage = (event: MessageEvent<unknown>) => {
+      if (event.source !== frameRef.current?.contentWindow || !isRecord(event.data)) return;
+      if (event.data.channel !== "course-studio-animation-v1") return;
+      if (event.data.kind === "resize" && typeof event.data.height === "number") {
+        setHeight(Math.min(960, Math.max(320, Math.ceil(event.data.height) + 4)));
+      } else if (event.data.kind === "error") {
+        setStatus("error");
+      }
+    };
+    window.addEventListener("message", receiveRuntimeMessage);
+    return () => window.removeEventListener("message", receiveRuntimeMessage);
+  }, []);
+
+  if (status === "unavailable") return null;
+  if (status === "checking") {
+    return (
+      <section className="course-reader__animation course-reader__animation--loading" aria-busy="true">
+        <span>正在准备交互演示…</span>
+      </section>
+    );
+  }
+  if (status === "error") {
+    return (
+      <section className="course-reader__animation course-reader__animation--error" role="status">
+        <strong>交互演示暂时无法加载</strong>
+        <span>你仍可继续阅读正文和下方动画说明。</span>
+      </section>
+    );
+  }
+
+  const source = `${courseApi}/animations/player?type=${encodeURIComponent(animationType)}`;
+  return (
+    <section className="course-reader__animation" aria-label={`${pointTitle}交互演示`}>
+      <iframe
+        ref={frameRef}
+        src={source}
+        title={`${pointTitle}教学动画`}
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        style={{ height }}
+      />
+    </section>
   );
 }
 

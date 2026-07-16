@@ -30,11 +30,15 @@ _COURSE_CREATOR_PROMPT_PATH = (
 _PROJECT_ROOT = Path(__file__).resolve().parents[5]
 _PROJECT_SKILLS_PATH = _PROJECT_ROOT / "skills"
 _COURSE_CREATION_SKILLS = (
-    "candidate-knowledge-point-generator",
-    "knowledge-cluster-builder",
-    "knowledge-pipeline-orchestrator",
+    ("candidate-knowledge-point-generator", Path("SKILL.md")),
+    (
+        "knowledge-cluster-builder",
+        Path("knowledge-cluster-builder") / "SKILL.md",
+    ),
+    ("knowledge-pipeline-orchestrator", Path("SKILL.md")),
 )
 _COURSE_CREATION_TOOLS = (
+    "bundle-course-animations.mjs",
     "init-course-pipeline.mjs",
     "layout-course-map.mjs",
     "publish-course-pipeline.mjs",
@@ -47,7 +51,7 @@ def _course_creator_permission() -> dict:
     return {
         "edit": {
             "**": "deny",
-            "**/pipeline/*/candidate-points.json": "allow",
+            "**/pipeline/*/course-content/**": "allow",
             "**/pipeline/*/clustered-graph.json": "allow",
         },
         "skill": {
@@ -56,16 +60,42 @@ def _course_creator_permission() -> dict:
             "knowledge-cluster-builder": "allow",
             "knowledge-pipeline-orchestrator": "allow",
         },
+        "task": {
+            "*": "deny",
+            "course-content-worker": "allow",
+            "course-animation-worker": "allow",
+        },
         "question": "allow",
         "bash": {
             "*": "deny",
             "node *init-course-pipeline.mjs*": "allow",
-            "node *check-dag.mjs*": "allow",
+            "node *validate_output.mjs*": "allow",
+            "node *sync_index_from_points.mjs*": "allow",
+            "node *build_animation_registry.mjs*": "allow",
+            "node *check-graph.mjs*": "allow",
             "node *check-pipeline.mjs*": "allow",
             "node *publish-course-pipeline.mjs*": "allow",
+            "node --test *candidate-knowledge-point-generator/scripts/*.test.mjs": "allow",
         },
         "webfetch": "allow",
         "websearch": "allow",
+    }
+
+
+def _course_worker_permission(*edit_patterns: str) -> dict:
+    """Least-privilege permissions for v2 content-generation subagents."""
+
+    return {
+        "edit": {"**": "deny", **{pattern: "allow" for pattern in edit_patterns}},
+        "skill": {
+            "*": "deny",
+            "candidate-knowledge-point-generator": "allow",
+        },
+        "task": "deny",
+        "question": "deny",
+        "bash": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
     }
 
 
@@ -126,7 +156,23 @@ def build_root_config() -> dict:
                 "description": "按照项目 Skill 流程引导用户创建并发布课程",
                 "mode": "primary",
                 "permission": _course_creator_permission(),
-            }
+            },
+            "course-content-worker": {
+                "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",
+                "mode": "subagent",
+                "permission": _course_worker_permission(
+                    "**/pipeline/*/course-content/src/data/points/*.json",
+                    "**/pipeline/*/course-content/generation/animation-requests/*.json",
+                ),
+            },
+            "course-animation-worker": {
+                "description": "按动画清单生成自己负责的教学动画 TSX 与 CSS 组件",
+                "mode": "subagent",
+                "permission": _course_worker_permission(
+                    "**/pipeline/*/course-content/src/animations/*.tsx",
+                    "**/pipeline/*/course-content/src/animations/*.css",
+                ),
+            },
         },
     }
 
@@ -177,11 +223,29 @@ def ensure_course_creation_session_assets(conversation_id: str) -> CourseWorkspa
     )
 
     skills_target = session_root / ".opencode" / "skills"
-    for skill_name in _COURSE_CREATION_SKILLS:
+    skills_target.mkdir(parents=True, exist_ok=True)
+    resolved_skills_target = skills_target.resolve()
+    for skill_name, manifest_path in _COURSE_CREATION_SKILLS:
         source = _PROJECT_SKILLS_PATH / skill_name
-        if not (source / "SKILL.md").is_file():
+        if not (source / manifest_path).is_file():
             raise FileNotFoundError(f"课程创建 Skill 不完整：{source}")
-        shutil.copytree(source, skills_target / skill_name, dirs_exist_ok=True)
+        target = skills_target / skill_name
+        resolved_target = target.resolve()
+        try:
+            resolved_target.relative_to(resolved_skills_target)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Course creation Skill target escapes the session directory: {target}"
+            ) from exc
+        if resolved_target == resolved_skills_target:
+            raise RuntimeError(f"Invalid course creation Skill target: {target}")
+
+        if target.exists() or target.is_symlink():
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.copytree(source, target)
 
     tools_target = session_root / ".opencode" / "tools"
     tools_target.mkdir(parents=True, exist_ok=True)

@@ -52,7 +52,7 @@ PERMISSION = {
 COURSE_CREATOR_PERMISSION = {
     "edit": {
         "**": "deny",
-        "**/pipeline/*/candidate-points.json": "allow",
+        "**/pipeline/*/course-content/**": "allow",
         "**/pipeline/*/clustered-graph.json": "allow",
     },
     "skill": {
@@ -61,16 +61,59 @@ COURSE_CREATOR_PERMISSION = {
         "knowledge-cluster-builder": "allow",
         "knowledge-pipeline-orchestrator": "allow",
     },
+    "task": {
+        "*": "deny",
+        "course-content-worker": "allow",
+        "course-animation-worker": "allow",
+    },
     "question": "allow",
     "bash": {
         "*": "deny",
         "node *init-course-pipeline.mjs*": "allow",
-        "node *check-dag.mjs*": "allow",
+        "node *validate_output.mjs*": "allow",
+        "node *sync_index_from_points.mjs*": "allow",
+        "node *build_animation_registry.mjs*": "allow",
+        "node *check-graph.mjs*": "allow",
         "node *check-pipeline.mjs*": "allow",
         "node *publish-course-pipeline.mjs*": "allow",
+        "node --test *candidate-knowledge-point-generator/scripts/*.test.mjs": "allow",
     },
     "webfetch": "allow",
     "websearch": "allow",
+}
+
+COURSE_CONTENT_WORKER_PERMISSION = {
+    "edit": {
+        "**": "deny",
+        "**/pipeline/*/course-content/src/data/points/*.json": "allow",
+        "**/pipeline/*/course-content/generation/animation-requests/*.json": "allow",
+    },
+    "skill": {
+        "*": "deny",
+        "candidate-knowledge-point-generator": "allow",
+    },
+    "task": "deny",
+    "question": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+}
+
+COURSE_ANIMATION_WORKER_PERMISSION = {
+    "edit": {
+        "**": "deny",
+        "**/pipeline/*/course-content/src/animations/*.tsx": "allow",
+        "**/pipeline/*/course-content/src/animations/*.css": "allow",
+    },
+    "skill": {
+        "*": "deny",
+        "candidate-knowledge-point-generator": "allow",
+    },
+    "task": "deny",
+    "question": "deny",
+    "bash": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
 }
 
 
@@ -159,7 +202,17 @@ def main() -> int:
                 "description": "按照项目 Skill 流程引导用户创建并发布课程",
                 "mode": "primary",
                 "permission": COURSE_CREATOR_PERMISSION,
-            }
+            },
+            "course-content-worker": {
+                "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",
+                "mode": "subagent",
+                "permission": COURSE_CONTENT_WORKER_PERMISSION,
+            },
+            "course-animation-worker": {
+                "description": "按动画清单生成自己负责的教学动画 TSX 与 CSS 组件",
+                "mode": "subagent",
+                "permission": COURSE_ANIMATION_WORKER_PERMISSION,
+            },
         },
     }
 

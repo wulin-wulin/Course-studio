@@ -5,7 +5,9 @@ import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { createCourseMapLayout } from "./layout-course-map.mjs";
+import { buildCourseAnimationRuntime } from "./bundle-course-animations.mjs";
 
+const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const PALETTE = [
   ["#2F7A65", "#E2F4EC", "#185342"],
   ["#A86132", "#F8E8DA", "#6E381C"],
@@ -23,11 +25,12 @@ function fail(message) {
   throw new Error(message);
 }
 
-function readJson(filePath) {
+function readJson(filePath, label = "JSON") {
+  if (!fs.existsSync(filePath)) fail(`缺少${label}：${path.relative(process.cwd(), filePath)}`);
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (error) {
-    fail(`无法读取 JSON：${filePath}\n${error.message}`);
+    fail(`无法读取${label}：${path.relative(process.cwd(), filePath)}\n${error.message}`);
   }
 }
 
@@ -38,15 +41,19 @@ function writeJson(filePath, value) {
 
 function parseArgs(argv) {
   const courseId = argv[2];
-  if (!courseId || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(courseId)) {
+  if (!courseId || !ID_PATTERN.test(courseId)) {
     fail("用法：node .opencode/tools/publish-course-pipeline.mjs <course-id>");
   }
+  if (argv.length > 3) fail(`未知参数：${argv.slice(3).join(" ")}`);
   return courseId;
 }
 
-function validateGraph(graph) {
-  if (graph?.schema_version !== "clustered-graph/1.0") {
-    fail("clustered-graph.json 的 schema_version 必须是 clustered-graph/1.0");
+function validateGraphBasics(graph, courseId) {
+  if (graph?.schema_version !== "clustered-graph/2.0") {
+    fail("clustered-graph.json 的 schema_version 必须是 clustered-graph/2.0");
+  }
+  if (graph.subject?.id !== courseId || graph.generation?.sourceCourseId !== courseId) {
+    fail("图谱的 subject.id、generation.sourceCourseId 必须与 course-id 一致");
   }
   if (!Array.isArray(graph.clusters) || graph.clusters.length === 0) {
     fail("clustered-graph.json 必须至少包含一个簇");
@@ -55,40 +62,26 @@ function validateGraph(graph) {
     fail("clustered-graph.json 必须至少包含一个知识点");
   }
 
-  const clusterIds = new Set(graph.clusters.map((cluster) => cluster.id));
+  const clusterIds = new Set();
+  for (const cluster of graph.clusters) {
+    if (!ID_PATTERN.test(cluster?.id ?? "") || clusterIds.has(cluster.id)) {
+      fail(`知识簇 ID 缺失、非法或重复：${cluster?.id ?? "<empty>"}`);
+    }
+    clusterIds.add(cluster.id);
+  }
   const pointIds = new Set();
   for (const point of graph.points) {
-    if (!point?.id || pointIds.has(point.id)) fail(`知识点 ID 缺失或重复：${point?.id ?? "<empty>"}`);
+    if (!ID_PATTERN.test(point?.id ?? "") || pointIds.has(point.id)) {
+      fail(`知识点 ID 缺失、非法或重复：${point?.id ?? "<empty>"}`);
+    }
     pointIds.add(point.id);
-    if (!clusterIds.has(point.clusterId)) fail(`知识点 ${point.id} 引用了不存在的簇 ${point.clusterId}`);
-  }
-
-  const indegree = new Map([...pointIds].map((id) => [id, 0]));
-  const outgoing = new Map([...pointIds].map((id) => [id, []]));
-  for (const point of graph.points) {
-    for (const prerequisite of point.prerequisites ?? []) {
-      if (!pointIds.has(prerequisite)) fail(`知识点 ${point.id} 引用了不存在的前置知识点 ${prerequisite}`);
-      if (prerequisite === point.id) fail(`知识点 ${point.id} 不能依赖自身`);
-      outgoing.get(prerequisite).push(point.id);
-      indegree.set(point.id, indegree.get(point.id) + 1);
+    if (!Array.isArray(point.clusterIds) || point.clusterIds.length === 0) {
+      fail(`知识点 ${point.id} 缺少 clusterIds`);
     }
-    for (const relatedId of point.related ?? []) {
-      if (!pointIds.has(relatedId)) fail(`知识点 ${point.id} 引用了不存在的关联知识点 ${relatedId}`);
+    for (const clusterId of point.clusterIds) {
+      if (!clusterIds.has(clusterId)) fail(`知识点 ${point.id} 引用了不存在的簇 ${clusterId}`);
     }
   }
-
-  const queue = [...indegree.entries()].filter(([, degree]) => degree === 0).map(([id]) => id);
-  let visited = 0;
-  while (queue.length) {
-    const id = queue.shift();
-    visited += 1;
-    for (const next of outgoing.get(id)) {
-      const degree = indegree.get(next) - 1;
-      indegree.set(next, degree);
-      if (degree === 0) queue.push(next);
-    }
-  }
-  if (visited !== graph.points.length) fail("prerequisites 中存在环，不能发布");
 }
 
 function sentence(value, fallback) {
@@ -97,137 +90,96 @@ function sentence(value, fallback) {
   return /[。！？.!?]$/.test(text) ? text : `${text}。`;
 }
 
-function clusterDescription(cluster, courseTitle) {
-  return sentence(cluster.description, `${cluster.title}是${courseTitle}课程中的核心知识模块`);
-}
-
-function pointDetail(point, indexPoint, pointById, clusterById, color) {
-  const cluster = clusterById.get(point.clusterId);
-  const prerequisites = [...(point.prerequisites ?? [])];
-  const comparisons = (point.related ?? []).slice(0, 4).map(
-    (id) => `${point.title}与${pointById.get(id).title}处于相近或互补的知识脉络，可比较其目标、方法与适用场景。`,
+function buildCourseData(courseId, sourceCourse, manifest, graph) {
+  const courseTitle = sourceCourse.title.trim();
+  const colorByCluster = new Map(
+    graph.clusters.map((cluster, index) => [cluster.id, PALETTE[index % PALETTE.length]]),
   );
-  const keyTerms = Array.isArray(point.keyTerms) ? point.keyTerms.filter(Boolean).slice(0, 6) : [];
-  const terms = keyTerms.length ? keyTerms.join("、") : point.title;
-
-  return {
-    id: point.id,
-    title: point.title,
-    subtitle: cluster.title,
-    clusterId: point.clusterId,
-    shortSummary: point.shortSummary,
-    difficulty: point.difficulty,
-    importance: point.importance,
-    keyTerms: [...point.keyTerms],
-    pos: indexPoint.pos,
-    scale: indexPoint.scale,
-    aliases: [...(point.aliases ?? [])],
-    kind: point.kind,
-    role: point.role,
-    prerequisites,
-    coreIdea: sentence(point.shortSummary, `${point.title}关注${cluster.title}中的关键概念、方法与实践边界`),
-    principles: [
-      `建立“${point.title}”的概念模型，理解${terms}之间的关系。`,
-      `结合“${cluster.title}”的整体目标，分析该知识点的输入、过程、输出与约束。`,
-      `通过案例和反馈验证理解，并识别方法成立的条件、常见误区与权衡。`,
-    ],
-    applications: [
-      `在真实任务中识别需要运用“${point.title}”的问题，并选择合适的方法。`,
-      `把该知识点与“${cluster.title}”的整体内容相结合，完成分析、设计或评估。`,
-    ],
-    comparisons,
-    related: [...(point.related ?? [])],
-    visual: {
-      type: "concept-card",
-      caption: `${point.title} · ${cluster.title}`,
-      color,
-    },
-  };
-}
-
-function buildCourseData(courseId, graph) {
-  const courseTitle = graph.subject?.normalizedTitle?.trim() || graph.subject?.input?.trim() || courseId;
   const clusterById = new Map(graph.clusters.map((cluster) => [cluster.id, cluster]));
-  const pointById = new Map(graph.points.map((point) => [point.id, point]));
-  const colorByCluster = new Map(graph.clusters.map((cluster, index) => [cluster.id, PALETTE[index % PALETTE.length]]));
+  const kindById = new Map(
+    (manifest.pointEvidence ?? []).map((evidence) => [evidence.pointId, evidence.kind]),
+  );
   const rolesById = Object.fromEntries(graph.points.map((point) => [point.id, point.role]));
 
-  const clusters = graph.clusters.map((cluster) => {
-    const [accent, soft, dark] = colorByCluster.get(cluster.id);
-    return {
-      id: cluster.id,
-      title: cluster.title,
-      subtitle: cluster.subtitle,
-      description: clusterDescription(cluster, courseTitle),
-      accent: cluster.accent ?? accent,
-      soft: cluster.soft ?? soft,
-      dark: cluster.dark ?? dark,
-    };
-  });
+  const clusters = graph.clusters
+    .slice()
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+    .map((cluster) => {
+      const [accent, soft, dark] = colorByCluster.get(cluster.id);
+      return {
+        ...cluster,
+        description: sentence(cluster.description, `${cluster.title}是${courseTitle}课程中的核心知识模块`),
+        accent: cluster.accent ?? accent,
+        soft: cluster.soft ?? soft,
+        dark: cluster.dark ?? dark,
+      };
+    });
 
   const points = graph.points.map((point) => ({
     id: point.id,
     title: point.title,
-    clusterId: point.clusterId,
+    clusterId: point.clusterIds[0],
+    clusterIds: [...point.clusterIds],
+    role: point.role,
+    related: [...point.related],
     shortSummary: point.shortSummary,
     difficulty: point.difficulty,
     importance: point.importance,
     keyTerms: [...point.keyTerms],
   }));
-
   const baseIndex = {
     schema_version: "1.0",
     courseId,
-    generatedAt: new Date().toISOString(),
+    generatedAt: graph.generation.generatedAt,
     clusters,
     points,
-    relations: Array.isArray(graph.relations) ? graph.relations : [],
   };
   const layout = createCourseMapLayout({
     courseId,
     index: baseIndex,
     rolesById,
     styleName: "organic",
-    seed: `${courseId}:course-creator:v1`,
+    seed: `${courseId}:course-creator:v2`,
+  });
+  const indexPointById = new Map(layout.index.points.map((point) => [point.id, point]));
+
+  const details = graph.points.map((point) => {
+    const indexPoint = indexPointById.get(point.id);
+    const primaryCluster = clusterById.get(point.clusterIds[0]);
+    return {
+      ...point,
+      subtitle: primaryCluster.title,
+      clusterId: point.clusterIds[0],
+      clusterIds: [...point.clusterIds],
+      related: [...point.related],
+      kind: kindById.get(point.id),
+      pos: indexPoint.pos,
+      scale: indexPoint.scale,
+    };
   });
 
-  const laidOutPointById = new Map(layout.index.points.map((point) => [point.id, point]));
-  const details = graph.points.map((point) =>
-    pointDetail(
-      point,
-      laidOutPointById.get(point.id),
-      pointById,
-      clusterById,
-      colorByCluster.get(point.clusterId)[0],
-    ),
-  );
   const course = {
+    ...sourceCourse,
     schema_version: "1.0",
-    id: courseId,
-    title: courseTitle,
-    subtitle: sentence(graph.subject?.scope, `系统掌握${courseTitle}的核心知识与实践方法`),
-    description: sentence(graph.subject?.scope, `从基础概念到综合实践，建立${courseTitle}的完整知识地图`),
-    language: graph.subject?.language || "zh-CN",
-    accent: PALETTE[0][0],
+    subtitle: sentence(graph.subject.scope, `系统掌握${courseTitle}的核心知识与实践方法`),
+    accent: clusters[0].accent,
     route: `/courses/${courseId}`,
-    revision: 1,
+    revision: sourceCourse.version,
     status: "published",
   };
-
-  return {
-    course,
-    index: layout.index,
-    details,
-  };
+  return { course, index: layout.index, details };
 }
 
-function publish(courseId) {
-  const root = process.cwd();
+async function publish(courseId) {
+  const root = path.resolve(process.cwd());
   const pipelineDirectory = path.join(root, "pipeline", courseId);
+  const contentRoot = path.join(pipelineDirectory, "course-content");
+  const graphPath = path.join(pipelineDirectory, "clustered-graph.json");
+  const sourceCoursePath = path.join(contentRoot, "src", "data", "course.json");
+  const manifestPath = path.join(contentRoot, "generation", "manifest.json");
+  const animationManifestPath = path.join(contentRoot, "generation", "animation-manifest.json");
   const coursesDirectory = path.join(root, "courses");
   const targetDirectory = path.join(coursesDirectory, courseId);
-  const candidatePath = path.join(pipelineDirectory, "candidate-points.json");
-  const graphPath = path.join(pipelineDirectory, "clustered-graph.json");
   const pipelineChecker = path.join(
     root,
     ".opencode",
@@ -237,28 +189,37 @@ function publish(courseId) {
     "check-pipeline.mjs",
   );
 
-  if (!fs.existsSync(candidatePath)) fail(`缺少中间产物：pipeline/${courseId}/candidate-points.json`);
-  if (!fs.existsSync(graphPath)) fail(`缺少中间产物：pipeline/${courseId}/clustered-graph.json`);
-  if (!fs.existsSync(pipelineChecker)) fail("缺少 G4 流水线校验工具，不能发布");
-  if (fs.existsSync(targetDirectory)) fail(`课程 ${courseId} 已存在；发布工具不会覆盖已有课程`);
-  fs.mkdirSync(coursesDirectory, { recursive: true });
-
-  const graph = readJson(graphPath);
-  if (graph.subject?.id !== courseId) {
-    fail(`课程 ID 不一致：参数是 ${courseId}，图谱 subject.id 是 ${graph.subject?.id ?? "<empty>"}`);
+  if (!fs.existsSync(contentRoot) || fs.lstatSync(contentRoot).isSymbolicLink()) {
+    fail(`缺少或拒绝使用不安全的内容包：pipeline/${courseId}/course-content`);
   }
+  if (!fs.existsSync(graphPath)) fail(`缺少中间产物：pipeline/${courseId}/clustered-graph.json`);
+  if (!fs.existsSync(pipelineChecker)) fail("缺少 G7 流水线校验工具，不能发布");
+  if (fs.existsSync(targetDirectory)) fail(`课程 ${courseId} 已存在；发布工具不会覆盖已有课程`);
+
   const checked = spawnSync(
     process.execPath,
-    [pipelineChecker, candidatePath, graphPath, "--json"],
+    [pipelineChecker, contentRoot, graphPath, "--phase", "all", "--json"],
     { cwd: root, encoding: "utf8" },
   );
   if (checked.status !== 0) {
     const detail = (checked.stdout || checked.stderr || "未知校验错误").trim();
-    fail(`G4 流水线校验未通过，不能发布：\n${detail}`);
+    fail(`G7 流水线校验未通过，不能发布：\n${detail}`);
   }
-  validateGraph(graph);
-  const { course, index, details } = buildCourseData(courseId, graph);
 
+  const sourceCourse = readJson(sourceCoursePath, "课程元数据");
+  const manifest = readJson(manifestPath, "生成清单");
+  const animationManifest = readJson(animationManifestPath, "动画清单");
+  const graph = readJson(graphPath, "聚类图谱");
+  validateGraphBasics(graph, courseId);
+  if (sourceCourse.id !== courseId || manifest.subject?.id !== courseId) {
+    fail("course.json、generation/manifest.json 与 course-id 不一致");
+  }
+
+  const animations = Array.isArray(animationManifest.animations) ? animationManifest.animations : null;
+  if (animations === null) fail("动画清单格式无效");
+
+  const { course, index, details } = buildCourseData(courseId, sourceCourse, manifest, graph);
+  fs.mkdirSync(coursesDirectory, { recursive: true });
   const temporaryDirectory = path.join(coursesDirectory, `.publishing-${courseId}-${process.pid}`);
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   try {
@@ -267,19 +228,31 @@ function publish(courseId) {
     for (const detail of details) {
       writeJson(path.join(temporaryDirectory, "points", `${detail.id}.json`), detail);
     }
+    if (animations.length > 0) {
+      await buildCourseAnimationRuntime({
+        contentRoot,
+        outputDirectory: path.join(temporaryDirectory, "animations"),
+        animationManifest,
+        projectRootHint: process.env.COURSE_STUDIO_PROJECT_ROOT,
+      });
+    }
     fs.renameSync(temporaryDirectory, targetDirectory);
   } catch (error) {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
     throw error;
   }
 
-  process.stdout.write(
-    `${JSON.stringify({ courseId, clusters: index.clusters.length, points: index.points.length, output: `courses/${courseId}` })}\n`,
-  );
+  process.stdout.write(`${JSON.stringify({
+    courseId,
+    clusters: index.clusters.length,
+    points: index.points.length,
+    animations: animations.length,
+    output: `courses/${courseId}`,
+  })}\n`);
 }
 
 try {
-  publish(parseArgs(process.argv));
+  await publish(parseArgs(process.argv));
 } catch (error) {
   process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;

@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RootDir = Split-Path -Parent $PSScriptRoot
+$env:COURSE_STUDIO_PROJECT_ROOT = $RootDir
 $EnvFile = Join-Path $RootDir ".env"
 $Generator = Join-Path $PSScriptRoot "gen_opencode_config.py"
 
