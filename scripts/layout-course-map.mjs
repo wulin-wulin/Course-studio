@@ -15,17 +15,19 @@ export const MAP_LAYOUT_STYLES = {
   organic: {
     description: "岛屿式不规则簇，适合知识森林的自然分布",
     vertices: [5, 9],
-    clusterJitter: 130,
-    pointSpread: 0.86,
-    pointGap: 98,
+    clusterJitter: 72,
+    clusterGap: [150, 135],
+    pointSpread: 0.84,
+    pointGap: 150,
     scale: { trunk: 1.16, branch: 0.86, leaf: 0.6 },
   },
   compact: {
     description: "更紧凑的岛屿分布，适合知识簇较少或需要快速总览的课程",
     vertices: [5, 7],
-    clusterJitter: 70,
-    pointSpread: 0.7,
-    pointGap: 84,
+    clusterJitter: 44,
+    clusterGap: [118, 104],
+    pointSpread: 0.76,
+    pointGap: 126,
     scale: { trunk: 1.1, branch: 0.82, leaf: 0.58 },
   },
 };
@@ -79,24 +81,103 @@ function pointInPolygon(point, polygon) {
   return inside;
 }
 
-function genericAnchors(clusters, style, seed) {
+function genericAnchors(clusters, points, style, seed) {
+  if (clusters.length === 0) return {};
   const random = seededRandom(`${seed}:anchors`);
-  const columns = Math.max(2, Math.ceil(Math.sqrt((clusters.length * 4) / 3)));
-  const rows = Math.ceil(clusters.length / columns);
-  const xGap = columns === 1 ? 0 : 2900 / (columns - 1);
-  const yGap = rows === 1 ? 0 : 2000 / (rows - 1);
+  const memberCountByCluster = new Map(clusters.map((cluster) => [cluster.id, 0]));
+  for (const point of points) {
+    memberCountByCluster.set(
+      point.clusterId,
+      (memberCountByCluster.get(point.clusterId) ?? 0) + 1,
+    );
+  }
 
-  return Object.fromEntries(clusters.map((cluster, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const jitterX = (random() - 0.5) * style.clusterJitter;
-    const jitterY = (random() - 0.5) * style.clusterJitter;
-    return [cluster.id, {
-      center: [Math.round(520 + column * xGap + jitterX), Math.round(480 + row * yGap + jitterY)],
-      radius: [265 + random() * 95, 220 + random() * 75],
+  // Round instead of ceil so perfect squares remain balanced (9 -> 3 x 3).
+  // The former 9 -> 4 x 3 grid left most of the last row empty and made the
+  // whole map look much wider than its useful content.
+  const columns = Math.max(2, Math.round(Math.sqrt(clusters.length * 1.15)));
+  const rows = Math.ceil(clusters.length / columns);
+  const baseRowSize = Math.floor(clusters.length / rows);
+  const fullerRows = clusters.length % rows;
+  const rowSizes = Array.from(
+    { length: rows },
+    (_, row) => baseRowSize + (row < fullerRows ? 1 : 0),
+  );
+
+  const entries = clusters.map((cluster) => {
+    const members = memberCountByCluster.get(cluster.id) ?? 0;
+    const density = Math.sqrt(Math.max(1, members));
+    // Dense clusters receive more room, while a one-point cluster no longer
+    // occupies nearly the same island as a seven-point cluster. makePolygon
+    // adds a final small per-member allowance below.
+    const radius = [
+      style.pointGap * 1.25 + density * 38 + random() * 32,
+      style.pointGap + density * 30 + random() * 26,
+    ];
+    const memberAllowanceScale = style.pointGap / MAP_LAYOUT_STYLES.organic.pointGap;
+    return {
+      cluster,
+      members,
+      radius,
+      footprintX: radius[0] + members * 11 * memberAllowanceScale,
+      footprintY: radius[1] + members * 9 * memberAllowanceScale,
       phase: random() * Math.PI * 2,
-    }];
-  }));
+    };
+  });
+
+  const packedRows = [];
+  let entryIndex = 0;
+  for (const rowSize of rowSizes) {
+    const items = entries.slice(entryIndex, entryIndex + rowSize);
+    entryIndex += rowSize;
+    let cursorX = 0;
+    let previousFootprintX = 0;
+    for (const [column, item] of items.entries()) {
+      if (column === 0) cursorX = item.footprintX;
+      else {
+        cursorX += previousFootprintX + style.clusterGap[0] + item.footprintX;
+      }
+      item.localX = cursorX;
+      previousFootprintX = item.footprintX;
+    }
+    const width = items.length > 0
+      ? items.at(-1).localX + items.at(-1).footprintX
+      : 0;
+    packedRows.push({ items, width, halfHeight: Math.max(...items.map((item) => item.footprintY)) });
+  }
+
+  const widestRow = Math.max(...packedRows.map((row) => row.width));
+  let cursorY = 0;
+  let previousHalfHeight = 0;
+  for (const [rowIndex, row] of packedRows.entries()) {
+    if (rowIndex === 0) cursorY = row.halfHeight;
+    else cursorY += previousHalfHeight + style.clusterGap[1] + row.halfHeight;
+    row.localY = cursorY;
+    previousHalfHeight = row.halfHeight;
+  }
+  const totalHeight = packedRows.length > 0
+    ? packedRows.at(-1).localY + packedRows.at(-1).halfHeight
+    : 0;
+
+  const result = {};
+  for (const [rowIndex, row] of packedRows.entries()) {
+    const centeredStart = (widestRow - row.width) / 2;
+    const stagger = (random() - 0.5) * style.clusterJitter
+      + (rowIndex % 2 === 0 ? -style.clusterJitter * 0.12 : style.clusterJitter * 0.12);
+    for (const item of row.items) {
+      const jitterX = (random() - 0.5) * style.clusterJitter * 0.34;
+      const jitterY = (random() - 0.5) * style.clusterJitter * 0.5;
+      result[item.cluster.id] = {
+        center: [
+          Math.round(2000 - widestRow / 2 + centeredStart + item.localX + stagger + jitterX),
+          Math.round(1500 - totalHeight / 2 + row.localY + jitterY),
+        ],
+        radius: item.radius,
+        phase: item.phase,
+      };
+    }
+  }
+  return result;
 }
 
 function roleOf(point, rolesById) {
@@ -109,8 +190,9 @@ function roleOf(point, rolesById) {
 
 function makePolygon(anchor, memberCount, style, random) {
   const vertexCount = style.vertices[0] + Math.floor(random() * (style.vertices[1] - style.vertices[0] + 1));
-  const radiusX = anchor.radius[0] + memberCount * 11;
-  const radiusY = anchor.radius[1] + memberCount * 9;
+  const memberAllowanceScale = style.pointGap / MAP_LAYOUT_STYLES.organic.pointGap;
+  const radiusX = anchor.radius[0] + memberCount * 11 * memberAllowanceScale;
+  const radiusY = anchor.radius[1] + memberCount * 9 * memberAllowanceScale;
   const polygon = [];
   for (let vertex = 0; vertex < vertexCount; vertex += 1) {
     const angle = anchor.phase + (Math.PI * 2 * vertex) / vertexCount + (random() - 0.5) * 0.13;
@@ -127,9 +209,25 @@ function makePolygon(anchor, memberCount, style, random) {
  * 纯函数：根据现有课程索引生成一套地图布局。调用者负责决定是否写回文件。
  */
 export function createCourseMapLayout({ courseId, index, rolesById = {}, styleName = "organic", seed = courseId }) {
-  const style = MAP_LAYOUT_STYLES[styleName];
-  if (!style) fail(`未知布局风格：${styleName}；可用：${Object.keys(MAP_LAYOUT_STYLES).join("、")}`);
+  const stylePreset = MAP_LAYOUT_STYLES[styleName];
+  if (!stylePreset) fail(`未知布局风格：${styleName}；可用：${Object.keys(MAP_LAYOUT_STYLES).join("、")}`);
   if (!Array.isArray(index?.clusters) || !Array.isArray(index?.points)) fail("index.json 必须包含 clusters 与 points 数组");
+  // Small and medium courses keep the generous spacing seen in the UI audit.
+  // Very large maps reduce world-space gaps gradually so hundreds of points do
+  // not expand the camera range without bound; the renderer still applies a
+  // screen-space anti-overlap pass at every zoom level.
+  const densityScale = Math.max(
+    0.72,
+    Math.min(1, Math.sqrt(140 / Math.max(140, index.points.length))),
+  );
+  const style = densityScale === 1
+    ? stylePreset
+    : {
+        ...stylePreset,
+        clusterJitter: stylePreset.clusterJitter * densityScale,
+        clusterGap: stylePreset.clusterGap.map((gap) => Math.max(94, gap * densityScale)),
+        pointGap: stylePreset.pointGap * densityScale,
+      };
 
   const configuredAnchors = COURSE_ANCHORS[courseId];
   // A course may be regenerated with a different cluster taxonomy.  A stale
@@ -138,7 +236,7 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
   const anchors = configuredAnchors
     && index.clusters.every((cluster) => configuredAnchors[cluster.id])
     ? configuredAnchors
-    : genericAnchors(index.clusters, style, seed);
+    : genericAnchors(index.clusters, index.points, style, seed);
   const clusterLayouts = new Map();
   const clusters = index.clusters.map((cluster) => {
     const anchor = anchors[cluster.id];
@@ -150,7 +248,7 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
     return {
       ...cluster,
       polygon: shape.polygon,
-      labelPos: [anchor.center[0], Math.round(anchor.center[1] - shape.radiusY * 0.22)],
+      labelPos: [anchor.center[0], Math.round(anchor.center[1] - shape.radiusY * 0.42)],
     };
   });
 
@@ -167,18 +265,20 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
       const role = roleOf(point, rolesById);
       const scale = Math.round((style.scale[role] + ((point.importance ?? 0.5) - 0.5) * 0.22 + (random() - 0.5) * 0.08) * 100) / 100;
       let position = null;
-      for (let attempt = 0; attempt < 260; attempt += 1) {
+      for (let attempt = 0; attempt < 420; attempt += 1) {
         const angle = random() * Math.PI * 2;
-        const band = role === "trunk"
-          ? 0.14 + random() * 0.28
-          : role === "branch"
-            ? 0.28 + random() * 0.43
-            : 0.24 + Math.sqrt(random()) * (style.pointSpread - 0.24);
+        const band = attempt < 320
+          ? role === "trunk"
+            ? 0.14 + random() * 0.28
+            : role === "branch"
+              ? 0.28 + random() * 0.43
+              : 0.24 + Math.sqrt(random()) * (style.pointSpread - 0.24)
+          : 0.18 + Math.sqrt(random()) * (style.pointSpread - 0.18);
         const candidate = [
           Math.round(bounds.center[0] + Math.cos(angle) * bounds.radiusX * band),
           Math.round(bounds.center[1] + Math.sin(angle) * bounds.radiusY * band),
         ];
-        const minimumGap = (attempt < 180 ? style.pointGap : style.pointGap * 0.8);
+        const minimumGap = attempt < 320 ? style.pointGap : style.pointGap * 0.9;
         const hasRoom = placed.every((other) => Math.hypot(candidate[0] - other.pos[0], candidate[1] - other.pos[1]) >= minimumGap * ((scale + other.scale) / 2));
         if (hasRoom && pointInPolygon(candidate, bounds.polygon)) {
           position = candidate;

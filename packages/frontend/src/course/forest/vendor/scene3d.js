@@ -224,7 +224,7 @@ export class Scene3D {
                 `padding:2px 10px;border-radius:999px;background:rgba(17,28,42,0.62);` +
                 `box-shadow:0 1px 6px rgba(0,0,0,0.25);text-shadow:0 1px 2px rgba(0,0,0,0.55);pointer-events:none;`;
             this._labelLayer.appendChild(el);
-            this._labelEls.push({ el, poly: dom.polygon });
+            this._labelEls.push({ el, poly: dom.polygon, pos: dom.label_pos });
         }
     }
 
@@ -236,14 +236,21 @@ export class Scene3D {
         // 域标签
         for (const lbl of this._labelEls) {
             let sx = 0, sy = 0;
-            const n = lbl.poly.length;
-            for (const pt of lbl.poly) {
-                v3.set(pt[0], pt[1], 0);
+            if (Array.isArray(lbl.pos) && lbl.pos.length >= 2) {
+                v3.set(lbl.pos[0], lbl.pos[1], 0);
                 v3.project(this.camera);
-                sx += (v3.x * 0.5 + 0.5) * rect.width;
-                sy += (-v3.y * 0.5 + 0.5) * rect.height;
+                sx = (v3.x * 0.5 + 0.5) * rect.width;
+                sy = (-v3.y * 0.5 + 0.5) * rect.height;
+            } else {
+                const n = lbl.poly.length;
+                for (const pt of lbl.poly) {
+                    v3.set(pt[0], pt[1], 0);
+                    v3.project(this.camera);
+                    sx += (v3.x * 0.5 + 0.5) * rect.width;
+                    sy += (-v3.y * 0.5 + 0.5) * rect.height;
+                }
+                sx /= n; sy /= n;
             }
-            sx /= n; sy /= n;
             lbl.el.style.left = sx + "px";
             lbl.el.style.top = sy + "px";
             const off = sx < -200 || sx > rect.width + 200 || sy < -200 || sy > rect.height + 200;
@@ -609,7 +616,9 @@ export class Scene3D {
 
         // 屏幕间距过滤（树宽 ≈ 0.05 × 屏宽，间距 = 树宽 × 1.5）
         const rect = this.container.getBoundingClientRect();
-        const minDist = rect.width * 0.03;
+        // 树冠在屏幕上约占视口宽度的 5%；按接近树冠宽度过滤，
+        // 避免远景中两棵树虽然世界坐标不同，投影后仍挤成一团。
+        const minDist = rect.width * 0.045;
         const v3 = new THREE.Vector3();
         const inOrder = sorted.filter(m => candidates.has(m.id));
         const visible = new Set();
@@ -1007,6 +1016,15 @@ export class Scene3D {
             if (x < minX) minX = x; if (x > maxX) maxX = x;
             if (y < minY) minY = y; if (y > maxY) maxY = y;
         }
+        // 簇边界通常比最外侧知识点再宽一圈；把 polygon 也纳入初始
+        // 包围盒，避免窄视口（右侧 Agent 展开时）左右边缘被裁掉。
+        for (const domain of this.layout.domains || []) {
+            for (const point of domain.polygon || []) {
+                const x = point[0], y = point[1];
+                if (x < minX) minX = x; if (x > maxX) maxX = x;
+                if (y < minY) minY = y; if (y > maxY) maxY = y;
+            }
+        }
         if (!isFinite(minX)) { minX = 0; maxX = CANVAS_W; minY = 0; maxY = CANVAS_H; }
         const spanX = maxX - minX, spanY = maxY - minY;
         // 平移限位：内容包围盒外扩 ~15% 边距（随布局自适应，不写死）
@@ -1014,9 +1032,9 @@ export class Scene3D {
         this._panBox = { minX: minX - mx, maxX: maxX + mx, minY: minY - my, maxY: maxY + my };
         const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
         // 距离按 FOV 反算，使竖直与水平跨度都框得住，再留边距
-        const r = this._frameRadius(spanX, spanY, 1.12);
+        const r = this._frameRadius(spanX, spanY, 1.16);
         // phi 默认自然 3/4 俯视森林、露出一小截天空；用户右键上拖可继续抬头直到仰望天空
-        this._best = { theta: -Math.PI / 2, phi: 1.0, r, target: { x: cx, y: cy } };
+        this._best = { theta: -Math.PI / 2, phi: 0.9, r, target: { x: cx, y: cy } };
     }
 
     // 按相机 FOV + 画面比例反算「恰好框住给定地面跨度」所需距离 r（×factor 留边距）
