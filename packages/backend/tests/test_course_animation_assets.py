@@ -157,6 +157,18 @@ class CourseAnimationAssetsTest(unittest.TestCase):
             )
             self.assertEqual(missing.status_code, 404)
 
+    def test_api_deletes_the_selected_course_package(self):
+        app = FastAPI()
+        app.include_router(courses_api.router, prefix="/courses")
+        with patch.object(courses_api, "get_course_store", return_value=self.store):
+            client = TestClient(app)
+            response = client.delete(f"/courses/{self.course_id}")
+
+            self.assertEqual(response.status_code, 204)
+            self.assertFalse((self.course_root / self.course_id).exists())
+            self.assertEqual(client.get(f"/courses/{self.course_id}").status_code, 404)
+            self.assertEqual(client.get("/courses").json(), {"courses": []})
+
 
 if __name__ == "__main__":
     unittest.main()

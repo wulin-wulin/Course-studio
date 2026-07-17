@@ -96,6 +96,15 @@ type ConversationDetail = Omit<ConversationSummary, "message_count" | "preview">
   }>;
 };
 
+type CourseDeletionCandidate = {
+  id: string;
+  title: string;
+  description?: string;
+  clusters?: number;
+  points?: number;
+  invalid: boolean;
+};
+
 type HandlerCtx = {
   setEntries: Dispatch<SetStateAction<AgentEntry[]>>;
   setIsRunning: Dispatch<SetStateAction<boolean>>;
@@ -176,6 +185,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [questionError, setQuestionError] = useState("");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
+  const [courseDeleteOpen, setCourseDeleteOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -520,6 +530,17 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     );
   }, [createConversation, isRunning, mode, resetConversationView, submitRequest, workflow]);
 
+  const openCourseDeletion = useCallback(() => {
+    if (mode !== "agent" || isRunning || workflow === "course-create") return;
+    setHistoryOpen(false);
+    setModeInfoOpen(false);
+    setCourseDeleteOpen(true);
+  }, [isRunning, mode, workflow]);
+
+  const closeCourseDeletion = useCallback(() => {
+    setCourseDeleteOpen(false);
+  }, []);
+
   const submitQuestionAnswers = useCallback(async (answers: string[][]) => {
     const question = pendingQuestion;
     if (!question || questionSubmitting) return;
@@ -795,6 +816,8 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         </div>
       )}
 
+      {courseDeleteOpen && <CourseDeleteDialog onClose={closeCourseDeletion} />}
+
       <div className="border-b border-border bg-cream/45 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <div className="grid w-[142px] shrink-0 grid-cols-2 rounded-lg border border-border bg-surface p-0.5 shadow-sm">
@@ -952,16 +975,28 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
           <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
             <div className="flex min-w-0 items-center gap-2">
               {mode === "agent" && (
-                <button
-                  type="button"
-                  onClick={startCourseCreation}
-                  disabled={!isConnected || isRunning || workflow === "course-create"}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary-light px-2 py-1 text-[11px] font-semibold text-primary transition-colors hover:border-primary/35 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
-                  title={workflow === "course-create" ? "当前对话正在创建课程" : "按照引导创建一门新课程"}
-                >
-                  <BookPlus className="h-3.5 w-3.5" />
-                  创建课程
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={startCourseCreation}
+                    disabled={!isConnected || isRunning || workflow === "course-create"}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary-light px-2 py-1 text-[11px] font-semibold text-primary transition-colors hover:border-primary/35 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={workflow === "course-create" ? "当前对话正在创建课程" : "按照引导创建一门新课程"}
+                  >
+                    <BookPlus className="h-3.5 w-3.5" />
+                    创建课程
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openCourseDeletion}
+                    disabled={isRunning || workflow === "course-create"}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-error/20 bg-error/5 px-2 py-1 text-[11px] font-semibold text-error transition-colors hover:border-error/35 hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={workflow === "course-create" ? "课程创建期间不能删除课程" : "选择并删除一门课程"}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    删除课程
+                  </button>
+                </>
               )}
               <span className="truncate text-[11px] text-text-secondary">
                 {workflow === "course-create" ? "课程创建流程进行中" : "Enter 发送 · Shift+Enter 换行"}
@@ -976,6 +1011,253 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       </div>
     </div>
   );
+}
+
+function CourseDeleteDialog({ onClose }: { onClose: () => void }) {
+  const [courses, setCourses] = useState<CourseDeletionCandidate[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
+  const [deletedCourse, setDeletedCourse] = useState<CourseDeletionCandidate | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadCourses = useCallback(async (signal?: AbortSignal) => {
+    setIsLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/courses", { cache: "no-store", signal });
+      if (!response.ok) throw new Error(`课程列表请求失败（${response.status}）`);
+      const payload: unknown = await response.json();
+      const nextCourses = parseCourseDeletionCandidates(payload);
+      if (!nextCourses) throw new Error("课程列表格式无效");
+      setCourses(nextCourses);
+      setSelectedCourseId((current) => nextCourses.some((course) => course.id === current) ? current : null);
+    } catch (reason) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      setError(reason instanceof Error ? reason.message : "课程列表加载失败");
+    } finally {
+      if (!signal?.aborted) setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadCourses(controller.signal);
+    return () => controller.abort();
+  }, [loadCourses]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isDeleting) onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isDeleting, onClose]);
+
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? null;
+
+  const deleteSelectedCourse = useCallback(async () => {
+    if (!selectedCourse || isDeleting) return;
+    setIsDeleting(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/courses/${encodeURIComponent(selectedCourse.id)}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+      if (!response.ok && response.status !== 404) {
+        const detail = typeof payload?.detail === "string" ? payload.detail : `删除失败（${response.status}）`;
+        throw new Error(detail);
+      }
+
+      setCourses((current) => current.filter((course) => course.id !== selectedCourse.id));
+      setSelectedCourseId(null);
+      setDeletedCourse(selectedCourse);
+      window.dispatchEvent(new CustomEvent("course-data-changed", {
+        detail: {
+          course_id: selectedCourse.id,
+          deleted: true,
+          changed_paths: ["course.json", "index.json", "points/", "animations/"],
+        },
+      }));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除课程失败");
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [isDeleting, selectedCourse]);
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-end bg-black/20 p-3 backdrop-blur-[1px] sm:items-center" role="presentation">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="course-delete-title"
+        className="mx-auto flex max-h-[min(78vh,660px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-border bg-cream/55 px-4 py-3.5">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-error/10 text-error">
+              <Trash2 className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <h2 id="course-delete-title" className="text-sm font-semibold text-text-primary">删除课程</h2>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-text-secondary">先选择课程，再进行最终确认</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isDeleting}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-secondary transition-colors hover:bg-cream-dark hover:text-text-primary disabled:opacity-40"
+            aria-label="关闭删除课程窗口"
+            title="关闭"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {deletedCourse ? (
+            <div className="flex min-h-52 flex-col items-center justify-center text-center">
+              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-primary-light text-primary">
+                <CheckCircle2 className="h-6 w-6" />
+              </div>
+              <h3 className="mt-3 text-sm font-semibold text-text-primary">课程已删除</h3>
+              <p className="mt-1 max-w-sm text-xs leading-relaxed text-text-secondary">
+                “{deletedCourse.title}”已从课程数据和课程导览中移除。
+              </p>
+              <button
+                type="button"
+                onClick={onClose}
+                className="mt-5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-primary-hover"
+              >
+                完成
+              </button>
+            </div>
+          ) : isLoading ? (
+            <div className="flex min-h-52 items-center justify-center gap-2 text-xs text-text-secondary" role="status">
+              <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              正在加载课程列表
+            </div>
+          ) : courses.length === 0 && !error ? (
+            <div className="flex min-h-52 flex-col items-center justify-center text-center text-text-secondary">
+              <Database className="h-7 w-7 opacity-50" />
+              <h3 className="mt-3 text-sm font-semibold text-text-primary">没有可删除的课程</h3>
+              <p className="mt-1 text-xs">创建课程后，它会显示在这里。</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/10 px-3 py-2.5 text-[11px] leading-relaxed text-text-secondary">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <span>删除会移除课程元数据、知识点、地图布局和动画资源，当前界面不提供撤销。</span>
+              </div>
+              {courses.map((course) => {
+                const selected = course.id === selectedCourseId;
+                return (
+                  <button
+                    type="button"
+                    key={course.id}
+                    onClick={() => setSelectedCourseId(course.id)}
+                    aria-pressed={selected}
+                    className={`w-full rounded-xl border px-3 py-3 text-left transition-all ${
+                      selected
+                        ? "border-error/45 bg-error/5 shadow-sm"
+                        : "border-border bg-cream/45 hover:border-error/25 hover:bg-cream"
+                    }`}
+                  >
+                    <span className="flex items-start gap-2.5">
+                      <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
+                        selected ? "border-error bg-error text-white" : "border-border bg-surface"
+                      }`}>
+                        {selected && <CheckCircle2 className="h-3 w-3" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate text-xs font-semibold text-text-primary">{course.title}</span>
+                          {course.invalid && (
+                            <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-medium text-warning">数据无效</span>
+                          )}
+                        </span>
+                        <span className="mt-1 block truncate font-mono text-[10px] text-text-secondary">{course.id}</span>
+                        <span className="mt-1.5 block text-[10px] text-text-secondary">
+                          {formatCourseMetric(course.clusters, "知识簇")} · {formatCourseMetric(course.points, "知识点")}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {error && !deletedCourse && (
+            <div className="mt-3 rounded-xl border border-error/20 bg-error/5 px-3 py-2.5 text-xs text-error" role="alert">
+              <div>{error}</div>
+              {!selectedCourse && (
+                <button type="button" onClick={() => void loadCourses()} className="mt-2 inline-flex items-center gap-1 font-semibold hover:underline">
+                  <RefreshCw className="h-3 w-3" />
+                  重新加载
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {!deletedCourse && !isLoading && courses.length > 0 && (
+          <footer className="flex items-center justify-between gap-3 border-t border-border bg-cream/35 px-4 py-3">
+            <span className="min-w-0 truncate text-[11px] text-text-secondary">
+              {selectedCourse ? `将删除：${selectedCourse.title}` : "请选择要删除的课程"}
+            </span>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isDeleting}
+                className="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-semibold text-text-secondary transition-colors hover:bg-cream disabled:opacity-40"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void deleteSelectedCourse()}
+                disabled={!selectedCourse || isDeleting}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-error px-3 py-2 text-xs font-semibold text-white transition-colors hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                {isDeleting ? "正在删除" : "确认删除"}
+              </button>
+            </div>
+          </footer>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function parseCourseDeletionCandidates(payload: unknown): CourseDeletionCandidate[] | null {
+  if (!isRecord(payload) || !Array.isArray(payload.courses)) return null;
+  const courses: CourseDeletionCandidate[] = [];
+  for (const item of payload.courses) {
+    if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim()) return null;
+    courses.push({
+      id: item.id,
+      title: typeof item.title === "string" && item.title.trim() ? item.title : item.id,
+      description: typeof item.description === "string" ? item.description : undefined,
+      clusters: toOptionalCount(item.clusters),
+      points: toOptionalCount(item.points),
+      invalid: item.invalid === true,
+    });
+  }
+  return courses;
+}
+
+function toOptionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function formatCourseMetric(value: number | undefined, label: string): string {
+  return `${typeof value === "number" ? value : "—"} 个${label}`;
 }
 
 function AgentQuestionCard({

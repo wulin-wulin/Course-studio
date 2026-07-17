@@ -40,12 +40,16 @@ export type CourseMeta = {
 };
 
 export type CoursePointDetail = ForestPoint & {
+  subtitle?: string;
+  kind?: string;
+  role?: string;
   coreIdea?: string;
   principles?: string[];
   applications?: string[];
   comparisons?: string[];
   formula?: string;
   aliases?: string[];
+  related?: string[];
   intuition?: string;
   misconceptions?: string[];
   history?: string;
@@ -54,6 +58,12 @@ export type CoursePointDetail = ForestPoint & {
   animationType?: string;
   visualSuggestion?: string;
   animationSuggestion?: string;
+  yearIntroduced?: number;
+  visual?: {
+    type?: string;
+    caption?: string;
+    color?: string;
+  };
   ideologicalElement?: string;
   prosCons?: {
     pros?: string[];

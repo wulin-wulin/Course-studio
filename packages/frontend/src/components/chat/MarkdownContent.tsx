@@ -1,6 +1,9 @@
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import "katex/dist/katex.min.css";
 
 type MarkdownContentProps = {
   content: string;
@@ -11,12 +14,14 @@ export function MarkdownContent({ content, className = "" }: MarkdownContentProp
   return (
     <div className={`min-w-0 max-w-full overflow-hidden break-words ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, trust: false }]]}
         components={{
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
-            const inline = !match;
-            if (inline) {
+            const content = String(children);
+            const isBlock = Boolean(match) || content.includes("\n");
+            if (!isBlock) {
               return (
                 <code className="rounded bg-cream-dark px-1 py-0.5 text-xs break-words" {...props}>
                   {children}
@@ -26,7 +31,7 @@ export function MarkdownContent({ content, className = "" }: MarkdownContentProp
             return (
               <div className="max-w-full overflow-x-auto">
                 <SyntaxHighlighter
-                  language={match[1]}
+                  language={match?.[1] ?? "text"}
                   PreTag="div"
                   customStyle={{
                     margin: 0,
@@ -36,7 +41,7 @@ export function MarkdownContent({ content, className = "" }: MarkdownContentProp
                     minWidth: "100%",
                   }}
                 >
-                  {String(children).replace(/\n$/, "")}
+                  {content.replace(/\n$/, "")}
                 </SyntaxHighlighter>
               </div>
             );

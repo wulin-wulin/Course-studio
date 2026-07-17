@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import { AlertCircle, Loader2, PanelRightOpen } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { CourseCatalog } from "../course/CourseCatalog";
@@ -16,6 +20,16 @@ type AppRoute =
 const AGENT_PANEL_WIDTH_KEY = "course-studio:agent-panel-width";
 const AGENT_PANEL_MIN_WIDTH = 400;
 const AGENT_PANEL_MAX_WIDTH = 880;
+const AGENT_PANEL_KEYBOARD_STEP = 24;
+const AGENT_PANEL_KEYBOARD_LARGE_STEP = 64;
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled]):not([type='hidden'])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
 
 function agentPanelBounds(viewportWidth = window.innerWidth) {
   return {
@@ -67,9 +81,24 @@ function useCourseRoute(): [AppRoute, (path: string) => void] {
 
 export function AppShell() {
   const [route, navigate] = useCourseRoute();
-  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(true);
+  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(() => window.innerWidth >= 1024);
   const [agentPanelWidth, setAgentPanelWidth] = useState(initialAgentPanelWidth);
   const [isResizingAgentPanel, setIsResizingAgentPanel] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const agentDialogRef = useRef<HTMLElement>(null);
+  const expandAgentButtonRef = useRef<HTMLButtonElement>(null);
+  const wasMobileAgentModalOpenRef = useRef(false);
+  const isMobileAgentModalOpen = isAgentPanelOpen && viewportWidth < 1024;
+
+  const openAgentPanel = useCallback(() => {
+    setIsAgentPanelOpen(true);
+  }, []);
+
+  const closeAgentPanel = useCallback(() => {
+    setIsAgentPanelOpen(false);
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(AGENT_PANEL_WIDTH_KEY, String(agentPanelWidth));
@@ -77,11 +106,119 @@ export function AppShell() {
 
   useEffect(() => {
     const handleResize = () => {
+      setViewportWidth(window.innerWidth);
       setAgentPanelWidth((current) => clampAgentPanelWidth(current));
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    const handleDeletedCourse = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (
+        route.kind !== "catalog"
+        && isRecord(detail)
+        && detail.deleted === true
+        && detail.course_id === route.courseId
+      ) {
+        navigate("/");
+      }
+    };
+    window.addEventListener("course-data-changed", handleDeletedCourse);
+    return () => window.removeEventListener("course-data-changed", handleDeletedCourse);
+  }, [navigate, route]);
+
+  useEffect(() => {
+    if (route.kind === "reading" && window.innerWidth < 1024) {
+      setIsAgentPanelOpen(false);
+    }
+  }, [route]);
+
+  useEffect(() => {
+    if (!isMobileAgentModalOpen) return;
+
+    const topNavigation = appShellRef.current?.firstElementChild;
+    const backgroundElements = [
+      topNavigation instanceof HTMLElement ? topNavigation : null,
+      workspaceRef.current,
+    ].filter((element): element is HTMLElement => element !== null);
+    const previousStates = backgroundElements.map((element) => ({
+      element,
+      inert: element.inert,
+      ariaHidden: element.getAttribute("aria-hidden"),
+    }));
+
+    for (const element of backgroundElements) {
+      element.inert = true;
+      element.setAttribute("aria-hidden", "true");
+    }
+
+    return () => {
+      for (const previous of previousStates) {
+        previous.element.inert = previous.inert;
+        if (previous.ariaHidden === null) previous.element.removeAttribute("aria-hidden");
+        else previous.element.setAttribute("aria-hidden", previous.ariaHidden);
+      }
+    };
+  }, [isMobileAgentModalOpen]);
+
+  useEffect(() => {
+    if (!isMobileAgentModalOpen) {
+      const shouldRestoreFocus = wasMobileAgentModalOpenRef.current && !isAgentPanelOpen;
+      wasMobileAgentModalOpenRef.current = false;
+      if (!shouldRestoreFocus) return;
+      const frame = window.requestAnimationFrame(() => expandAgentButtonRef.current?.focus());
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    wasMobileAgentModalOpenRef.current = true;
+    const dialog = agentDialogRef.current;
+    if (!dialog) return;
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const collapseButton = dialog.querySelector<HTMLElement>(
+        '[aria-controls="course-agent-panel"][aria-expanded="true"]',
+      );
+      const firstFocusable = getFocusableElements(dialog)[0];
+      (collapseButton ?? firstFocusable ?? dialog).focus();
+    });
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeAgentPanel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = getFocusableElements(dialog);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || active === dialog || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [closeAgentPanel, isAgentPanelOpen, isMobileAgentModalOpen]);
 
   const beginAgentPanelResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (window.innerWidth < 1024) return;
@@ -109,6 +246,34 @@ export function AppShell() {
     window.addEventListener("pointercancel", stopResize);
   }, [agentPanelWidth]);
 
+  const resizeAgentPanelByKeyboard = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (window.innerWidth < 1024) return;
+    const bounds = agentPanelBounds();
+    const step = event.shiftKey ? AGENT_PANEL_KEYBOARD_LARGE_STEP : AGENT_PANEL_KEYBOARD_STEP;
+    let nextWidth: number;
+
+    switch (event.key) {
+      case "ArrowLeft":
+        // The separator is on the panel's left edge, so moving it left makes the panel wider.
+        nextWidth = agentPanelWidth + step;
+        break;
+      case "ArrowRight":
+        nextWidth = agentPanelWidth - step;
+        break;
+      case "Home":
+        nextWidth = bounds.min;
+        break;
+      case "End":
+        nextWidth = bounds.max;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    setAgentPanelWidth(clampAgentPanelWidth(nextWidth));
+  }, [agentPanelWidth]);
+
   const resetAgentPanelWidth = useCallback(() => {
     setAgentPanelWidth(defaultAgentPanelWidth());
   }, []);
@@ -118,23 +283,38 @@ export function AppShell() {
   } as CSSProperties;
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-cream">
+    <div ref={appShellRef} className="h-screen flex flex-col overflow-hidden bg-cream">
       <TopNav onGoHome={() => navigate("/")} isCatalog={route.kind === "catalog"} />
-      <main className="flex-1 min-h-0 flex overflow-hidden max-lg:flex-col">
-        <section className="flex-1 min-w-0 min-h-0 relative">
+      <main className="relative flex-1 min-h-0 flex overflow-hidden max-lg:flex-col">
+        <section ref={workspaceRef} className="flex-1 min-w-0 min-h-0 relative">
           {route.kind === "catalog" ? (
             <CourseCatalog onOpenCourse={(course) => navigate(`/courses/${encodeURIComponent(course.id)}/forest`)} />
           ) : (
             <CourseWorkspace route={route} navigate={navigate} />
           )}
         </section>
+        {isAgentPanelOpen && (
+          <button
+            type="button"
+            aria-label="收起课程助手"
+            aria-hidden={isMobileAgentModalOpen ? true : undefined}
+            tabIndex={-1}
+            onClick={closeAgentPanel}
+            className="absolute inset-0 z-40 hidden bg-black/20 max-lg:block"
+          />
+        )}
         <aside
+          ref={agentDialogRef}
+          role={isMobileAgentModalOpen ? "dialog" : undefined}
+          aria-modal={isMobileAgentModalOpen ? true : undefined}
+          aria-label={isMobileAgentModalOpen ? "课程助手" : undefined}
+          tabIndex={isMobileAgentModalOpen ? -1 : undefined}
           style={panelStyle}
           className={`relative shrink-0 min-h-0 border-l border-border bg-surface max-lg:border-l-0 max-lg:border-t ${
             isResizingAgentPanel ? "" : "transition-[width] duration-200"
           } ${
             isAgentPanelOpen
-              ? "w-[var(--agent-panel-width)] min-w-[400px] max-lg:!w-full max-lg:min-w-0 max-lg:min-h-[420px]"
+              ? "w-[var(--agent-panel-width)] min-w-[400px] max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-50 max-lg:!h-[min(72vh,640px)] max-lg:!w-full max-lg:min-w-0 max-lg:overflow-hidden max-lg:rounded-t-2xl max-lg:shadow-2xl"
               : "w-12 min-w-12 max-lg:w-full max-lg:min-h-12 max-lg:h-12"
           }`}
         >
@@ -143,29 +323,33 @@ export function AppShell() {
               role="separator"
               aria-label="调整课程助手面板宽度"
               aria-orientation="vertical"
-              aria-valuemin={agentPanelBounds().min}
-              aria-valuemax={agentPanelBounds().max}
+              aria-valuemin={agentPanelBounds(viewportWidth).min}
+              aria-valuemax={agentPanelBounds(viewportWidth).max}
               aria-valuenow={agentPanelWidth}
-              title="左右拖动调整宽度，双击恢复默认"
+              aria-valuetext={`${agentPanelWidth} 像素`}
+              tabIndex={0}
+              title="左右拖动或使用方向键调整宽度，双击恢复默认"
               onPointerDown={beginAgentPanelResize}
+              onKeyDown={resizeAgentPanelByKeyboard}
               onDoubleClick={resetAgentPanelWidth}
-              className={`absolute -left-1.5 top-0 z-40 hidden h-full w-3 cursor-col-resize items-center justify-center lg:flex ${
+              className={`group absolute -left-1.5 top-0 z-40 hidden h-full w-3 cursor-col-resize items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary lg:flex ${
                 isResizingAgentPanel ? "bg-primary/5" : ""
               }`}
             >
               <span className={`h-12 w-1 rounded-full transition-colors ${
-                isResizingAgentPanel ? "bg-primary" : "bg-border hover:bg-primary/65"
+                isResizingAgentPanel ? "bg-primary" : "bg-border group-focus-visible:bg-primary hover:bg-primary/65"
               }`} />
             </div>
           )}
           <div id="course-agent-panel" className={isAgentPanelOpen ? "h-full" : "hidden"}>
-            <AgentPanel onCollapse={() => setIsAgentPanelOpen(false)} />
+            <AgentPanel onCollapse={closeAgentPanel} />
           </div>
 
           {!isAgentPanelOpen && (
             <button
+              ref={expandAgentButtonRef}
               type="button"
-              onClick={() => setIsAgentPanelOpen(true)}
+              onClick={openAgentPanel}
               aria-controls="course-agent-panel"
               aria-expanded={false}
               aria-label="展开 OpenCode Agent 面板"
@@ -180,6 +364,14 @@ export function AppShell() {
       </main>
     </div>
   );
+}
+
+function getFocusableElements(container: HTMLElement) {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((element) => {
+    if (element.tabIndex < 0 || element.closest("[inert]")) return false;
+    const style = window.getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
+  });
 }
 
 function CourseWorkspace({
