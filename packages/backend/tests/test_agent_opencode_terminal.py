@@ -38,10 +38,17 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
                 yield item
 
         abort = AsyncMock()
+        reject_permission = AsyncMock()
+        self.reject_permission = reject_permission
         with (
             patch.object(agent.opencode_client, "prompt", new=send_prompt),
             patch.object(agent.opencode_client, "events", new=event_stream),
             patch.object(agent.opencode_client, "abort", new=abort),
+            patch.object(
+                agent.opencode_client,
+                "reject_permission",
+                new=reject_permission,
+            ),
             patch.object(agent.settings, "opencode_terminal_timeout_seconds", timeout),
         ):
             result = await agent._run_opencode_prompt(
@@ -216,6 +223,38 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(ok)
         abort.assert_not_awaited()
+
+    async def test_child_permission_request_is_rejected_and_aborts_parent(self):
+        async def events():
+            yield {
+                "directory": "workspace",
+                "payload": {
+                    "type": "permission.asked",
+                    "properties": {
+                        "id": "permission-1",
+                        "sessionID": "child-session-1",
+                        "permission": "doom_loop",
+                        "patterns": ["invalid"],
+                        "metadata": {},
+                        "always": ["invalid"],
+                    },
+                },
+            }
+
+        (ok, _), messages, abort = await self._run_prompt(events)
+
+        self.assertFalse(ok)
+        self.reject_permission.assert_awaited_once_with(
+            "permission-1",
+            "workspace",
+            "该权限不在课程创建工作流的允许范围内。",
+        )
+        self.assertTrue(any(
+            message["type"] == "agent_error"
+            and "doom_loop" in message["payload"]["message"]
+            for message in messages
+        ))
+        abort.assert_awaited_once_with("session-1")
 
     async def test_failed_prompt_never_commits_workspace(self):
         websocket = _WebSocket()

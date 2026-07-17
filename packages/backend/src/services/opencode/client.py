@@ -127,6 +127,26 @@ async def reject_question(request_id: str, directory: str) -> None:
             )
 
 
+async def reject_permission(
+    request_id: str,
+    directory: str,
+    message: str = "Course Studio 不允许此操作，请改用已授权的工具。",
+) -> None:
+    """Reject a native OpenCode permission prompt in a headless session."""
+
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+        resp = await client.post(
+            f"{_base_url()}/permission/{request_id}/reply",
+            params={"directory": directory},
+            json={"reply": "reject", "message": message},
+            auth=_auth(),
+        )
+        if resp.status_code != 200:
+            raise OpencodeError(
+                f"opencode permission reject 失败：{resp.status_code} {resp.text[:300]}"
+            )
+
+
 async def events() -> AsyncIterator[dict]:
     """Yield parsed SSE events from the global event stream.
 

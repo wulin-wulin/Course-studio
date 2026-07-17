@@ -47,6 +47,9 @@ PERMISSION = {
     "question": "deny",
     "bash": "deny",
     "webfetch": "deny",
+    # Never leave a headless Agent session waiting on an OpenCode permission
+    # prompt that the Course Studio UI cannot answer.
+    "doom_loop": "deny",
 }
 
 COURSE_CREATOR_PERMISSION = {
@@ -81,6 +84,7 @@ COURSE_CREATOR_PERMISSION = {
     },
     "webfetch": "allow",
     "websearch": "allow",
+    "doom_loop": "deny",
 }
 
 COURSE_CONTENT_WORKER_PERMISSION = {
@@ -98,6 +102,7 @@ COURSE_CONTENT_WORKER_PERMISSION = {
     "bash": "deny",
     "webfetch": "deny",
     "websearch": "deny",
+    "doom_loop": "deny",
 }
 
 COURSE_ANIMATION_WORKER_PERMISSION = {
@@ -115,6 +120,7 @@ COURSE_ANIMATION_WORKER_PERMISSION = {
     "bash": "deny",
     "webfetch": "deny",
     "websearch": "deny",
+    "doom_loop": "deny",
 }
 
 

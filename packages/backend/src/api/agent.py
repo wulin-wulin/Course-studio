@@ -849,6 +849,36 @@ async def _run_opencode_prompt(
                     properties = {}
                 if event_type in ("server.connected", "server.heartbeat", "sync"):
                     continue
+                if event_type == "permission.asked":
+                    # Sub-agent events carry the child session id, so the usual
+                    # session filter would hide them from the parent turn.  A
+                    # course-creation conversation owns a unique workspace;
+                    # use that directory to fail fast instead of leaving the UI
+                    # waiting on an invisible OpenCode permission dialog.
+                    event_directory = envelope.get("directory")
+                    event_session_id = str(properties.get("sessionID") or "").strip()
+                    if event_session_id == session_id or event_directory == directory:
+                        request_id = str(properties.get("id") or "").strip()
+                        permission = str(properties.get("permission") or "unknown").strip()
+                        reject_error = ""
+                        if request_id:
+                            try:
+                                await opencode_client.reject_permission(
+                                    request_id,
+                                    directory,
+                                    "该权限不在课程创建工作流的允许范围内。",
+                                )
+                            except Exception as exc:
+                                reject_error = f"；自动拒绝失败：{exc}"
+                        await fail_turn(
+                            f"OpenCode 子任务请求了未授权权限 {permission}，"
+                            f"本轮已终止，避免对话持续等待{reject_error}",
+                            abort=True,
+                        )
+                        waiting_question_ids.clear()
+                        terminal_wait_state_changed.set()
+                        _clear_pending_questions_for_session(session_id)
+                        return
                 if not matches_session(properties, envelope):
                     continue
                 if event_type == "question.asked":
