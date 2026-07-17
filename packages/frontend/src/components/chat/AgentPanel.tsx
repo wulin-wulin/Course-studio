@@ -230,6 +230,13 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         opened = true;
         window.clearTimeout(openTimer);
         setConnectionState("connected");
+        // Re-fetch the catalog after backend restarts or a missed commit event.
+        // The initial connection may cause one harmless duplicate no-store
+        // request, while reconnects make externally completed publications
+        // visible without requiring a full page refresh.
+        window.dispatchEvent(new CustomEvent("course-data-changed", {
+          detail: { source: "agent-websocket-connected" },
+        }));
       };
       ws.onmessage = (event) => {
         try {

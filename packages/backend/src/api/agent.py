@@ -761,7 +761,25 @@ async def _run_opencode_prompt(
     active_text = {"any": False}
     text_chunks: list[str] = []
     tool_started: set[str] = set()
-    result = {"ok": True}
+    result: dict[str, Any] = {"ok": True, "abort": False}
+    critical_tool_errors: dict[str, str] = {}
+    waiting_question_ids: set[str] = set()
+    terminal_wait_state_changed = asyncio.Event()
+
+    async def fail_turn(message: str, *, abort: bool = False) -> None:
+        result["ok"] = False
+        result["abort"] = bool(result["abort"] or abort)
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {"message": message, "conversation_id": conversation_id},
+        })
+
+    def set_question_waiting(request_id: str, waiting: bool) -> None:
+        if waiting:
+            waiting_question_ids.add(request_id)
+        else:
+            waiting_question_ids.discard(request_id)
+        terminal_wait_state_changed.set()
 
     async def finish_text_segment(*, persist: bool) -> str:
         content = "".join(text_chunks).strip()
@@ -799,92 +817,178 @@ async def _run_opencode_prompt(
         event_directory = envelope.get("directory")
         return event_directory in (None, directory)
 
+    def critical_tool_key(part: dict[str, Any]) -> str | None:
+        """Identify publish failures that must not be reported as a successful turn.
+
+        Validators and exploratory shell commands may legitimately fail before
+        the model repairs and reruns them.  Treating every tool error as fatal
+        would reject a successfully recovered course.  Publication is the
+        irreversible terminal operation, so an unsuccessful publish remains
+        fatal until a later successful publish invocation clears it.
+        """
+
+        state = part.get("state") or {}
+        if not isinstance(state, dict):
+            return None
+        tool_input = state.get("input") or {}
+        if not isinstance(tool_input, dict):
+            return None
+        command = str(tool_input.get("command") or tool_input.get("cmd") or "")
+        if "publish-course-pipeline.mjs" in command:
+            return "publish-course-pipeline"
+        return None
+
     async def consume() -> None:
         await _send_status(websocket, conversation_id, "thinking", "模型思考中")
-        async for envelope in opencode_client.events():
-            payload = envelope.get("payload") or {}
-            event_type = payload.get("type")
-            properties = payload.get("properties") or {}
-            if not isinstance(properties, dict):
-                properties = {}
-            if event_type in ("server.connected", "server.heartbeat", "sync"):
-                continue
-            if not matches_session(properties, envelope):
-                continue
-            if event_type == "question.asked":
-                request_id = str(properties.get("id") or "").strip()
-                questions = _normalize_opencode_questions(properties.get("questions"))
-                if not request_id or not questions:
+        try:
+            async for envelope in opencode_client.events():
+                payload = envelope.get("payload") or {}
+                event_type = payload.get("type")
+                properties = payload.get("properties") or {}
+                if not isinstance(properties, dict):
+                    properties = {}
+                if event_type in ("server.connected", "server.heartbeat", "sync"):
                     continue
-                await finish_text_segment(persist=True)
-                _pending_questions[request_id] = {
-                    "request_id": request_id,
-                    "conversation_id": conversation_id,
-                    "session_id": session_id,
-                    "directory": directory,
-                    "questions": questions,
-                }
-                await websocket.send_json({
-                    "type": "agent_question",
-                    "payload": {
+                if not matches_session(properties, envelope):
+                    continue
+                if event_type == "question.asked":
+                    request_id = str(properties.get("id") or "").strip()
+                    questions = _normalize_opencode_questions(properties.get("questions"))
+                    if not request_id or not questions:
+                        continue
+                    set_question_waiting(request_id, True)
+                    await finish_text_segment(persist=True)
+                    _pending_questions[request_id] = {
                         "request_id": request_id,
                         "conversation_id": conversation_id,
+                        "session_id": session_id,
+                        "directory": directory,
                         "questions": questions,
-                    },
-                })
-                await _send_status(websocket, conversation_id, "waiting", "等待你的确认")
-                continue
-            if event_type in ("question.replied", "question.rejected"):
-                request_id = str(properties.get("requestID") or "").strip()
-                if request_id:
-                    _pending_questions.pop(request_id, None)
+                    }
                     await websocket.send_json({
-                        "type": "agent_question_resolved",
+                        "type": "agent_question",
                         "payload": {
                             "request_id": request_id,
                             "conversation_id": conversation_id,
-                            "rejected": event_type == "question.rejected",
+                            "questions": questions,
                         },
                     })
-                    await _send_status(websocket, conversation_id, "thinking", "已收到确认，继续处理")
-                continue
-            if event_type == "message.part.delta":
-                field = properties.get("field")
-                delta = properties.get("delta")
-                if not delta:
+                    await _send_status(websocket, conversation_id, "waiting", "等待你的确认")
                     continue
-                if field == "text":
-                    active_text["any"] = True
-                    text_chunks.append(str(delta))
-                    await websocket.send_json({
-                        "type": "agent_text_delta",
-                        "payload": {"text": delta, "conversation_id": conversation_id},
-                    })
-                elif field == "reasoning":
-                    await websocket.send_json({
-                        "type": "agent_thinking_delta",
-                        "payload": {"text": delta, "conversation_id": conversation_id},
-                    })
-                continue
-            if event_type == "message.part.updated":
-                part = properties.get("part") or {}
-                if isinstance(part, dict) and part.get("type") == "tool":
-                    await _handle_opencode_tool_part(
-                        websocket, conversation_id, part, tool_started
-                    )
-                continue
-            if event_type == "session.error":
-                error = properties.get("error") or properties.get("message") or "OpenCode 会话出错"
-                await websocket.send_json({
-                    "type": "agent_error",
-                    "payload": {"message": str(error), "conversation_id": conversation_id},
-                })
-                result["ok"] = False
-                _clear_pending_questions_for_session(session_id)
+                if event_type in ("question.replied", "question.rejected"):
+                    request_id = str(properties.get("requestID") or "").strip()
+                    if request_id:
+                        set_question_waiting(request_id, False)
+                        _pending_questions.pop(request_id, None)
+                        await websocket.send_json({
+                            "type": "agent_question_resolved",
+                            "payload": {
+                                "request_id": request_id,
+                                "conversation_id": conversation_id,
+                                "rejected": event_type == "question.rejected",
+                            },
+                        })
+                        await _send_status(websocket, conversation_id, "thinking", "已收到确认，继续处理")
+                    continue
+                if event_type == "message.part.delta":
+                    field = properties.get("field")
+                    delta = properties.get("delta")
+                    if not delta:
+                        continue
+                    if field == "text":
+                        active_text["any"] = True
+                        text_chunks.append(str(delta))
+                        await websocket.send_json({
+                            "type": "agent_text_delta",
+                            "payload": {"text": delta, "conversation_id": conversation_id},
+                        })
+                    elif field == "reasoning":
+                        await websocket.send_json({
+                            "type": "agent_thinking_delta",
+                            "payload": {"text": delta, "conversation_id": conversation_id},
+                        })
+                    continue
+                if event_type == "message.part.updated":
+                    part = properties.get("part") or {}
+                    if isinstance(part, dict) and part.get("type") == "tool":
+                        tool_error = await _handle_opencode_tool_part(
+                            websocket, conversation_id, part, tool_started
+                        )
+                        critical_key = critical_tool_key(part)
+                        state = part.get("state") or {}
+                        tool_status = state.get("status") if isinstance(state, dict) else None
+                        if critical_key and tool_error:
+                            critical_tool_errors[critical_key] = tool_error
+                        elif critical_key and tool_status == "completed":
+                            critical_tool_errors.pop(critical_key, None)
+                    continue
+                if event_type == "session.error":
+                    error = properties.get("error") or properties.get("message") or "OpenCode 会话出错"
+                    await fail_turn(str(error))
+                    waiting_question_ids.clear()
+                    terminal_wait_state_changed.set()
+                    _clear_pending_questions_for_session(session_id)
+                    return
+                if event_type == "session.idle":
+                    if critical_tool_errors:
+                        await fail_turn(next(iter(critical_tool_errors.values())))
+                    waiting_question_ids.clear()
+                    terminal_wait_state_changed.set()
+                    _clear_pending_questions_for_session(session_id)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await fail_turn(f"OpenCode 事件流中断：{exc}", abort=True)
+            waiting_question_ids.clear()
+            terminal_wait_state_changed.set()
+            _clear_pending_questions_for_session(session_id)
+            return
+
+        await fail_turn(
+            "OpenCode 事件流已结束，但没有收到 session.idle 或 session.error 终态。",
+            abort=True,
+        )
+        waiting_question_ids.clear()
+        terminal_wait_state_changed.set()
+        _clear_pending_questions_for_session(session_id)
+
+    async def wait_for_terminal(consume_task: asyncio.Task[None], timeout: float) -> None:
+        """Wait for a terminal event, pausing the budget for native questions."""
+
+        remaining = timeout
+        loop = asyncio.get_running_loop()
+        while True:
+            if consume_task.done():
+                await consume_task
                 return
-            if event_type == "session.idle":
-                _clear_pending_questions_for_session(session_id)
+
+            terminal_wait_state_changed.clear()
+            state_change_task = asyncio.create_task(terminal_wait_state_changed.wait())
+            started = loop.time()
+            was_waiting_for_question = bool(waiting_question_ids)
+            wait_timeout = None if was_waiting_for_question else remaining
+            done, _ = await asyncio.wait(
+                {consume_task, state_change_task},
+                timeout=wait_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not was_waiting_for_question:
+                remaining -= loop.time() - started
+
+            if consume_task in done:
+                state_change_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await state_change_task
+                await consume_task
                 return
+            if state_change_task in done:
+                continue
+
+            state_change_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await state_change_task
+            raise TimeoutError
 
     heartbeat_task = asyncio.create_task(send_heartbeat())
     try:
@@ -905,12 +1009,36 @@ async def _run_opencode_prompt(
             consume_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await consume_task
+            _clear_pending_questions_for_session(session_id)
+            with contextlib.suppress(Exception):
+                await opencode_client.abort(session_id)
             await websocket.send_json({
                 "type": "agent_error",
                 "payload": {"message": f"发送 OpenCode prompt 失败：{exc}", "conversation_id": conversation_id},
             })
             return False, "".join(text_chunks).strip()
-        await consume_task
+        try:
+            timeout = float(settings.opencode_terminal_timeout_seconds)
+        except (TypeError, ValueError):
+            timeout = 3600.0
+        if timeout <= 0:
+            timeout = 3600.0
+        try:
+            await wait_for_terminal(consume_task, timeout)
+        except TimeoutError:
+            consume_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await consume_task
+            await fail_turn(
+                f"OpenCode 在 {timeout:g} 秒内未返回会话终态，已中止本轮操作；课程数据未提交。",
+                abort=True,
+            )
+            waiting_question_ids.clear()
+            terminal_wait_state_changed.set()
+            _clear_pending_questions_for_session(session_id)
+        if result["abort"]:
+            with contextlib.suppress(Exception):
+                await opencode_client.abort(session_id)
         response_text = await finish_text_segment(persist=False)
         return bool(result["ok"]), response_text
     finally:
@@ -925,7 +1053,7 @@ async def _handle_opencode_tool_part(
     conversation_id: str,
     part: dict[str, Any],
     tool_started: set[str],
-) -> None:
+) -> str | None:
     raw_name = part.get("tool") or "tool"
     name = _map_tool_name(str(raw_name))
     part_id = str(part.get("id") or "")
@@ -947,7 +1075,7 @@ async def _handle_opencode_tool_part(
                 "conversation_id": conversation_id,
             },
         })
-        return
+        return None
     if tool_status in ("completed", "error"):
         if part_id not in tool_started:
             tool_started.add(part_id)
@@ -971,6 +1099,12 @@ async def _handle_opencode_tool_part(
                 "conversation_id": conversation_id,
             },
         })
+        if tool_status == "error":
+            detail = str(output).strip()
+            if len(detail) > 600:
+                detail = f"{detail[:600]}…"
+            return f"工具 {name} 执行失败{f'：{detail}' if detail else ''}"
+    return None
 
 
 async def _build_opencode_parts(text: str, images: list[Any]) -> list[dict[str, Any]]:

@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     opencode_provider_id: str = "coursegw"
     opencode_provider_base_url: str = ""
     opencode_server_password: str = ""
+    # Maximum time a submitted OpenCode turn may wait for a terminal SSE
+    # event.  This prevents a lost ``session.idle`` event or a wedged tool
+    # process from leaving the browser in its running state forever.
+    opencode_terminal_timeout_seconds: float = 3600.0
     # Course data is intentionally outside the frontend bundle.  It is the
     # canonical JSON package directory used by both the HTTP API and future
     # course-management skills.

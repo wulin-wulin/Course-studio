@@ -31,16 +31,29 @@ function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
-function run(script, args, cwd) {
+function run(script, args, cwd, extraEnv = {}) {
   return spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, COURSE_STUDIO_PROJECT_ROOT: PROJECT_ROOT },
+    env: {
+      ...process.env,
+      COURSE_STUDIO_PROJECT_ROOT: PROJECT_ROOT,
+      ...extraEnv,
+    },
   });
 }
 
 function assertSuccess(result) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
+function assertNoPublishingDirectories(workspace) {
+  const coursesDirectory = path.join(workspace, "courses");
+  if (!existsSync(coursesDirectory)) return;
+  assert.deepEqual(
+    readdirSync(coursesDirectory).filter((name) => name.startsWith(".publishing-")),
+    [],
+  );
 }
 
 function makeWorkspace(t, prefix) {
@@ -220,4 +233,37 @@ test("v2 动画源码引用未授权依赖时发布原子失败", (t) => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /未授权依赖/);
   assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+});
+
+test("v2 G7 校验超时会终止子进程并且不留下发布临时目录", (t) => {
+  const { workspace, courseId } = preparePublishFixture(t, { withAnimation: false });
+  const checkerPath = path.join(
+    workspace,
+    ".opencode",
+    "skills",
+    "knowledge-pipeline-orchestrator",
+    "scripts",
+    "check-pipeline.mjs",
+  );
+  writeFileSync(checkerPath, "setInterval(() => {}, 1_000);\n", "utf8");
+
+  const result = run(PUBLISH_SCRIPT, [courseId], workspace, {
+    COURSE_PIPELINE_G7_TIMEOUT_MS: "50",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /G7 流水线校验超时（50ms）/);
+  assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+  assertNoPublishingDirectories(workspace);
+});
+
+test("v2 动画构建超时会取消构建并清理发布临时目录", (t) => {
+  const { workspace, courseId } = preparePublishFixture(t, { withAnimation: true });
+  const result = run(PUBLISH_SCRIPT, [courseId], workspace, {
+    COURSE_ANIMATION_BUNDLE_TIMEOUT_MS: "1",
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /教学动画构建超时（1ms）/);
+  assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+  assertNoPublishingDirectories(workspace);
 });

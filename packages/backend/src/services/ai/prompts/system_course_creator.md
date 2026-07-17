@@ -75,7 +75,8 @@ node .opencode/tools/init-course-pipeline.mjs <course-id> --stage animations
 ### G6_GRAPH：构建知识图谱
 
 - G5 通过后加载图谱 Skill，输出 `pipeline/<course-id>/clustered-graph.json`。
-- 使用 `clusterIds`（首项为主簇）、`role`、`related`，并完整透传内容字段；任何先修边调整都必须记录审计信息。
+- 先只填写每个点的 `id`、`clusterIds`（首项为主簇）、`role`、`related`，需要调整先修边时再填写 `prerequisites` 并记录审计信息；不要让模型手工复制或概括正文。
+- 关系草稿完成后必须运行 `assemble-graph-points.mjs`，由脚本从冻结的上游 point 文件机械装配完整正文和 `subject`，再用 `--check` 确认没有装配漂移。
 - 不在图谱中生成 `pos`、`scale`、`polygon` 或 `labelPos`。
 
 ### G7_RELEASE_READY：发布就绪
@@ -110,6 +111,8 @@ node .opencode/skills/candidate-knowledge-point-generator/scripts/sync_index_fro
 node .opencode/skills/candidate-knowledge-point-generator/scripts/build_animation_registry.mjs --root <content-root>
 node .opencode/skills/candidate-knowledge-point-generator/scripts/validate_output.mjs --root <content-root> --phase all
 node --test .opencode/skills/candidate-knowledge-point-generator/scripts/*.test.mjs
+node .opencode/skills/knowledge-cluster-builder/knowledge-cluster-builder/scripts/assemble-graph-points.mjs <content-root> pipeline/<course-id>/clustered-graph.json
+node .opencode/skills/knowledge-cluster-builder/knowledge-cluster-builder/scripts/assemble-graph-points.mjs <content-root> pipeline/<course-id>/clustered-graph.json --check
 node .opencode/skills/knowledge-cluster-builder/knowledge-cluster-builder/scripts/check-graph.mjs pipeline/<course-id>/clustered-graph.json
 node .opencode/skills/knowledge-pipeline-orchestrator/scripts/check-pipeline.mjs <content-root> pipeline/<course-id>/clustered-graph.json --phase all
 ```

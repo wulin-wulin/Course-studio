@@ -84,7 +84,7 @@ node <上游 skill>/scripts/validate_output.mjs --root <中间包目录> --phase
 node scripts/check-graph.mjs <你的输出>.json
 ```
 
-它做两类校验——**引用完整性**（clusterIds 命中簇、prerequisites/related 无悬空、无自环、id 规范；注意 clusterIds 是外键、与 DAG 无关）与**图性质**（prerequisites 无环 + 拓扑排序）。通过（退出 0）才算合格。
+它做两类校验——**对象与引用完整性**（point 必需字段齐全且没有契约外字段、clusterIds 命中簇、prerequisites/related 无悬空、无自环、id 规范；注意 clusterIds 是外键、与 DAG 无关）与**图性质**（prerequisites 无环 + 拓扑排序）。通过（退出 0）才算合格。
 
 失败时加 `--json` 拿结构化问题清单，按每条 finding 的 `pointId + field + value + fix` 定位修改，改完重跑直到 `ok: true`：
 
@@ -94,7 +94,15 @@ node scripts/check-graph.mjs <你的输出>.json --json
 
 ### 8. 增量叠加输出
 
-透传每个点的全部 v2 内容字段，追加 `clusterIds / role / related`，顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`，通过 [clustered-graph.schema.json](clustered-graph.schema.json) 校验。
+先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后必须由脚本按冻结 index 顺序读取 `points/<id>.json`，机械补齐全部 v2 内容字段：
+
+```bash
+node scripts/assemble-graph-points.mjs <CONTENT_ROOT> <GRAPH_FILE>
+node scripts/assemble-graph-points.mjs <CONTENT_ROOT> <GRAPH_FILE> --check
+node scripts/check-graph.mjs <GRAPH_FILE>
+```
+
+装配脚本会自动补齐草稿中省略的正文，并用上游 point 文件与 manifest 覆盖草稿里任何被模型改写/精简的正文和 `subject`；若增删知识点、遗漏关系字段或包含契约外字段，则立即失败。只有三条命令都通过，才可把结果视为 `clustered-graph/2.0`。最终对象在上游字段之外只能追加 `clusterIds / role / related`，`prerequisites` 只能按审计记录优化。
 
 ## 输出契约
 
@@ -144,4 +152,5 @@ node scripts/check-graph.mjs <你的输出>.json --json
 - [ ] 对上游 prerequisites 的每处改动都记入 `refinedPrerequisiteEdges`；引入的环已记入 `brokenCycleEdges`。
 - [ ] 每个非空主簇至少一个 `trunk`；标为 `leaf` 的点未被其他点依赖。
 - [ ] v2 内容字段原样透传，未被改写；未生成布局字段。
+- [ ] 已运行 `assemble-graph-points.mjs`，其 `--check` 模式退出码为 0；没有手工复制或精简 point 正文。
 - [ ] `pointCount` 等于 `points` 长度，`clusterCount` 等于 `clusters` 长度。

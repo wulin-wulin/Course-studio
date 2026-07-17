@@ -131,7 +131,14 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
   if (!style) fail(`未知布局风格：${styleName}；可用：${Object.keys(MAP_LAYOUT_STYLES).join("、")}`);
   if (!Array.isArray(index?.clusters) || !Array.isArray(index?.points)) fail("index.json 必须包含 clusters 与 points 数组");
 
-  const anchors = COURSE_ANCHORS[courseId] ?? genericAnchors(index.clusters, style, seed);
+  const configuredAnchors = COURSE_ANCHORS[courseId];
+  // A course may be regenerated with a different cluster taxonomy.  A stale
+  // hand-tuned map must never make publication fail merely because the course
+  // id is unchanged; only use it when it covers the complete current graph.
+  const anchors = configuredAnchors
+    && index.clusters.every((cluster) => configuredAnchors[cluster.id])
+    ? configuredAnchors
+    : genericAnchors(index.clusters, style, seed);
   const clusterLayouts = new Map();
   const clusters = index.clusters.map((cluster) => {
     const anchor = anchors[cluster.id];

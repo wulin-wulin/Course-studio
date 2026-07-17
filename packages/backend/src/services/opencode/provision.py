@@ -72,6 +72,7 @@ def _course_creator_permission() -> dict:
             "node *validate_output.mjs*": "allow",
             "node *sync_index_from_points.mjs*": "allow",
             "node *build_animation_registry.mjs*": "allow",
+            "node *assemble-graph-points.mjs*": "allow",
             "node *check-graph.mjs*": "allow",
             "node *check-pipeline.mjs*": "allow",
             "node *publish-course-pipeline.mjs*": "allow",

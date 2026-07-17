@@ -7,6 +7,7 @@
 // 校验分两类，都需要加载整张图后做交叉检查（JSON Schema 只能查单文件结构、查不了这些）：
 //   A. 引用完整性（与 DAG 无关的「外键」约束）：
 //      - schema_version 正确
+//      - point 必需字段齐全且没有契约外字段（防止把完整正文精简成关系摘要）
 //      - 簇 / 点 id 的 kebab-case 规范与唯一性
 //      - clusterIds 非空、去重、每个都命中已声明的簇（首个为主簇）；role 合法
 //      - prerequisites / related 引用无悬空、无自环
@@ -25,6 +26,16 @@ import { readFileSync } from 'node:fs';
 
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ROLES = ['trunk', 'branch', 'leaf'];
+const REQUIRED_POINT_FIELDS = [
+  'id', 'title', 'shortSummary', 'coreIdea', 'principles', 'keyTerms',
+  'applications', 'aliases', 'intuition', 'misconceptions', 'qa',
+  'animationType', 'difficulty', 'importance', 'prerequisites',
+  'clusterIds', 'role', 'related',
+];
+const OPTIONAL_POINT_FIELDS = [
+  'formula', 'comparisons', 'history', 'yearIntroduced', 'prosCons',
+  'visualType', 'visualSuggestion', 'animationSuggestion',
+];
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
@@ -133,6 +144,19 @@ points.forEach((p, i) => {
 // —— A3. 簇归属 clusterIds、role、悬空引用、自环 ——
 points.forEach((p, i) => {
   if (!p || typeof p.id !== 'string') return;
+  const missingFields = REQUIRED_POINT_FIELDS.filter((key) => !(key in p));
+  if (missingFields.length > 0) {
+    add({ code: 'point-missing-fields', pointId: p.id, pointIndex: i, field: 'points', value: missingFields,
+      message: `知识点对象不完整，缺少字段: ${missingFields.join(', ')}`,
+      fix: '运行 assemble-graph-points.mjs，从上游 points/<id>.json 机械装配完整对象' });
+  }
+  const allowedFields = new Set([...REQUIRED_POINT_FIELDS, ...OPTIONAL_POINT_FIELDS]);
+  const extraFields = Object.keys(p).filter((key) => !allowedFields.has(key));
+  if (extraFields.length > 0) {
+    add({ code: 'point-extra-fields', pointId: p.id, pointIndex: i, field: 'points', value: extraFields,
+      message: `知识点对象含契约外字段: ${extraFields.join(', ')}`,
+      fix: '移除契约外字段；布局字段应留给 CKDS 发布阶段' });
+  }
   const cids = Array.isArray(p.clusterIds) ? p.clusterIds : null;
   if (!cids || cids.length === 0) {
     add({ code: 'empty-cluster-ids', pointId: p.id, pointIndex: i, field: 'clusterIds', value: p.clusterIds,

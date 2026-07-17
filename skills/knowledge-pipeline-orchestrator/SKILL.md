@@ -114,15 +114,27 @@ node --test "<content-skill-dir>/scripts/"*.test.mjs
 
 - 仅在 G5 通过后使用图 Skill，读取完整 `CONTENT_ROOT`，写出 `GRAPH_FILE`。
 - 点集及 index 顺序保持不变；所有 v2 内容字段原样透传。
+- 先写只含 `id/prerequisites/clusterIds/role/related` 的关系草稿，再运行图 Skill 的 `assemble-graph-points.mjs` 从上游机械装配完整 point 对象和 `subject`；脚本会自动覆盖模型误写的正文，禁止让模型手工复制、概括或精简正文。
 - `prerequisites` 默认透传。每条补漏、去冗余或纠向都必须与 `generation.refinedPrerequisiteEdges` 一一对应。
 - 新增 `clusterIds / role / related`；多簇归属保持克制，首个 `clusterIds` 为主簇。
 - `related` 与任一方向的 `prerequisites` 互斥；优化后仍须为 DAG。
+
+必须依次运行：
+
+```bash
+node "<graph-skill-dir>/scripts/assemble-graph-points.mjs" "$CONTENT_ROOT" "$GRAPH_FILE"
+node "<graph-skill-dir>/scripts/assemble-graph-points.mjs" "$CONTENT_ROOT" "$GRAPH_FILE" --check
+node "<graph-skill-dir>/scripts/check-graph.mjs" "$GRAPH_FILE"
+```
+
+任一命令失败时停留在 G6 定点修复，不得进入发布。
 
 ### G7_RELEASE_READY
 
 依次执行：
 
 ```bash
+node "<graph-skill-dir>/scripts/assemble-graph-points.mjs" "$CONTENT_ROOT" "$GRAPH_FILE" --check
 node "<graph-skill-dir>/scripts/check-graph.mjs" "$GRAPH_FILE"
 node "<orchestrator-dir>/scripts/check-pipeline.mjs" "$CONTENT_ROOT" "$GRAPH_FILE"
 ```

@@ -8,6 +8,7 @@ import { createCourseMapLayout } from "./layout-course-map.mjs";
 import { buildCourseAnimationRuntime } from "./bundle-course-animations.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DEFAULT_G7_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
 const PALETTE = [
   ["#2F7A65", "#E2F4EC", "#185342"],
   ["#A86132", "#F8E8DA", "#6E381C"],
@@ -23,6 +24,16 @@ const PALETTE = [
 
 function fail(message) {
   throw new Error(message);
+}
+
+function timeoutFromEnvironment(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail(`环境变量 ${name} 必须是正整数毫秒值，当前值：${raw}`);
+  }
+  return value;
 }
 
 function readJson(filePath, label = "JSON") {
@@ -196,11 +207,29 @@ async function publish(courseId) {
   if (!fs.existsSync(pipelineChecker)) fail("缺少 G7 流水线校验工具，不能发布");
   if (fs.existsSync(targetDirectory)) fail(`课程 ${courseId} 已存在；发布工具不会覆盖已有课程`);
 
+  const g7TimeoutMs = timeoutFromEnvironment(
+    "COURSE_PIPELINE_G7_TIMEOUT_MS",
+    DEFAULT_G7_CHECK_TIMEOUT_MS,
+  );
   const checked = spawnSync(
     process.execPath,
     [pipelineChecker, contentRoot, graphPath, "--phase", "all", "--json"],
-    { cwd: root, encoding: "utf8" },
+    {
+      cwd: root,
+      encoding: "utf8",
+      timeout: g7TimeoutMs,
+      killSignal: "SIGTERM",
+    },
   );
+  if (checked.error?.code === "ETIMEDOUT") {
+    fail(
+      `G7 流水线校验超时（${g7TimeoutMs}ms），已终止校验进程；`
+        + "请检查校验器或产物规模，必要时通过 COURSE_PIPELINE_G7_TIMEOUT_MS 调整上限",
+    );
+  }
+  if (checked.error) {
+    fail(`G7 流水线校验进程启动失败：${checked.error.message}`);
+  }
   if (checked.status !== 0) {
     const detail = (checked.stdout || checked.stderr || "未知校验错误").trim();
     fail(`G7 流水线校验未通过，不能发布：\n${detail}`);

@@ -11,9 +11,35 @@ const COMPONENT_PATTERN = /^[A-Z][A-Za-z0-9]*$/;
 const RUNTIME_SCHEMA = "course-animation-runtime/1.0";
 const RUNTIME_FILES = ["runtime.js", "runtime.css"];
 const MAX_BUNDLE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_ANIMATION_BUNDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const ANIMATION_BUNDLE_TIMEOUT_CODE = "COURSE_ANIMATION_BUNDLE_TIMEOUT";
 
 function fail(message) {
   throw new Error(message);
+}
+
+function resolveBundleTimeoutMs(value) {
+  const raw = value ?? process.env.COURSE_ANIMATION_BUNDLE_TIMEOUT_MS;
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    return DEFAULT_ANIMATION_BUNDLE_TIMEOUT_MS;
+  }
+  const parsed = Number(String(raw).trim());
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    fail(
+      "COURSE_ANIMATION_BUNDLE_TIMEOUT_MS 必须是正整数毫秒值，"
+        + `当前值：${String(raw)}`,
+    );
+  }
+  return parsed;
+}
+
+function bundleTimeoutError(timeoutMs) {
+  const error = new Error(
+    `教学动画构建超时（${timeoutMs}ms），已取消构建；`
+      + "请检查动画源码，必要时通过 COURSE_ANIMATION_BUNDLE_TIMEOUT_MS 调整上限",
+  );
+  error.code = ANIMATION_BUNDLE_TIMEOUT_CODE;
+  return error;
 }
 
 function isInside(root, candidate) {
@@ -259,6 +285,7 @@ export async function buildCourseAnimationRuntime({
   outputDirectory,
   animationManifest,
   projectRootHint,
+  timeoutMs,
 }) {
   const resolvedContentRoot = path.resolve(contentRoot);
   const resolvedOutput = path.resolve(outputDirectory);
@@ -278,11 +305,14 @@ export async function buildCourseAnimationRuntime({
   if (fs.existsSync(entryPath)) fail("动画内容包包含保留文件 .course-studio-animation-entry.tsx");
   const javascriptPath = path.join(resolvedOutput, "runtime.js");
   const stylesheetPath = path.join(resolvedOutput, "runtime.css");
+  const bundleTimeoutMs = resolveBundleTimeoutMs(timeoutMs);
 
   let buildResult;
+  let buildContext;
+  let timeoutHandle;
   try {
     fs.writeFileSync(entryPath, runtimeEntrySource(), "utf8");
-    buildResult = await esbuild.build({
+    buildContext = await esbuild.context({
       absWorkingDir: resolvedContentRoot,
       entryPoints: [entryPath],
       outfile: javascriptPath,
@@ -301,6 +331,22 @@ export async function buildCourseAnimationRuntime({
       target: ["es2020"],
       treeShaking: true,
     });
+    const buildPromise = buildContext.rebuild();
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(bundleTimeoutError(bundleTimeoutMs)),
+        bundleTimeoutMs,
+      );
+    });
+    try {
+      buildResult = await Promise.race([buildPromise, timeoutPromise]);
+    } catch (error) {
+      if (error?.code === ANIMATION_BUNDLE_TIMEOUT_CODE) {
+        await buildContext.cancel().catch(() => undefined);
+        await buildPromise.catch(() => undefined);
+      }
+      throw error;
+    }
     validateMetafileInputs(buildResult.metafile, resolvedContentRoot, frontendRoot, entryPath);
   } catch (error) {
     const detail = Array.isArray(error?.errors) && error.errors.length > 0
@@ -308,7 +354,12 @@ export async function buildCourseAnimationRuntime({
       : error instanceof Error ? error.message : String(error);
     fail(`教学动画生产构建失败：\n${detail}`);
   } finally {
-    fs.rmSync(entryPath, { force: true });
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    try {
+      if (buildContext) await buildContext.dispose();
+    } finally {
+      fs.rmSync(entryPath, { force: true });
+    }
   }
 
   if (
