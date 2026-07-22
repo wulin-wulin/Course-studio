@@ -11,7 +11,7 @@ import json
 import shutil
 from pathlib import Path
 
-from ...config import settings
+from ...config import PROJECT_ROOT, settings
 from ..ai import model_config
 from ..courses import CourseWorkspace, get_course_store
 
@@ -27,7 +27,7 @@ _CHAT_PROMPT_PATH = (
 _COURSE_CREATOR_PROMPT_PATH = (
     Path(__file__).resolve().parents[1] / "ai" / "prompts" / "system_course_creator.md"
 )
-_PROJECT_ROOT = Path(__file__).resolve().parents[5]
+_PROJECT_ROOT = PROJECT_ROOT
 _PROJECT_SKILLS_PATH = _PROJECT_ROOT / "skills"
 _COURSE_CREATION_SKILLS = (
     ("candidate-knowledge-point-generator", Path("SKILL.md")),
