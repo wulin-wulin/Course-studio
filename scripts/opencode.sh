@@ -24,11 +24,21 @@ CORS="${OPENCODE_CORS:-http://127.0.0.1:5173}"
 # Resolve the opencode binary: prefer one on PATH, otherwise fall back to the
 # project-local copy under .tools/bin (used when the global npm install fails
 # to fetch the platform binary, e.g. the optionalDependencies npm bug).
+OPENCODE_BIN=""
 if command -v opencode >/dev/null 2>&1; then
     OPENCODE_BIN="$(command -v opencode)"
-elif [ -x "$ROOT_DIR/.tools/bin/opencode" ]; then
-    OPENCODE_BIN="$ROOT_DIR/.tools/bin/opencode"
 else
+    for candidate in \
+        "$ROOT_DIR/.tools/bin/opencode" \
+        /opt/homebrew/bin/opencode \
+        /usr/local/bin/opencode; do
+        if [ -x "$candidate" ]; then
+            OPENCODE_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$OPENCODE_BIN" ]; then
     echo "opencode 未安装。安装方式（任选其一）："
     echo "  1) curl -fsSL https://opencode.ai/install | bash"
     echo "  2) brew install sst/tap/opencode"

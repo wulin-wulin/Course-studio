@@ -64,6 +64,8 @@ OPENCODE_BASE_URL=http://127.0.0.1:4096
 OPENCODE_PROVIDER_BASE_URL=
 # 等待 OpenCode 返回 session.idle/session.error 的主动处理时限；等待用户确认不计时
 OPENCODE_TERMINAL_TIMEOUT_SECONDS=3600
+# 创建课程会生成大量内容和动画，使用独立的六小时主动处理上限
+COURSE_CREATE_TERMINAL_TIMEOUT_SECONDS=21600
 COURSE_DATA_DIR=course-data/courses
 # Docker only: host-side absolute path to generated/course_agent_sessions
 OPENCODE_COURSE_HOST_ROOT=
@@ -121,6 +123,21 @@ npm run dev
 ```bash
 bash scripts/opencode.sh
 ```
+
+长时间生成课程时，建议改用带自动重启的后台守护方式，避免终端关闭导致
+OpenCode 服务退出：
+
+```bash
+bash scripts/opencode-service.sh start
+bash scripts/opencode-service.sh status
+# 不再需要时停止
+bash scripts/opencode-service.sh stop
+```
+
+在 macOS 上该命令使用系统自带的 detached `screen` 会话，在其内部自动重启
+OpenCode（避免 LaunchAgent 无法访问 Desktop/Documents 的系统隐私限制）；在
+Linux / WSL 上使用独立于终端的 supervisor 进程。日志和 PID 等运行文件保存在
+`packages/backend/generated/opencode-service/`，不会提交到 Git。
 
 如果 PowerShell 拒绝执行脚本，可仅对当前终端临时放行：
 
