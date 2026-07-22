@@ -7,9 +7,13 @@ COPY packages/backend/src/ ./src/
 COPY course-data/ ./course-data/
 
 # Runtime dependencies include FastAPI, OpenCode communication, and model
-# clients. Course JSON packages are copied for standalone container use and
-# can be replaced by the compose bind mount in development.
+# clients. Course JSON packages, course-creation skills, and pipeline tools are
+# copied for standalone container use and can be replaced by Compose bind
+# mounts in development.
 RUN pip install --no-cache-dir ".[dev]"
+
+COPY skills/ ./skills/
+COPY scripts/ ./scripts/
 
 RUN mkdir -p /app/generated
 
