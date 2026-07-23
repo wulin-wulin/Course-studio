@@ -572,7 +572,10 @@ async def _run_agent_turn_opencode(
         await websocket.send_json({
             "type": "agent_error",
             "payload": {
-                "message": "无法连接 OpenCode 服务，请先启动 scripts/opencode.sh 或 scripts/opencode.ps1。",
+                "message": (
+                    "无法连接 OpenCode 服务，请先运行 scripts/opencode-service.sh start；"
+                    "Windows 请运行 scripts/opencode.ps1。"
+                ),
                 "conversation_id": conversation_id,
             },
         })
@@ -626,6 +629,11 @@ async def _run_agent_turn_opencode(
         images=images,
         model=model,
         agent_name="course-creator" if creating_course else None,
+        terminal_timeout_seconds=(
+            settings.course_create_terminal_timeout_seconds
+            if creating_course
+            else None
+        ),
     )
     if response_text:
         await asyncio.to_thread(
@@ -754,6 +762,7 @@ async def _run_opencode_prompt(
     images: list[Any],
     model: str | None = None,
     agent_name: str | None = None,
+    terminal_timeout_seconds: float | None = None,
 ) -> tuple[bool, str]:
     """Stream OpenCode SSE events into the existing agent WebSocket protocol."""
 
@@ -1047,8 +1056,13 @@ async def _run_opencode_prompt(
                 "payload": {"message": f"发送 OpenCode prompt 失败：{exc}", "conversation_id": conversation_id},
             })
             return False, "".join(text_chunks).strip()
+        configured_timeout = (
+            settings.opencode_terminal_timeout_seconds
+            if terminal_timeout_seconds is None
+            else terminal_timeout_seconds
+        )
         try:
-            timeout = float(settings.opencode_terminal_timeout_seconds)
+            timeout = float(configured_timeout)
         except (TypeError, ValueError):
             timeout = 3600.0
         if timeout <= 0:

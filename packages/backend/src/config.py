@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # event.  This prevents a lost ``session.idle`` event or a wedged tool
     # process from leaving the browser in its running state forever.
     opencode_terminal_timeout_seconds: float = 3600.0
+    # Course creation can legitimately spend much longer generating and
+    # validating dozens of points and animations. Keep its hard ceiling
+    # separate so ordinary chat/edit turns still fail fast when wedged.
+    course_create_terminal_timeout_seconds: float = 21600.0
     # Course data is intentionally outside the frontend bundle.  It is the
     # canonical JSON package directory used by both the HTTP API and future
     # course-management skills.

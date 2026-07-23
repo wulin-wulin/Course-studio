@@ -6,6 +6,7 @@ import {
   Layers3,
   Loader2,
   RefreshCw,
+  Sparkles,
   Trees,
 } from "lucide-react";
 import "./CourseCatalog.css";
@@ -29,11 +30,15 @@ export type CourseSummary = {
 
 type CourseCatalogProps = {
   onOpenCourse: (course: CourseSummary) => void;
+  onStartGenerationDemo: () => void;
 };
 
 const COURSE_API = "/api/courses";
 
-export function CourseCatalog({ onOpenCourse }: CourseCatalogProps) {
+export function CourseCatalog({
+  onOpenCourse,
+  onStartGenerationDemo,
+}: CourseCatalogProps) {
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -106,21 +111,31 @@ export function CourseCatalog({ onOpenCourse }: CourseCatalogProps) {
         </header>
 
         <div className="course-catalog__heading-row">
-          <div>
+          <div className="course-catalog__heading-copy">
             <span>可用课程</span>
             <strong>{isLoading ? "正在整理课程…" : `${validCourses.length} 门课程`}</strong>
           </div>
-          <button
-            type="button"
-            className="course-catalog__refresh"
-            onClick={() => void loadCourses()}
-            disabled={isRefreshing}
-            aria-label="刷新课程列表"
-            title="刷新课程列表"
-          >
-            <RefreshCw aria-hidden="true" size={15} className={isRefreshing ? "is-spinning" : undefined} />
-            <span>刷新</span>
-          </button>
+          <div className="course-catalog__heading-actions">
+            <button
+              type="button"
+              className="course-catalog__demo"
+              onClick={onStartGenerationDemo}
+            >
+              <Sparkles aria-hidden="true" size={14} />
+              <span>生成演示</span>
+            </button>
+            <button
+              type="button"
+              className="course-catalog__refresh"
+              onClick={() => void loadCourses()}
+              disabled={isRefreshing}
+              aria-label="刷新课程列表"
+              title="刷新课程列表"
+            >
+              <RefreshCw aria-hidden="true" size={15} className={isRefreshing ? "is-spinning" : undefined} />
+              <span>刷新</span>
+            </button>
+          </div>
         </div>
 
         {isLoading && courses.length === 0 && <CatalogState kind="loading" />}

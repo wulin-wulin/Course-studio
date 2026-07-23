@@ -297,6 +297,54 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertIsNone(active_session["id"])
 
+    async def test_course_creation_uses_dedicated_terminal_timeout(self):
+        websocket = _WebSocket()
+        conversation_store = Mock()
+        conversation_store.get_opencode_session.return_value = "session-1"
+        course_store = Mock()
+        active_session = {"id": None}
+        run_prompt = AsyncMock(return_value=(False, ""))
+        agent._opencode_sessions.pop("agent:course-create:timeout-test", None)
+
+        with (
+            patch.object(agent, "get_conversation_store", return_value=conversation_store),
+            patch.object(agent, "get_course_store", return_value=course_store),
+            patch.object(agent, "_resolve_opencode_model", return_value="model-1"),
+            patch.object(
+                agent.model_config,
+                "get_model",
+                return_value=SimpleNamespace(base_url="http://model", api_key="key"),
+            ),
+            patch.object(
+                agent.opencode_provision,
+                "ensure_course_creation_session_assets",
+                return_value="workspace",
+            ),
+            patch.object(
+                agent.opencode_provision,
+                "host_course_creation_workspace_dir",
+                return_value="workspace",
+            ),
+            patch.object(agent.opencode_client, "health", new=AsyncMock(return_value={})),
+            patch.object(agent, "_run_opencode_prompt", new=run_prompt),
+            patch.object(agent.settings, "course_create_terminal_timeout_seconds", 21600.0),
+        ):
+            await agent._run_agent_turn_opencode(
+                websocket,
+                {
+                    "message": "创建课程",
+                    "conversation_id": "timeout-test",
+                    "mode": "agent",
+                    "workflow": "course-create",
+                },
+                active_session,
+            )
+
+        self.assertEqual(
+            run_prompt.await_args.kwargs["terminal_timeout_seconds"],
+            21600.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

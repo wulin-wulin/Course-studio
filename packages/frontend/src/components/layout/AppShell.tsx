@@ -7,10 +7,12 @@ import type {
 import { AlertCircle, Loader2, PanelRightOpen } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { CourseCatalog } from "../course/CourseCatalog";
+import { CourseGenerationView } from "../course/CourseGenerationView";
 import { CourseForestViewport } from "../course/CourseForestViewport";
 import { CourseReadingPage } from "../course/CourseReadingPage";
 import { AgentPanel } from "../chat/AgentPanel";
 import type { CourseMeta } from "@/course/forest/types";
+import { useCourseGenerationStore } from "@/course/generation/generationStore";
 
 type AppRoute =
   | { kind: "catalog" }
@@ -81,6 +83,8 @@ function useCourseRoute(): [AppRoute, (path: string) => void] {
 
 export function AppShell() {
   const [route, navigate] = useCourseRoute();
+  const generationStatus = useCourseGenerationStore((state) => state.status);
+  const requestGenerationDemo = useCourseGenerationStore((state) => state.requestDemo);
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(() => window.innerWidth >= 1024);
   const [agentPanelWidth, setAgentPanelWidth] = useState(initialAgentPanelWidth);
   const [isResizingAgentPanel, setIsResizingAgentPanel] = useState(false);
@@ -287,8 +291,20 @@ export function AppShell() {
       <TopNav onGoHome={() => navigate("/")} isCatalog={route.kind === "catalog"} />
       <main className="relative flex-1 min-h-0 flex overflow-hidden max-lg:flex-col">
         <section ref={workspaceRef} className="flex-1 min-w-0 min-h-0 relative">
-          {route.kind === "catalog" ? (
-            <CourseCatalog onOpenCourse={(course) => navigate(`/courses/${encodeURIComponent(course.id)}/forest`)} />
+          {generationStatus !== "idle" ? (
+            <CourseGenerationView
+              onClose={() => undefined}
+              onOpenCourse={(courseId) =>
+                navigate(`/courses/${encodeURIComponent(courseId)}/forest`)
+              }
+            />
+          ) : route.kind === "catalog" ? (
+            <CourseCatalog
+              onOpenCourse={(course) =>
+                navigate(`/courses/${encodeURIComponent(course.id)}/forest`)
+              }
+              onStartGenerationDemo={requestGenerationDemo}
+            />
           ) : (
             <CourseWorkspace route={route} navigate={navigate} />
           )}
