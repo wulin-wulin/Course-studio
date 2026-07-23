@@ -34,6 +34,31 @@ function Import-DotEnv([string]$Path) {
 
 Import-DotEnv $EnvFile
 
+# OpenCode installs custom-tool dependencies in the background. Keep npm's
+# cache inside the project and recreate the ignored runtime package manifest
+# from its tracked source before the server starts.
+$NpmCache = if ($env:NPM_CONFIG_CACHE) {
+    $env:NPM_CONFIG_CACHE
+} elseif ($env:npm_config_cache) {
+    $env:npm_config_cache
+} else {
+    Join-Path $RootDir ".tools/npm-cache"
+}
+$env:NPM_CONFIG_CACHE = $NpmCache
+$env:npm_config_cache = $NpmCache
+New-Item -ItemType Directory -Force -Path $NpmCache | Out-Null
+
+$OpenCodeToolPackage = Join-Path $PSScriptRoot "opencode-tool-package.json"
+if (-not (Test-Path -LiteralPath $OpenCodeToolPackage -PathType Leaf)) {
+    throw "Missing OpenCode custom-tool package manifest: $OpenCodeToolPackage"
+}
+$OpenCodeProjectDir = Join-Path $RootDir ".opencode"
+New-Item -ItemType Directory -Force -Path $OpenCodeProjectDir | Out-Null
+Copy-Item `
+    -LiteralPath $OpenCodeToolPackage `
+    -Destination (Join-Path $OpenCodeProjectDir "package.json") `
+    -Force
+
 # Explicit command-line parameters win; otherwise let the shared .env control
 # the OpenCode listener just like the Bash launcher does.
 if (-not $PSBoundParameters.ContainsKey("Port") -and $env:OPENCODE_PORT) {

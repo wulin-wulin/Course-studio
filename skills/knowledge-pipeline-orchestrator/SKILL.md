@@ -1,188 +1,155 @@
 ---
 name: knowledge-pipeline-orchestrator
-description: 端到端编排 v2 课程知识流水线：从课程名或领域名生成完整课程内容中间包及教学动画，执行身份复核和动画人工验收，再构建支持多簇归属与可审计先修优化的 clustered-graph/2.0，并验证内容透传、点集一致性和 DAG。用于完整生成、恢复、校验或干跑课程内容与知识图谱流水线；输入旧 candidate-points/1.0 或 clustered-graph/1.0 时也用它识别不兼容并要求迁移。
+description: 端到端编排 v2 课程知识流水线：生成完整课程内容与教学动画，通过 G2 知识点和 G6 知识图谱两次结构化用户审核，再发布支持多簇归属与可审计关系的课程。用于完整生成、恢复、校验或干跑课程内容与知识图谱流水线。
 ---
 
 # v2 知识流水线编排
 
-串联课程内容生成与知识聚类两个子 Skill，保持阶段可恢复、人工门禁不可绕过、跨阶段修改可审计。最终产物仍是 CKDS 发布前中间数据，不包含森林布局。
+串联课程内容生成与知识聚类两个子 Skill，保持阶段可恢复、两次结构化审核不可绕过、跨阶段修改可审计。受信脚本一律通过 `course_pipeline` 工具的固定 action 执行；不得直接调用 Bash、拼接脚本路径或让模型自报校验成功。
 
 ## 路径与模式
 
-先确定稳定的 `<course-id>`，再解析绝对路径：
+先确定稳定的 `<course-id>`。当前会话使用固定路径：
 
 ```text
-<pipeline-root>/                         默认 generated/<course-id>-knowledge-pipeline/
-├── course-content/                     CONTENT_ROOT，上游独占目录
-└── clustered-graph.json                GRAPH_FILE，下游图
+pipeline/<course-id>/
+├── course-content/
+└── clustered-graph.json
 ```
-
-不得把 `GRAPH_FILE` 写进 `CONTENT_ROOT`；上游内容包要求目录自包含且无契约外文件。用户显式提供已有 v2 内容包时，可让 `CONTENT_ROOT` 指向该目录，并把 `GRAPH_FILE` 放在其外部。
 
 确定一种模式：
 
 - `full`：从课程名或领域名依次完成全部门禁。
-- `resume`：校验现有产物，定位最早未通过或已失效的门禁后继续，不重建已通过阶段。
-- `validate`：只校验指定阶段或最终交接，不改写文件。
-- `dry-run`：只返回固定状态对象，不读取项目、不调用子 Skill、不写文件。
+- `resume`：从现有产物和审核回执定位最早未通过阶段，不重建已通过阶段。
+- `validate`：只调用固定校验 action，不改写课程内容。
+- `dry-run`：只返回本文规定的固定状态对象。
 
-旧版 `candidate-points/1.0` 和 `clustered-graph/1.0` 不能作为 v2 `resume` 输入。报告不兼容并停止；除非用户明确要求迁移，否则从 G1 重新生成到新目录。
+旧 `candidate-points/1.0` 和 `clustered-graph/1.0` 不能作为 v2 恢复输入。除非用户明确要求迁移，否则从 G1 生成到新目录。
 
 ## 载入子 Skill
 
-把本文件所在目录解析为 `<orchestrator-dir>`，再解析两个 canonical 目录：
-
-```text
-<content-skill-dir> = ../candidate-knowledge-point-generator
-<graph-skill-dir>   = ../knowledge-cluster-builder/knowledge-cluster-builder
-```
-
-`knowledge-cluster-builder/candidate-knowledge-point-generator` 是同名打包副本，OpenCode 可能把它注册为候选 Skill 入口。两份目录同时存在时先递归比较：完全一致可加载任一入口，但所有命令统一使用 `<content-skill-dir>`；若有任何差异，以 `duplicate-skill-drift` 阻断，不能混用规则和脚本。
-
 进入相应阶段前完整读取：
 
-1. 内容阶段：`<content-skill-dir>/SKILL.md`、`data-contract.md`、`orchestration.md`、`animation-contract.md`。
-2. 图阶段：`<graph-skill-dir>/SKILL.md`、`references/relation-heuristics.md`、Schema 和 `scripts/check-graph.mjs`。
+1. 内容阶段：`candidate-knowledge-point-generator/SKILL.md`、`data-contract.md`、`orchestration.md`、`animation-contract.md`。
+2. 图阶段：`knowledge-cluster-builder/knowledge-cluster-builder/SKILL.md`、关系启发式、Schema。
 
-子 Skill 的正式规则高于示例。本 Skill 只规定交接、门禁和跨阶段不变量，不降低子 Skill 的内容或动画质量要求。
+同名打包内容 Skill 与 canonical 副本有任何差异时，以 `duplicate-skill-drift` 阻断。
+
+## `course_pipeline` 调用规则
+
+只传两个结构化参数：
+
+```json
+{"action":"<fixed-action>","courseId":"<course-id>"}
+```
+
+`courseId` 必须是小写 kebab-case。不得把路径、命令、Shell 运算符或额外参数放进工具调用。子智能体没有该工具权限。
 
 ## 门禁状态机
 
-严格按顺序推进。任一门禁失败时保留产物、定点修复并重跑，不得跳过。
+严格按顺序推进。失败时保留产物、定点修复并重跑，不得跳过。
 
 ### G0_SCOPE
 
-- 确认 `course` 或 `domain`、受众、深度、范围、排除项和学习成果。
-- 只有会显著改变知识点集合的关键歧义才询问用户；否则记录最常见教育语境假设。
-- 确认 `CONTENT_ROOT` 是独占的新目录或合法 v2 包，`GRAPH_FILE` 位于其外部。
+- 确认课程、受众、深度、范围、排除项和学习成果。
+- 只有会显著改变知识点集合的关键歧义才询问用户。
+- 调用 `init` 创建安全占位和目录。
 
 ### G1_INDEX
 
-- 使用内容 Skill 只生成 `course.json`、`generation/manifest.json` 和全量 `index.json`。
-- 冻结 index 中的 `id`、`title` 和数组顺序；manifest 的 `pointEvidence` 必须同序对应。
-- 不生成详情、动画实现、知识簇、关系层或布局字段。
-- 运行并通过：
-
-```bash
-node "<content-skill-dir>/scripts/validate_output.mjs" --root "$CONTENT_ROOT" --phase index
-```
+- 只生成 `course.json`、`generation/manifest.json` 和完整 `index.json`。
+- 冻结 index 的 `id`、`title` 和数组顺序；`pointEvidence` 必须同序。
+- 不生成详情、动画实现、知识簇、关系或布局字段。
+- 调用 `validate-index`，失败则修复后重跑。
 
 ### G2_IDENTITY_REVIEW
 
 - 汇总 `core / boundary / needs-review`、低置信度项和 `reviewQueue`。
-- `scope-ambiguity / granularity / synonym / naming` 会改变点 ID、标题或身份时必须停止，等待用户决定。
-- 用户明确要求 `model-only` 或全自动时，`insufficient-evidence` 可作为非阻断警告继续，但不得伪造来源或提高置信度。
-- 决定导致增删、合并或重命名时，只在详情任务启动前串行更新 index 与 manifest，再重跑 G1；不得留下失效 ID。
-- `resume` 遇到身份影响项时，只有当前请求或可审计会话中有明确决定才能继续，不能猜测历史批准。
+- 调用 `review-knowledge-points`。工具仅在 G1 校验通过后创建 `knowledge-points/G2_IDENTITY_REVIEW` 结构化审核请求。
+- 返回 `pending` 后立即停止本轮。不得用普通 `question`、聊天文字或模型写入的请求标记替代审核。
+- 只有后端签发且与当前有序 `id/title` 哈希一致的回执才允许 G3。增删、合并、重命名或换序都会使回执失效。
 
 ### G3_CONTENT
 
-- 按内容 Skill 的文件所有权和自适应拆分规则生成每个 `points/<id>.json` 与同名动画请求。
-- 子智能体只写自己拥有的详情和请求；共享 index、manifest、清单与注册文件保持串行。
-- 全局复核正文区分度、事实、前置引用与 DAG 后执行：
+- 先调用 `init-points`；该 action 会验证 G2 回执，无有效回执时必须阻断。
+- 按内容 Skill 的文件所有权和自适应拆分规则，让内容子智能体生成各自的 `points/<id>.json` 和同名动画请求。
+- 子智能体不得修改共享 index、manifest、清单或注册文件。
+- 全局复核正文区分度、事实、前置引用与 DAG 后，依次调用：
 
-```bash
-node "<content-skill-dir>/scripts/validate_output.mjs" --root "$CONTENT_ROOT" --phase points
-node "<content-skill-dir>/scripts/sync_index_from_points.mjs" --root "$CONTENT_ROOT"
-node "<content-skill-dir>/scripts/validate_output.mjs" --root "$CONTENT_ROOT" --phase points
-```
+  1. `validate-points`
+  2. `sync-index`
+  3. `validate-points`
 
 ### G4_ANIMATIONS
 
-- 归并全部动画请求，只有真实动态机制才进入 `animation-manifest.json`。
-- 按唯一机制生成互斥所有权的 TSX/CSS 组件，不以装饰运动冒充教学动画。
-- 串行构建注册层；即使动画清单为空也必须运行：
-
-```bash
-node "<content-skill-dir>/scripts/build_animation_registry.mjs" --root "$CONTENT_ROOT"
-```
+- 调用 `init-animation-manifest` 后归并动画请求，只有真实动态机制才进入动画清单。
+- 清单确定后调用 `init-animations`，再让动画子智能体按互斥所有权实现 TSX/CSS。
+- 串行调用 `build-animation-registry`；清单为空也必须执行。
 
 ### G5_CONTENT_READY
 
-依次执行：
-
-```bash
-node "<content-skill-dir>/scripts/validate_output.mjs" --root "$CONTENT_ROOT" --phase all
-node --test "<content-skill-dir>/scripts/"*.test.mjs
-```
-
-- 输出项目存在可用 TypeScript 构建命令时也必须运行。
-- 若动画类型非空，必须按 `animation-contract.md` 实际操作重播、重新生成、状态推进、低动态和响应式布局。结构检查不能替代人工/浏览器验收；无法完成时门禁保持阻断。
-- 动画清单为空时，人工动画验收标记为 `not-required`，不能伪造已操作结论。
+- 调用 `validate-all`，修复全部结构、动画源码、注册闭环和内容一致性错误。
+- 动画可以在浏览器中观察质量，但本阶段不创建用户审核、不调用 `question`、不生成或要求人工动画凭据。
+- 非空动画不得删除。最终发布仍会执行真实生产构建、依赖边界检查与完整性清单生成。
 
 ### G6_GRAPH
 
-- 仅在 G5 通过后使用图 Skill，读取完整 `CONTENT_ROOT`，写出 `GRAPH_FILE`。
-- 点集及 index 顺序保持不变；所有 v2 内容字段原样透传。
-- 先写只含 `id/prerequisites/clusterIds/role/related` 的关系草稿，再运行图 Skill 的 `assemble-graph-points.mjs` 从上游机械装配完整 point 对象和 `subject`；脚本会自动覆盖模型误写的正文，禁止让模型手工复制、概括或精简正文。
-- `prerequisites` 默认透传。每条补漏、去冗余或纠向都必须与 `generation.refinedPrerequisiteEdges` 一一对应。
-- 新增 `clusterIds / role / related`；多簇归属保持克制，首个 `clusterIds` 为主簇。
-- `related` 与任一方向的 `prerequisites` 互斥；优化后仍须为 DAG。
+- 仅在 G5 通过后读取完整内容包并写 `clustered-graph.json`。
+- 点集及 index 顺序不变，全部正文原样透传。
+- `prerequisites` 默认透传；每条增删必须与审核记录一一对应。
+- 新增 `clusters / clusterIds / role / related`，不生成布局。
+- 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
 
-必须依次运行：
+### G6_GRAPH_REVIEW
 
-```bash
-node "<graph-skill-dir>/scripts/assemble-graph-points.mjs" "$CONTENT_ROOT" "$GRAPH_FILE"
-node "<graph-skill-dir>/scripts/assemble-graph-points.mjs" "$CONTENT_ROOT" "$GRAPH_FILE" --check
-node "<graph-skill-dir>/scripts/check-graph.mjs" "$GRAPH_FILE"
-```
-
-任一命令失败时停留在 G6 定点修复，不得进入发布。
+- 调用 `review-knowledge-graph`。工具会先执行全量图谱预审核校验，再创建 `knowledge-graph/G6_GRAPH_REVIEW` 请求。
+- 回执绑定完整簇定义、每点有序 `clusterIds`、`role`、`related`、全部 `prerequisites`，以及 `refinedPrerequisiteEdges`、`brokenCycleEdges` 审计。
+- 返回 `pending` 后立即停止本轮。任何被绑定字段变化都会使回执失效，必须重新审核。
 
 ### G7_RELEASE_READY
 
-依次执行：
+依次调用：
 
-```bash
-node "<graph-skill-dir>/scripts/assemble-graph-points.mjs" "$CONTENT_ROOT" "$GRAPH_FILE" --check
-node "<graph-skill-dir>/scripts/check-graph.mjs" "$GRAPH_FILE"
-node "<orchestrator-dir>/scripts/check-pipeline.mjs" "$CONTENT_ROOT" "$GRAPH_FILE"
-```
+1. `assemble-graph-check`
+2. `check-graph`
+3. `check-pipeline-all`
+4. `publish`
 
-只有两条命令均退出 0，且 G5 的全量内容校验、脚本测试和必要动画验收已有证据时，才能声明中间产物合格。不得称其为已布局或已发布的 CKDS 森林包。
-
-最终发布工具会把已验收动画源码做目标项目生产构建，生成带 SHA-256 完整性清单的独立 iframe 运行包；构建、依赖边界或资产完整性失败时整次发布原子失败。不得把源码直接接入主前端，也不得为了通过发布而删除非空动画清单。
+最终 checker 必须确认当前内容/图谱和两份有效结构化回执。发布工具会对动画源码执行真实生产 bundle，生成带 SHA-256 完整性清单的独立 iframe 运行包；源码校验、生产构建、依赖边界或资产完整性任一失败时整次发布原子失败。发布不读取旧 G5 人工动画凭据。
 
 ## 恢复与失效
 
-- 依次运行上游 `index / points / all` 校验来定位最早可复用阶段，不凭文件存在判断成功。
-- G1 身份冻结后若 `id/title/order` 改变，G3–G7 全部失效。
-- 任一 point 内容、动画绑定或 `prerequisites` 改变，G5–G7 失效；重新同步 index、全量校验并重建或复核图。
-- `check-pipeline.mjs` 报内容漂移、点顺序变化或边审计不匹配时，图立即视为过期。
-- 不覆盖已通过产物，除非用户明确要求重建；不删除问题点、关系或动画来伪造通过。
+- 依次调用 `validate-index / validate-points / validate-all` 定位可复用阶段，不凭文件存在判断成功。
+- G1 身份发生变化时，G2 回执和 G3–G7 全部失效。
+- 点正文或动画变化后重新执行 G5–G7。
+- 簇定义、`clusterIds / role / related / prerequisites` 或图谱审核记录变化后，G6 图谱回执和 G7 失效。
+- `check-pipeline` 报内容漂移、点顺序变化或边审计不匹配时，图立即视为过期。
 
-## 校验器用法
+## 固定校验 action
 
-只校验内容包：
+- `check-content-all`：只校验内容包。
+- `check-pipeline-json`：检查图谱交接并返回机器结果。
+- `check-pipeline-all` / `check-pipeline-all-json`：执行最终全量门禁。
 
-```bash
-node "<orchestrator-dir>/scripts/check-pipeline.mjs" "$CONTENT_ROOT" --phase all
-```
-
-校验最终交接：
-
-```bash
-node "<orchestrator-dir>/scripts/check-pipeline.mjs" "$CONTENT_ROOT" "$GRAPH_FILE" --json
-```
-
-校验器复用上游 `validateProject()`，并额外检查 subject/courseId、点集与顺序、全部内容字段透传、关系字段边界、角色约束、关系互斥、先修边差异及其审计记录。
+最终全量门禁必须显示 `reviewApprovals: 2`。
 
 ## Dry-run 输出
 
-`dry-run` 是固定机器接口。第一个非空字符必须是 `{`，最后一个非空字符必须是 `}`，不得包含反引号、说明文字或额外键；输出必须与下方对象完全一致：
+输出必须与下方对象完全一致：
 
 ```json
-{"pipelineSkill":"knowledge-pipeline-orchestrator","mode":"dry-run","gates":["G0_SCOPE","G1_INDEX","G2_IDENTITY_REVIEW","G3_CONTENT","G4_ANIMATIONS","G5_CONTENT_READY","G6_GRAPH","G7_RELEASE_READY"],"artifacts":["course-content/","clustered-graph.json"],"blockingPolicy":"stop-on-identity-or-animation-review"}
+{"pipelineSkill":"knowledge-pipeline-orchestrator","mode":"dry-run","gates":["G0_SCOPE","G1_INDEX","G2_IDENTITY_REVIEW","G3_CONTENT","G4_ANIMATIONS","G5_CONTENT_READY","G6_GRAPH","G6_GRAPH_REVIEW","G7_RELEASE_READY"],"artifacts":["course-content/","clustered-graph.json"],"blockingPolicy":"stop-on-identity-or-graph-review"}
 ```
 
 ## 最终报告
 
-只报告：运行模式与路径、已通过门禁、index/详情/复核/来源数量、动画请求/类型/组件及人工验收状态、簇与多簇点数量、前置边/优化边/打破环边数量、校验/测试/构建结果、警告和阻断项。不粘贴完整点集、JSON 或动画源码。
+只报告运行模式、路径、已通过门禁、两类审核状态、知识点/详情/来源数量、动画类型与组件、簇与关系数量、校验和生产构建结果、警告和阻断项。不粘贴完整 JSON 或动画源码。
 
 ## 禁止项
 
-- 不生成或继续使用旧 `candidate-points.json`。
-- 不把 `clustered-graph.json` 放进上游独占内容目录。
-- 不让图阶段改写正文或未经审计修改 `prerequisites`。
-- 不在动画未实际验收时宣称 G5/G7 通过。
-- 不生成布局字段，不把中间产物伪装成 CKDS 发布包。
+- 不生成或继续使用旧 v1 中间产物。
+- 不让图阶段改写正文或未经审计修改先修关系。
+- 不让 Agent 直接运行本地脚本。
+- 不用普通对话确认代替结构化审核。
+- 不为发布删除非空动画清单。
+- 不在中间产物中生成森林布局字段。

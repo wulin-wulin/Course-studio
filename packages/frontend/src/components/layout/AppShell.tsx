@@ -11,12 +11,22 @@ import { CourseGenerationView } from "../course/CourseGenerationView";
 import { CourseForestViewport } from "../course/CourseForestViewport";
 import { CourseReadingPage } from "../course/CourseReadingPage";
 import { AgentPanel } from "../chat/AgentPanel";
+import { ReviewWorkspace } from "../review/ReviewWorkspace";
 import type { CourseMeta } from "@/course/forest/types";
-import { useCourseGenerationStore } from "@/course/generation/generationStore";
+import {
+  COURSE_GENERATION_RESUME_EVENT,
+  useCourseGenerationStore,
+} from "@/course/generation/generationStore";
+import { queueReviewResume } from "@/features/reviews/resumeDelivery";
+import type {
+  ReviewKind,
+  ReviewSubmissionNavigation,
+} from "@/features/reviews/types";
 
 type AppRoute =
   | { kind: "catalog" }
   | { kind: "generation"; conversationId: string }
+  | { kind: "review"; reviewId: string; reviewKind: ReviewKind }
   | { kind: "forest"; courseId: string }
   | { kind: "reading"; courseId: string; clusterId: string; pointId: string };
 
@@ -97,6 +107,9 @@ export function AppShell() {
   const requestGenerationDemo = useCourseGenerationStore((state) => state.requestDemo);
   const openLiveGeneration = useCourseGenerationStore((state) => state.openLive);
   const tickGenerationEstimates = useCourseGenerationStore((state) => state.tickEstimates);
+  const pauseStaleLiveRuns = useCourseGenerationStore(
+    (state) => state.pauseStaleLiveRuns
+  );
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(() => window.innerWidth >= 1024);
   const [agentPanelWidth, setAgentPanelWidth] = useState(initialAgentPanelWidth);
   const [isResizingAgentPanel, setIsResizingAgentPanel] = useState(false);
@@ -148,6 +161,12 @@ export function AppShell() {
     tickGenerationEstimates,
   ]);
 
+  useEffect(() => {
+    pauseStaleLiveRuns();
+    const timer = window.setInterval(pauseStaleLiveRuns, 5_000);
+    return () => window.clearInterval(timer);
+  }, [pauseStaleLiveRuns]);
+
   const openAgentPanel = useCallback(() => {
     setIsAgentPanelOpen(true);
   }, []);
@@ -155,6 +174,38 @@ export function AppShell() {
   const closeAgentPanel = useCallback(() => {
     setIsAgentPanelOpen(false);
   }, []);
+
+  const resumeCourseGeneration = useCallback(() => {
+    if (route.kind !== "generation" || route.conversationId === "demo") return;
+    setIsAgentPanelOpen(true);
+    window.dispatchEvent(
+      new CustomEvent(COURSE_GENERATION_RESUME_EVENT, {
+        detail: { conversationId: route.conversationId },
+      })
+    );
+  }, [route]);
+
+  const openReview = useCallback(
+    (reviewId: string, kind: ReviewKind) => {
+      navigate(
+        `/reviews/${encodeURIComponent(reviewId)}/${encodeURIComponent(kind)}`,
+      );
+    },
+    [navigate],
+  );
+
+  const completeReview = useCallback(
+    (result: ReviewSubmissionNavigation) => {
+      queueReviewResume(result);
+      const generation = useCourseGenerationStore.getState();
+      if (!generation.liveRuns[result.conversationId]) {
+        generation.startLive(result.conversationId);
+      }
+      navigate(`/generation/${encodeURIComponent(result.conversationId)}`);
+      setIsAgentPanelOpen(true);
+    },
+    [navigate],
+  );
 
   useEffect(() => {
     window.localStorage.setItem(AGENT_PANEL_WIDTH_KEY, String(agentPanelWidth));
@@ -186,7 +237,10 @@ export function AppShell() {
   }, [navigate, route]);
 
   useEffect(() => {
-    if (route.kind === "reading" && window.innerWidth < 1024) {
+    if (
+      (route.kind === "reading" || route.kind === "review") &&
+      window.innerWidth < 1024
+    ) {
       setIsAgentPanelOpen(false);
     }
   }, [route]);
@@ -349,6 +403,7 @@ export function AppShell() {
               generationConversationId === route.conversationId) ? (
               <CourseGenerationView
                 onClose={() => navigate("/")}
+                onResume={resumeCourseGeneration}
                 onOpenCourse={(courseId) =>
                   navigate(`/courses/${encodeURIComponent(courseId)}/forest`)
                 }
@@ -378,6 +433,13 @@ export function AppShell() {
                 <Loader2 aria-hidden="true" className="h-6 w-6 animate-spin text-primary" />
               </div>
             )
+          ) : route.kind === "review" ? (
+            <ReviewWorkspace
+              reviewId={route.reviewId}
+              expectedKind={route.reviewKind}
+              onSubmitted={completeReview}
+              onBack={() => navigate("/")}
+            />
           ) : route.kind === "catalog" ? (
             <CourseCatalog
               onOpenCourse={(course) =>
@@ -444,7 +506,7 @@ export function AppShell() {
             </div>
           )}
           <div id="course-agent-panel" className={isAgentPanelOpen ? "h-full" : "hidden"}>
-            <AgentPanel onCollapse={closeAgentPanel} />
+            <AgentPanel onCollapse={closeAgentPanel} onOpenReview={openReview} />
           </div>
 
           {!isAgentPanelOpen && (
@@ -480,7 +542,7 @@ function CourseWorkspace({
   route,
   navigate,
 }: {
-  route: Exclude<AppRoute, { kind: "catalog" } | { kind: "generation" }>;
+  route: Extract<AppRoute, { kind: "forest" | "reading" }>;
   navigate: (path: string) => void;
 }) {
   const [course, setCourse] = useState<CourseMeta | null>(null);
@@ -570,6 +632,21 @@ function currentHashPath() {
 
 function parseRoute(path: string): AppRoute {
   const segments = path.split("/").filter(Boolean).map(decodeSegment);
+  if (segments.length === 3 && segments[0] === "reviews") {
+    const reviewId = segments[1];
+    const reviewPath = segments[2];
+    const reviewKind =
+      reviewPath === "knowledge-points" || reviewPath === "points"
+        ? "knowledge-points"
+        : reviewPath === "knowledge-graph" ||
+            reviewPath === "graph" ||
+            reviewPath === "prerequisites"
+          ? "knowledge-graph"
+          : null;
+    if (reviewId && reviewKind) {
+      return { kind: "review", reviewId, reviewKind };
+    }
+  }
   if (segments.length === 2 && segments[0] === "generation") {
     const conversationId = segments[1];
     if (conversationId) return { kind: "generation", conversationId };

@@ -124,7 +124,7 @@ export type CourseGenerationSnapshot = {
 
 export type LiveCourseGenerationRun = {
   conversationId: string;
-  status: Exclude<GenerationRunStatus, "idle" | "requested" | "loading" | "paused">;
+  status: Exclude<GenerationRunStatus, "idle" | "requested" | "loading">;
   course: GenerationCourse | null;
   gate: GenerationGate;
   phaseLabel: string;

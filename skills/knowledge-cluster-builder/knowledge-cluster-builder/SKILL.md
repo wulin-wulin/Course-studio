@@ -37,11 +37,7 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 ### 1. 载入并核对输入
 
-加载四类来源，建立 `id → point` 索引。确认 `points/*.json` 与 `index.json` 的 id 集合一致、`prerequisites` 只引用已存在 id。建议先跑上游校验器确认输入干净：
-
-```bash
-node <上游 skill>/scripts/validate_output.mjs --root <中间包目录> --phase all
-```
+加载四类来源，建立 `id → point` 索引。确认 `points/*.json` 与 `index.json` 的 id 集合一致、`prerequisites` 只引用已存在 id。主智能体先调用 `course_pipeline` 的 `validate-all` 确认输入干净；本 Skill 不直接运行 Bash。
 
 ### 2. 聚类分簇（核心）
 
@@ -78,29 +74,15 @@ node <上游 skill>/scripts/validate_output.mjs --root <中间包目录> --phase
 
 ### 7. 保证无环并自检
 
-优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。然后运行综合校验器：
-
-```bash
-node scripts/check-graph.mjs <你的输出>.json
-```
+优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。然后由主智能体调用 `course_pipeline` 的 `check-graph`。
 
 它做两类校验——**对象与引用完整性**（point 必需字段齐全且没有契约外字段、clusterIds 命中簇、prerequisites/related 无悬空、无自环、id 规范；注意 clusterIds 是外键、与 DAG 无关）与**图性质**（prerequisites 无环 + 拓扑排序）。通过（退出 0）才算合格。
 
-失败时加 `--json` 拿结构化问题清单，按每条 finding 的 `pointId + field + value + fix` 定位修改，改完重跑直到 `ok: true`：
-
-```bash
-node scripts/check-graph.mjs <你的输出>.json --json
-```
+失败时调用 `check-graph-json` 获取结构化问题，按每条 finding 的 `pointId + field + value + fix` 定位修改，改完重跑直到 `ok: true`。
 
 ### 8. 增量叠加输出
 
-先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后必须由脚本按冻结 index 顺序读取 `points/<id>.json`，机械补齐全部 v2 内容字段：
-
-```bash
-node scripts/assemble-graph-points.mjs <CONTENT_ROOT> <GRAPH_FILE>
-node scripts/assemble-graph-points.mjs <CONTENT_ROOT> <GRAPH_FILE> --check
-node scripts/check-graph.mjs <GRAPH_FILE>
-```
+先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后由主智能体依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`，让受信脚本按冻结 index 顺序机械补齐全部 v2 内容字段。
 
 装配脚本会自动补齐草稿中省略的正文，并用上游 point 文件与 manifest 覆盖草稿里任何被模型改写/精简的正文和 `subject`；若增删知识点、遗漏关系字段或包含契约外字段，则立即失败。只有三条命令都通过，才可把结果视为 `clustered-graph/2.0`。最终对象在上游字段之外只能追加 `clusterIds / role / related`，`prerequisites` 只能按审计记录优化。
 
@@ -145,7 +127,7 @@ node scripts/check-graph.mjs <GRAPH_FILE>
 ## 发布前检查
 
 - [ ] 输出通过 `clustered-graph.schema.json` 校验。
-- [ ] `node scripts/check-graph.mjs` 退出码为 0。
+- [ ] `course_pipeline` 的 `check-graph` action 成功。
 - [ ] 每个点 `clusterIds` 非空、去重、每个都命中已声明的簇；首个为主簇。
 - [ ] 多簇点确有跨主题的独立教学理由，未滥用多簇。
 - [ ] 所有 `prerequisites`/`related` 都是点 id（无中文标题、无悬空、无自环）；`prerequisites` 全图无环。
@@ -154,3 +136,4 @@ node scripts/check-graph.mjs <GRAPH_FILE>
 - [ ] v2 内容字段原样透传，未被改写；未生成布局字段。
 - [ ] 已运行 `assemble-graph-points.mjs`，其 `--check` 模式退出码为 0；没有手工复制或精简 point 正文。
 - [ ] `pointCount` 等于 `points` 长度，`clusterCount` 等于 `clusters` 长度。
+- [ ] 主智能体已调用 `review-knowledge-graph`；无有效 `knowledge-graph/G6_GRAPH_REVIEW` 回执时不得进入 G7。

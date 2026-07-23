@@ -30,11 +30,31 @@ import {
 import { useChatStore } from "@/stores/chatStore";
 import type { ChatMode } from "@/stores/chatStore";
 import { getBackendWsUrl } from "@/utils/backendWs";
-import { useCourseGenerationStore } from "@/course/generation/generationStore";
+import { LatestRequestGuard } from "@/utils/latestRequest";
+import {
+  COURSE_GENERATION_RESUME_EVENT,
+  useCourseGenerationStore,
+} from "@/course/generation/generationStore";
+import {
+  parseReviewPointer,
+  reviewResumeNavigation,
+  type ReviewKind,
+  type ReviewPointer,
+  type ReviewSubmissionNavigation,
+} from "@/features/reviews/types";
+import {
+  getBrowserReviewResumeOutbox,
+  queueReviewResume,
+  reconcileReviewResume,
+  REVIEW_RESUME_AVAILABLE_EVENT,
+  reviewResumeDeliveryOutcome,
+  reviewResumeRetryDelay,
+} from "@/features/reviews/resumeDelivery";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
 import { ModelControls } from "./ModelControls";
+import { ReviewRequiredCard } from "../review/ReviewRequiredCard";
 
 type AgentEntry = {
   id: string;
@@ -95,6 +115,9 @@ type ConversationDetail = Omit<ConversationSummary, "message_count" | "preview">
     images: string[];
     created_at: string;
   }>;
+  pending_review?: unknown;
+  pending_review_resume?: unknown;
+  pending_question?: unknown;
 };
 
 type CourseDeletionCandidate = {
@@ -115,10 +138,13 @@ type HandlerCtx = {
   modeRef: RefObject<ChatMode>;
   workflowRef: RefObject<AgentWorkflow>;
   setPendingQuestion: Dispatch<SetStateAction<AgentQuestionRequest | null>>;
+  setPendingReview: Dispatch<SetStateAction<ReviewPointer | null>>;
+  onOpenReviewRef: RefObject<AgentPanelProps["onOpenReview"]>;
 };
 
 type AgentPanelProps = {
   onCollapse?: () => void;
+  onOpenReview?: (reviewId: string, kind: ReviewKind) => void;
 };
 
 const MODE_COPY: Record<
@@ -162,7 +188,7 @@ const AGENT_SUGGESTIONS = [
   "调整一个知识点的摘要并保持索引同步",
 ];
 
-export function AgentPanel({ onCollapse }: AgentPanelProps) {
+export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const requestGenerationDemo = useCourseGenerationStore((state) => state.requestDemo);
   const startLiveGeneration = useCourseGenerationStore((state) => state.startLive);
   const generationStatus = useCourseGenerationStore((state) => state.status);
@@ -182,10 +208,13 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   const [workflow, setWorkflow] = useState<AgentWorkflow>("default");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyCourseOnly, setHistoryCourseOnly] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionRequest | null>(null);
+  const [pendingReview, setPendingReview] = useState<ReviewPointer | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [questionError, setQuestionError] = useState("");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
@@ -201,6 +230,14 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const thinkingIdRef = useRef<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const onOpenReviewRef = useRef(onOpenReview);
+  const deliverReviewResumeRef = useRef<() => void>(() => undefined);
+  const inFlightReviewResumeRef = useRef<ReviewSubmissionNavigation | null>(null);
+  const reviewResumeFailureCountsRef = useRef(new Map<string, number>());
+  const reviewResumeRetryTimerRef = useRef<number | null>(null);
+  const reviewResumeReconcileAbortRef = useRef<AbortController | null>(null);
+  const reconcileReviewResumeRef = useRef<() => void>(() => undefined);
+  const conversationRestoreGuardRef = useRef(new LatestRequestGuard());
 
   useEffect(() => {
     let disposed = false;
@@ -241,10 +278,53 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         window.dispatchEvent(new CustomEvent("course-data-changed", {
           detail: { source: "agent-websocket-connected" },
         }));
+        window.setTimeout(() => deliverReviewResumeRef.current(), 0);
       };
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
+          const data = JSON.parse(event.data) as {
+            type: string;
+            payload?: Record<string, unknown>;
+          };
+          const activeResume = inFlightReviewResumeRef.current;
+          if (activeResume) {
+            const outcome = reviewResumeDeliveryOutcome(activeResume, data);
+            if (outcome === "consumed") {
+              getBrowserReviewResumeOutbox().remove(activeResume.reviewId);
+              reviewResumeFailureCountsRef.current.delete(activeResume.reviewId);
+              inFlightReviewResumeRef.current = null;
+              setPendingReview(null);
+              reviewResumeReconcileAbortRef.current?.abort();
+              if (reviewResumeRetryTimerRef.current !== null) {
+                window.clearTimeout(reviewResumeRetryTimerRef.current);
+                reviewResumeRetryTimerRef.current = null;
+              }
+              window.setTimeout(() => deliverReviewResumeRef.current(), 0);
+            } else if (outcome === "failed") {
+              inFlightReviewResumeRef.current = null;
+              const failures =
+                (reviewResumeFailureCountsRef.current.get(activeResume.reviewId) ?? 0) + 1;
+              reviewResumeFailureCountsRef.current.set(activeResume.reviewId, failures);
+              const delay = reviewResumeRetryDelay(failures);
+              if (delay !== null) {
+                reviewResumeRetryTimerRef.current = window.setTimeout(
+                  () => reconcileReviewResumeRef.current(),
+                  delay,
+                );
+              }
+            } else if (
+              data.type === "agent_done" &&
+              Number(data.payload?.return_code) === 0
+            ) {
+              // A successful resume can immediately yield the next review.
+              // Reconcile against durable server state instead of guessing
+              // whether this terminal event consumed the current outbox item.
+              reviewResumeRetryTimerRef.current = window.setTimeout(
+                () => reconcileReviewResumeRef.current(),
+                350,
+              );
+            }
+          }
           handleAgentEvent(data, {
             setEntries,
             setIsRunning,
@@ -254,6 +334,8 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
             modeRef,
             workflowRef,
             setPendingQuestion,
+            setPendingReview,
+            onOpenReviewRef,
           });
         } catch {
           setEntries((prev) => [
@@ -273,6 +355,9 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         window.clearTimeout(openTimer);
         if (wsRef.current === ws) wsRef.current = null;
         if (disposed) return;
+        if (inFlightReviewResumeRef.current) {
+          inFlightReviewResumeRef.current = null;
+        }
         const generation = useCourseGenerationStore.getState();
         const liveConversationId =
           lastActiveConversationIdRef.current ?? generation.conversationId;
@@ -284,9 +369,9 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
           liveRun?.status === "running" &&
           !liveRun.published
         ) {
-          generation.markLiveError(
+          generation.pauseLive(
             liveConversationId,
-            "与课程助手的连接已中断，生成显示已暂停；重新连接并继续流程后会自动恢复。"
+            "与课程助手的连接已中断。对话和已生成数据仍然保留，重新连接后可以继续创建。"
           );
         }
         setConnectionState("disconnected");
@@ -307,6 +392,11 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     return () => {
       disposed = true;
       clearReconnectTimer();
+      if (reviewResumeRetryTimerRef.current !== null) {
+        window.clearTimeout(reviewResumeRetryTimerRef.current);
+      }
+      reviewResumeReconcileAbortRef.current?.abort();
+      conversationRestoreGuardRef.current.cancel();
       wsRef.current?.close();
     };
   }, []);
@@ -316,17 +406,23 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   }, [mode]);
 
   useEffect(() => {
+    onOpenReviewRef.current = onOpenReview;
+  }, [onOpenReview]);
+
+  useEffect(() => {
     setQuestionError("");
     setQuestionSubmitting(false);
   }, [pendingQuestion?.requestId]);
 
   useEffect(() => {
     if (!activeConversationId || activeConversationId === lastActiveConversationIdRef.current) return;
+    conversationRestoreGuardRef.current.cancel();
     lastActiveConversationIdRef.current = activeConversationId;
     setEntries([]);
     setIsRunning(false);
     setRunStatus(null);
     setPendingQuestion(null);
+    setPendingReview(null);
     setQuestionSubmitting(false);
     setQuestionError("");
     setWorkflow("default");
@@ -341,7 +437,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     const container = scrollContainerRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [entries, isRunning, pendingQuestion, runStatus]);
+  }, [entries, isRunning, pendingQuestion, pendingReview, runStatus]);
 
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -352,14 +448,17 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   }, []);
 
   const resetConversationView = useCallback(() => {
+    conversationRestoreGuardRef.current.cancel();
     setEntries([]);
     setInput("");
     setImages([]);
     setIsRunning(false);
     setRunStatus(null);
     setPendingQuestion(null);
+    setPendingReview(null);
     setQuestionSubmitting(false);
     setQuestionError("");
+    setHistoryLoading(false);
     setWorkflow("default");
     workflowRef.current = "default";
     streamingIdRef.current = null;
@@ -386,20 +485,35 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     if (historyOpen) void loadConversationHistory();
   }, [historyOpen, loadConversationHistory]);
 
-  const openHistoricalConversation = useCallback(async (conversationId: string) => {
-    if (isRunning) return;
+  const openHistoricalConversation = useCallback(async (
+    conversationId: string
+  ): Promise<ConversationDetail | null> => {
+    if (isRunning) return null;
+    const request = conversationRestoreGuardRef.current.start();
     setHistoryLoading(true);
     setHistoryError("");
     try {
       const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
         cache: "no-store",
+        signal: request.controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const conversation = await response.json() as ConversationDetail;
+      if (!conversationRestoreGuardRef.current.isCurrent(request)) return null;
       const restoredMode: ChatMode = conversation.mode === "chat" ? "chat" : "agent";
       const restoredWorkflow: AgentWorkflow = conversation.workflow === "course-create"
         ? "course-create"
         : "default";
+      const restoredReview = parseReviewPointer(conversation.pending_review);
+      const restoredResumePointer = parseReviewPointer(
+        conversation.pending_review_resume,
+      );
+      const restoredResume = restoredResumePointer
+        ? reviewResumeNavigation(restoredResumePointer)
+        : null;
+      const restoredQuestion = parseAgentQuestionRequest(
+        conversation.pending_question,
+      );
 
       lastActiveConversationIdRef.current = conversation.id;
       setActiveConversation(conversation.id);
@@ -411,7 +525,8 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       setInput("");
       setImages([]);
       setRunStatus(null);
-      setPendingQuestion(null);
+      setPendingQuestion(restoredQuestion);
+      setPendingReview(restoredReview);
       setQuestionSubmitting(false);
       setQuestionError("");
       setEntries(conversation.messages.map((message) => ({
@@ -430,10 +545,20 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       })));
       stickToBottomRef.current = true;
       setHistoryOpen(false);
+      if (restoredReview) {
+        onOpenReviewRef.current?.(restoredReview.id, restoredReview.kind);
+      } else if (restoredResume) {
+        queueReviewResume(restoredResume);
+      }
+      return conversation;
     } catch (error) {
+      if (request.controller.signal.aborted) return null;
       setHistoryError(error instanceof Error ? error.message : "恢复历史对话失败");
+      return null;
     } finally {
-      setHistoryLoading(false);
+      if (conversationRestoreGuardRef.current.finish(request)) {
+        setHistoryLoading(false);
+      }
     }
   }, [isRunning, setActiveConversation, setMode, setModel]);
 
@@ -442,23 +567,54 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     conversation: ConversationSummary
   ) => {
     event.stopPropagation();
-    if (isRunning || !window.confirm(`删除历史对话“${conversation.title}”？`)) return;
+    if (isRunning && activeConversationId === conversation.id) {
+      setHistoryError("当前流程仍在运行，不能删除；可以先删除其他旧流程。");
+      return;
+    }
+    const description = conversation.workflow === "course-create"
+      ? `删除旧流程“${conversation.title}”？其对话、私有 pipeline、审核记录和 OpenCode 会话会一起清理，已发布课程不受影响。`
+      : `删除历史对话“${conversation.title}”？`;
+    if (!window.confirm(description)) return;
+    setDeletingConversationId(conversation.id);
+    setHistoryError("");
     try {
-      const response = await fetch(`/api/conversations/${encodeURIComponent(conversation.id)}`, {
-        method: "DELETE",
-      });
-      if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversation.id)}/purge`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: unknown } | null;
+        throw new Error(
+          typeof payload?.detail === "string"
+            ? payload.detail
+            : `删除失败（HTTP ${response.status}）`
+        );
+      }
       setConversations((prev) => prev.filter((item) => item.id !== conversation.id));
+      getBrowserReviewResumeOutbox().removeConversation(conversation.id);
       useCourseGenerationStore.getState().removeLive(conversation.id);
       if (activeConversationId === conversation.id) {
         const nextId = createConversation();
         lastActiveConversationIdRef.current = nextId;
         resetConversationView();
+        if (window.location.hash.includes(encodeURIComponent(conversation.id))) {
+          window.location.hash = "/";
+        }
       }
     } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : "删除历史对话失败");
+      setHistoryError(error instanceof Error ? error.message : "删除流程和对话失败");
+    } finally {
+      setDeletingConversationId((current) =>
+        current === conversation.id ? null : current
+      );
     }
   }, [activeConversationId, createConversation, isRunning, resetConversationView]);
+
+  const openWorkflowCleanup = useCallback(() => {
+    setHistoryCourseOnly(true);
+    setHistoryOpen(true);
+    setHistoryError("");
+  }, []);
 
   const startNewConversation = useCallback(() => {
     if (isRunning) return;
@@ -489,8 +645,18 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     requestImages: string[],
     requestWorkflow: AgentWorkflow,
     displayContent?: string,
-    replaceEntries = false
+    replaceEntries = false,
+    reviewResumeId?: string,
+    modelOverride?: string,
   ) => {
+    const requestMode: ChatMode =
+      requestWorkflow === "course-create" ? "agent" : mode;
+    if (requestWorkflow === "course-create") {
+      const generation = useCourseGenerationStore.getState();
+      if (generation.liveRuns[conversationId]) {
+        generation.resumeLive(conversationId);
+      }
+    }
     streamingIdRef.current = null;
     thinkingIdRef.current = null;
     stickToBottomRef.current = true;
@@ -504,7 +670,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     setEntries((prev) => replaceEntries ? [entry] : [...prev, entry]);
     setIsRunning(true);
     setRunStatus(
-      mode === "chat"
+      requestMode === "chat"
         ? makeRunStatus("正在思考", "正在只读检索课程信息")
         : requestWorkflow === "course-create"
           ? makeRunStatus("正在启动课程创建流程", "正在加载课程创建 Skill")
@@ -517,18 +683,214 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
           conversation_id: conversationId,
           request_id: entry.id,
           message,
+          ...(displayContent ? { display_content: displayContent } : {}),
           images: requestImages,
-          model: selectedModel,
-          mode,
+          model: modelOverride || selectedModel,
+          mode: requestMode,
           workflow: requestWorkflow,
+          ...(reviewResumeId ? { review_resume_id: reviewResumeId } : {}),
         },
       })
     );
   }, [mode, selectedModel]);
 
+  const resumeCourseCreation = useCallback(async (conversationId: string) => {
+    const normalizedId = conversationId.trim();
+    if (!normalizedId) return;
+    const generation = useCourseGenerationStore.getState();
+    const run = generation.liveRuns[normalizedId];
+    if (!run || run.published || run.status === "completed") return;
+    if (isRunning) {
+      if (lastActiveConversationIdRef.current === normalizedId) {
+        generation.resumeLive(normalizedId);
+      }
+      return;
+    }
+
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      generation.pauseLive(
+        normalizedId,
+        "课程助手尚未连接，当前进度已经保留。连接恢复后请再次点击“继续创建”。"
+      );
+      return;
+    }
+
+    const conversation = await openHistoricalConversation(normalizedId);
+    if (!conversation) return;
+    if (
+      parseReviewPointer(conversation.pending_review) ||
+      parseReviewPointer(conversation.pending_review_resume)
+    ) {
+      return;
+    }
+
+    generation.resumeLive(normalizedId);
+    lastActiveConversationIdRef.current = normalizedId;
+    setMode("agent");
+    modeRef.current = "agent";
+    setWorkflow("course-create");
+    workflowRef.current = "course-create";
+    submitRequest(
+      normalizedId,
+      [
+        "继续之前中断的课程创建流程。",
+        "必须使用 knowledge-pipeline-orchestrator 的 resume 模式：读取当前会话的 pipeline、审核回执和已生成文件，",
+        "通过固定校验 action 定位最早未完成 Gate；复用所有已通过的产物，只修复或继续未完成阶段。",
+        "如果 G0 课程信息仍不完整，请直接询问我缺少的信息。",
+      ].join(""),
+      [],
+      "course-create",
+      "继续创建课程",
+      false,
+      undefined,
+      conversation.model,
+    );
+  }, [
+    isRunning,
+    openHistoricalConversation,
+    setMode,
+    submitRequest,
+  ]);
+
+  useEffect(() => {
+    const resume = (event: Event) => {
+      const detail = (event as CustomEvent<{ conversationId?: unknown }>).detail;
+      const conversationId =
+        typeof detail?.conversationId === "string" ? detail.conversationId : "";
+      if (conversationId) void resumeCourseCreation(conversationId);
+    };
+    window.addEventListener(COURSE_GENERATION_RESUME_EVENT, resume);
+    return () => {
+      window.removeEventListener(COURSE_GENERATION_RESUME_EVENT, resume);
+    };
+  }, [resumeCourseCreation]);
+
+  const deliverReviewResume = useCallback(() => {
+    if (
+      inFlightReviewResumeRef.current ||
+      wsRef.current?.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+    const request = getBrowserReviewResumeOutbox().list()[0];
+    if (!request) return;
+    const activeConversationId = lastActiveConversationIdRef.current;
+    if (
+      isRunning &&
+      activeConversationId &&
+      activeConversationId !== request.conversationId
+    ) {
+      return;
+    }
+
+    inFlightReviewResumeRef.current = request;
+    lastActiveConversationIdRef.current = request.conversationId;
+    setActiveConversation(request.conversationId);
+    setMode("agent");
+    modeRef.current = "agent";
+    setWorkflow("course-create");
+    workflowRef.current = "course-create";
+    setPendingReview(null);
+    useCourseGenerationStore.getState().resumeLive(request.conversationId);
+    submitRequest(
+      request.conversationId,
+      request.resumeMessage,
+      [],
+      "course-create",
+      request.displayContent,
+      false,
+      request.reviewId,
+    );
+  }, [isRunning, setActiveConversation, setMode, submitRequest]);
+
+  const reconcilePendingReviewResume = useCallback(async () => {
+    const request =
+      inFlightReviewResumeRef.current ??
+      getBrowserReviewResumeOutbox().list()[0];
+    if (!request) return;
+    reviewResumeReconcileAbortRef.current?.abort();
+    const controller = new AbortController();
+    reviewResumeReconcileAbortRef.current = controller;
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(request.conversationId)}`,
+        { cache: "no-store", signal: controller.signal },
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const decision = reconcileReviewResume(request.reviewId, await response.json());
+      if (controller.signal.aborted) return;
+      inFlightReviewResumeRef.current = null;
+
+      if (decision.kind === "retry") {
+        getBrowserReviewResumeOutbox().enqueue(decision.navigation);
+        window.setTimeout(() => deliverReviewResumeRef.current(), 0);
+        return;
+      }
+
+      getBrowserReviewResumeOutbox().remove(request.reviewId);
+      reviewResumeFailureCountsRef.current.delete(request.reviewId);
+      if (decision.kind === "pending-review") {
+        setPendingReview(decision.review);
+        onOpenReviewRef.current?.(decision.review.id, decision.review.kind);
+      } else {
+        setPendingReview(null);
+        window.setTimeout(() => deliverReviewResumeRef.current(), 0);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      inFlightReviewResumeRef.current = null;
+      const failureCount =
+        (reviewResumeFailureCountsRef.current.get(request.reviewId) ?? 0) + 1;
+      reviewResumeFailureCountsRef.current.set(request.reviewId, failureCount);
+      const delay = reviewResumeRetryDelay(failureCount);
+      if (delay !== null) {
+        reviewResumeRetryTimerRef.current = window.setTimeout(
+          () => reconcileReviewResumeRef.current(),
+          delay,
+        );
+      }
+    } finally {
+      if (reviewResumeReconcileAbortRef.current === controller) {
+        reviewResumeReconcileAbortRef.current = null;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    deliverReviewResumeRef.current = deliverReviewResume;
+  }, [deliverReviewResume]);
+
+  useEffect(() => {
+    reconcileReviewResumeRef.current = () => {
+      void reconcilePendingReviewResume();
+    };
+  }, [reconcilePendingReviewResume]);
+
+  useEffect(() => {
+    const deliver = () => {
+      window.setTimeout(() => deliverReviewResumeRef.current(), 0);
+    };
+    window.addEventListener(REVIEW_RESUME_AVAILABLE_EVENT, deliver);
+    deliver();
+    return () => {
+      window.removeEventListener(REVIEW_RESUME_AVAILABLE_EVENT, deliver);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isRunning) {
+      window.setTimeout(() => deliverReviewResumeRef.current(), 0);
+    }
+  }, [isRunning]);
+
   const send = useCallback(() => {
     const message = input.trim();
-    if ((!message && images.length === 0) || isRunning || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    if (
+      (!message && images.length === 0) ||
+      isRunning ||
+      pendingReview ||
+      wsRef.current?.readyState !== WebSocket.OPEN
+    ) return;
 
     let conversationId = activeConversationId;
     if (!conversationId) {
@@ -539,7 +901,16 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     submitRequest(conversationId, message, images, workflow);
     setInput("");
     setImages([]);
-  }, [activeConversationId, createConversation, images, input, isRunning, submitRequest, workflow]);
+  }, [
+    activeConversationId,
+    createConversation,
+    images,
+    input,
+    isRunning,
+    pendingReview,
+    submitRequest,
+    workflow,
+  ]);
 
   const startCourseCreation = useCallback(() => {
     if (mode !== "agent" || isRunning || workflow === "course-create" || wsRef.current?.readyState !== WebSocket.OPEN) return;
@@ -691,6 +1062,9 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const inputPlaceholder = workflow === "course-create"
     ? "回答课程创建流程的问题…"
     : modeCopy.placeholder;
+  const visibleConversations = historyCourseOnly
+    ? conversations.filter((conversation) => conversation.workflow === "course-create")
+    : conversations;
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-surface text-text-primary">
@@ -717,11 +1091,13 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
           </span>
           <button
             type="button"
-            onClick={() => setHistoryOpen((value) => !value)}
-            disabled={isRunning}
+            onClick={() => {
+              setHistoryCourseOnly(false);
+              setHistoryOpen((value) => !value);
+            }}
             aria-label="历史对话"
             title="历史对话"
-            className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
               historyOpen
                 ? "bg-primary-light text-primary"
                 : "text-text-secondary hover:bg-cream-dark hover:text-text-primary"
@@ -759,10 +1135,24 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         <div className="absolute inset-x-0 bottom-0 top-[53px] z-30 flex flex-col bg-surface">
           <div className="flex items-center justify-between border-b border-border bg-cream/45 px-3.5 py-3">
             <div>
-              <h3 className="text-sm font-semibold text-text-primary">历史对话</h3>
-              <p className="mt-0.5 text-[11px] text-text-secondary">保存在本机后端，不依赖账号登录</p>
+              <h3 className="text-sm font-semibold text-text-primary">
+                {historyCourseOnly ? "清理旧课程流程" : "历史对话"}
+              </h3>
+              <p className="mt-0.5 text-[11px] text-text-secondary">
+                {historyCourseOnly
+                  ? "删除草稿流程时会同时清理私有文件与对话"
+                  : "保存在本机后端，不依赖账号登录"}
+              </p>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setHistoryCourseOnly((value) => !value)}
+                className="rounded-md px-2 py-1 text-[10px] font-medium text-text-secondary hover:bg-cream-dark hover:text-text-primary"
+                title={historyCourseOnly ? "显示全部历史对话" : "只显示课程创建流程"}
+              >
+                {historyCourseOnly ? "全部对话" : "创建流程"}
+              </button>
               <button
                 type="button"
                 onClick={() => void loadConversationHistory()}
@@ -794,15 +1184,21 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
                 <Loader2 className="h-4 w-4 animate-spin" />
                 正在加载历史对话
               </div>
-            ) : conversations.length === 0 ? (
+            ) : visibleConversations.length === 0 ? (
               <div className="flex h-48 flex-col items-center justify-center text-center text-text-secondary">
                 <History className="mb-2 h-6 w-6 opacity-50" />
-                <p className="text-xs font-medium text-text-primary">还没有历史对话</p>
-                <p className="mt-1 text-[11px]">发送第一条消息后会自动保存</p>
+                <p className="text-xs font-medium text-text-primary">
+                  {historyCourseOnly ? "没有可清理的旧流程" : "还没有历史对话"}
+                </p>
+                <p className="mt-1 text-[11px]">
+                  {historyCourseOnly
+                    ? "已发布课程不会出现在这里"
+                    : "发送第一条消息后会自动保存"}
+                </p>
               </div>
             ) : (
               <div className="space-y-2">
-                {conversations.map((conversation) => (
+                {visibleConversations.map((conversation) => (
                   <div
                     role="button"
                     tabIndex={0}
@@ -846,10 +1242,15 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
                       <button
                         type="button"
                         onClick={(event) => void deleteHistoricalConversation(event, conversation)}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-secondary opacity-0 transition-all hover:bg-error/10 hover:text-error group-hover:opacity-100 focus:opacity-100"
-                        title="删除历史对话"
+                        disabled={deletingConversationId === conversation.id}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-secondary opacity-70 transition-all hover:bg-error/10 hover:text-error group-hover:opacity-100 focus:opacity-100 disabled:cursor-wait disabled:opacity-40"
+                        title={conversation.workflow === "course-create" ? "删除流程和对话" : "删除历史对话"}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        {deletingConversationId === conversation.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
                       </button>
                     </div>
                   </div>
@@ -947,7 +1348,14 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       </div>
 
       <div className="border-t border-border bg-surface p-3">
-        {pendingQuestion ? (
+        {pendingReview ? (
+          <ReviewRequiredCard
+            review={pendingReview}
+            onOpen={() =>
+              onOpenReviewRef.current?.(pendingReview.id, pendingReview.kind)
+            }
+          />
+        ) : pendingQuestion ? (
           <AgentQuestionCard
             request={pendingQuestion}
             submitting={questionSubmitting}
@@ -1053,6 +1461,15 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     删除课程
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openWorkflowCleanup}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                    title="删除旧课程流程、私有草稿和对应对话"
+                  >
+                    <History className="h-3.5 w-3.5" />
+                    清理流程
                   </button>
                 </>
               )}
@@ -1571,6 +1988,8 @@ function handleAgentEvent(
     modeRef,
     workflowRef,
     setPendingQuestion,
+    setPendingReview,
+    onOpenReviewRef,
   } = ctx;
   const payload = data.payload ?? {};
   const currentMode = modeRef.current;
@@ -1578,10 +1997,12 @@ function handleAgentEvent(
 
   switch (data.type) {
     case "agent_heartbeat":
+      touchLiveGeneration(payload);
       setRunStatus((prev) => (prev ? { ...prev, updatedAt: Date.now() } : prev));
       return;
 
     case "agent_start":
+      touchLiveGeneration(payload);
       updateRunStatus(
         setRunStatus,
         currentMode === "chat" ? "正在思考" : isCourseCreation ? "课程创建中" : "Agent 启动中",
@@ -1594,6 +2015,7 @@ function handleAgentEvent(
       return;
 
     case "agent_status":
+      touchLiveGeneration(payload);
       updateRunStatus(setRunStatus, String(payload.label ?? "Agent 工作中"));
       return;
 
@@ -1648,6 +2070,36 @@ function handleAgentEvent(
     }
 
     case "agent_tool_result": {
+      return;
+    }
+
+    case "agent_review_required": {
+      const review = parseReviewPointer(payload);
+      if (!review) {
+        setEntries((previous) => [
+          ...previous,
+          {
+            id: crypto.randomUUID(),
+            role: "error",
+            title: "审核任务格式无效",
+            content: "后端返回的结构化审核缺少身份、版本或课程信息。",
+            status: "error",
+          },
+        ]);
+        return;
+      }
+      finalizeStreaming(streamingIdRef, setEntries);
+      finalizeThinking(thinkingIdRef, setEntries);
+      setPendingQuestion(null);
+      setPendingReview(review);
+      setIsRunning(false);
+      setRunStatus(null);
+      onOpenReviewRef.current?.(review.id, review.kind);
+      return;
+    }
+
+    case "agent_review_resolved": {
+      setPendingReview(null);
       return;
     }
 
@@ -1726,15 +2178,23 @@ function handleAgentEvent(
       setIsRunning(false);
       setRunStatus(null);
       const code = Number(payload.return_code);
-      if (code === 0) return;
+      if (code === 0) {
+        const generation = useCourseGenerationStore.getState();
+        const conversationId = generationConversationId(payload, generation);
+        const liveRun = conversationId
+          ? generation.liveRuns[conversationId]
+          : undefined;
+        if (liveRun && !liveRun.published) {
+          generation.pauseLive(
+            conversationId,
+            "本轮执行已经结束，课程进度和对话均已保留，可以继续下一步。"
+          );
+        }
+        return;
+      }
       {
         const generation = useCourseGenerationStore.getState();
-        const conversationId = String(
-          payload.conversation_id ??
-          payload.conversationId ??
-          generation.conversationId ??
-          ""
-        ).trim();
+        const conversationId = generationConversationId(payload, generation);
         if (
           conversationId &&
           (isCourseCreation || Boolean(generation.liveRuns[conversationId]))
@@ -1766,12 +2226,7 @@ function handleAgentEvent(
       const message = String(payload.message ?? payload.content ?? "");
       {
         const generation = useCourseGenerationStore.getState();
-        const conversationId = String(
-          payload.conversation_id ??
-          payload.conversationId ??
-          generation.conversationId ??
-          ""
-        ).trim();
+        const conversationId = generationConversationId(payload, generation);
         if (
           conversationId &&
           (isCourseCreation || Boolean(generation.liveRuns[conversationId]))
@@ -1802,6 +2257,26 @@ function handleAgentEvent(
   }
 }
 
+function generationConversationId(
+  payload: Record<string, unknown>,
+  generation: ReturnType<typeof useCourseGenerationStore.getState>,
+): string {
+  return String(
+    payload.conversation_id ??
+      payload.conversationId ??
+      generation.conversationId ??
+      ""
+  ).trim();
+}
+
+function touchLiveGeneration(payload: Record<string, unknown>) {
+  const generation = useCourseGenerationStore.getState();
+  const conversationId = generationConversationId(payload, generation);
+  if (conversationId && generation.liveRuns[conversationId]) {
+    generation.touchLive(conversationId);
+  }
+}
+
 function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item, index) => {
@@ -1825,6 +2300,17 @@ function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {
       custom: item.custom !== false,
     }];
   });
+}
+
+function parseAgentQuestionRequest(
+  value: unknown,
+): AgentQuestionRequest | null {
+  if (!isRecord(value)) return null;
+  const requestId = String(value.request_id ?? "").trim();
+  const conversationId = String(value.conversation_id ?? "").trim();
+  const questions = normalizeAgentQuestions(value.questions);
+  if (!requestId || !conversationId || questions.length === 0) return null;
+  return { requestId, conversationId, questions };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

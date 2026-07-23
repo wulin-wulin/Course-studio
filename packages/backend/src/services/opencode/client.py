@@ -96,6 +96,29 @@ async def abort(session_id: str) -> None:
         pass
 
 
+async def delete_session(session_id: str) -> bool:
+    """Best-effort removal of an inactive OpenCode session and its children."""
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
+            await client.post(
+                f"{_base_url()}/session/{session_id}/abort",
+                auth=_auth(),
+            )
+            resp = await client.delete(
+                f"{_base_url()}/session/{session_id}",
+                auth=_auth(),
+            )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+    except Exception:
+        # Local conversation/workspace cleanup must remain available while the
+        # optional OpenCode process is offline.
+        return False
+
+
 async def reply_question(request_id: str, answers: list[list[str]], directory: str) -> None:
     """Reply to a pending native OpenCode question and resume its session."""
 

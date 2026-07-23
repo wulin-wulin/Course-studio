@@ -6,7 +6,6 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { createCourseMapLayout } from "./layout-course-map.mjs";
 import { buildCourseAnimationRuntime } from "./bundle-course-animations.mjs";
-import { validateAnimationAcceptance } from "./animation-acceptance.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_G7_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
@@ -235,6 +234,21 @@ async function publish(courseId) {
     const detail = (checked.stdout || checked.stderr || "未知校验错误").trim();
     fail(`G7 流水线校验未通过，不能发布：\n${detail}`);
   }
+  let checkReport;
+  try {
+    checkReport = JSON.parse(checked.stdout);
+  } catch (error) {
+    fail(`G7 流水线校验未返回有效 JSON，不能确认审核门禁：${error.message}`);
+  }
+  if (
+    checkReport?.ok !== true
+    || checkReport?.phase !== "all"
+    || path.resolve(checkReport?.contentRoot ?? "") !== contentRoot
+    || path.resolve(checkReport?.graphFile ?? "") !== graphPath
+    || checkReport?.counts?.reviewApprovals !== 2
+  ) {
+    fail("G7 流水线校验未确认当前课程和两份有效结构化审核回执，不能发布");
+  }
 
   const sourceCourse = readJson(sourceCoursePath, "课程元数据");
   const manifest = readJson(manifestPath, "生成清单");
@@ -247,14 +261,6 @@ async function publish(courseId) {
 
   const animations = Array.isArray(animationManifest.animations) ? animationManifest.animations : null;
   if (animations === null) fail("动画清单格式无效");
-  validateAnimationAcceptance({
-    workspaceRoot: root,
-    contentRoot,
-    courseId,
-    animations,
-    readJson,
-    fail,
-  });
 
   const { course, index, details } = buildCourseData(courseId, sourceCourse, manifest, graph);
   fs.mkdirSync(coursesDirectory, { recursive: true });

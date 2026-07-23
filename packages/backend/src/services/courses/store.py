@@ -1215,6 +1215,23 @@ class CourseStore:
                 raise CourseDataError("无效的只读课程工作区")
             self._copy_canonical_to_workspace(workspace.path)
 
+    def discard_conversation_workspaces(self, conversation_id: str) -> list[str]:
+        """Delete private Agent/Chat workspaces without touching canonical courses."""
+
+        safe_id = _safe_conversation_id(conversation_id)
+        scoped_ids = {safe_id, f"chat-{safe_id}"[:80]}
+        removed: list[str] = []
+        with self._lock:
+            for scoped_id in sorted(scoped_ids):
+                session_dir = self._workspace_session_dir(scoped_id)
+                if not session_dir.exists():
+                    continue
+                if not session_dir.is_dir() or session_dir.is_symlink():
+                    raise CourseDataError("课程会话工作区不是安全目录")
+                shutil.rmtree(session_dir)
+                removed.append(scoped_id)
+        return removed
+
     def commit_workspace(self, workspace: CourseWorkspace) -> dict[str, Any]:
         """Validate a staged OpenCode tree and atomically promote its changes."""
 

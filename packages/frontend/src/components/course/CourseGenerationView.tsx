@@ -42,11 +42,13 @@ const GATE_LABELS: Record<GenerationGate, string> = {
 type CourseGenerationViewProps = {
   onClose: () => void;
   onOpenCourse: (courseId: string) => void;
+  onResume: () => void;
 };
 
 export function CourseGenerationView({
   onClose,
   onOpenCourse,
+  onResume,
 }: CourseGenerationViewProps) {
   const mode = useCourseGenerationStore((state) => state.mode);
   const status = useCourseGenerationStore((state) => state.status);
@@ -183,7 +185,7 @@ export function CourseGenerationView({
 
   const retry = () => {
     if (!isDemo) {
-      close();
+      onResume();
       return;
     }
     replayRef.current?.dispose();
@@ -385,13 +387,19 @@ export function CourseGenerationView({
           </aside>
         )}
 
-        {status === "error" && (
+        {(status === "error" || (!isDemo && isPaused)) && (
           <div className="course-generation__error" role="alert">
             <AlertTriangle aria-hidden="true" size={23} />
-            <strong>{isDemo ? "演示暂时无法启动" : "本轮生成暂时中断"}</strong>
-            <span>{error}</span>
+            <strong>
+              {isDemo ? "演示暂时无法启动" : "课程创建已暂停"}
+            </strong>
+            <span>
+              {error ||
+                "对话和已经生成的数据仍然保留，可以从当前进度继续。"}
+            </span>
             <button type="button" onClick={retry}>
-              {isDemo ? "重试" : "返回对话"}
+              {!isDemo && <Play aria-hidden="true" size={14} />}
+              {isDemo ? "重试" : "继续创建"}
             </button>
           </div>
         )}

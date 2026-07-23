@@ -23,11 +23,12 @@ async def run_turn(
     websocket: websockets.ClientConnection,
     *,
     conversation_id: str,
-    message: str,
+    message: str = "",
+    review_resume_id: str | None = None,
     model: str | None,
     api_url: str,
     timeout: float,
-) -> tuple[str, int]:
+) -> tuple[str, int, dict | None]:
     payload = {
         "conversation_id": conversation_id,
         "message": message,
@@ -35,12 +36,15 @@ async def run_turn(
         "mode": "agent",
         "workflow": "course-create",
     }
+    if review_resume_id:
+        payload["review_resume_id"] = review_resume_id
     if model:
         payload["model"] = model
     await websocket.send(json.dumps({"type": "agent_request", "payload": payload}))
 
     chunks: list[str] = []
     question_events = 0
+    review: dict | None = None
     while True:
         raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
         event = json.loads(raw)
@@ -65,12 +69,74 @@ async def run_turn(
                     json={"conversation_id": conversation_id, "answers": answers},
                 )
                 response.raise_for_status()
+        elif event_type == "agent_review_required":
+            if review is not None:
+                raise RuntimeError("one agent turn emitted more than one review gate")
+            review = dict(event_payload)
+            print(
+                "  review: "
+                f"{review.get('kind')} / {review.get('gate')} / {review.get('id')}"
+            )
+        elif event_type == "agent_review_resolved":
+            print(
+                "  review resumed: "
+                f"{event_payload.get('kind')} / {event_payload.get('id')}"
+            )
         elif event_type == "agent_error":
             raise RuntimeError(str(event_payload.get("message") or "Agent error"))
         elif event_type == "agent_done":
             if int(event_payload.get("return_code") or 0) != 0:
                 raise RuntimeError(f"Agent exited with {event_payload.get('return_code')}")
-            return "".join(chunks).strip(), question_events
+            awaiting_review = bool(event_payload.get("awaiting_review"))
+            if awaiting_review != (review is not None):
+                raise RuntimeError(
+                    "agent_done.awaiting_review does not match agent_review_required"
+                )
+            return "".join(chunks).strip(), question_events, review
+
+
+async def approve_review(
+    *,
+    api_url: str,
+    conversation_id: str,
+    review: dict,
+) -> dict:
+    review_id = str(review.get("id") or "")
+    if not review_id:
+        raise RuntimeError("agent_review_required omitted review id")
+    base_url = f"{api_url.rstrip('/')}/agent/reviews"
+    async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+        detail_response = await client.get(f"{base_url}/{review_id}")
+        detail_response.raise_for_status()
+        detail = detail_response.json()
+        if detail.get("conversation_id") != conversation_id:
+            raise RuntimeError("review detail belongs to another conversation")
+        if (
+            detail.get("kind") != review.get("kind")
+            or detail.get("gate") != review.get("gate")
+        ):
+            raise RuntimeError("review pointer and detail disagree")
+        submit_response = await client.post(
+            f"{base_url}/{review_id}/submit",
+            json={
+                "conversation_id": conversation_id,
+                "revision": detail.get("revision"),
+                "artifact_hash": detail.get("artifact_hash"),
+                "operations": [],
+            },
+        )
+        submit_response.raise_for_status()
+        submitted = submit_response.json()
+    submitted_review = submitted.get("review") or {}
+    if (
+        submitted.get("ok") is not True
+        or submitted_review.get("id") != review_id
+        or submitted_review.get("status") != "resolved"
+        or submitted_review.get("resume_pending") is not True
+    ):
+        raise RuntimeError(f"review {review_id} was not resolved for resume")
+    print(f"  review approved with no edits: {review_id}")
+    return submitted_review
 
 
 def choose_question_answers(questions: list[dict]) -> list[list[str]]:
@@ -149,32 +215,86 @@ async def main_async(args: argparse.Namespace) -> int:
         max_size=16 * 1024 * 1024,
         proxy=None,
     ) as websocket:
-        print("turn 1/1: create, review, confirm and publish")
-        text, question_events = await run_turn(
-            websocket,
-            conversation_id=conversation_id,
-            message=(
-                f"创建一门《软件工程文档元数据字段词典（v2 全流程测试）》课程，course-id 必须使用 {course_id}。"
-                "使用 full 和 model-only 模式，面向具备基础开发经验的软件工程初学者，深度为两小时入门。"
-                "课程只讲文档上静态记录的元数据字段，知识点必须恰好为：文档标题、文档唯一标识、文档版本号、"
-                "文档作者、文档所有者、文档适用范围、文档语言、文档密级、文档关键词、文档参考资料。"
-                "排除文档创建、修改、审批、发布、流转等过程，排除运行时交互、状态变化、算法执行、时间线演进、"
-                "工具操作和特定厂商格式。严格依次完成 G0_SCOPE 到 G7_RELEASE_READY，并把内容写入 v2 "
-                "course-content 包、把图写入其同级 clustered-graph.json。G1 通过后必须在 "
-                "G2_IDENTITY_REVIEW 使用 question 工具让我确认身份和范围；确认后才能继续 G3-G7。"
-                "动画请求必须对每个知识点按真实动态机制逐点判断：虽然本课程被限定为静态概念辨析，"
-                "但不得为了让测试通过而预设 animationType=none、隐藏真实动画需要或绕过动画契约；"
-                "若确实发现动态机制，应如实生成和验收，让测试断言暴露预期偏差。G7 的全部校验通过后，"
-                "必须再次使用 question 工具询问是否发布，得到确认后才执行项目发布。"
-            ),
-            model=args.model,
-            api_url=args.api_url,
-            timeout=args.timeout,
+        initial_message = (
+            f"创建一门《软件工程文档元数据字段词典（v2 全流程测试）》课程，course-id 必须使用 {course_id}。"
+            "使用 full 和 model-only 模式，面向具备基础开发经验的软件工程初学者，深度为两小时入门。"
+            "课程只讲文档上静态记录的元数据字段，知识点必须恰好为：文档标题、文档唯一标识、文档版本号、"
+            "文档作者、文档所有者、文档适用范围、文档语言、文档密级、文档关键词、文档参考资料。"
+            "排除文档创建、修改、审批、发布、流转等过程，排除运行时交互、状态变化、算法执行、时间线演进、"
+            "工具操作和特定厂商格式。严格依次完成 G0_SCOPE 到 G7_RELEASE_READY，并把内容写入 v2 "
+            "course-content 包、把图写入其同级 clustered-graph.json。G1 通过后创建 "
+            "knowledge-points/G2_IDENTITY_REVIEW 结构化审核并停止；审核恢复后再进入 G3。"
+            "正文和动画生成阶段不创建 question 人工审核或人工验收凭据，但仍须执行完整内容校验、"
+            "动画源码校验和真实生产构建。动画请求必须对每个知识点按真实动态机制逐点判断："
+            "虽然本课程被限定为静态概念辨析，但不得为了让测试通过而预设 animationType=none、"
+            "隐藏真实动画需要或绕过动画契约；若确实发现动态机制，应如实生成，让测试断言暴露预期偏差。"
+            "图谱完成后创建 knowledge-graph/G6_GRAPH_REVIEW 结构化审核并停止；审核恢复后进入 G7。"
+            "G7 的全部校验通过后，必须使用 question 工具询问是否发布，得到确认后才执行项目发布。"
         )
-        print(f"  reply: {text[:500]}")
-        if question_events < 2:
-            raise RuntimeError(f"expected at least 2 structured questions, got {question_events}")
-        print(f"  structured questions: {question_events}")
+        expected_reviews = [
+            ("knowledge-points", "G2_IDENTITY_REVIEW"),
+            ("knowledge-graph", "G6_GRAPH_REVIEW"),
+        ]
+        resolved_reviews: list[tuple[str, str]] = []
+        resume_id: str | None = None
+        final_question_events = 0
+        for turn_number in range(1, 4):
+            print(
+                f"turn {turn_number}/3: "
+                + ("create outline" if turn_number == 1 else f"resume {resume_id}")
+            )
+            text, question_events, review = await run_turn(
+                websocket,
+                conversation_id=conversation_id,
+                message=initial_message if turn_number == 1 else "",
+                review_resume_id=resume_id,
+                model=args.model,
+                api_url=args.api_url,
+                timeout=args.timeout,
+            )
+            print(f"  reply: {text[:500]}")
+            if review is None:
+                if len(resolved_reviews) != len(expected_reviews):
+                    raise RuntimeError(
+                        "course flow finished before both structured reviews"
+                    )
+                final_question_events = question_events
+                resume_id = None
+                break
+
+            if len(resolved_reviews) >= len(expected_reviews):
+                raise RuntimeError(f"unexpected extra review gate: {review}")
+            expected_kind, expected_gate = expected_reviews[len(resolved_reviews)]
+            if (
+                review.get("kind") != expected_kind
+                or review.get("gate") != expected_gate
+                or review.get("course_id") != course_id
+            ):
+                raise RuntimeError(
+                    "unexpected review sequence: "
+                    f"expected {expected_kind}/{expected_gate}, got "
+                    f"{review.get('kind')}/{review.get('gate')}"
+                )
+            approved = await approve_review(
+                api_url=args.api_url,
+                conversation_id=conversation_id,
+                review=review,
+            )
+            resolved_reviews.append((expected_kind, expected_gate))
+            resume_id = str(approved["id"])
+        else:
+            raise RuntimeError("course flow did not finish after both review resumes")
+
+        if resolved_reviews != expected_reviews:
+            raise RuntimeError(f"structured review sequence incomplete: {resolved_reviews}")
+        if final_question_events < 1:
+            raise RuntimeError("G7 did not ask for final publish confirmation")
+        print(
+            "  structured reviews: "
+            "knowledge-points/G2_IDENTITY_REVIEW -> "
+            "knowledge-graph/G6_GRAPH_REVIEW"
+        )
+        print(f"  G7 publish questions: {final_question_events}")
         course_content = load_artifact(course_path, "1.0")
         index = load_artifact(index_path, "course-content-index/1.0")
         generation = load_artifact(

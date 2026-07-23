@@ -29,6 +29,10 @@ type CourseGenerationState = {
   startLive: (conversationId: string) => void;
   openLive: (conversationId: string) => void;
   applySnapshot: (snapshot: unknown) => void;
+  touchLive: (conversationId: string, now?: number) => void;
+  pauseLive: (conversationId: string, message?: string) => void;
+  resumeLive: (conversationId: string) => void;
+  pauseStaleLiveRuns: (now?: number) => void;
   markLiveError: (conversationId: string, message: string) => void;
   removeLive: (conversationId: string) => void;
   tickEstimates: (now?: number) => void;
@@ -42,6 +46,20 @@ type CourseGenerationState = {
 
 const STORAGE_KEY = "course-studio:live-course-generations:v1";
 const MAX_PERSISTED_RUNS = 8;
+const SYNTHETIC_RUN_PREFIX = "course-creation-smoke-";
+// Initial workspace provisioning can copy an existing course library before
+// OpenCode emits its first event. Keep this above that normal startup window.
+const LIVE_RUN_STALE_AFTER_MS = 120_000;
+const INTERRUPTED_RUN_MESSAGE =
+  "课程创建已暂停。已生成的数据和对话仍然保留，可以从当前进度继续。";
+
+export const COURSE_GENERATION_RESUME_EVENT =
+  "course-generation-resume-requested";
+
+export function isPersistableLiveGenerationConversationId(conversationId: string): boolean {
+  const normalizedId = conversationId.trim();
+  return normalizedId.length > 0 && !normalizedId.startsWith(SYNTHETIC_RUN_PREFIX);
+}
 
 const EMPTY_ACTIVE_STATE = {
   status: "idle" as const,
@@ -133,7 +151,7 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
 
   startLive: (conversationId) => {
     const normalizedId = conversationId.trim();
-    if (!normalizedId) return;
+    if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
     set((state) => {
       const run = state.liveRuns[normalizedId] ?? makePlaceholderRun(normalizedId);
       const liveRuns = { ...state.liveRuns, [normalizedId]: run };
@@ -153,7 +171,12 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
 
   applySnapshot: (value) => {
     const snapshot = normalizeSnapshot(value);
-    if (!snapshot) return;
+    if (
+      !snapshot ||
+      !isPersistableLiveGenerationConversationId(snapshot.conversation_id)
+    ) {
+      return;
+    }
     set((state) => {
       const previous =
         state.liveRuns[snapshot.conversation_id] ??
@@ -180,10 +203,114 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
     });
   },
 
+  touchLive: (conversationId, now = Date.now()) => {
+    const normalizedId = conversationId.trim();
+    if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
+    set((state) => {
+      const previous = state.liveRuns[normalizedId];
+      if (
+        !previous ||
+        previous.status === "completed" ||
+        previous.published
+      ) {
+        return state;
+      }
+      const run: LiveCourseGenerationRun = {
+        ...previous,
+        status: "running",
+        error: null,
+        updatedAt: now,
+      };
+      const liveRuns = { ...state.liveRuns, [normalizedId]: run };
+      if (state.mode === "live" && state.conversationId === normalizedId) {
+        return { ...state, ...activeStateFromRun(run), liveRuns };
+      }
+      return { ...state, liveRuns };
+    });
+  },
+
+  pauseLive: (conversationId, message = INTERRUPTED_RUN_MESSAGE) => {
+    const normalizedId = conversationId.trim();
+    const normalizedMessage = message.trim() || INTERRUPTED_RUN_MESSAGE;
+    if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
+    set((state) => {
+      const previous = state.liveRuns[normalizedId];
+      if (
+        !previous ||
+        previous.published ||
+        previous.status === "completed"
+      ) {
+        return state;
+      }
+      const run: LiveCourseGenerationRun = {
+        ...previous,
+        status: "paused",
+        error: normalizedMessage,
+        updatedAt: Date.now(),
+      };
+      const liveRuns = { ...state.liveRuns, [normalizedId]: run };
+      if (state.mode === "live" && state.conversationId === normalizedId) {
+        return { ...state, ...activeStateFromRun(run), liveRuns };
+      }
+      return { ...state, liveRuns };
+    });
+  },
+
+  resumeLive: (conversationId) => {
+    const normalizedId = conversationId.trim();
+    if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
+    set((state) => {
+      const previous = state.liveRuns[normalizedId];
+      if (!previous || previous.published) return state;
+      const run: LiveCourseGenerationRun = {
+        ...previous,
+        status: "running",
+        error: null,
+        updatedAt: Date.now(),
+      };
+      const liveRuns = { ...state.liveRuns, [normalizedId]: run };
+      if (state.mode === "live" && state.conversationId === normalizedId) {
+        return { ...state, ...activeStateFromRun(run), liveRuns };
+      }
+      return { ...state, liveRuns };
+    });
+  },
+
+  pauseStaleLiveRuns: (now = Date.now()) => {
+    set((state) => {
+      let changed = false;
+      const liveRuns = { ...state.liveRuns };
+      for (const [conversationId, previous] of Object.entries(liveRuns)) {
+        if (
+          previous.status !== "running" ||
+          previous.published ||
+          now - previous.updatedAt <= LIVE_RUN_STALE_AFTER_MS
+        ) {
+          continue;
+        }
+        changed = true;
+        liveRuns[conversationId] = {
+          ...previous,
+          status: "paused",
+          error: INTERRUPTED_RUN_MESSAGE,
+          updatedAt: now,
+        };
+      }
+      if (!changed) return state;
+      const activeRun = state.conversationId
+        ? liveRuns[state.conversationId]
+        : undefined;
+      if (state.mode === "live" && activeRun) {
+        return { ...state, ...activeStateFromRun(activeRun), liveRuns };
+      }
+      return { ...state, liveRuns };
+    });
+  },
+
   markLiveError: (conversationId, message) => {
     const normalizedId = conversationId.trim();
     const normalizedMessage = message.trim() || "课程创建流程暂时中断";
-    if (!normalizedId) return;
+    if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
     set((state) => {
       const previous =
         state.liveRuns[normalizedId] ?? makePlaceholderRun(normalizedId);
@@ -677,7 +804,9 @@ function loadPersistedRuns(): Record<string, LiveCourseGenerationRun> {
     const runs: Record<string, LiveCourseGenerationRun> = {};
     for (const item of parsed) {
       const run = normalizePersistedRun(item);
-      if (run) runs[run.conversationId] = run;
+      if (run && isPersistableLiveGenerationConversationId(run.conversationId)) {
+        runs[run.conversationId] = run;
+      }
     }
     return runs;
   } catch {
@@ -688,6 +817,7 @@ function loadPersistedRuns(): Record<string, LiveCourseGenerationRun> {
 function persistRuns(runs: Record<string, LiveCourseGenerationRun>) {
   try {
     const recent = Object.values(runs)
+      .filter((run) => isPersistableLiveGenerationConversationId(run.conversationId))
       .sort((left, right) => right.updatedAt - left.updatedAt)
       .slice(0, MAX_PERSISTED_RUNS);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(recent));
@@ -696,7 +826,9 @@ function persistRuns(runs: Record<string, LiveCourseGenerationRun>) {
   }
 }
 
-function normalizePersistedRun(value: unknown): LiveCourseGenerationRun | null {
+export function normalizePersistedRun(
+  value: unknown
+): LiveCourseGenerationRun | null {
   if (!isRecord(value)) return null;
   const conversationId = readString(value, "conversationId");
   const rawGate = readString(value, "gate");
@@ -718,7 +850,8 @@ function normalizePersistedRun(value: unknown): LiveCourseGenerationRun | null {
     ? "error"
     : published || value.status === "completed"
       ? "completed"
-      : "running";
+      : "paused";
+  const persistedError = readString(value, "error");
   return {
     conversationId,
     status,
@@ -731,7 +864,10 @@ function normalizePersistedRun(value: unknown): LiveCourseGenerationRun | null {
     clusters,
     published,
     publishedCourseId: readString(value, "publishedCourseId") || null,
-    error: readString(value, "error") || null,
+    error:
+      status === "paused"
+        ? persistedError || INTERRUPTED_RUN_MESSAGE
+        : persistedError || null,
     updatedAt: readNumber(value, "updatedAt") ?? Date.now(),
     snapshotKey: readString(value, "snapshotKey"),
   };

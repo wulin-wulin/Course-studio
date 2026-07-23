@@ -113,13 +113,7 @@ keyTerms
 
 `id` 使用稳定的 ASCII kebab-case；冲突使用有语义的限定词，禁止随机编号。为每个索引项在 manifest 的 `pointEvidence` 中按 index 同序记录冻结的 `pointId/title`、原子类型、来源、置信度和范围状态。所有边界、待复核或低置信度点必须关联到 `reviewQueue`。
 
-完成后运行：
-
-```bash
-node "$SKILL_DIR/scripts/validate_output.mjs" \
-  --root "$OUTPUT_ROOT" \
-  --phase index
-```
+完成后由主智能体调用 `course_pipeline` 的 `validate-index`。索引阶段未通过前，不得生成详情；通过后还必须完成 `knowledge-points/G2_IDENTITY_REVIEW` 结构化审核。
 
 索引阶段未通过前，不得生成详情。
 
@@ -192,16 +186,7 @@ generation/animation-requests/<id>.json
 5. 难度、重要性和摘要与目标受众是否一致；
 6. 公式、历史、年份和事实归属是否可核实。
 
-运行：
-
-```bash
-node "$SKILL_DIR/scripts/validate_output.mjs" \
-  --root "$OUTPUT_ROOT" \
-  --phase points
-
-node "$SKILL_DIR/scripts/sync_index_from_points.mjs" \
-  --root "$OUTPUT_ROOT"
-```
+由主智能体依次调用 `course_pipeline` 的 `validate-points`、`sync-index`、`validate-points`。子智能体不得自行运行脚本。
 
 同步脚本冻结 `id`、`title` 和顺序，只从详情回写 `shortSummary`、`difficulty`、`importance`、`keyTerms`。
 
@@ -227,28 +212,13 @@ src/animations/<Component>.css
 
 组件必须遵守 [animation-contract.md](animation-contract.md)，使用 React、SVG 和 CSS，除非三维空间关系确实不可替代。不得让多个动画任务修改同一文件。
 
-组件完成后串行运行：
-
-```bash
-node "$SKILL_DIR/scripts/build_animation_registry.mjs" \
-  --root "$OUTPUT_ROOT"
-```
+组件完成后由主智能体串行调用 `course_pipeline` 的 `build-animation-registry`。
 
 该脚本更新 points 中的动画字段，并生成 `courseKnowledge.ts`、`AnimationBlock.tsx` 和共享样式。即使没有动画也必须运行。
 
 ### 10. 全量校验
 
-运行：
-
-```bash
-node "$SKILL_DIR/scripts/validate_output.mjs" \
-  --root "$OUTPUT_ROOT" \
-  --phase all
-
-node --test "$SKILL_DIR/scripts/"*.test.mjs
-```
-
-脚本只能验证结构、注册闭环和最低动态信号，不能仅凭源码文本证明动画忠于教学机制。必须按 [animation-contract.md](animation-contract.md) 逐组件实际操作重播、重新生成、状态推进、低动态模式和响应式布局，并把人工验收结论记入最终报告。
+由主智能体调用 `course_pipeline` 的 `validate-all`。该校验覆盖结构、注册闭环和最低动态源码信号。可以额外观察重播、状态推进、低动态和响应式效果，但生成期不为正文或动画创建用户审核，不调用 `question`，也不签发人工动画凭据；真实生产 bundle、依赖边界和资产完整性由最终发布 action 强制执行。
 
 如果输出目录所在项目提供 TypeScript 构建命令，再运行该构建。修复全部错误后重复校验；不得用局部 JSON 可解析替代全量通过。
 

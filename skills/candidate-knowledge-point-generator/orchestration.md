@@ -226,10 +226,10 @@ src/animations/[Component].css
 6. CSS 类使用组件命名空间，不修改全局元素选择器。
 7. 不修改注册表、类型文件、points、manifest 或其他动画。
 
-完成后说明输入、变化状态、规则、终态和人工验证方式。
+完成后说明输入、变化状态、规则、终态和可自动复现的质量检查方式。
 ```
 
-## 动画任务验收
+## 动画任务源码检查
 
 - 组件和同名 CSS 均存在；
 - 组件默认导出且根视图含 `animation-stage`；
@@ -240,19 +240,18 @@ src/animations/[Component].css
 - effect 清理覆盖所有副作用；
 - 机制与清单中所有绑定点都一致。
 
-所有动画任务完成后，才由主智能体运行注册构建脚本。
+所有动画任务完成后，才由主智能体通过 `course_pipeline` 固定 action 构建注册层。本检查不创建人工审核凭据。
 
 ## 最终串行步骤
 
 ```text
-validate --phase points
-sync_index_from_points
+course_pipeline: validate-points
+course_pipeline: sync-index
 write animation-manifest
 animation component tasks
-build_animation_registry
-validate --phase all
-node --test scripts/*.test.mjs
-project build（若可用）
+course_pipeline: build-animation-registry
+course_pipeline: validate-all
+course_pipeline: publish（G6 图谱审核通过后，内部执行生产构建）
 ```
 
 任何串行步骤失败时，停止发布并修复根因；不要在失败状态下继续添加更多内容。

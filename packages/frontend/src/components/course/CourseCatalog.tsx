@@ -108,7 +108,7 @@ export function CourseCatalog({
     )
     .sort((left, right) => right.updatedAt - left.updatedAt);
   const runningGenerationCount = activeGenerations.filter(
-    (run) => run.status !== "error"
+    (run) => run.status === "running"
   ).length;
   const pausedGenerationCount =
     activeGenerations.length - runningGenerationCount;
@@ -186,26 +186,27 @@ export function CourseCatalog({
               const completedPoints = run.points.filter(
                 (point) => point.status === "grown" || point.status === "clustered"
               ).length;
-              const failed = run.status === "error";
+              const interrupted =
+                run.status === "error" || run.status === "paused";
               return (
                 <li key={`generation:${run.conversationId}`}>
                   <button
                     type="button"
                     className={`course-catalog__card course-catalog__card--generation ${
-                      failed ? "is-error" : ""
+                      interrupted ? "is-error" : ""
                     }`}
                     onClick={() => onOpenGeneration(run.conversationId)}
                     aria-label={`查看${run.course?.title ?? "新课程"}的创建进度`}
                   >
                     <span className="course-catalog__card-icon" aria-hidden="true">
-                      {failed ? (
+                      {interrupted ? (
                         <AlertCircle size={19} />
                       ) : (
                         <Loader2 size={19} className="is-spinning" />
                       )}
                     </span>
                     <span className="course-catalog__generation-badge">
-                      {failed ? "创建已暂停" : "正在创建"}
+                      {interrupted ? "创建已暂停" : "正在创建"}
                     </span>
                     <span className="course-catalog__card-title">
                       {run.course?.title ?? "正在创建的新课程"}
@@ -223,7 +224,7 @@ export function CourseCatalog({
                       </span>
                     </span>
                     <span className="course-catalog__enter">
-                      查看生长过程
+                      {interrupted ? "查看并继续创建" : "查看生长过程"}
                       <ArrowRight aria-hidden="true" size={16} />
                     </span>
                   </button>

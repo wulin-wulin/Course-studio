@@ -2,6 +2,7 @@
 
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -9,6 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +45,261 @@ function stable(value) {
     );
   }
   return value;
+}
+
+function sha256Json(value, { stableKeys = false } = {}) {
+  const encoded = JSON.stringify(stableKeys ? stable(value) : value);
+  return createHash('sha256').update(encoded, 'utf8').digest('hex');
+}
+
+function isIsoUtc(value) {
+  if (
+    typeof value !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)
+  ) return false;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const normalized = value.includes('.') ? value : value.replace(/Z$/, '.000Z');
+  return parsed.toISOString() === normalized;
+}
+
+function assertSafeRegularFile(file, label) {
+  const absolute = path.resolve(file);
+  const parsed = path.parse(absolute);
+  let current = parsed.root;
+  for (const segment of absolute.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (!existsSync(current)) continue;
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error(`${label}路径不允许符号链接：${current}`);
+  }
+  if (!existsSync(absolute) || !lstatSync(absolute).isFile()) {
+    throw new Error(`缺少${label}：${absolute}`);
+  }
+  return absolute;
+}
+
+function identityPayload(points) {
+  if (!Array.isArray(points) || points.length === 0) {
+    throw new Error('审核身份清单必须包含至少一个知识点');
+  }
+  const seen = new Set();
+  return points.map((point, index) => {
+    const id = point?.id;
+    const title = point?.title;
+    if (!KEBAB.test(id ?? '') || seen.has(id) || typeof title !== 'string' || !title.trim()) {
+      throw new Error(`审核身份清单第 ${index + 1} 项的 id/title 缺失、非法或重复`);
+    }
+    seen.add(id);
+    return [id, title.trim()];
+  });
+}
+
+function prerequisitePayload(points) {
+  const pointIds = new Set(points.map((point) => point.id));
+  const edges = [];
+  for (const point of points) {
+    if (!Array.isArray(point.prerequisites)) {
+      throw new Error(`知识点 ${point.id} 的 prerequisites 必须是数组`);
+    }
+    const seen = new Set();
+    for (const prerequisite of point.prerequisites) {
+      if (
+        typeof prerequisite !== 'string'
+        || !pointIds.has(prerequisite)
+        || prerequisite === point.id
+        || seen.has(prerequisite)
+      ) {
+        throw new Error(`知识点 ${point.id} 包含非法、重复、自引用或悬空的 prerequisite`);
+      }
+      seen.add(prerequisite);
+      edges.push([point.id, prerequisite]);
+    }
+  }
+  const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+  return edges.sort(([leftId, leftDependency], [rightId, rightDependency]) => (
+    compare(leftId, rightId) || compare(leftDependency, rightDependency)
+  ));
+}
+
+function clusterReviewPayload(graph) {
+  const clusterIds = new Set();
+  const clusters = graph.clusters.map((cluster, index) => {
+    if (
+      !isRecord(cluster)
+      || !KEBAB.test(cluster.id ?? '')
+      || clusterIds.has(cluster.id)
+      || typeof cluster.title !== 'string'
+      || !cluster.title.trim()
+    ) {
+      throw new Error(`graph.clusters[${index}] 定义非法`);
+    }
+    clusterIds.add(cluster.id);
+    return structuredClone(cluster);
+  });
+  const pointIds = new Set(graph.points.map((point) => point.id));
+  const assignments = graph.points.map((point) => {
+    if (
+      !Array.isArray(point.clusterIds)
+      || point.clusterIds.length === 0
+      || new Set(point.clusterIds).size !== point.clusterIds.length
+      || point.clusterIds.some((clusterId) => !clusterIds.has(clusterId))
+      || !ROLES.has(point.role)
+      || !Array.isArray(point.related)
+      || new Set(point.related).size !== point.related.length
+      || point.related.some((relatedId) => !pointIds.has(relatedId) || relatedId === point.id)
+    ) {
+      throw new Error(`知识点 ${point.id} 的 clusterIds/role/related 审核载荷非法`);
+    }
+    return {
+      id: point.id,
+      clusterIds: [...point.clusterIds],
+      role: point.role,
+      related: [...point.related],
+    };
+  });
+  return { clusters, assignments };
+}
+
+function graphReviewAuditPayload(graph) {
+  const refined = graph.generation?.refinedPrerequisiteEdges;
+  const broken = graph.generation?.brokenCycleEdges;
+  if (!Array.isArray(refined) || !Array.isArray(broken)) {
+    throw new Error('graph generation 审核记录必须是数组');
+  }
+  return {
+    refinedPrerequisiteEdges: refined.map((entry, index) => {
+      if (
+        !isRecord(entry)
+        || Object.keys(entry).length !== 4
+        || !['op', 'from', 'to', 'reason'].every((key) => key in entry)
+      ) {
+        throw new Error(`refinedPrerequisiteEdges[${index}] 格式非法`);
+      }
+      return {
+        op: String(entry.op ?? '').trim(),
+        from: String(entry.from ?? '').trim(),
+        to: String(entry.to ?? '').trim(),
+        reason: String(entry.reason ?? '').trim(),
+      };
+    }),
+    brokenCycleEdges: structuredClone(broken),
+  };
+}
+
+function approvalCommonMatches(approval, courseId, kind, gate, identitySha256) {
+  return Boolean(
+    isRecord(approval)
+    && approval.schema_version === 'course-review-approval/1.0'
+    && typeof approval.review_id === 'string'
+    && approval.review_id.trim()
+    && approval.course_id === courseId
+    && approval.kind === kind
+    && approval.gate === gate
+    && isIsoUtc(approval.approved_at)
+    && Number.isInteger(approval.operation_count)
+    && approval.operation_count >= 0
+    && approval.operation_count <= 500
+    && Array.isArray(approval.submitted_operations)
+    && approval.submitted_operations.length === approval.operation_count
+    && approval.submitted_operations.every(isRecord)
+    && approval.identity_sha256 === identitySha256
+  );
+}
+
+function reviewWorkspace(contentRoot, courseId) {
+  const resolvedContent = path.resolve(contentRoot);
+  const courseRoot = path.dirname(resolvedContent);
+  const pipelineRoot = path.dirname(courseRoot);
+  if (
+    path.basename(resolvedContent) !== 'course-content'
+    || path.basename(courseRoot) !== courseId
+    || path.basename(pipelineRoot) !== 'pipeline'
+  ) {
+    throw new Error('结构化审核只接受 pipeline/<course-id>/course-content 标准工作区');
+  }
+  return path.dirname(pipelineRoot);
+}
+
+function loadApproval(workspaceRoot, courseId, kind) {
+  const file = path.join(
+    workspaceRoot,
+    '.course-review-approvals',
+    courseId,
+    `${kind}.json`,
+  );
+  return loadJson(assertSafeRegularFile(file, `${kind} 审核回执`));
+}
+
+function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
+  if (reviewMode === 'skip') return 0;
+  const graph = loadJson(graphFile);
+  const index = loadJson(path.join(contentRoot, 'src/data/index.json'));
+  const courseId = index.courseId;
+  const workspaceRoot = reviewWorkspace(contentRoot, courseId);
+  const identitySha256 = sha256Json(identityPayload(index.points));
+  let count = 0;
+
+  let knowledgeApproval;
+  try {
+    knowledgeApproval = loadApproval(workspaceRoot, courseId, 'knowledge-points');
+  } catch (error) {
+    add(findings, 'error', 'review', 'invalid-knowledge-points-approval', error.message);
+  }
+  if (knowledgeApproval && approvalCommonMatches(
+    knowledgeApproval,
+    courseId,
+    'knowledge-points',
+    'G2_IDENTITY_REVIEW',
+    identitySha256,
+  )) {
+    count += 1;
+  } else if (knowledgeApproval) {
+    add(
+      findings,
+      'error',
+      'review',
+      'invalid-knowledge-points-approval',
+      '知识点审核回执缺失、格式错误或已因 id/title/顺序变化而失效',
+    );
+  }
+
+  if (reviewMode === 'knowledge-graph-pre-review') return count;
+
+  const graphIdentitySha256 = sha256Json(identityPayload(graph.points));
+  const clustersSha256 = sha256Json(clusterReviewPayload(graph), { stableKeys: true });
+  const prerequisitesSha256 = sha256Json(prerequisitePayload(graph.points));
+  const reviewAuditSha256 = sha256Json(graphReviewAuditPayload(graph), { stableKeys: true });
+  let graphApproval;
+  try {
+    graphApproval = loadApproval(workspaceRoot, courseId, 'knowledge-graph');
+  } catch (error) {
+    add(findings, 'error', 'review', 'invalid-knowledge-graph-approval', error.message);
+  }
+  if (
+    graphApproval
+    && approvalCommonMatches(
+      graphApproval,
+      courseId,
+      'knowledge-graph',
+      'G6_GRAPH_REVIEW',
+      graphIdentitySha256,
+    )
+    && graphApproval.clusters_sha256 === clustersSha256
+    && graphApproval.prerequisites_sha256 === prerequisitesSha256
+    && graphApproval.review_audit_sha256 === reviewAuditSha256
+  ) {
+    count += 1;
+  } else if (graphApproval) {
+    add(
+      findings,
+      'error',
+      'review',
+      'invalid-knowledge-graph-approval',
+      '知识图谱审核回执缺失、格式错误，或簇/角色/关系/审计已在审核后变化',
+    );
+  }
+  return count;
 }
 
 function equal(left, right) {
@@ -602,7 +859,7 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
   };
 }
 
-function run(contentRoot, graphFile, phase = 'all') {
+function run(contentRoot, graphFile, phase = 'all', { reviewMode = 'final' } = {}) {
   const findings = [];
   const skillDifferences = compareContentSkillCopies();
   if (skillDifferences.length > 0) {
@@ -675,6 +932,7 @@ function run(contentRoot, graphFile, phase = 'all') {
   }
 
   let graphCounts = {};
+  let reviewApprovals = 0;
   if (graphFile) {
     if (phase !== 'all') {
       add(findings, 'error', 'handoff', 'graph-requires-all', '校验 graph 时 --phase 必须是 all');
@@ -684,6 +942,18 @@ function run(contentRoot, graphFile, phase = 'all') {
         path.resolve(graphFile),
         findings,
       );
+      if (!findings.some((finding) => finding.severity === 'error')) {
+        try {
+          reviewApprovals = validateReviewApprovals(
+            path.resolve(contentRoot),
+            path.resolve(graphFile),
+            reviewMode,
+            findings,
+          );
+        } catch (error) {
+          add(findings, 'error', 'review', 'review-check-failed', error.message);
+        }
+      }
     }
   }
 
@@ -698,6 +968,7 @@ function run(contentRoot, graphFile, phase = 'all') {
       animationRequests: content.counts?.animationRequests ?? 0,
       animations: content.counts?.animations ?? 0,
       ...graphCounts,
+      reviewApprovals,
       errors: findings.filter((finding) => finding.severity === 'error').length,
       warnings: findings.filter((finding) => finding.severity === 'warning').length,
     },
@@ -750,13 +1021,13 @@ async function selfTest() {
     const graphFile = path.join(graphDir, 'clustered-graph.json');
     writeFileSync(graphFile, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
 
-    const valid = run(root, graphFile);
+    const valid = run(root, graphFile, 'all', { reviewMode: 'skip' });
     if (!valid.ok) throw new Error(`正例失败: ${JSON.stringify(valid.findings)}`);
 
     const changed = structuredClone(graph);
     changed.points[0].coreIdea = '被下游擅自改写的内容';
     writeFileSync(graphFile, `${JSON.stringify(changed, null, 2)}\n`, 'utf8');
-    const contentChanged = run(root, graphFile);
+    const contentChanged = run(root, graphFile, 'all', { reviewMode: 'skip' });
     if (!contentChanged.findings.some((finding) => finding.code === 'content-changed')) {
       throw new Error('未捕获内容字段漂移');
     }
@@ -764,7 +1035,7 @@ async function selfTest() {
     const unaudited = structuredClone(graph);
     unaudited.points[2].prerequisites.push('input-state');
     writeFileSync(graphFile, `${JSON.stringify(unaudited, null, 2)}\n`, 'utf8');
-    const auditFailed = run(root, graphFile);
+    const auditFailed = run(root, graphFile, 'all', { reviewMode: 'skip' });
     if (!auditFailed.findings.some((finding) => finding.code === 'edge-audit-mismatch')) {
       throw new Error('未捕获未经审计的 prerequisite 变化');
     }
@@ -773,7 +1044,7 @@ async function selfTest() {
     conflicted.points[0].related = ['state-transition'];
     conflicted.points[1].related = ['input-state'];
     writeFileSync(graphFile, `${JSON.stringify(conflicted, null, 2)}\n`, 'utf8');
-    const relationFailed = run(root, graphFile);
+    const relationFailed = run(root, graphFile, 'all', { reviewMode: 'skip' });
     if (!relationFailed.findings.some((finding) => finding.code === 'relation-type-conflict')) {
       throw new Error('未捕获 related/prerequisites 冲突');
     }
@@ -790,12 +1061,19 @@ function parseArgs(argv) {
     asJson: false,
     phase: 'all',
     selfTest: false,
+    preReview: null,
     files: [],
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--json') options.asJson = true;
     else if (argument === '--self-test') options.selfTest = true;
+    else if (argument === '--pre-review') {
+      options.preReview = argv[index + 1];
+      index += 1;
+    } else if (argument.startsWith('--pre-review=')) {
+      options.preReview = argument.slice('--pre-review='.length);
+    }
     else if (argument === '--phase') {
       options.phase = argv[index + 1];
       index += 1;
@@ -809,6 +1087,9 @@ function parseArgs(argv) {
   }
   if (!['index', 'points', 'animations', 'all'].includes(options.phase)) {
     throw new Error('--phase 只能是 index/points/animations/all');
+  }
+  if (options.preReview !== null && options.preReview !== 'knowledge-graph') {
+    throw new Error('--pre-review 目前只能是 knowledge-graph');
   }
   return options;
 }
@@ -834,12 +1115,21 @@ async function main() {
   }
 
   if (options.files.length < 1 || options.files.length > 2) {
-    console.error('用法: node check-pipeline.mjs <content-root> [clustered-graph.json] [--phase index|points|animations|all] [--json]');
+    console.error('用法: node check-pipeline.mjs <content-root> [clustered-graph.json] [--phase index|points|animations|all] [--pre-review knowledge-graph] [--json]');
+    process.exitCode = 2;
+    return;
+  }
+  if (options.preReview && (options.files.length !== 2 || options.phase !== 'all')) {
+    console.error('--pre-review knowledge-graph 必须同时提供 clustered-graph.json 且 --phase 为 all');
     process.exitCode = 2;
     return;
   }
 
-  const result = run(options.files[0], options.files[1], options.phase);
+  const result = run(options.files[0], options.files[1], options.phase, {
+    reviewMode: options.preReview === 'knowledge-graph'
+      ? 'knowledge-graph-pre-review'
+      : 'final',
+  });
   if (options.asJson) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -847,6 +1137,7 @@ async function main() {
       `${result.ok ? '✅' : '❌'} v2 流水线校验${result.ok ? '通过' : '失败'}：`
       + `${result.counts.indexPoints} 个索引点，${result.counts.pointFiles} 个详情，`
       + `${result.counts.animations} 个动画类型，${result.counts.clusters ?? 0} 个簇，`
+      + (result.graphFile ? `${result.counts.reviewApprovals ?? 0}/2 份结构化审核回执，` : '')
       + `${result.counts.errors} 个错误，${result.counts.warnings} 个警告。`,
     );
     for (const finding of result.findings) {

@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
+import uuid
 
 import anthropic
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -35,6 +34,16 @@ from ..services.courses.generation import CourseGenerationObserver
 from ..services.conversations import get_conversation_store
 from ..services.opencode import client as opencode_client
 from ..services.opencode import provision as opencode_provision
+from ..services.reviews import (
+    CourseReviewError,
+    RESUME_CLAIM_HEARTBEAT_SECONDS,
+    get_course_review_store,
+    is_strict_g2_successor,
+)
+from ..services.reviews.activity import (
+    CourseActivityConflictError,
+    get_course_activity_coordinator,
+)
 
 
 router = APIRouter()
@@ -46,6 +55,7 @@ MAX_TOOL_ITERATIONS = 24
 MAX_TOKENS = 32000
 THINKING_BUDGET_TOKENS = 1024
 MAX_HISTORY_MESSAGES = 40
+MAX_DISPLAY_CONTENT_CHARS = 500
 
 # Per-conversation message history powers the optional in-process tool loop.
 _histories: dict[str, list[dict[str, Any]]] = {}
@@ -60,29 +70,21 @@ _pending_questions: dict[str, dict[str, Any]] = {}
 InteractionMode = Literal["chat", "agent"]
 AgentWorkflow = Literal["default", "course-create"]
 
-ANIMATION_ACCEPTANCE_SCHEMA = "course-animation-acceptance/1.0"
-_ANIMATION_GATE_BYPASS_TERMS = (
-    "跳过",
-    "绕过",
-    "忽略",
-    "未验收继续",
-    "不验收继续",
-    "无需验收",
-    "直接继续",
-)
-_ANIMATION_GATE_ACCEPT_TERMS = (
-    "已完成实际动画验收",
-    "动画验收通过",
-    "已验收",
-    "验收完成",
-)
-_ANIMATION_GATE_BLOCK_LABEL = "保持 G5 阻断"
-_ANIMATION_TRACKED_FILES = (
-    "generation/animation-manifest.json",
-    "src/components/AnimationBlock.css",
-    "src/components/AnimationBlock.tsx",
-    "src/data/courseKnowledge.ts",
-)
+
+def forget_opencode_conversation(
+    conversation_id: str,
+    session_id: str | None = None,
+) -> None:
+    """Drop process-local state after a durable conversation is deleted."""
+
+    safe_id = _safe_conversation_id(conversation_id)
+    for key, cached_session_id in list(_opencode_sessions.items()):
+        if key.endswith(f":{safe_id}") or (
+            session_id is not None and cached_session_id == session_id
+        ):
+            _opencode_sessions.pop(key, None)
+    if session_id:
+        _clear_pending_questions_for_session(session_id)
 
 
 class AgentQuestionReply(BaseModel):
@@ -265,6 +267,26 @@ def _pending_question_for(request_id: str, conversation_id: str) -> dict[str, An
     return pending
 
 
+def pending_question_for_conversation(
+    conversation_id: str,
+) -> dict[str, Any] | None:
+    """Return a restorable question card after a missed websocket event."""
+
+    safe_id = _safe_conversation_id(conversation_id)
+    for request_id, pending in reversed(list(_pending_questions.items())):
+        if pending.get("conversation_id") != safe_id:
+            continue
+        questions = _normalize_opencode_questions(pending.get("questions"))
+        if not questions:
+            continue
+        return {
+            "request_id": request_id,
+            "conversation_id": safe_id,
+            "questions": questions,
+        }
+    return None
+
+
 def _normalize_opencode_questions(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
@@ -295,191 +317,6 @@ def _normalize_opencode_questions(value: Any) -> list[dict[str, Any]]:
             "custom": item.get("custom") is not False,
         })
     return questions
-
-
-def _is_animation_gate_question(question: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(question.get(field) or "")
-        for field in ("header", "question")
-    ).lower()
-    return "动画" in text and any(token in text for token in ("验收", "验证", "检查", "g5"))
-
-
-def _contains_animation_gate_bypass(value: str) -> bool:
-    compact = "".join(str(value).lower().split())
-    return any(term in compact for term in _ANIMATION_GATE_BYPASS_TERMS)
-
-
-def _prepare_animation_gate_questions(
-    questions: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[int]]:
-    """Remove unsafe G5 bypass choices and return their question indexes."""
-
-    gate_indexes: list[int] = []
-    for index, question in enumerate(questions):
-        if not _is_animation_gate_question(question):
-            continue
-        gate_indexes.append(index)
-        safe_options = [
-            option
-            for option in question.get("options") or []
-            if not _contains_animation_gate_bypass(
-                f"{option.get('label', '')} {option.get('description', '')}"
-            )
-        ]
-        if not any(
-            any(term in str(option.get("label") or "") for term in _ANIMATION_GATE_ACCEPT_TERMS)
-            for option in safe_options
-        ):
-            safe_options.insert(0, {
-                "label": _ANIMATION_GATE_ACCEPT_TERMS[0],
-                "description": (
-                    "仅在已实际检查重播、状态推进、低动态模式和响应式布局后选择；"
-                    "系统会把凭据绑定到当前动画源码。"
-                ),
-            })
-        if not any(
-            _ANIMATION_GATE_BLOCK_LABEL in str(option.get("label") or "")
-            for option in safe_options
-        ):
-            safe_options.append({
-                "label": _ANIMATION_GATE_BLOCK_LABEL,
-                "description": "当前无法完成实际验收，停留在 G5，不进入图谱构建和发布。",
-            })
-        question["options"] = safe_options
-        question["custom"] = False
-    return questions, gate_indexes
-
-
-def _animation_artifact_hash(content_root: Path) -> str:
-    relative_paths: list[str] = []
-    for relative_path in _ANIMATION_TRACKED_FILES:
-        candidate = content_root.joinpath(*relative_path.split("/"))
-        if candidate.is_file():
-            relative_paths.append(relative_path)
-    animations_root = content_root / "src" / "animations"
-    if animations_root.is_dir():
-        relative_paths.extend(
-            f"src/animations/{candidate.name}"
-            for candidate in animations_root.iterdir()
-            if candidate.is_file() and candidate.suffix in {".tsx", ".css"}
-        )
-
-    digest = hashlib.sha256()
-    for relative_path in sorted(relative_paths):
-        candidate = content_root.joinpath(*relative_path.split("/"))
-        file_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
-        digest.update(relative_path.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(file_digest.encode("ascii"))
-        digest.update(b"\n")
-    return digest.hexdigest()
-
-
-def _animation_gate_courses(directory: str) -> list[dict[str, Any]]:
-    workspace_root = Path(directory).resolve()
-    pipeline_root = workspace_root / "pipeline"
-    if not pipeline_root.is_dir():
-        return []
-
-    courses: list[dict[str, Any]] = []
-    for course_root in sorted(pipeline_root.iterdir(), key=lambda item: item.name):
-        if not course_root.is_dir():
-            continue
-        content_root = course_root / "course-content"
-        manifest_path = content_root / "generation" / "animation-manifest.json"
-        if not manifest_path.is_file():
-            continue
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        animations = manifest.get("animations") if isinstance(manifest, dict) else None
-        if not isinstance(animations, list) or not animations:
-            continue
-        courses.append({
-            "course_id": course_root.name,
-            "content_root": str(content_root),
-            "animation_count": len(animations),
-            "artifact_hash": _animation_artifact_hash(content_root),
-        })
-    return courses
-
-
-def _validate_animation_gate_answers(
-    pending: dict[str, Any], answers: list[list[str]]
-) -> bool:
-    gate_indexes = pending.get("animation_gate_indexes") or []
-    accepted = bool(gate_indexes)
-    for index in gate_indexes:
-        answer_text = "、".join(answers[index])
-        if _contains_animation_gate_bypass(answer_text):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "动画清单非空时不能跳过 G5 实际验收。"
-                    "请完成动画重播、状态推进、低动态和响应式检查，"
-                    f"或选择“{_ANIMATION_GATE_BLOCK_LABEL}”。"
-                ),
-            )
-        if not any(term in answer_text for term in _ANIMATION_GATE_ACCEPT_TERMS):
-            accepted = False
-    return accepted
-
-
-def _write_animation_acceptance(
-    pending: dict[str, Any], answers: list[list[str]]
-) -> list[tuple[Path, bytes | None]]:
-    if not _validate_animation_gate_answers(pending, answers):
-        return []
-
-    workspace_root = Path(str(pending["directory"])).resolve()
-    backups: list[tuple[Path, bytes | None]] = []
-    attestation = [
-        "、".join(answers[index])
-        for index in pending.get("animation_gate_indexes") or []
-    ]
-    for course in pending.get("animation_courses") or []:
-        content_root = Path(str(course["content_root"])).resolve()
-        current_hash = _animation_artifact_hash(content_root)
-        marker_path = (
-            workspace_root
-            / ".course-studio"
-            / "gates"
-            / str(course["course_id"])
-            / "animation-acceptance.json"
-        )
-        previous = marker_path.read_bytes() if marker_path.is_file() else None
-        marker_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": ANIMATION_ACCEPTANCE_SCHEMA,
-            "courseId": course["course_id"],
-            "status": "accepted",
-            "animationCount": course["animation_count"],
-            "artifactHash": current_hash,
-            "acceptedAt": datetime.now(UTC).isoformat(timespec="milliseconds").replace(
-                "+00:00", "Z"
-            ),
-            "conversationId": pending["conversation_id"],
-            "requestId": pending["request_id"],
-            "attestation": attestation,
-        }
-        temporary_path = marker_path.with_suffix(".json.tmp")
-        temporary_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary_path.replace(marker_path)
-        backups.append((marker_path, previous))
-    return backups
-
-
-def _restore_animation_acceptance(backups: list[tuple[Path, bytes | None]]) -> None:
-    for marker_path, previous in backups:
-        if previous is None:
-            marker_path.unlink(missing_ok=True)
-        else:
-            marker_path.write_bytes(previous)
 
 
 def _normalize_question_answers(
@@ -544,7 +381,6 @@ def _clear_pending_questions_for_session(session_id: str | None) -> None:
 async def reply_to_agent_question(request_id: str, body: AgentQuestionReply):
     pending = _pending_question_for(request_id, body.conversation_id)
     answers = _normalize_question_answers(pending, body.answers)
-    _validate_animation_gate_answers(pending, answers)
     content = _question_answer_content(pending, answers)
     await asyncio.to_thread(
         get_conversation_store().add_message,
@@ -553,15 +389,9 @@ async def reply_to_agent_question(request_id: str, body: AgentQuestionReply):
         content=content,
         message_id=f"question-reply:{request_id}",
     )
-    acceptance_backups: list[tuple[Path, bytes | None]] = []
     try:
-        acceptance_backups = await asyncio.to_thread(
-            _write_animation_acceptance, pending, answers
-        )
         await opencode_client.reply_question(request_id, answers, pending["directory"])
     except Exception as exc:
-        if acceptance_backups:
-            await asyncio.to_thread(_restore_animation_acceptance, acceptance_backups)
         raise HTTPException(status_code=502, detail=f"提交确认失败：{exc}") from exc
     _pending_questions.pop(request_id, None)
     return {"ok": True, "content": content}
@@ -634,15 +464,28 @@ def _request_workflow(payload: dict[str, Any]) -> AgentWorkflow:
     return "default"
 
 
+def _request_history_content(
+    payload: dict[str, Any],
+    message: str,
+    images: list[Any],
+) -> str:
+    display_content = payload.get("display_content")
+    if isinstance(display_content, str) and display_content.strip():
+        return display_content.strip()[:MAX_DISPLAY_CONTENT_CHARS]
+    return message or (f"发送了 {len(images)} 张图片" if images else "")
+
+
 def _course_creation_prompt(message: str) -> str:
     return (
         "当前是 Course Studio 的课程创建工作流。必须加载并遵循 "
         "knowledge-pipeline-orchestrator Skill，通过多轮对话推进 v2 的 G0-G7 门禁和最终发布确认。\n\n"
         f"用户本轮输入：\n{message}\n\n"
-        "需要用户补充信息或确认时必须调用 question 工具提供选项和自定义填写，"
-        "不要只在普通回复末尾提问。不要跳过 G2 身份复核或 G5 动画验收，也不要在用户明确选择"
-        "确认发布且 G7 校验通过前生成 courses 下的正式课程。动画非空时不得提供跳过验收、"
-        "未验收继续或同义选项；只有实际验收确认后系统签发的哈希凭据才能解锁发布。"
+        "G0 范围补充和 G7 最终发布确认必须调用 question 工具提供选项和自定义填写，"
+        "不要只在普通回复末尾提问。G2 知识点清单审核和 G6 知识簇及前后依赖审核必须调用 "
+        "course_pipeline 的结构化审核动作；进入 pending 后结束当前 turn，由 Course Studio "
+        "审核工作区完成，不能用聊天文字或 question 替代。知识点正文与动画不进入生成期人工审核，"
+        "但必须通过全部自动结构、构建、安全和完整性校验。不要在 G6 审核通过、用户明确确认发布"
+        "且 G7 校验通过前生成 courses 下的正式课程。"
         "不得生成或继续使用 v1 中间产物。"
     )
 
@@ -688,6 +531,98 @@ async def _emit_committed_workspace_changes(
         prefix = f"{course_id}/"
         paths = [path[len(prefix):] for path in all_paths if path.startswith(prefix)]
         await _emit_course_change(websocket, conversation_id, course_id, paths)
+
+
+async def _pending_review(conversation_id: str) -> dict[str, Any] | None:
+    review_store = get_course_review_store()
+    resources = await asyncio.to_thread(
+        review_store.pending_for_conversation,
+        conversation_id,
+    )
+    if not resources:
+        return None
+    return review_store.pointer(resources[0])
+
+
+async def _pending_review_resume(conversation_id: str) -> dict[str, Any] | None:
+    review_store = get_course_review_store()
+    resource = await asyncio.to_thread(
+        review_store.resume_pending_for_conversation,
+        conversation_id,
+    )
+    return review_store.pointer(resource) if resource else None
+
+
+async def _finish_for_review(
+    websocket: WebSocket,
+    conversation_id: str,
+    mode: InteractionMode,
+    review: dict[str, Any],
+) -> None:
+    await _send_status(websocket, conversation_id, "waiting", "等待课程审核")
+    await websocket.send_json({
+        "type": "agent_review_required",
+        "payload": review,
+    })
+    await websocket.send_json({
+        "type": "agent_done",
+        "payload": {
+            "return_code": 0,
+            "conversation_id": conversation_id,
+            "mode": mode,
+            "awaiting_review": True,
+            "review_id": review["id"],
+        },
+    })
+
+
+async def _resume_claim_heartbeat(
+    review_store: Any,
+    review_id: str,
+    conversation_id: str,
+    claim_id: str,
+) -> None:
+    while True:
+        await asyncio.sleep(RESUME_CLAIM_HEARTBEAT_SECONDS)
+        await asyncio.to_thread(
+            review_store.renew_resume_claim,
+            review_id,
+            conversation_id=conversation_id,
+            claim_id=claim_id,
+        )
+
+
+async def _await_prompt_with_resume_heartbeat(
+    prompt: Any,
+    *,
+    heartbeat_task: asyncio.Task[None],
+    session_id: str,
+) -> tuple[bool, str]:
+    prompt_task = asyncio.create_task(prompt)
+    try:
+        done, _ = await asyncio.wait(
+            {prompt_task, heartbeat_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if heartbeat_task in done:
+            try:
+                await heartbeat_task
+            finally:
+                prompt_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await prompt_task
+                with contextlib.suppress(Exception):
+                    await opencode_client.abort(session_id)
+            raise CourseReviewError("审核恢复 claim 续租意外停止")
+        return await prompt_task
+    except BaseException:
+        if not prompt_task.done():
+            prompt_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await prompt_task
+            with contextlib.suppress(Exception):
+                await opencode_client.abort(session_id)
+        raise
 
 
 @router.websocket("/ws")
@@ -751,9 +686,78 @@ async def _run_agent_turn_opencode(
     payload: dict[str, Any],
     active_session: dict[str, str | None],
 ) -> None:
+    if _request_workflow(payload) != "course-create":
+        await _run_agent_turn_opencode_unlocked(websocket, payload, active_session)
+        return
+
+    conversation_id = _safe_conversation_id(
+        payload.get("conversation_id") or "default"
+    )
+    coordinator = get_course_activity_coordinator()
+    try:
+        lease = coordinator.claim(conversation_id, "agent-turn")
+    except CourseActivityConflictError as exc:
+        active_session["id"] = None
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "code": "course_activity_conflict",
+                "message": str(exc),
+                "conversation_id": conversation_id,
+            },
+        })
+        await websocket.send_json({
+            "type": "agent_done",
+            "payload": {
+                "return_code": 1,
+                "conversation_id": conversation_id,
+                "mode": _request_mode(payload),
+            },
+        })
+        return
+
+    turn_task: asyncio.Task[None] | None = None
+    try:
+        turn_task = asyncio.create_task(
+            _run_agent_turn_opencode_unlocked(websocket, payload, active_session)
+        )
+        await asyncio.shield(turn_task)
+    except asyncio.CancelledError:
+        session_id = active_session.get("id")
+        if session_id:
+            _clear_pending_questions_for_session(session_id)
+            abort_task = asyncio.create_task(opencode_client.abort(session_id))
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.shield(abort_task)
+        raise
+    except BaseException:
+        session_id = active_session.get("id")
+        if session_id:
+            _clear_pending_questions_for_session(session_id)
+            with contextlib.suppress(Exception):
+                await opencode_client.abort(session_id)
+        raise
+    finally:
+        if turn_task is None or turn_task.done():
+            coordinator.release(lease)
+        else:
+            def release_when_done(completed: asyncio.Task[None]) -> None:
+                coordinator.release(lease)
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    completed.result()
+
+            turn_task.add_done_callback(release_when_done)
+
+
+async def _run_agent_turn_opencode_unlocked(
+    websocket: WebSocket,
+    payload: dict[str, Any],
+    active_session: dict[str, str | None],
+) -> None:
     message = (payload.get("message") or "").strip()
     images = payload.get("images") or []
-    if not message and not images:
+    review_resume_id = str(payload.get("review_resume_id") or "").strip()
+    if not message and not images and not review_resume_id:
         return
 
     conversation_id = _safe_conversation_id(payload.get("conversation_id") or "default")
@@ -761,6 +765,153 @@ async def _run_agent_turn_opencode(
     workflow = _request_workflow(payload)
     creating_course = workflow == "course-create"
     readonly = mode == "chat"
+    resume_response: dict[str, Any] | None = None
+    review_store = get_course_review_store() if creating_course else None
+
+    if review_resume_id:
+        if not creating_course:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": "审核恢复只允许用于课程创建工作流。",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            return
+        try:
+            assert review_store is not None
+            resume_response = await asyncio.to_thread(
+                review_store.get_resume,
+                review_resume_id,
+                conversation_id=conversation_id,
+            )
+        except CourseReviewError as exc:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"审核恢复请求无效：{exc}",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            return
+        message = str(resume_response["resume_message"])
+        images = []
+
+    if creating_course:
+        try:
+            assert review_store is not None
+            review = await _pending_review(conversation_id)
+            if not review_resume_id and not review:
+                resume = await _pending_review_resume(conversation_id)
+                if resume:
+                    await _finish_for_review(
+                        websocket,
+                        conversation_id,
+                        mode,
+                        resume,
+                    )
+                    active_session["id"] = None
+                    return
+        except CourseReviewError as exc:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"课程审核任务无法读取：{exc}",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+        if review:
+            # If G2 already produced a durable downstream G6 marker, a retry
+            # must advance to that marker instead of replaying content work.
+            if (
+                resume_response is not None
+                and is_strict_g2_successor(resume_response.get("review"), review)
+            ):
+                recovery_claim_id = f"agent:{uuid.uuid4()}"
+                try:
+                    claimed = await asyncio.to_thread(
+                        review_store.claim_resume,
+                        review_resume_id,
+                        conversation_id=conversation_id,
+                        claim_id=recovery_claim_id,
+                    )
+                    if not is_strict_g2_successor(claimed.get("review"), review):
+                        raise CourseReviewError(
+                            "审核恢复的下游知识图谱标记与当前课程不匹配"
+                        )
+                    completed = await asyncio.to_thread(
+                        review_store.complete_resume,
+                        review_resume_id,
+                        conversation_id=conversation_id,
+                        claim_id=recovery_claim_id,
+                    )
+                except CourseReviewError as exc:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(
+                            review_store.release_resume,
+                            review_resume_id,
+                            conversation_id=conversation_id,
+                            claim_id=recovery_claim_id,
+                        )
+                    await websocket.send_json({
+                        "type": "agent_error",
+                        "payload": {
+                            "message": f"审核恢复状态无法完成：{exc}",
+                            "conversation_id": conversation_id,
+                        },
+                    })
+                    await websocket.send_json({
+                        "type": "agent_done",
+                        "payload": {
+                            "return_code": 1,
+                            "conversation_id": conversation_id,
+                            "mode": mode,
+                        },
+                    })
+                    active_session["id"] = None
+                    return
+                await websocket.send_json({
+                    "type": "agent_review_resolved",
+                    "payload": {
+                        "review": review_store.pointer(completed["review"]),
+                        "conversation_id": conversation_id,
+                    },
+                })
+            await _finish_for_review(websocket, conversation_id, mode, review)
+            active_session["id"] = None
+            return
+
+    history_content = (
+        str(resume_response["display_content"])
+        if resume_response is not None
+        else _request_history_content(payload, message, images)
+    )
     model = _resolve_opencode_model(payload.get("model"))
     conversation_store = get_conversation_store()
     await asyncio.to_thread(
@@ -769,16 +920,17 @@ async def _run_agent_turn_opencode(
         mode=mode,
         workflow=workflow,
         model=model,
-        title_hint=message,
+        title_hint=history_content,
     )
-    await asyncio.to_thread(
-        conversation_store.add_message,
-        conversation_id,
-        role="user",
-        content=message or (f"发送了 {len(images)} 张图片" if images else ""),
-        images=images,
-        message_id=payload.get("request_id"),
-    )
+    if resume_response is None:
+        await asyncio.to_thread(
+            conversation_store.add_message,
+            conversation_id,
+            role="user",
+            content=history_content,
+            images=images,
+            message_id=payload.get("request_id"),
+        )
     configured_model = model_config.get_model(model)
     if not (configured_model and configured_model.base_url and configured_model.api_key):
         await websocket.send_json({
@@ -790,15 +942,30 @@ async def _run_agent_turn_opencode(
         })
         return
 
+    await _send_status(
+        websocket,
+        conversation_id,
+        "provision",
+        "正在恢复课程工作区" if creating_course else "正在准备课程工作区",
+    )
     try:
         if readonly:
-            workspace = opencode_provision.ensure_course_chat_session_assets(conversation_id)
+            workspace = await asyncio.to_thread(
+                opencode_provision.ensure_course_chat_session_assets,
+                conversation_id,
+            )
             directory = opencode_provision.host_course_workspace_dir(workspace)
         elif creating_course:
-            workspace = opencode_provision.ensure_course_creation_session_assets(conversation_id)
+            workspace = await asyncio.to_thread(
+                opencode_provision.ensure_course_creation_session_assets,
+                conversation_id,
+            )
             directory = opencode_provision.host_course_creation_workspace_dir(workspace)
         else:
-            workspace = opencode_provision.ensure_course_session_assets(conversation_id)
+            workspace = await asyncio.to_thread(
+                opencode_provision.ensure_course_session_assets,
+                conversation_id,
+            )
             directory = opencode_provision.host_course_workspace_dir(workspace)
     except (CourseDataError, OSError) as exc:
         await websocket.send_json({
@@ -845,6 +1012,162 @@ async def _run_agent_turn_opencode(
         })
         return
 
+    course_agent_name: str | None = None
+    if creating_course:
+        assert review_store is not None
+        resume_course_id = (
+            str(resume_response["review"].get("course_id") or "")
+            if resume_response is not None
+            else ""
+        )
+        try:
+            if resume_course_id:
+                identity_reviewed = await asyncio.to_thread(
+                    review_store.has_resolved_knowledge_review,
+                    conversation_id,
+                    resume_course_id,
+                )
+            else:
+                identity_reviewed = (
+                    await asyncio.to_thread(
+                        review_store.resolved_knowledge_course_for_conversation,
+                        conversation_id,
+                    )
+                    is not None
+                )
+        except CourseReviewError as exc:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"无法验证课程创建权限阶段：{exc}",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+        course_agent_name = (
+            "course-creator" if identity_reviewed else "course-outline-creator"
+        )
+
+    resume_claim_id: str | None = None
+    resume_claim_active = False
+    resume_claim_heartbeat_task: asyncio.Task[None] | None = None
+
+    async def stop_resume_claim_heartbeat() -> None:
+        nonlocal resume_claim_heartbeat_task
+        if resume_claim_heartbeat_task is None:
+            return
+        task = resume_claim_heartbeat_task
+        resume_claim_heartbeat_task = None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    async def ensure_resume_claim_heartbeat() -> None:
+        task = resume_claim_heartbeat_task
+        if not resume_claim_active or task is None or not task.done():
+            return
+        try:
+            await task
+        except asyncio.CancelledError as exc:
+            raise CourseReviewError("审核恢复 claim 续租意外停止") from exc
+        raise CourseReviewError("审核恢复 claim 续租意外停止")
+
+    async def release_resume_claim() -> None:
+        nonlocal resume_claim_active
+        if (
+            not resume_claim_active
+            or resume_claim_id is None
+            or review_store is None
+        ):
+            return
+        try:
+            await asyncio.to_thread(
+                review_store.release_resume,
+                review_resume_id,
+                conversation_id=conversation_id,
+                claim_id=resume_claim_id,
+            )
+        finally:
+            resume_claim_active = False
+            await stop_resume_claim_heartbeat()
+
+    async def complete_resume_claim() -> dict[str, Any] | None:
+        nonlocal resume_claim_active
+        if (
+            not resume_claim_active
+            or resume_claim_id is None
+            or review_store is None
+        ):
+            return None
+        await ensure_resume_claim_heartbeat()
+        response = await asyncio.to_thread(
+            review_store.complete_resume,
+            review_resume_id,
+            conversation_id=conversation_id,
+            claim_id=resume_claim_id,
+        )
+        resume_claim_active = False
+        await stop_resume_claim_heartbeat()
+        return response
+
+    if resume_response is not None and review_store is not None:
+        resume_claim_id = f"agent:{uuid.uuid4()}"
+        try:
+            resume_response = await asyncio.to_thread(
+                review_store.claim_resume,
+                review_resume_id,
+                conversation_id=conversation_id,
+                claim_id=resume_claim_id,
+            )
+            resume_claim_active = True
+            resume_claim_heartbeat_task = asyncio.create_task(
+                _resume_claim_heartbeat(
+                    review_store,
+                    review_resume_id,
+                    conversation_id,
+                    resume_claim_id,
+                )
+            )
+            message = str(resume_response["resume_message"])
+            await asyncio.to_thread(
+                conversation_store.add_message,
+                conversation_id,
+                role="user",
+                content=str(resume_response["display_content"]),
+                images=[],
+                message_id=f"review-resume:{review_resume_id}",
+            )
+        except CourseReviewError as exc:
+            if resume_claim_active:
+                with contextlib.suppress(Exception):
+                    await release_resume_claim()
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"审核恢复请求无法领取：{exc}",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+
     active_session["id"] = session_id
     await websocket.send_json({
         "type": "agent_start",
@@ -873,7 +1196,7 @@ async def _run_agent_turn_opencode(
     else:
         prompt = _agent_prompt(message) if message else "请根据上传内容维护课程知识数据。"
     try:
-        ok, response_text = await _run_opencode_prompt(
+        prompt_call = _run_opencode_prompt(
             websocket=websocket,
             conversation_id=conversation_id,
             session_id=session_id,
@@ -881,13 +1204,27 @@ async def _run_agent_turn_opencode(
             text=prompt,
             images=images,
             model=model,
-            agent_name="course-creator" if creating_course else None,
+            agent_name=course_agent_name,
             terminal_timeout_seconds=(
                 settings.course_create_terminal_timeout_seconds
                 if creating_course
                 else None
             ),
         )
+        if resume_claim_heartbeat_task is not None:
+            ok, response_text = await _await_prompt_with_resume_heartbeat(
+                prompt_call,
+                heartbeat_task=resume_claim_heartbeat_task,
+                session_id=session_id,
+            )
+        else:
+            ok, response_text = await prompt_call
+    except BaseException:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
+        active_session["id"] = None
+        raise
     finally:
         if generation_observer_task is not None:
             generation_observer_task.cancel()
@@ -898,13 +1235,20 @@ async def _run_agent_turn_opencode(
             # event without leaving a background task attached to the socket.
             with contextlib.suppress(Exception):
                 await generation_observer.emit_if_changed(websocket.send_json)
-    if response_text:
-        await asyncio.to_thread(
-            conversation_store.add_message,
-            conversation_id,
-            role="assistant",
-            content=response_text,
-        )
+    try:
+        if response_text:
+            await asyncio.to_thread(
+                conversation_store.add_message,
+                conversation_id,
+                role="assistant",
+                content=response_text,
+            )
+    except BaseException:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
+        active_session["id"] = None
+        raise
 
     if readonly:
         try:
@@ -938,6 +1282,9 @@ async def _run_agent_turn_opencode(
         return
 
     if not ok:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
         await _send_status(websocket, conversation_id, "error", "Agent 执行失败")
         await websocket.send_json({
             "type": "agent_done",
@@ -946,10 +1293,163 @@ async def _run_agent_turn_opencode(
         active_session["id"] = None
         return
 
+    if creating_course:
+        try:
+            review = await _pending_review(conversation_id)
+        except CourseReviewError as exc:
+            if resume_claim_active:
+                with contextlib.suppress(Exception):
+                    await release_resume_claim()
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"课程审核任务无法创建：{exc}",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+        if review:
+            completed_response: dict[str, Any] | None = None
+            if (
+                resume_claim_active
+                and resume_response is not None
+                and is_strict_g2_successor(
+                    resume_response.get("review"),
+                    review,
+                )
+            ):
+                try:
+                    completed_response = await complete_resume_claim()
+                except CourseReviewError as exc:
+                    with contextlib.suppress(Exception):
+                        await release_resume_claim()
+                    await websocket.send_json({
+                        "type": "agent_error",
+                        "payload": {
+                            "message": f"审核恢复状态无法完成：{exc}",
+                            "conversation_id": conversation_id,
+                        },
+                    })
+                    await websocket.send_json({
+                        "type": "agent_done",
+                        "payload": {
+                            "return_code": 1,
+                            "conversation_id": conversation_id,
+                            "mode": mode,
+                        },
+                    })
+                    active_session["id"] = None
+                    return
+            elif resume_claim_active:
+                # A different pending marker does not prove that this resume
+                # turn reached the required durable successor.
+                await release_resume_claim()
+
+            if completed_response is not None and review_store is not None:
+                await websocket.send_json({
+                    "type": "agent_review_resolved",
+                    "payload": {
+                        "review": review_store.pointer(completed_response["review"]),
+                        "conversation_id": conversation_id,
+                    },
+                })
+            await _finish_for_review(websocket, conversation_id, mode, review)
+            active_session["id"] = None
+            return
+
+        if (
+            resume_claim_active
+            and isinstance(resume_response, dict)
+            and isinstance(resume_response.get("review"), dict)
+            and resume_response["review"].get("kind") == "knowledge-points"
+        ):
+            await release_resume_claim()
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": (
+                        "知识点审核恢复未生成同课程的知识图谱审核，"
+                        "已保留恢复任务供重试。"
+                    ),
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+
+    try:
+        await ensure_resume_claim_heartbeat()
+    except CourseReviewError as exc:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "message": f"审核恢复状态已失效：{exc}",
+                "conversation_id": conversation_id,
+            },
+        })
+        await websocket.send_json({
+            "type": "agent_done",
+            "payload": {
+                "return_code": 1,
+                "conversation_id": conversation_id,
+                "mode": mode,
+            },
+        })
+        active_session["id"] = None
+        return
+
     await _send_status(websocket, conversation_id, "commit", "校验并提交课程数据")
     try:
-        committed = get_course_store().commit_workspace(workspace)
+        committed = await asyncio.to_thread(
+            get_course_store().commit_workspace,
+            workspace,
+        )
+        await ensure_resume_claim_heartbeat()
+    except CourseReviewError as exc:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "message": f"课程已校验，但审核恢复租约失效：{exc}",
+                "conversation_id": conversation_id,
+            },
+        })
+        await websocket.send_json({
+            "type": "agent_done",
+            "payload": {
+                "return_code": 1,
+                "conversation_id": conversation_id,
+                "mode": mode,
+            },
+        })
+        active_session["id"] = None
+        return
     except CourseValidationError as exc:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
         details = "；".join(exc.errors[:3])
         await websocket.send_json({
             "type": "agent_error",
@@ -967,6 +1467,9 @@ async def _run_agent_turn_opencode(
         active_session["id"] = None
         return
     except CourseConflictError as exc:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
         await websocket.send_json({
             "type": "agent_error",
             "payload": {"message": str(exc), "conversation_id": conversation_id},
@@ -978,6 +1481,9 @@ async def _run_agent_turn_opencode(
         active_session["id"] = None
         return
     except CourseDataError as exc:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
         await websocket.send_json({
             "type": "agent_error",
             "payload": {"message": f"课程数据提交失败：{exc}", "conversation_id": conversation_id},
@@ -988,6 +1494,43 @@ async def _run_agent_turn_opencode(
         })
         active_session["id"] = None
         return
+
+    completed_response = None
+    if resume_claim_active:
+        try:
+            completed_response = await complete_resume_claim()
+        except CourseReviewError as exc:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": (
+                        "课程数据已提交，但审核恢复状态无法完成："
+                        f"{exc}。可重新进入该会话安全重试。"
+                    ),
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+
+    if completed_response is not None and review_store is not None:
+        await websocket.send_json({
+            "type": "agent_review_resolved",
+            "payload": {
+                "review": review_store.pointer(completed_response["review"]),
+                "conversation_id": conversation_id,
+            },
+        })
 
     if committed.get("changed_paths"):
         await _emit_committed_workspace_changes(websocket, conversation_id, committed)
@@ -1181,9 +1724,6 @@ async def _run_opencode_prompt(
                 if event_type == "question.asked":
                     request_id = str(properties.get("id") or "").strip()
                     questions = _normalize_opencode_questions(properties.get("questions"))
-                    questions, animation_gate_indexes = _prepare_animation_gate_questions(
-                        questions
-                    )
                     if not request_id or not questions:
                         continue
                     set_question_waiting(request_id, True)
@@ -1201,12 +1741,6 @@ async def _run_opencode_prompt(
                         "session_id": session_id,
                         "directory": directory,
                         "questions": questions,
-                        "animation_gate_indexes": animation_gate_indexes,
-                        "animation_courses": (
-                            _animation_gate_courses(directory)
-                            if animation_gate_indexes
-                            else []
-                        ),
                     }
                     await websocket.send_json({
                         "type": "agent_question",
