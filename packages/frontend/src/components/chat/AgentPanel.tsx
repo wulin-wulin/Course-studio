@@ -164,6 +164,7 @@ const AGENT_SUGGESTIONS = [
 
 export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const requestGenerationDemo = useCourseGenerationStore((state) => state.requestDemo);
+  const startLiveGeneration = useCourseGenerationStore((state) => state.startLive);
   const generationStatus = useCourseGenerationStore((state) => state.status);
   const selectedModel = useChatStore((s) => s.selectedModel);
   const setModel = useChatStore((s) => s.setModel);
@@ -272,6 +273,22 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         window.clearTimeout(openTimer);
         if (wsRef.current === ws) wsRef.current = null;
         if (disposed) return;
+        const generation = useCourseGenerationStore.getState();
+        const liveConversationId =
+          lastActiveConversationIdRef.current ?? generation.conversationId;
+        const liveRun = liveConversationId
+          ? generation.liveRuns[liveConversationId]
+          : undefined;
+        if (
+          liveConversationId &&
+          liveRun?.status === "running" &&
+          !liveRun.published
+        ) {
+          generation.markLiveError(
+            liveConversationId,
+            "与课程助手的连接已中断，生成显示已暂停；重新连接并继续流程后会自动恢复。"
+          );
+        }
         setConnectionState("disconnected");
         settleActiveEntries(setEntries, "error");
         setIsRunning(false);
@@ -432,6 +449,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       });
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       setConversations((prev) => prev.filter((item) => item.id !== conversation.id));
+      useCourseGenerationStore.getState().removeLive(conversation.id);
       if (activeConversationId === conversation.id) {
         const nextId = createConversation();
         lastActiveConversationIdRef.current = nextId;
@@ -530,6 +548,8 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     resetConversationView();
     setWorkflow("course-create");
     workflowRef.current = "course-create";
+    startLiveGeneration(conversationId);
+    window.location.hash = `/generation/${encodeURIComponent(conversationId)}`;
     submitRequest(
       conversationId,
       "开始创建课程。如果我还没有提供课程或领域名称，请先询问我。",
@@ -538,7 +558,21 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       "创建课程",
       true
     );
-  }, [createConversation, isRunning, mode, resetConversationView, submitRequest, workflow]);
+  }, [
+    createConversation,
+    isRunning,
+    mode,
+    resetConversationView,
+    startLiveGeneration,
+    submitRequest,
+    workflow,
+  ]);
+
+  const startGenerationDemo = useCallback(() => {
+    if (isRunning || generationStatus !== "idle") return;
+    requestGenerationDemo();
+    window.location.hash = "/generation/demo";
+  }, [generationStatus, isRunning, requestGenerationDemo]);
 
   const openCourseDeletion = useCallback(() => {
     if (mode !== "agent" || isRunning || workflow === "course-create") return;
@@ -998,7 +1032,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={requestGenerationDemo}
+                    onClick={startGenerationDemo}
                     disabled={isRunning || generationStatus !== "idle"}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                     title={
@@ -1617,6 +1651,37 @@ function handleAgentEvent(
       return;
     }
 
+    case "course_generation_snapshot": {
+      useCourseGenerationStore.getState().applySnapshot(payload);
+      const conversationId = String(
+        payload.conversation_id ?? payload.conversationId ?? ""
+      ).trim();
+      const currentRun = conversationId
+        ? useCourseGenerationStore.getState().liveRuns[conversationId]
+        : undefined;
+      if (currentRun?.published) {
+        window.dispatchEvent(
+          new CustomEvent("course-data-changed", {
+            detail: {
+              source: "course-generation-published",
+              course_id: currentRun.publishedCourseId,
+            },
+          })
+        );
+        updateRunStatus(setRunStatus, "课程发布完成", "课程导览正在刷新");
+      } else if (
+        conversationId &&
+        conversationId === useCourseGenerationStore.getState().conversationId
+      ) {
+        updateRunStatus(
+          setRunStatus,
+          currentRun?.phaseLabel ?? "课程创建中",
+          currentRun?.phaseDetail
+        );
+      }
+      return;
+    }
+
     case "course_data_changed": {
       window.dispatchEvent(new CustomEvent("course-data-changed", { detail: payload }));
       updateRunStatus(setRunStatus, "课程数据已更新", "知识森林正在刷新");
@@ -1662,6 +1727,24 @@ function handleAgentEvent(
       setRunStatus(null);
       const code = Number(payload.return_code);
       if (code === 0) return;
+      {
+        const generation = useCourseGenerationStore.getState();
+        const conversationId = String(
+          payload.conversation_id ??
+          payload.conversationId ??
+          generation.conversationId ??
+          ""
+        ).trim();
+        if (
+          conversationId &&
+          (isCourseCreation || Boolean(generation.liveRuns[conversationId]))
+        ) {
+          generation.markLiveError(
+            conversationId,
+            `课程创建任务异常退出（退出码 ${String(payload.return_code ?? "未知")}）`
+          );
+        }
+      }
       setEntries((prev) => [
         ...prev,
         {
@@ -1681,6 +1764,24 @@ function handleAgentEvent(
       settleActiveEntries(setEntries, "error");
       setPendingQuestion(null);
       const message = String(payload.message ?? payload.content ?? "");
+      {
+        const generation = useCourseGenerationStore.getState();
+        const conversationId = String(
+          payload.conversation_id ??
+          payload.conversationId ??
+          generation.conversationId ??
+          ""
+        ).trim();
+        if (
+          conversationId &&
+          (isCourseCreation || Boolean(generation.liveRuns[conversationId]))
+        ) {
+          generation.markLiveError(
+            conversationId,
+            message || "课程创建流程暂时中断"
+          );
+        }
+      }
       setIsRunning(false);
       setRunStatus(null);
       setEntries((prev) => [

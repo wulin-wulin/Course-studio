@@ -239,6 +239,36 @@ class ConversationStore:
         result["messages"] = [self._message(message) for message in messages]
         return result
 
+    def replace_assistant_message_contents(
+        self, conversation_id: str, contents: list[str]
+    ) -> None:
+        """Atomically repair assistant text while preserving message identity/order."""
+
+        cid = _conversation_id(conversation_id)
+        normalized_contents = [str(content) for content in contents]
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id
+                FROM messages
+                WHERE conversation_id = ? AND role = 'assistant'
+                ORDER BY created_at, rowid
+                """,
+                (cid,),
+            ).fetchall()
+            if len(rows) != len(normalized_contents):
+                raise ValueError(
+                    "助手消息数量不匹配："
+                    f"数据库中有 {len(rows)} 条，修复内容有 {len(normalized_contents)} 条"
+                )
+            connection.executemany(
+                "UPDATE messages SET content = ? WHERE id = ?",
+                [
+                    (content, row["id"])
+                    for row, content in zip(rows, normalized_contents, strict=True)
+                ],
+            )
+
     def delete_conversation(self, conversation_id: str) -> bool:
         cid = _conversation_id(conversation_id)
         with self._lock, self._connect() as connection:

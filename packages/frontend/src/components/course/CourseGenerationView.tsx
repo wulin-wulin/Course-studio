@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -6,6 +6,7 @@ import {
   Loader2,
   Pause,
   Play,
+  Radio,
   RotateCcw,
   SkipForward,
   Sparkles,
@@ -20,6 +21,7 @@ import { useCourseGenerationStore } from "@/course/generation/generationStore";
 import {
   GENERATION_GATES,
   type GenerationGate,
+  type GenerationPointState,
 } from "@/course/generation/types";
 import "./courseGeneration.css";
 
@@ -46,6 +48,7 @@ export function CourseGenerationView({
   onClose,
   onOpenCourse,
 }: CourseGenerationViewProps) {
+  const mode = useCourseGenerationStore((state) => state.mode);
   const status = useCourseGenerationStore((state) => state.status);
   const course = useCourseGenerationStore((state) => state.course);
   const gate = useCourseGenerationStore((state) => state.gate);
@@ -62,11 +65,21 @@ export function CourseGenerationView({
   const setSpeed = useCourseGenerationStore((state) => state.setSpeed);
   const reset = useCourseGenerationStore((state) => state.reset);
   const requestDemo = useCourseGenerationStore((state) => state.requestDemo);
+  const leaveView = useCourseGenerationStore((state) =>
+    (state as typeof state & { leaveView?: () => void }).leaveView
+  );
   const replayRef = useRef<DemoReplaySource | null>(null);
   const [timelineProgress, setTimelineProgress] = useState(0);
   const [reloadVersion, setReloadVersion] = useState(0);
+  const isDemo = mode === "demo";
 
   useEffect(() => {
+    if (!isDemo) {
+      replayRef.current?.dispose();
+      replayRef.current = null;
+      return;
+    }
+
     const controller = new AbortController();
     let disposed = false;
     markLoading();
@@ -121,20 +134,31 @@ export function CourseGenerationView({
       replayRef.current?.dispose();
       replayRef.current = null;
     };
-  }, [applyEvent, markLoading, reloadVersion]);
+  }, [applyEvent, isDemo, markLoading, reloadVersion]);
 
-  const grownPoints = useMemo(
-    () => points.filter((point) => point.status !== "planned"),
+  const completedPoints = useMemo(
+    () => points.filter((point) => isPointComplete(point)),
+    [points]
+  );
+  const generatingPoints = useMemo(
+    () => points
+      .filter((point) => pointStatus(point) === "generating")
+      .sort((left, right) => left.order - right.order)
+      .slice(0, 4),
     [points]
   );
   const recentPoints = useMemo(
-    () => grownPoints.slice(-4).reverse(),
-    [grownPoints]
+    () => completedPoints.slice(-4).reverse(),
+    [completedPoints]
   );
   const activeGateIndex = gate ? GENERATION_GATES.indexOf(gate) : -1;
   const isPaused = status === "paused";
   const isCompleted = status === "completed";
   const isLoading = status === "requested" || status === "loading";
+  const courseTitle = course?.title || (isDemo ? "软件工程" : "新课程");
+  const completedRatio = totalPoints > 0
+    ? completedPoints.length / totalPoints
+    : 0;
 
   const togglePlayback = () => {
     if (isPaused) {
@@ -158,6 +182,10 @@ export function CourseGenerationView({
   };
 
   const retry = () => {
+    if (!isDemo) {
+      close();
+      return;
+    }
     replayRef.current?.dispose();
     replayRef.current = null;
     requestDemo();
@@ -167,19 +195,25 @@ export function CourseGenerationView({
 
   const close = () => {
     replayRef.current?.dispose();
-    reset();
+    if (isDemo) reset();
+    else leaveView?.();
     onClose();
   };
 
   const openCourse = () => {
-    const courseId = course?.id ?? DEMO_COURSE_ID;
+    const courseId = course?.id ?? (isDemo ? DEMO_COURSE_ID : "");
+    if (!courseId) return;
     replayRef.current?.dispose();
-    reset();
+    if (isDemo) reset();
+    else leaveView?.();
     onOpenCourse(courseId);
   };
 
   return (
-    <section className="course-generation" aria-label="课程生成演示">
+    <section
+      className={`course-generation ${isDemo ? "is-demo" : "is-live"}`}
+      aria-label={isDemo ? "课程生成演示" : "课程实时生成进度"}
+    >
       <header className="course-generation__header">
         <div className="course-generation__identity">
           <span className="course-generation__brand-icon" aria-hidden="true">
@@ -187,18 +221,32 @@ export function CourseGenerationView({
           </span>
           <div>
             <div className="course-generation__title-row">
-              <strong>{course?.title ?? "软件工程"}课程正在生长</strong>
-              <span className="course-generation__demo-badge">
-                <Sparkles aria-hidden="true" size={11} />
-                演示模式
+              <strong>{courseTitle}课程正在生长</strong>
+              <span
+                className={`course-generation__mode-badge ${
+                  isDemo ? "is-demo" : "is-live"
+                }`}
+              >
+                {isDemo ? (
+                  <Sparkles aria-hidden="true" size={11} />
+                ) : (
+                  <Radio aria-hidden="true" size={11} />
+                )}
+                {isDemo ? "演示模式" : "实时生成"}
               </span>
             </div>
-            <span>使用预定义课程数据回放真实生成流程</span>
+            <span>
+              {isDemo
+                ? "使用预定义课程数据回放真实生成流程"
+                : course
+                  ? "生成结果会随智能体工作实时更新"
+                  : "等待智能体确认课程范围和名称"}
+            </span>
           </div>
         </div>
 
         <div className="course-generation__header-actions">
-          {isCompleted && (
+          {isCompleted && course?.id && (
             <button
               type="button"
               className="course-generation__enter-button"
@@ -212,8 +260,8 @@ export function CourseGenerationView({
             type="button"
             className="course-generation__close-button"
             onClick={close}
-            title="退出生成演示"
-            aria-label="退出生成演示"
+            title={isDemo ? "退出生成演示" : "返回课程导览"}
+            aria-label={isDemo ? "退出生成演示" : "返回课程导览"}
           >
             <X aria-hidden="true" size={17} />
           </button>
@@ -253,18 +301,29 @@ export function CourseGenerationView({
           <span className="course-generation__status-kicker">
             {isCompleted ? "森林已完成" : gate ? GATE_LABELS[gate] : "准备中"}
           </span>
-          <h2>{isLoading ? "正在准备演示数据" : phaseLabel || "课程生成即将开始"}</h2>
+          <h2>
+            {isLoading
+              ? isDemo
+                ? "正在准备演示数据"
+                : "正在连接课程生成状态"
+              : phaseLabel || (isDemo ? "课程生成即将开始" : "等待课程范围确认")}
+          </h2>
           <p>
             {isLoading
-              ? "正在读取预定义的课程目录和知识点。"
-              : phaseDetail || "稍候，第一颗知识种子马上落下。"}
+              ? isDemo
+                ? "正在读取预定义的课程目录和知识点。"
+                : "正在同步智能体已生成的课程文件。"
+              : phaseDetail
+                || (isDemo
+                  ? "稍候，第一颗知识树马上长出。"
+                  : "你可以继续在右侧对话；确认后，知识树会在这里依次出现。")}
           </p>
 
           <div className="course-generation__point-progress">
             <div>
               <span>已完成知识点</span>
               <strong>
-                {grownPoints.length}
+                {completedPoints.length}
                 <small> / {totalPoints || "—"}</small>
               </strong>
             </div>
@@ -274,15 +333,25 @@ export function CourseGenerationView({
               aria-label="知识点编写进度"
               aria-valuemin={0}
               aria-valuemax={totalPoints || 1}
-              aria-valuenow={grownPoints.length}
+              aria-valuenow={completedPoints.length}
             >
-              <i
-                style={{
-                  width: `${totalPoints > 0 ? (grownPoints.length / totalPoints) * 100 : 0}%`,
-                }}
-              />
+              <i style={{ width: `${completedRatio * 100}%` }} />
             </div>
           </div>
+
+          {generatingPoints.length > 0 && (
+            <div className="course-generation__working">
+              <span>正在并行编写 {generatingPoints.length} 个知识点</span>
+              <div aria-hidden="true">
+                {generatingPoints.map((point) => (
+                  <i
+                    key={point.id}
+                    style={{ "--point-progress": `${pointProgress(point)}%` } as CSSProperties}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           {recentPoints.length > 0 && (
             <div className="course-generation__recent">
@@ -290,7 +359,7 @@ export function CourseGenerationView({
               <ul>
                 {recentPoints.map((point, index) => (
                   <li key={point.id} className={index === 0 ? "is-latest" : ""}>
-                    <Sprout aria-hidden="true" size={13} />
+                    <CheckCircle2 aria-hidden="true" size={13} />
                     {point.title}
                   </li>
                 ))}
@@ -319,10 +388,10 @@ export function CourseGenerationView({
         {status === "error" && (
           <div className="course-generation__error" role="alert">
             <AlertTriangle aria-hidden="true" size={23} />
-            <strong>演示暂时无法启动</strong>
+            <strong>{isDemo ? "演示暂时无法启动" : "本轮生成暂时中断"}</strong>
             <span>{error}</span>
             <button type="button" onClick={retry}>
-              重试
+              {isDemo ? "重试" : "返回对话"}
             </button>
           </div>
         )}
@@ -330,11 +399,11 @@ export function CourseGenerationView({
         {isLoading && (
           <div className="course-generation__loading" role="status">
             <Loader2 aria-hidden="true" size={21} />
-            正在装载课程种子
+            {isDemo ? "正在装载课程种子" : "正在同步生成现场"}
           </div>
         )}
 
-        {!isLoading && status !== "error" && (
+        {isDemo && !isLoading && status !== "error" && (
           <div className="course-generation__controls" aria-label="演示播放控制">
             <button
               type="button"
@@ -392,6 +461,22 @@ export function CourseGenerationView({
   );
 }
 
+function pointStatus(point: GenerationPointState) {
+  return String(point.status);
+}
+
+function isPointComplete(point: GenerationPointState) {
+  const status = pointStatus(point);
+  return status === "grown" || status === "clustered";
+}
+
+function pointProgress(point: GenerationPointState) {
+  const candidate = (point as GenerationPointState & { progress?: number }).progress;
+  return Number.isFinite(candidate)
+    ? Math.max(0, Math.min(100, candidate ?? 0))
+    : 0;
+}
+
 function unwrapCourse(payload: unknown): CourseMeta | null {
   const candidate = isRecord(payload) && "course" in payload ? payload.course : payload;
   if (
@@ -424,4 +509,3 @@ function unwrapIndex(payload: unknown): ForestIndex | null {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-

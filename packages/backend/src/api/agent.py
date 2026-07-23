@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from datetime import UTC, datetime
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +31,7 @@ from ..services.courses import (
     CourseValidationError,
     get_course_store,
 )
+from ..services.courses.generation import CourseGenerationObserver
 from ..services.conversations import get_conversation_store
 from ..services.opencode import client as opencode_client
 from ..services.opencode import provision as opencode_provision
@@ -56,6 +59,30 @@ _pending_questions: dict[str, dict[str, Any]] = {}
 
 InteractionMode = Literal["chat", "agent"]
 AgentWorkflow = Literal["default", "course-create"]
+
+ANIMATION_ACCEPTANCE_SCHEMA = "course-animation-acceptance/1.0"
+_ANIMATION_GATE_BYPASS_TERMS = (
+    "跳过",
+    "绕过",
+    "忽略",
+    "未验收继续",
+    "不验收继续",
+    "无需验收",
+    "直接继续",
+)
+_ANIMATION_GATE_ACCEPT_TERMS = (
+    "已完成实际动画验收",
+    "动画验收通过",
+    "已验收",
+    "验收完成",
+)
+_ANIMATION_GATE_BLOCK_LABEL = "保持 G5 阻断"
+_ANIMATION_TRACKED_FILES = (
+    "generation/animation-manifest.json",
+    "src/components/AnimationBlock.css",
+    "src/components/AnimationBlock.tsx",
+    "src/data/courseKnowledge.ts",
+)
 
 
 class AgentQuestionReply(BaseModel):
@@ -270,6 +297,191 @@ def _normalize_opencode_questions(value: Any) -> list[dict[str, Any]]:
     return questions
 
 
+def _is_animation_gate_question(question: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(question.get(field) or "")
+        for field in ("header", "question")
+    ).lower()
+    return "动画" in text and any(token in text for token in ("验收", "验证", "检查", "g5"))
+
+
+def _contains_animation_gate_bypass(value: str) -> bool:
+    compact = "".join(str(value).lower().split())
+    return any(term in compact for term in _ANIMATION_GATE_BYPASS_TERMS)
+
+
+def _prepare_animation_gate_questions(
+    questions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Remove unsafe G5 bypass choices and return their question indexes."""
+
+    gate_indexes: list[int] = []
+    for index, question in enumerate(questions):
+        if not _is_animation_gate_question(question):
+            continue
+        gate_indexes.append(index)
+        safe_options = [
+            option
+            for option in question.get("options") or []
+            if not _contains_animation_gate_bypass(
+                f"{option.get('label', '')} {option.get('description', '')}"
+            )
+        ]
+        if not any(
+            any(term in str(option.get("label") or "") for term in _ANIMATION_GATE_ACCEPT_TERMS)
+            for option in safe_options
+        ):
+            safe_options.insert(0, {
+                "label": _ANIMATION_GATE_ACCEPT_TERMS[0],
+                "description": (
+                    "仅在已实际检查重播、状态推进、低动态模式和响应式布局后选择；"
+                    "系统会把凭据绑定到当前动画源码。"
+                ),
+            })
+        if not any(
+            _ANIMATION_GATE_BLOCK_LABEL in str(option.get("label") or "")
+            for option in safe_options
+        ):
+            safe_options.append({
+                "label": _ANIMATION_GATE_BLOCK_LABEL,
+                "description": "当前无法完成实际验收，停留在 G5，不进入图谱构建和发布。",
+            })
+        question["options"] = safe_options
+        question["custom"] = False
+    return questions, gate_indexes
+
+
+def _animation_artifact_hash(content_root: Path) -> str:
+    relative_paths: list[str] = []
+    for relative_path in _ANIMATION_TRACKED_FILES:
+        candidate = content_root.joinpath(*relative_path.split("/"))
+        if candidate.is_file():
+            relative_paths.append(relative_path)
+    animations_root = content_root / "src" / "animations"
+    if animations_root.is_dir():
+        relative_paths.extend(
+            f"src/animations/{candidate.name}"
+            for candidate in animations_root.iterdir()
+            if candidate.is_file() and candidate.suffix in {".tsx", ".css"}
+        )
+
+    digest = hashlib.sha256()
+    for relative_path in sorted(relative_paths):
+        candidate = content_root.joinpath(*relative_path.split("/"))
+        file_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(file_digest.encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _animation_gate_courses(directory: str) -> list[dict[str, Any]]:
+    workspace_root = Path(directory).resolve()
+    pipeline_root = workspace_root / "pipeline"
+    if not pipeline_root.is_dir():
+        return []
+
+    courses: list[dict[str, Any]] = []
+    for course_root in sorted(pipeline_root.iterdir(), key=lambda item: item.name):
+        if not course_root.is_dir():
+            continue
+        content_root = course_root / "course-content"
+        manifest_path = content_root / "generation" / "animation-manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        animations = manifest.get("animations") if isinstance(manifest, dict) else None
+        if not isinstance(animations, list) or not animations:
+            continue
+        courses.append({
+            "course_id": course_root.name,
+            "content_root": str(content_root),
+            "animation_count": len(animations),
+            "artifact_hash": _animation_artifact_hash(content_root),
+        })
+    return courses
+
+
+def _validate_animation_gate_answers(
+    pending: dict[str, Any], answers: list[list[str]]
+) -> bool:
+    gate_indexes = pending.get("animation_gate_indexes") or []
+    accepted = bool(gate_indexes)
+    for index in gate_indexes:
+        answer_text = "、".join(answers[index])
+        if _contains_animation_gate_bypass(answer_text):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "动画清单非空时不能跳过 G5 实际验收。"
+                    "请完成动画重播、状态推进、低动态和响应式检查，"
+                    f"或选择“{_ANIMATION_GATE_BLOCK_LABEL}”。"
+                ),
+            )
+        if not any(term in answer_text for term in _ANIMATION_GATE_ACCEPT_TERMS):
+            accepted = False
+    return accepted
+
+
+def _write_animation_acceptance(
+    pending: dict[str, Any], answers: list[list[str]]
+) -> list[tuple[Path, bytes | None]]:
+    if not _validate_animation_gate_answers(pending, answers):
+        return []
+
+    workspace_root = Path(str(pending["directory"])).resolve()
+    backups: list[tuple[Path, bytes | None]] = []
+    attestation = [
+        "、".join(answers[index])
+        for index in pending.get("animation_gate_indexes") or []
+    ]
+    for course in pending.get("animation_courses") or []:
+        content_root = Path(str(course["content_root"])).resolve()
+        current_hash = _animation_artifact_hash(content_root)
+        marker_path = (
+            workspace_root
+            / ".course-studio"
+            / "gates"
+            / str(course["course_id"])
+            / "animation-acceptance.json"
+        )
+        previous = marker_path.read_bytes() if marker_path.is_file() else None
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": ANIMATION_ACCEPTANCE_SCHEMA,
+            "courseId": course["course_id"],
+            "status": "accepted",
+            "animationCount": course["animation_count"],
+            "artifactHash": current_hash,
+            "acceptedAt": datetime.now(UTC).isoformat(timespec="milliseconds").replace(
+                "+00:00", "Z"
+            ),
+            "conversationId": pending["conversation_id"],
+            "requestId": pending["request_id"],
+            "attestation": attestation,
+        }
+        temporary_path = marker_path.with_suffix(".json.tmp")
+        temporary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(marker_path)
+        backups.append((marker_path, previous))
+    return backups
+
+
+def _restore_animation_acceptance(backups: list[tuple[Path, bytes | None]]) -> None:
+    for marker_path, previous in backups:
+        if previous is None:
+            marker_path.unlink(missing_ok=True)
+        else:
+            marker_path.write_bytes(previous)
+
+
 def _normalize_question_answers(
     pending: dict[str, Any], answers: list[list[str]]
 ) -> list[list[str]]:
@@ -296,6 +508,26 @@ def _question_answer_content(pending: dict[str, Any], answers: list[list[str]]) 
     return "确认选择\n" + "\n".join(lines)
 
 
+def _question_history_content(questions: list[dict[str, Any]]) -> str:
+    """Render native question cards into durable, readable history text."""
+
+    sections: list[str] = ["需要你的确认："]
+    for question in questions:
+        header = str(question.get("header") or "确认事项").strip()
+        prompt = str(question.get("question") or "").strip()
+        lines = [f"### {header}", prompt]
+        options = question.get("options") if isinstance(question.get("options"), list) else []
+        if options:
+            lines.append("")
+            lines.append("可选项：")
+            for option in options:
+                label = str(option.get("label") or "").strip()
+                description = str(option.get("description") or "").strip()
+                lines.append(f"- {label}" + (f"：{description}" if description else ""))
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
+
+
 def _clear_pending_questions_for_session(session_id: str | None) -> None:
     if not session_id:
         return
@@ -312,6 +544,7 @@ def _clear_pending_questions_for_session(session_id: str | None) -> None:
 async def reply_to_agent_question(request_id: str, body: AgentQuestionReply):
     pending = _pending_question_for(request_id, body.conversation_id)
     answers = _normalize_question_answers(pending, body.answers)
+    _validate_animation_gate_answers(pending, answers)
     content = _question_answer_content(pending, answers)
     await asyncio.to_thread(
         get_conversation_store().add_message,
@@ -320,9 +553,15 @@ async def reply_to_agent_question(request_id: str, body: AgentQuestionReply):
         content=content,
         message_id=f"question-reply:{request_id}",
     )
+    acceptance_backups: list[tuple[Path, bytes | None]] = []
     try:
+        acceptance_backups = await asyncio.to_thread(
+            _write_animation_acceptance, pending, answers
+        )
         await opencode_client.reply_question(request_id, answers, pending["directory"])
     except Exception as exc:
+        if acceptance_backups:
+            await asyncio.to_thread(_restore_animation_acceptance, acceptance_backups)
         raise HTTPException(status_code=502, detail=f"提交确认失败：{exc}") from exc
     _pending_questions.pop(request_id, None)
     return {"ok": True, "content": content}
@@ -402,7 +641,9 @@ def _course_creation_prompt(message: str) -> str:
         f"用户本轮输入：\n{message}\n\n"
         "需要用户补充信息或确认时必须调用 question 工具提供选项和自定义填写，"
         "不要只在普通回复末尾提问。不要跳过 G2 身份复核或 G5 动画验收，也不要在用户明确选择"
-        "确认发布且 G7 校验通过前生成 courses 下的正式课程。不得生成或继续使用 v1 中间产物。"
+        "确认发布且 G7 校验通过前生成 courses 下的正式课程。动画非空时不得提供跳过验收、"
+        "未验收继续或同义选项；只有实际验收确认后系统签发的哈希凭据才能解锁发布。"
+        "不得生成或继续使用 v1 中间产物。"
     )
 
 
@@ -614,27 +855,49 @@ async def _run_agent_turn_opencode(
             "workflow": workflow,
         },
     })
+    generation_observer: CourseGenerationObserver | None = None
+    generation_observer_task: asyncio.Task[None] | None = None
+    workspace_path = getattr(workspace, "path", None)
+    if creating_course and workspace_path is not None:
+        generation_observer = CourseGenerationObserver(
+            Path(workspace_path).parent / "pipeline",
+            conversation_id,
+        )
+        generation_observer_task = asyncio.create_task(
+            generation_observer.run(websocket.send_json)
+        )
     if readonly:
         prompt = _chat_prompt(message) if message else "请只读分析上传内容并回答问题。"
     elif creating_course:
         prompt = _course_creation_prompt(message)
     else:
         prompt = _agent_prompt(message) if message else "请根据上传内容维护课程知识数据。"
-    ok, response_text = await _run_opencode_prompt(
-        websocket=websocket,
-        conversation_id=conversation_id,
-        session_id=session_id,
-        directory=directory,
-        text=prompt,
-        images=images,
-        model=model,
-        agent_name="course-creator" if creating_course else None,
-        terminal_timeout_seconds=(
-            settings.course_create_terminal_timeout_seconds
-            if creating_course
-            else None
-        ),
-    )
+    try:
+        ok, response_text = await _run_opencode_prompt(
+            websocket=websocket,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            directory=directory,
+            text=prompt,
+            images=images,
+            model=model,
+            agent_name="course-creator" if creating_course else None,
+            terminal_timeout_seconds=(
+                settings.course_create_terminal_timeout_seconds
+                if creating_course
+                else None
+            ),
+        )
+    finally:
+        if generation_observer_task is not None:
+            generation_observer_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await generation_observer_task
+        if generation_observer is not None:
+            # Capture a final write made immediately before OpenCode's idle
+            # event without leaving a background task attached to the socket.
+            with contextlib.suppress(Exception):
+                await generation_observer.emit_if_changed(websocket.send_json)
     if response_text:
         await asyncio.to_thread(
             conversation_store.add_message,
@@ -728,6 +991,30 @@ async def _run_agent_turn_opencode(
 
     if committed.get("changed_paths"):
         await _emit_committed_workspace_changes(websocket, conversation_id, committed)
+    if generation_observer is not None:
+        with contextlib.suppress(Exception):
+            final_snapshot = await generation_observer.emit_if_changed(
+                websocket.send_json
+            )
+            generated_course = final_snapshot.get("course")
+            generated_course_id = (
+                generated_course.get("id")
+                if isinstance(generated_course, dict)
+                else ""
+            )
+            staged_course = Path(workspace.path) / str(generated_course_id)
+            # A successful no-diff retry still deserves G7 when the generated
+            # package is already present in the validated staged/canonical tree.
+            # Merely reaching G6 in pipeline files is not enough.
+            if (
+                generated_course_id
+                and staged_course.is_dir()
+                and not staged_course.is_symlink()
+            ):
+                await generation_observer.emit_if_changed(
+                    websocket.send_json,
+                    published=True,
+                )
     if committed.get("warnings"):
         await _send_status(websocket, conversation_id, "warning", "课程数据存在历史兼容性提示")
     await _send_status(websocket, conversation_id, "done", "完成")
@@ -772,6 +1059,7 @@ async def _run_opencode_prompt(
     tool_started: set[str] = set()
     result: dict[str, Any] = {"ok": True, "abort": False}
     critical_tool_errors: dict[str, str] = {}
+    part_types: dict[str, str] = {}
     waiting_question_ids: set[str] = set()
     terminal_wait_state_changed = asyncio.Event()
 
@@ -893,16 +1181,32 @@ async def _run_opencode_prompt(
                 if event_type == "question.asked":
                     request_id = str(properties.get("id") or "").strip()
                     questions = _normalize_opencode_questions(properties.get("questions"))
+                    questions, animation_gate_indexes = _prepare_animation_gate_questions(
+                        questions
+                    )
                     if not request_id or not questions:
                         continue
                     set_question_waiting(request_id, True)
                     await finish_text_segment(persist=True)
+                    await asyncio.to_thread(
+                        get_conversation_store().add_message,
+                        conversation_id,
+                        role="assistant",
+                        content=_question_history_content(questions),
+                        message_id=f"question-prompt:{request_id}",
+                    )
                     _pending_questions[request_id] = {
                         "request_id": request_id,
                         "conversation_id": conversation_id,
                         "session_id": session_id,
                         "directory": directory,
                         "questions": questions,
+                        "animation_gate_indexes": animation_gate_indexes,
+                        "animation_courses": (
+                            _animation_gate_courses(directory)
+                            if animation_gate_indexes
+                            else []
+                        ),
                     }
                     await websocket.send_json({
                         "type": "agent_question",
@@ -934,21 +1238,43 @@ async def _run_opencode_prompt(
                     delta = properties.get("delta")
                     if not delta:
                         continue
-                    if field == "text":
+                    part = properties.get("part")
+                    if isinstance(part, dict):
+                        part_id = str(part.get("id") or "").strip()
+                        part_type = str(part.get("type") or "").strip()
+                        if part_id and part_type:
+                            part_types[part_id] = part_type
+                    part_id = str(
+                        properties.get("partID")
+                        or properties.get("partId")
+                        or properties.get("part_id")
+                        or ""
+                    ).strip()
+                    part_type = part_types.get(part_id)
+                    if part_type == "reasoning" or (
+                        not part_id and field == "reasoning"
+                    ):
+                        await websocket.send_json({
+                            "type": "agent_thinking_delta",
+                            "payload": {"text": delta, "conversation_id": conversation_id},
+                        })
+                    elif part_type == "text" or (
+                        not part_id and field == "text"
+                    ):
                         active_text["any"] = True
                         text_chunks.append(str(delta))
                         await websocket.send_json({
                             "type": "agent_text_delta",
                             "payload": {"text": delta, "conversation_id": conversation_id},
                         })
-                    elif field == "reasoning":
-                        await websocket.send_json({
-                            "type": "agent_thinking_delta",
-                            "payload": {"text": delta, "conversation_id": conversation_id},
-                        })
                     continue
                 if event_type == "message.part.updated":
                     part = properties.get("part") or {}
+                    if isinstance(part, dict):
+                        part_id = str(part.get("id") or "").strip()
+                        part_type = str(part.get("type") or "").strip()
+                        if part_id and part_type:
+                            part_types[part_id] = part_type
                     if isinstance(part, dict) and part.get("type") == "tool":
                         tool_error = await _handle_opencode_tool_part(
                             websocket, conversation_id, part, tool_started

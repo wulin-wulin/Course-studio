@@ -55,6 +55,17 @@ class ConversationStoreTest(unittest.TestCase):
                 ["user-1", "assistant-1", "user-2"],
             )
             self.assertEqual(reopened.list_conversations()[0]["message_count"], 3)
+            reopened.replace_assistant_message_contents(
+                "conversation-1", ["请选择课程名称。"]
+            )
+            repaired = reopened.get_conversation("conversation-1")
+            assert repaired is not None
+            self.assertEqual(repaired["messages"][1]["id"], "assistant-1")
+            self.assertEqual(repaired["messages"][1]["content"], "请选择课程名称。")
+            with self.assertRaises(ValueError):
+                reopened.replace_assistant_message_contents(
+                    "conversation-1", ["第一条", "多余的一条"]
+                )
             self.assertTrue(reopened.delete_conversation("conversation-1"))
             self.assertIsNone(reopened.get_conversation("conversation-1"))
 

@@ -6,6 +6,7 @@ import process from "node:process";
 import { spawnSync } from "node:child_process";
 import { createCourseMapLayout } from "./layout-course-map.mjs";
 import { buildCourseAnimationRuntime } from "./bundle-course-animations.mjs";
+import { validateAnimationAcceptance } from "./animation-acceptance.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_G7_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
@@ -246,6 +247,14 @@ async function publish(courseId) {
 
   const animations = Array.isArray(animationManifest.animations) ? animationManifest.animations : null;
   if (animations === null) fail("动画清单格式无效");
+  validateAnimationAcceptance({
+    workspaceRoot: root,
+    contentRoot,
+    courseId,
+    animations,
+    readJson,
+    fail,
+  });
 
   const { course, index, details } = buildCourseData(courseId, sourceCourse, manifest, graph);
   fs.mkdirSync(coursesDirectory, { recursive: true });

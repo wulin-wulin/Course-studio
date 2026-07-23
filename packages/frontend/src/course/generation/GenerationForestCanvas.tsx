@@ -13,19 +13,35 @@ type GenerationForestCanvasProps = {
   completed: boolean;
 };
 
+type VisualPointStatus = "planned" | "generating" | "grown" | "clustered";
+
 type TreeEntry = {
   pointId: string;
   root: THREE.Object3D;
-  seed: THREE.Mesh | null;
   growthStartedAt: number;
+  revealAt: number;
+  revealed: boolean;
   targetPosition: THREE.Vector3;
-  clustered: boolean;
+  targetColor: THREE.Color;
+  progressElement: HTMLDivElement | null;
+  treeHeight: number;
 };
 
 type ClusterPad = {
   root: THREE.Group;
-  material: THREE.MeshBasicMaterial;
   bornAt: number;
+};
+
+type PreviewLayout = {
+  positions: Map<string, THREE.Vector3>;
+  clusterCenters: Map<string, THREE.Vector3>;
+  clusterRadii: Map<string, number>;
+};
+
+const TREE_COLORS: Record<Exclude<VisualPointStatus, "clustered">, string> = {
+  planned: "#87958b",
+  generating: "#d09a4e",
+  grown: "#4d936a",
 };
 
 export function GenerationForestCanvas({
@@ -150,58 +166,88 @@ class GenerationForestScene {
       this.treeEntries.delete(pointId);
     }
 
+    const now = performance.now();
+    const previewLayout = clusters.length > 0
+      ? buildClusterPreviewLayout(points, clusters)
+      : null;
     const accentByCluster = new Map(
       clusters.map((cluster) => [cluster.id, cluster.accent])
     );
+    const newPoints = points
+      .filter((point) => !this.treeEntries.has(point.id))
+      .sort((left, right) => left.order - right.order);
+    const revealDelayById = new Map(
+      newPoints.map((point, index) => [point.id, this.reducedMotion ? 0 : index * 68])
+    );
+
     for (const point of points) {
+      const visualStatus = getVisualStatus(point, clusters.length > 0);
+      const treeHeight = getTreeHeight(point);
       let entry = this.treeEntries.get(point.id);
       if (!entry) {
         const position = provisionalPosition(point.order, totalPoints);
-        const seed = makeSeed(hashString(point.id));
-        seed.position.copy(position);
-        this.world.add(seed);
-        entry = {
-          pointId: point.id,
-          root: new THREE.Group(),
-          seed,
-          growthStartedAt: 0,
-          targetPosition: position.clone(),
-          clustered: false,
-        };
-        this.treeEntries.set(point.id, entry);
-      }
-
-      if (point.status !== "planned" && entry.root.children.length === 0) {
-        const accent = accentByCluster.get(point.clusterId) ?? "#6f9171";
         const tree = createTree({
           seed: hashString(point.id),
-          scale: 3 + (point.scale ?? 1) * 1.15 + (point.importance ?? 0.5) * 0.7,
-          domainColor: point.status === "clustered" ? accent : "#78966f",
+          scale: treeHeight,
+          domainColor: TREE_COLORS.planned,
           lod: "medium",
         }) as THREE.Object3D;
-        tree.position.copy(entry.targetPosition);
+        tree.position.copy(position);
         tree.scale.setScalar(this.reducedMotion ? 1 : 0.015);
+        tree.visible = this.reducedMotion;
         tree.traverse((child) => {
           if (!(child instanceof THREE.Mesh)) return;
           child.castShadow = true;
           child.receiveShadow = true;
         });
         this.world.add(tree);
-        entry.root = tree;
-        entry.growthStartedAt = performance.now();
+        entry = {
+          pointId: point.id,
+          root: tree,
+          growthStartedAt: now,
+          revealAt: now + (revealDelayById.get(point.id) ?? 0),
+          revealed: this.reducedMotion,
+          targetPosition: position.clone(),
+          targetColor: new THREE.Color(TREE_COLORS.planned),
+          progressElement: null,
+          treeHeight,
+        };
+        this.treeEntries.set(point.id, entry);
       }
 
-      if (point.status === "clustered") {
-        const target = finalPosition(point.pos);
-        entry.targetPosition.copy(target);
-        if (!entry.clustered) {
-          entry.clustered = true;
-          recolorTree(entry.root, accentByCluster.get(point.clusterId) ?? "#6f9171");
-        }
+      const clustered = previewLayout !== null && pointClusterId(point) !== "";
+      if (clustered) {
+        const target = previewLayout.positions.get(point.id);
+        if (target) entry.targetPosition.copy(target);
+      } else {
+        entry.targetPosition.copy(provisionalPosition(point.order, totalPoints));
+      }
+
+      entry.targetColor.set(
+        visualStatus === "clustered"
+          ? accentByCluster.get(pointClusterId(point)) ?? "#5a8d73"
+          : TREE_COLORS[visualStatus]
+      );
+    }
+
+    const visibleProgressIds = new Set(
+      points
+        .filter((point) => getVisualStatus(point, false) === "generating")
+        .sort((left, right) => left.order - right.order)
+        .slice(0, 4)
+        .map((point) => point.id)
+    );
+    for (const point of points) {
+      const entry = this.treeEntries.get(point.id);
+      if (!entry) continue;
+      if (visibleProgressIds.has(point.id)) {
+        this.syncProgressIndicator(entry, point);
+      } else {
+        this.removeProgressIndicator(entry);
       }
     }
 
-    this.syncClusterPads(points, clusters);
+    this.syncClusterPads(previewLayout, clusters);
   }
 
   dispose() {
@@ -222,32 +268,66 @@ class GenerationForestScene {
     this.renderer.domElement.remove();
   }
 
-  private syncClusterPads(points: GenerationPointState[], clusters: ForestCluster[]) {
-    const clusterIds = new Set(clusters.map((cluster) => cluster.id));
+  private syncProgressIndicator(
+    entry: TreeEntry,
+    point: GenerationPointState
+  ) {
+    const progress = getPointProgress(point);
+    if (!entry.progressElement) {
+      const element = document.createElement("div");
+      element.className = "course-generation__point-indicator";
+      element.innerHTML = `
+        <span class="course-generation__point-indicator-title"></span>
+        <span class="course-generation__point-indicator-track"><i></i></span>
+        <strong></strong>
+      `;
+      element.setAttribute("role", "progressbar");
+      element.setAttribute("aria-valuemin", "0");
+      element.setAttribute("aria-valuemax", "100");
+      this.container.appendChild(element);
+      entry.progressElement = element;
+    }
+
+    const element = entry.progressElement;
+    element.setAttribute("aria-label", `${point.title} 生成进度`);
+    element.setAttribute("aria-valuenow", String(Math.round(progress)));
+    const title = element.querySelector<HTMLElement>(".course-generation__point-indicator-title");
+    const fill = element.querySelector<HTMLElement>(".course-generation__point-indicator-track i");
+    const value = element.querySelector<HTMLElement>("strong");
+    if (title) title.textContent = point.title;
+    if (fill) fill.style.width = `${progress}%`;
+    if (value) value.textContent = `${Math.round(progress)}%`;
+  }
+
+  private removeProgressIndicator(entry: TreeEntry) {
+    entry.progressElement?.remove();
+    entry.progressElement = null;
+  }
+
+  private syncClusterPads(
+    layout: PreviewLayout | null,
+    clusters: ForestCluster[]
+  ) {
+    const clusterIds = new Set(layout ? clusters.map((cluster) => cluster.id) : []);
     for (const [clusterId, pad] of this.clusterPads) {
       if (clusterIds.has(clusterId)) continue;
       this.world.remove(pad.root);
       disposeObject(pad.root);
       this.clusterPads.delete(clusterId);
     }
+    if (!layout) return;
 
     for (const cluster of clusters) {
-      if (this.clusterPads.has(cluster.id)) continue;
-      const members = points.filter((point) => point.clusterId === cluster.id);
-      if (members.length === 0) continue;
-      const center = members.reduce(
-        (sum, point) => sum.add(finalPosition(point.pos)),
-        new THREE.Vector3()
-      ).multiplyScalar(1 / members.length);
-      const radius = Math.max(
-        4.2,
-        Math.min(
-          9,
-          Math.max(
-            ...members.map((point) => finalPosition(point.pos).distanceTo(center))
-          ) + 2.1
-        )
-      );
+      const center = layout.clusterCenters.get(cluster.id);
+      const radius = layout.clusterRadii.get(cluster.id);
+      if (!center || !radius) continue;
+
+      const existing = this.clusterPads.get(cluster.id);
+      if (existing) {
+        existing.root.position.set(center.x, 0.02, center.z);
+        continue;
+      }
+
       const root = new THREE.Group();
       root.position.set(center.x, 0.02, center.z);
       root.scale.setScalar(this.reducedMotion ? 1 : 0.08);
@@ -255,7 +335,7 @@ class GenerationForestScene {
       const fillMaterial = new THREE.MeshBasicMaterial({
         color: cluster.soft ?? cluster.accent,
         transparent: true,
-        opacity: this.reducedMotion ? 0.3 : 0,
+        opacity: this.reducedMotion ? 0.26 : 0,
         depthWrite: false,
       });
       const fill = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), fillMaterial);
@@ -265,7 +345,7 @@ class GenerationForestScene {
       const ringMaterial = new THREE.MeshBasicMaterial({
         color: cluster.accent,
         transparent: true,
-        opacity: this.reducedMotion ? 0.55 : 0,
+        opacity: this.reducedMotion ? 0.52 : 0,
         depthWrite: false,
         side: THREE.DoubleSide,
       });
@@ -279,7 +359,6 @@ class GenerationForestScene {
       this.world.add(root);
       this.clusterPads.set(cluster.id, {
         root,
-        material: fillMaterial,
         bornAt: performance.now(),
       });
     }
@@ -298,25 +377,32 @@ class GenerationForestScene {
     const deltaSeconds = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     const positionBlend = this.reducedMotion ? 1 : 1 - Math.exp(-deltaSeconds * 2.25);
+    const colorBlend = this.reducedMotion ? 1 : 1 - Math.exp(-deltaSeconds * 3.6);
 
     for (const entry of this.treeEntries.values()) {
-      if (entry.root.children.length > 0) {
-        entry.root.position.lerp(entry.targetPosition, positionBlend);
-        if (!this.reducedMotion && entry.root.scale.x < 0.999) {
-          const progress = Math.min(1, (now - entry.growthStartedAt) / 880);
-          const scale = Math.max(0.015, easeOutBack(progress));
-          entry.root.scale.setScalar(scale);
-        }
-        if (entry.seed) {
-          const seedScale = Math.max(0, 1 - entry.root.scale.x * 1.25);
-          entry.seed.scale.setScalar(seedScale);
-          if (seedScale <= 0.01) {
-            this.world.remove(entry.seed);
-            disposeObject(entry.seed);
-            entry.seed = null;
-          }
+      if (!entry.revealed && now >= entry.revealAt) {
+        entry.revealed = true;
+        entry.root.visible = true;
+        entry.growthStartedAt = now;
+      }
+      if (!entry.revealed) {
+        if (entry.progressElement) entry.progressElement.hidden = true;
+        continue;
+      }
+
+      entry.root.position.lerp(entry.targetPosition, positionBlend);
+      if (!this.reducedMotion) {
+        const progress = Math.min(1, (now - entry.growthStartedAt) / 820);
+        if (progress < 1) {
+          entry.root.scale.setScalar(Math.max(0.015, easeOutBack(progress)));
+        } else if (entry.root.scale.x !== 1) {
+          // easeOutBack briefly overshoots 1. Keep animating until the end so
+          // every tree settles at its intended scale instead of freezing large.
+          entry.root.scale.setScalar(1);
         }
       }
+      tintFoliage(entry.root, entry.targetColor, colorBlend);
+      this.positionProgressIndicator(entry);
     }
 
     for (const pad of this.clusterPads.values()) {
@@ -328,8 +414,8 @@ class GenerationForestScene {
         const material = child.material;
         if (material instanceof THREE.MeshBasicMaterial) {
           material.opacity = child.geometry.type === "RingGeometry"
-            ? progress * 0.55
-            : progress * 0.3;
+            ? progress * 0.52
+            : progress * 0.26;
         }
       });
     }
@@ -340,26 +426,53 @@ class GenerationForestScene {
     this.animationFrame = window.requestAnimationFrame(this.render);
   };
 
+  private positionProgressIndicator(entry: TreeEntry) {
+    const element = entry.progressElement;
+    if (!element) return;
+    const position = entry.root.position.clone();
+    position.y += entry.treeHeight * Math.max(0.7, entry.root.scale.y) + 1.15;
+    position.project(this.camera);
+    const onScreen = position.z > -1 && position.z < 1;
+    element.hidden = !onScreen;
+    if (!onScreen) return;
+    const x = (position.x * 0.5 + 0.5) * this.container.clientWidth;
+    const y = (-position.y * 0.5 + 0.5) * this.container.clientHeight;
+    element.style.transform =
+      `translate3d(${x}px, ${y}px, 0) translate(-50%, -100%)`;
+  }
+
   private removeTreeEntry(entry: TreeEntry) {
-    if (entry.seed) {
-      this.world.remove(entry.seed);
-      disposeObject(entry.seed);
-    }
-    if (entry.root.children.length > 0) {
-      this.world.remove(entry.root);
-      disposeObject(entry.root);
-    }
+    this.removeProgressIndicator(entry);
+    this.world.remove(entry.root);
+    disposeObject(entry.root);
   }
 }
 
-function makeSeed(seed: number) {
-  const material = new THREE.MeshStandardMaterial({
-    color: seed % 2 === 0 ? "#8b6845" : "#765739",
-    roughness: 0.88,
-  });
-  const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(0.24, 0), material);
-  mesh.castShadow = true;
-  return mesh;
+function getVisualStatus(
+  point: GenerationPointState,
+  clustersReady: boolean
+): VisualPointStatus {
+  if (clustersReady && pointClusterId(point)) return "clustered";
+  const status = String(point.status);
+  if (status === "generating") return "generating";
+  if (status === "grown") return "grown";
+  if (status === "clustered") return "clustered";
+  return "planned";
+}
+
+function getPointProgress(point: GenerationPointState) {
+  const candidate = (point as GenerationPointState & { progress?: number }).progress;
+  return Number.isFinite(candidate)
+    ? Math.max(0, Math.min(100, candidate ?? 0))
+    : 0;
+}
+
+function pointClusterId(point: GenerationPointState) {
+  return typeof point.clusterId === "string" ? point.clusterId : "";
+}
+
+function getTreeHeight(point: GenerationPointState) {
+  return 3 + (point.scale ?? 1) * 1.15 + (point.importance ?? 0.5) * 0.7;
 }
 
 function provisionalPosition(order: number, total: number) {
@@ -374,25 +487,95 @@ function provisionalPosition(order: number, total: number) {
   );
 }
 
-function finalPosition(position: [number, number]) {
-  return new THREE.Vector3(
-    (position[0] - 2_000) / 47,
-    0,
-    (position[1] - 1_500) / 47
-  );
+/**
+ * A compact deterministic layout used only while the course is being generated.
+ * It deliberately does not reuse final map coordinates: the published map remains
+ * governed by the project's layout pipeline.
+ */
+function buildClusterPreviewLayout(
+  points: GenerationPointState[],
+  clusters: ForestCluster[]
+): PreviewLayout {
+  const positions = new Map<string, THREE.Vector3>();
+  const clusterCenters = new Map<string, THREE.Vector3>();
+  const clusterRadii = new Map<string, number>();
+  const columns = Math.max(1, Math.ceil(Math.sqrt(clusters.length * 1.15)));
+  const rows = Math.max(1, Math.ceil(clusters.length / columns));
+  const xGap = Math.min(27, 48 / Math.max(1, columns - 1));
+  const zGap = Math.min(22, 34 / Math.max(1, rows - 1));
+
+  clusters.forEach((cluster, clusterIndex) => {
+    const row = Math.floor(clusterIndex / columns);
+    const column = clusterIndex % columns;
+    const rowCount = Math.min(columns, clusters.length - row * columns);
+    const jitter = seededUnit(hashString(cluster.id));
+    const center = new THREE.Vector3(
+      (column - (rowCount - 1) / 2) * xGap
+        + (row % 2 === 0 ? -1.1 : 1.1)
+        + (jitter - 0.5) * 1.4,
+      0,
+      (row - (rows - 1) / 2) * zGap
+        + (seededUnit(hashString(`${cluster.id}:z`)) - 0.5) * 1.2
+    );
+    clusterCenters.set(cluster.id, center);
+
+    const members = points
+      .filter((point) => pointClusterId(point) === cluster.id)
+      .sort((left, right) => left.order - right.order);
+    let maximumRadius = 0;
+    members.forEach((point, memberIndex) => {
+      const angle = memberIndex * Math.PI * (3 - Math.sqrt(5))
+        + seededUnit(hashString(point.id)) * 0.5;
+      const radius = memberIndex === 0 ? 0 : 2.25 * Math.sqrt(memberIndex);
+      const position = new THREE.Vector3(
+        center.x + Math.cos(angle) * radius,
+        0,
+        center.z + Math.sin(angle) * radius * 0.78
+      );
+      positions.set(point.id, position);
+      maximumRadius = Math.max(maximumRadius, radius);
+    });
+    clusterRadii.set(cluster.id, Math.max(4.2, Math.min(9, maximumRadius + 2.6)));
+  });
+
+  // A malformed snapshot should still keep every tree on screen.
+  points
+    .filter((point) => !positions.has(point.id))
+    .forEach((point) => positions.set(
+      point.id,
+      provisionalPosition(point.order, points.length)
+    ));
+
+  return { positions, clusterCenters, clusterRadii };
 }
 
-function recolorTree(root: THREE.Object3D, accent: string) {
-  const accentColor = new THREE.Color(accent);
+function tintFoliage(
+  root: THREE.Object3D,
+  targetColor: THREE.Color,
+  blend: number
+) {
   root.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     for (const material of materials) {
       if (!(material instanceof THREE.MeshStandardMaterial)) continue;
-      if (material.color.getHexString().toLowerCase() === "6b4a2f") continue;
-      material.color.lerp(accentColor, 0.84);
+      if (isTrunkMaterial(material)) continue;
+      material.color.lerp(targetColor, blend);
+      material.emissive.lerp(
+        targetColor,
+        blend * (targetColor.r > targetColor.b * 1.45 ? 0.08 : 0.025)
+      );
+      material.emissiveIntensity = 0.18;
     }
   });
+}
+
+function isTrunkMaterial(material: THREE.MeshStandardMaterial) {
+  const trunk = new THREE.Color("#6b4a2f");
+  const red = material.color.r - trunk.r;
+  const green = material.color.g - trunk.g;
+  const blue = material.color.b - trunk.b;
+  return Math.sqrt(red * red + green * green + blue * blue) < 0.12;
 }
 
 function disposeObject(root: THREE.Object3D) {
@@ -402,6 +585,10 @@ function disposeObject(root: THREE.Object3D) {
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     for (const material of materials) material.dispose();
   });
+}
+
+function seededUnit(seed: number) {
+  return ((Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0) / 4_294_967_295;
 }
 
 function hashString(value: string) {
@@ -422,4 +609,3 @@ function easeOutBack(progress: number) {
 function easeOutCubic(progress: number) {
   return 1 - Math.pow(1 - progress, 3);
 }
-

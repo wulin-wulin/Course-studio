@@ -39,8 +39,10 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
 
         abort = AsyncMock()
         reject_permission = AsyncMock()
+        conversation_store = Mock()
         self.reject_permission = reject_permission
         with (
+            patch.object(agent, "get_conversation_store", return_value=conversation_store),
             patch.object(agent.opencode_client, "prompt", new=send_prompt),
             patch.object(agent.opencode_client, "events", new=event_stream),
             patch.object(agent.opencode_client, "abort", new=abort),
@@ -125,6 +127,46 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
             for message in messages
         ))
         self.assertFalse(any(message["type"] == "agent_error" for message in messages))
+        abort.assert_not_awaited()
+
+    async def test_reasoning_text_field_is_not_exposed_as_assistant_content(self):
+        async def events():
+            yield _event(
+                "message.part.updated",
+                {"part": {"type": "reasoning", "id": "reasoning-1"}},
+            )
+            yield _event(
+                "message.part.delta",
+                {
+                    "partID": "reasoning-1",
+                    "field": "text",
+                    "delta": "Internal chain of thought.",
+                },
+            )
+            yield _event(
+                "message.part.updated",
+                {"part": {"type": "text", "id": "text-1"}},
+            )
+            yield _event(
+                "message.part.delta",
+                {"partID": "text-1", "field": "text", "delta": "给用户的正式回复"},
+            )
+            yield _event("session.idle")
+
+        (ok, response), messages, abort = await self._run_prompt(events)
+
+        self.assertTrue(ok)
+        self.assertEqual(response, "给用户的正式回复")
+        self.assertTrue(any(
+            message["type"] == "agent_thinking_delta"
+            and message["payload"]["text"] == "Internal chain of thought."
+            for message in messages
+        ))
+        self.assertFalse(any(
+            message["type"] == "agent_text_delta"
+            and "Internal chain of thought." in message["payload"]["text"]
+            for message in messages
+        ))
         abort.assert_not_awaited()
 
     async def test_recovered_publish_error_does_not_fail_turn(self):

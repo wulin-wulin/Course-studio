@@ -38,6 +38,7 @@ _COURSE_CREATION_SKILLS = (
     ("knowledge-pipeline-orchestrator", Path("SKILL.md")),
 )
 _COURSE_CREATION_TOOLS = (
+    "animation-acceptance.mjs",
     "bundle-course-animations.mjs",
     "init-course-pipeline.mjs",
     "layout-course-map.mjs",

@@ -17,6 +17,11 @@ import test from "node:test";
 
 import { buildAnimationRegistry } from "../skills/candidate-knowledge-point-generator/scripts/build_animation_registry.mjs";
 import { createCourseFixture } from "../skills/candidate-knowledge-point-generator/scripts/test-fixture.mjs";
+import {
+  ANIMATION_ACCEPTANCE_SCHEMA,
+  animationAcceptancePath,
+  computeAnimationArtifactHash,
+} from "./animation-acceptance.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INIT_SCRIPT = path.join(PROJECT_ROOT, "scripts", "init-course-pipeline.mjs");
@@ -123,7 +128,24 @@ function makeGraph(contentRoot) {
   };
 }
 
-function preparePublishFixture(t, { withAnimation }) {
+function writeAnimationAcceptance(workspace, courseId, contentRoot) {
+  const animationManifest = readJson(
+    path.join(contentRoot, "generation", "animation-manifest.json"),
+  );
+  writeJson(animationAcceptancePath(workspace, courseId), {
+    schema_version: ANIMATION_ACCEPTANCE_SCHEMA,
+    courseId,
+    status: "accepted",
+    animationCount: animationManifest.animations.length,
+    artifactHash: computeAnimationArtifactHash(contentRoot),
+    acceptedAt: "2026-07-24T00:00:00.000Z",
+    conversationId: "test-conversation",
+    requestId: "test-question",
+    attestation: ["已完成实际动画验收"],
+  });
+}
+
+function preparePublishFixture(t, { withAnimation, withAcceptance = withAnimation }) {
   const workspace = makeWorkspace(t, "course-pipeline-publish-");
   installSessionSkills(workspace);
   const fixture = createCourseFixture(t, { withAnimation });
@@ -133,6 +155,9 @@ function preparePublishFixture(t, { withAnimation }) {
   copyDirectory(fixture.root, contentRoot);
   const graph = makeGraph(contentRoot);
   writeJson(path.join(workspace, "pipeline", courseId, "clustered-graph.json"), graph);
+  if (withAcceptance) {
+    writeAnimationAcceptance(workspace, courseId, contentRoot);
+  }
   return { workspace, courseId, contentRoot, graph };
 }
 
@@ -217,6 +242,36 @@ test("v2 动画内容包会编译成带完整性清单的沙箱运行时", (t) =
   assert.equal(existsSync(path.join(animationRoot, "ProcessFlow.tsx")), false);
 });
 
+test("v2 动画内容包缺少系统签发的 G5 验收凭据时拒绝发布", (t) => {
+  const { workspace, courseId } = preparePublishFixture(t, {
+    withAnimation: true,
+    withAcceptance: false,
+  });
+
+  const result = run(PUBLISH_SCRIPT, [courseId], workspace);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /G5 动画验收未完成/);
+  assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+});
+
+test("v2 动画源码在验收后变化会使 G5 凭据失效", (t) => {
+  const { workspace, courseId, contentRoot } = preparePublishFixture(t, {
+    withAnimation: true,
+  });
+  const component = readJson(
+    path.join(contentRoot, "generation", "animation-manifest.json"),
+  ).animations[0].component;
+  const cssPath = path.join(contentRoot, "src", "animations", `${component}.css`);
+  writeFileSync(cssPath, `${readFileSync(cssPath, "utf8")}\n/* changed */\n`, "utf8");
+
+  const result = run(PUBLISH_SCRIPT, [courseId], workspace);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /G5 动画验收凭据已失效/);
+  assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+});
+
 test("v2 动画源码引用未授权依赖时发布原子失败", (t) => {
   const { workspace, courseId, contentRoot } = preparePublishFixture(t, { withAnimation: true });
   const component = readJson(
@@ -228,6 +283,7 @@ test("v2 动画源码引用未授权依赖时发布原子失败", (t) => {
     `import unsafe from "unapproved-package";\n${readFileSync(componentPath, "utf8")}\nvoid unsafe;\n`,
     "utf8",
   );
+  writeAnimationAcceptance(workspace, courseId, contentRoot);
 
   const result = run(PUBLISH_SCRIPT, [courseId], workspace);
   assert.notEqual(result.status, 0);

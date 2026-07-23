@@ -20,10 +20,17 @@ export type GenerationPoint = Pick<
   order: number;
 };
 
-export type GenerationPointStatus = "planned" | "grown" | "clustered";
+export type GenerationPointStatus =
+  | "planned"
+  | "generating"
+  | "grown"
+  | "clustered";
 
 export type GenerationPointState = GenerationPoint & {
   status: GenerationPointStatus;
+  /** Estimated only. The backend reports completion, not token-level progress. */
+  progress?: number;
+  progressStartedAt?: number;
 };
 
 export type GenerationCourse = {
@@ -83,4 +90,52 @@ export type GenerationRunStatus =
   | "paused"
   | "completed"
   | "error";
+
+export type CourseGenerationSnapshotPoint = {
+  id: string;
+  title: string;
+  order: number;
+  importance?: number;
+  complete: boolean;
+  clusterId?: string;
+};
+
+export type CourseGenerationSnapshotCluster = {
+  id: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  order?: number;
+};
+
+/**
+ * Full, replay-safe state emitted by the backend while a course-create
+ * conversation advances through the G0-G7 pipeline.
+ */
+export type CourseGenerationSnapshot = {
+  conversation_id: string;
+  gate: "G0" | "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7";
+  course: GenerationCourse | null;
+  total_points: number;
+  points: CourseGenerationSnapshotPoint[];
+  clusters: CourseGenerationSnapshotCluster[];
+  published: boolean;
+};
+
+export type LiveCourseGenerationRun = {
+  conversationId: string;
+  status: Exclude<GenerationRunStatus, "idle" | "requested" | "loading" | "paused">;
+  course: GenerationCourse | null;
+  gate: GenerationGate;
+  phaseLabel: string;
+  phaseDetail: string;
+  totalPoints: number;
+  points: GenerationPointState[];
+  clusters: ForestCluster[];
+  published: boolean;
+  publishedCourseId: string | null;
+  error: string | null;
+  updatedAt: number;
+  snapshotKey: string;
+};
 

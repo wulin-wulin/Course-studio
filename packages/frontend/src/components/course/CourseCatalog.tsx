@@ -9,6 +9,7 @@ import {
   Sparkles,
   Trees,
 } from "lucide-react";
+import { useCourseGenerationStore } from "@/course/generation/generationStore";
 import "./CourseCatalog.css";
 
 /**
@@ -30,6 +31,7 @@ export type CourseSummary = {
 
 type CourseCatalogProps = {
   onOpenCourse: (course: CourseSummary) => void;
+  onOpenGeneration: (conversationId: string) => void;
   onStartGenerationDemo: () => void;
 };
 
@@ -37,8 +39,10 @@ const COURSE_API = "/api/courses";
 
 export function CourseCatalog({
   onOpenCourse,
+  onOpenGeneration,
   onStartGenerationDemo,
 }: CourseCatalogProps) {
+  const liveRuns = useCourseGenerationStore((state) => state.liveRuns);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -95,6 +99,19 @@ export function CourseCatalog({
 
   const validCourses = courses.filter((course) => !course.invalid);
   const invalidCourses = courses.filter((course) => course.invalid);
+  const validCourseIds = new Set(validCourses.map((course) => course.id));
+  const activeGenerations = Object.values(liveRuns)
+    .filter(
+      (run) =>
+        !run.published &&
+        !(run.course?.id && validCourseIds.has(run.course.id))
+    )
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+  const runningGenerationCount = activeGenerations.filter(
+    (run) => run.status !== "error"
+  ).length;
+  const pausedGenerationCount =
+    activeGenerations.length - runningGenerationCount;
 
   return (
     <main className="course-catalog" aria-label="课程导览">
@@ -113,7 +130,19 @@ export function CourseCatalog({
         <div className="course-catalog__heading-row">
           <div className="course-catalog__heading-copy">
             <span>可用课程</span>
-            <strong>{isLoading ? "正在整理课程…" : `${validCourses.length} 门课程`}</strong>
+            <strong>
+              {isLoading
+                ? "正在整理课程…"
+                : [
+                    `${validCourses.length} 门课程`,
+                    runningGenerationCount > 0
+                      ? `${runningGenerationCount} 门创建中`
+                      : "",
+                    pausedGenerationCount > 0
+                      ? `${pausedGenerationCount} 门已暂停`
+                      : "",
+                  ].filter(Boolean).join(" · ")}
+            </strong>
           </div>
           <div className="course-catalog__heading-actions">
             <button
@@ -138,16 +167,69 @@ export function CourseCatalog({
           </div>
         </div>
 
-        {isLoading && courses.length === 0 && <CatalogState kind="loading" />}
+        {isLoading &&
+          courses.length === 0 &&
+          activeGenerations.length === 0 && <CatalogState kind="loading" />}
 
-        {loadError && courses.length === 0 && (
+        {loadError && courses.length === 0 && activeGenerations.length === 0 && (
           <CatalogState kind="error" message={loadError} onRetry={() => void loadCourses()} />
         )}
 
-        {!isLoading && !loadError && validCourses.length === 0 && <CatalogState kind="empty" />}
+        {!isLoading &&
+          !loadError &&
+          validCourses.length === 0 &&
+          activeGenerations.length === 0 && <CatalogState kind="empty" />}
 
-        {validCourses.length > 0 && (
+        {(activeGenerations.length > 0 || validCourses.length > 0) && (
           <ul className="course-catalog__shelf" aria-label="可进入的课程">
+            {activeGenerations.map((run) => {
+              const completedPoints = run.points.filter(
+                (point) => point.status === "grown" || point.status === "clustered"
+              ).length;
+              const failed = run.status === "error";
+              return (
+                <li key={`generation:${run.conversationId}`}>
+                  <button
+                    type="button"
+                    className={`course-catalog__card course-catalog__card--generation ${
+                      failed ? "is-error" : ""
+                    }`}
+                    onClick={() => onOpenGeneration(run.conversationId)}
+                    aria-label={`查看${run.course?.title ?? "新课程"}的创建进度`}
+                  >
+                    <span className="course-catalog__card-icon" aria-hidden="true">
+                      {failed ? (
+                        <AlertCircle size={19} />
+                      ) : (
+                        <Loader2 size={19} className="is-spinning" />
+                      )}
+                    </span>
+                    <span className="course-catalog__generation-badge">
+                      {failed ? "创建已暂停" : "正在创建"}
+                    </span>
+                    <span className="course-catalog__card-title">
+                      {run.course?.title ?? "正在创建的新课程"}
+                    </span>
+                    <span className="course-catalog__card-description">
+                      {run.error || run.phaseDetail}
+                    </span>
+                    <span className="course-catalog__metrics">
+                      <span>
+                        <Layers3 aria-hidden="true" size={14} />
+                        {run.clusters.length || "—"} 个知识簇
+                      </span>
+                      <span>
+                        {completedPoints} / {run.totalPoints || "—"} 个知识点
+                      </span>
+                    </span>
+                    <span className="course-catalog__enter">
+                      查看生长过程
+                      <ArrowRight aria-hidden="true" size={16} />
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
             {validCourses.map((course) => (
               <li key={course.id}>
                 <button
@@ -180,7 +262,7 @@ export function CourseCatalog({
           </ul>
         )}
 
-        {loadError && courses.length > 0 && (
+        {loadError && (courses.length > 0 || activeGenerations.length > 0) && (
           <p className="course-catalog__soft-error" role="status">
             <AlertCircle aria-hidden="true" size={15} />
             课程列表暂未刷新：{loadError}

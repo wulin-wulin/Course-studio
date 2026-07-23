@@ -16,6 +16,7 @@ import { useCourseGenerationStore } from "@/course/generation/generationStore";
 
 type AppRoute =
   | { kind: "catalog" }
+  | { kind: "generation"; conversationId: string }
   | { kind: "forest"; courseId: string }
   | { kind: "reading"; courseId: string; clusterId: string; pointId: string };
 
@@ -84,7 +85,18 @@ function useCourseRoute(): [AppRoute, (path: string) => void] {
 export function AppShell() {
   const [route, navigate] = useCourseRoute();
   const generationStatus = useCourseGenerationStore((state) => state.status);
+  const generationMode = useCourseGenerationStore((state) => state.mode);
+  const generationConversationId = useCourseGenerationStore(
+    (state) => state.conversationId
+  );
+  const generationRuns = useCourseGenerationStore((state) => state.liveRuns);
+  const routedGenerationAvailable =
+    route.kind === "generation" &&
+    route.conversationId !== "demo" &&
+    Boolean(generationRuns[route.conversationId]);
   const requestGenerationDemo = useCourseGenerationStore((state) => state.requestDemo);
+  const openLiveGeneration = useCourseGenerationStore((state) => state.openLive);
+  const tickGenerationEstimates = useCourseGenerationStore((state) => state.tickEstimates);
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(() => window.innerWidth >= 1024);
   const [agentPanelWidth, setAgentPanelWidth] = useState(initialAgentPanelWidth);
   const [isResizingAgentPanel, setIsResizingAgentPanel] = useState(false);
@@ -95,6 +107,46 @@ export function AppShell() {
   const expandAgentButtonRef = useRef<HTMLButtonElement>(null);
   const wasMobileAgentModalOpenRef = useRef(false);
   const isMobileAgentModalOpen = isAgentPanelOpen && viewportWidth < 1024;
+
+  useEffect(() => {
+    if (route.kind !== "generation") return;
+    if (route.conversationId === "demo") {
+      // A live run can remain active while browser history navigates directly
+      // to the demo route. Always switch the active projection to demo mode;
+      // live runs stay preserved in the store and course catalogue.
+      if (generationMode !== "demo" || generationStatus === "idle") {
+        requestGenerationDemo();
+      }
+      return;
+    }
+    if (!routedGenerationAvailable) return;
+    openLiveGeneration(route.conversationId);
+  }, [
+    generationMode,
+    generationStatus,
+    openLiveGeneration,
+    requestGenerationDemo,
+    route,
+    routedGenerationAvailable,
+  ]);
+
+  useEffect(() => {
+    if (
+      route.kind !== "generation" ||
+      generationMode !== "live" ||
+      generationStatus !== "running"
+    ) {
+      return;
+    }
+    tickGenerationEstimates();
+    const timer = window.setInterval(tickGenerationEstimates, 1_000);
+    return () => window.clearInterval(timer);
+  }, [
+    generationMode,
+    generationStatus,
+    route.kind,
+    tickGenerationEstimates,
+  ]);
 
   const openAgentPanel = useCallback(() => {
     setIsAgentPanelOpen(true);
@@ -121,7 +173,7 @@ export function AppShell() {
     const handleDeletedCourse = (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail;
       if (
-        route.kind !== "catalog"
+        (route.kind === "forest" || route.kind === "reading")
         && isRecord(detail)
         && detail.deleted === true
         && detail.course_id === route.courseId
@@ -291,19 +343,53 @@ export function AppShell() {
       <TopNav onGoHome={() => navigate("/")} isCatalog={route.kind === "catalog"} />
       <main className="relative flex-1 min-h-0 flex overflow-hidden max-lg:flex-col">
         <section ref={workspaceRef} className="flex-1 min-w-0 min-h-0 relative">
-          {generationStatus !== "idle" ? (
-            <CourseGenerationView
-              onClose={() => undefined}
-              onOpenCourse={(courseId) =>
-                navigate(`/courses/${encodeURIComponent(courseId)}/forest`)
-              }
-            />
+          {route.kind === "generation" ? (
+            route.conversationId === "demo" ||
+            (generationMode === "live" &&
+              generationConversationId === route.conversationId) ? (
+              <CourseGenerationView
+                onClose={() => navigate("/")}
+                onOpenCourse={(courseId) =>
+                  navigate(`/courses/${encodeURIComponent(courseId)}/forest`)
+                }
+              />
+            ) : !generationRuns[route.conversationId] ? (
+              <div className="grid h-full place-items-center bg-cream p-6 text-center text-text-secondary">
+                <div className="grid max-w-sm justify-items-center gap-3 rounded-xl border border-border bg-surface p-7 shadow-sm">
+                  <AlertCircle aria-hidden="true" className="h-6 w-6 text-error" />
+                  <strong className="text-text-primary">找不到这条课程生成记录</strong>
+                  <span className="text-sm">
+                    它可能已被删除、已超过本地保留数量，或链接不完整。
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-primary-light"
+                    onClick={() => navigate("/")}
+                  >
+                    返回课程导览
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                className="grid h-full place-items-center bg-cream text-text-secondary"
+                role="status"
+              >
+                <Loader2 aria-hidden="true" className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            )
           ) : route.kind === "catalog" ? (
             <CourseCatalog
               onOpenCourse={(course) =>
                 navigate(`/courses/${encodeURIComponent(course.id)}/forest`)
               }
-              onStartGenerationDemo={requestGenerationDemo}
+              onOpenGeneration={(conversationId) =>
+                navigate(`/generation/${encodeURIComponent(conversationId)}`)
+              }
+              onStartGenerationDemo={() => {
+                requestGenerationDemo();
+                navigate("/generation/demo");
+              }}
             />
           ) : (
             <CourseWorkspace route={route} navigate={navigate} />
@@ -394,7 +480,7 @@ function CourseWorkspace({
   route,
   navigate,
 }: {
-  route: Exclude<AppRoute, { kind: "catalog" }>;
+  route: Exclude<AppRoute, { kind: "catalog" } | { kind: "generation" }>;
   navigate: (path: string) => void;
 }) {
   const [course, setCourse] = useState<CourseMeta | null>(null);
@@ -484,6 +570,10 @@ function currentHashPath() {
 
 function parseRoute(path: string): AppRoute {
   const segments = path.split("/").filter(Boolean).map(decodeSegment);
+  if (segments.length === 2 && segments[0] === "generation") {
+    const conversationId = segments[1];
+    if (conversationId) return { kind: "generation", conversationId };
+  }
   if (segments.length === 3 && segments[0] === "courses" && segments[2] === "forest") {
     const courseId = segments[1];
     if (courseId) return { kind: "forest", courseId };
