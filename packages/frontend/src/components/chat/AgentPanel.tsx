@@ -30,6 +30,7 @@ import {
 import { useChatStore } from "@/stores/chatStore";
 import type { ChatMode } from "@/stores/chatStore";
 import { getBackendWsUrl } from "@/utils/backendWs";
+import { useCourseGenerationStore } from "@/course/generation/generationStore";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
@@ -162,6 +163,8 @@ const AGENT_SUGGESTIONS = [
 ];
 
 export function AgentPanel({ onCollapse }: AgentPanelProps) {
+  const requestGenerationDemo = useCourseGenerationStore((state) => state.requestDemo);
+  const generationStatus = useCourseGenerationStore((state) => state.status);
   const selectedModel = useChatStore((s) => s.selectedModel);
   const setModel = useChatStore((s) => s.setModel);
   const mode = useChatStore((s) => s.mode);
@@ -992,6 +995,20 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
                   >
                     <BookPlus className="h-3.5 w-3.5" />
                     创建课程
+                  </button>
+                  <button
+                    type="button"
+                    onClick={requestGenerationDemo}
+                    disabled={isRunning || generationStatus !== "idle"}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      generationStatus === "idle"
+                        ? "使用预定义数据播放课程生成过程"
+                        : "生成演示正在左侧播放"
+                    }
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    生成演示
                   </button>
                   <button
                     type="button"
