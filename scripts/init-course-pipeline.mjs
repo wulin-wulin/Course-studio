@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const ISO_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const COMPONENT_PATTERN = /^[A-Z][A-Za-z0-9]*$/;
 const STAGES = new Set(["initial", "points", "animation-manifest", "animations"]);
 
@@ -12,12 +15,63 @@ function fail(message) {
   throw new Error(message);
 }
 
-function readJson(filePath, label) {
+function readJson(filePath, label, root = path.resolve(process.cwd())) {
   if (!fs.existsSync(filePath)) fail(`缺少${label}：${path.relative(process.cwd(), filePath)}`);
+  assertSafeRegularFile(root, filePath, label);
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (error) {
     fail(`${label}不是有效 JSON：${error.message}`);
+  }
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function isIsoUtc(value) {
+  if (typeof value !== "string" || !ISO_UTC_PATTERN.test(value)) return false;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const normalized = value.includes(".") ? value : value.replace(/Z$/, ".000Z");
+  return parsed.toISOString() === normalized;
+}
+
+function assertKnowledgePointApproval(paths, courseId, points) {
+  const identity = points.map((point, index) => {
+    if (typeof point?.title !== "string" || !point.title.trim()) {
+      fail(`课程索引第 ${index + 1} 个知识点缺少 title，不能验证知识点审核`);
+    }
+    return [point.id, point.title.trim()];
+  });
+  const approvalPath = path.join(
+    paths.workspaceRoot,
+    ".course-review-approvals",
+    courseId,
+    "knowledge-points.json",
+  );
+  ensureInside(paths.workspaceRoot, approvalPath);
+  if (!fs.existsSync(approvalPath)) {
+    fail("知识点清单尚未获得用户审核，不能创建详情任务");
+  }
+  assertSafeRegularFile(paths.workspaceRoot, approvalPath, "知识点审核回执");
+  const approval = readJson(approvalPath, "知识点审核回执");
+  if (
+    approval.schema_version !== "course-review-approval/1.0"
+    || typeof approval.review_id !== "string"
+    || !approval.review_id.trim()
+    || approval.course_id !== courseId
+    || approval.kind !== "knowledge-points"
+    || approval.gate !== "G2_IDENTITY_REVIEW"
+    || !isIsoUtc(approval.approved_at)
+    || !Number.isInteger(approval.operation_count)
+    || approval.operation_count < 0
+    || !Array.isArray(approval.submitted_operations)
+    || approval.submitted_operations.length !== approval.operation_count
+    || !SHA256_PATTERN.test(approval.identity_sha256 ?? "")
+    || approval.identity_sha256 !== sha256(identity)
+  ) {
+    fail("知识点审核回执缺失、格式错误或已因 id/title/顺序变化而失效");
   }
 }
 
@@ -39,6 +93,14 @@ function assertSafeDirectoryChain(root, targetDirectory) {
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       fail(`流水线路径包含符号链接或非目录项：${current}`);
     }
+  }
+}
+
+function assertSafeRegularFile(root, filePath, label) {
+  assertSafeDirectoryChain(root, path.dirname(filePath));
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    fail(`${label}必须是普通文件，且路径中不能包含符号链接`);
   }
 }
 
@@ -94,6 +156,14 @@ function scaffoldInitial(paths, created) {
 }
 
 function scaffoldPoints(paths, courseId, created) {
+  const index = assertKnowledgePointStageApproved(paths, courseId);
+  for (const point of index.points) {
+    createPlaceholder(paths.pipelineRoot, path.join(paths.points, `${point.id}.json`), created);
+    createPlaceholder(paths.pipelineRoot, path.join(paths.animationRequests, `${point.id}.json`), created);
+  }
+}
+
+function assertKnowledgePointStageApproved(paths, courseId) {
   const index = readJson(paths.index, "课程索引");
   if (index.schema_version !== "course-content-index/1.0" || index.courseId !== courseId) {
     fail("课程索引必须是 course-content-index/1.0，且 courseId 与命令参数一致");
@@ -105,9 +175,9 @@ function scaffoldPoints(paths, courseId, created) {
       fail(`课程索引包含非法或重复的知识点 ID：${point?.id ?? "<empty>"}`);
     }
     seen.add(point.id);
-    createPlaceholder(paths.pipelineRoot, path.join(paths.points, `${point.id}.json`), created);
-    createPlaceholder(paths.pipelineRoot, path.join(paths.animationRequests, `${point.id}.json`), created);
   }
+  assertKnowledgePointApproval(paths, courseId, index.points);
+  return index;
 }
 
 function scaffoldAnimationManifest(paths, created) {
@@ -142,6 +212,7 @@ function main() {
   const courseRoot = path.join(pipelineRoot, courseId);
   const contentRoot = path.join(courseRoot, "course-content");
   const paths = {
+    workspaceRoot: root,
     pipelineRoot,
     courseRoot,
     contentRoot,
@@ -160,8 +231,13 @@ function main() {
   const created = [];
   if (stage === "initial") scaffoldInitial(paths, created);
   else if (stage === "points") scaffoldPoints(paths, courseId, created);
-  else if (stage === "animation-manifest") scaffoldAnimationManifest(paths, created);
-  else scaffoldAnimations(paths, created);
+  else if (stage === "animation-manifest") {
+    assertKnowledgePointStageApproved(paths, courseId);
+    scaffoldAnimationManifest(paths, created);
+  } else {
+    assertKnowledgePointStageApproved(paths, courseId);
+    scaffoldAnimations(paths, created);
+  }
 
   process.stdout.write(`${JSON.stringify({
     courseId,

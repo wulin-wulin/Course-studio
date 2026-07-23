@@ -17,6 +17,20 @@ if [ -f "$ENV_FILE" ]; then
     set -a; . "$ENV_FILE"; set +a
 fi
 
+# OpenCode installs custom-tool dependencies in the background. Keep npm's
+# cache inside the project so a root-owned entry in ~/.npm cannot prevent the
+# tool runtime from loading.
+NPM_CACHE="${NPM_CONFIG_CACHE:-${npm_config_cache:-$ROOT_DIR/.tools/npm-cache}}"
+export NPM_CONFIG_CACHE="$NPM_CACHE"
+export npm_config_cache="$NPM_CACHE"
+mkdir -p "$NPM_CACHE"
+
+# The runtime copy is ignored by Git. Recreate it from the tracked manifest so
+# a fresh checkout installs the exact plugin version expected by the tool.
+OPENCODE_PROJECT_DIR="$ROOT_DIR/.opencode"
+mkdir -p "$OPENCODE_PROJECT_DIR"
+cp "$SCRIPT_DIR/opencode-tool-package.json" "$OPENCODE_PROJECT_DIR/package.json"
+
 PORT="${OPENCODE_PORT:-4096}"
 HOSTNAME="${OPENCODE_HOSTNAME:-127.0.0.1}"
 CORS="${OPENCODE_CORS:-http://127.0.0.1:5173}"

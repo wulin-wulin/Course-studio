@@ -46,16 +46,41 @@ PERMISSION = {
     "skill": {"*": "allow"},
     "question": "deny",
     "bash": "deny",
+    "course_pipeline": "deny",
     "webfetch": "deny",
     # Never leave a headless Agent session waiting on an OpenCode permission
     # prompt that the Course Studio UI cannot answer.
     "doom_loop": "deny",
 }
 
+COURSE_OUTLINE_CREATOR_PERMISSION = {
+    "edit": {
+        "**": "deny",
+        "**/pipeline/*/course-content/src/data/course.json": "allow",
+        "**/pipeline/*/course-content/src/data/index.json": "allow",
+        "**/pipeline/*/course-content/generation/manifest.json": "allow",
+    },
+    "skill": {
+        "*": "deny",
+        "candidate-knowledge-point-generator": "allow",
+        "knowledge-pipeline-orchestrator": "allow",
+    },
+    "task": "deny",
+    "question": "allow",
+    "bash": "deny",
+    "course_pipeline": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "doom_loop": "deny",
+}
+
 COURSE_CREATOR_PERMISSION = {
     "edit": {
         "**": "deny",
-        "**/pipeline/*/course-content/**": "allow",
+        "**/pipeline/*/course-content/src/data/course.json": "allow",
+        "**/pipeline/*/course-content/src/data/index.json": "allow",
+        "**/pipeline/*/course-content/generation/manifest.json": "allow",
+        "**/pipeline/*/course-content/generation/animation-manifest.json": "allow",
         "**/pipeline/*/clustered-graph.json": "allow",
     },
     "skill": {
@@ -70,18 +95,8 @@ COURSE_CREATOR_PERMISSION = {
         "course-animation-worker": "allow",
     },
     "question": "allow",
-    "bash": {
-        "*": "deny",
-        "node *init-course-pipeline.mjs*": "allow",
-        "node *validate_output.mjs*": "allow",
-        "node *sync_index_from_points.mjs*": "allow",
-        "node *build_animation_registry.mjs*": "allow",
-        "node *assemble-graph-points.mjs*": "allow",
-        "node *check-graph.mjs*": "allow",
-        "node *check-pipeline.mjs*": "allow",
-        "node *publish-course-pipeline.mjs*": "allow",
-        "node --test *candidate-knowledge-point-generator/scripts/*.test.mjs": "allow",
-    },
+    "bash": "deny",
+    "course_pipeline": "allow",
     "webfetch": "allow",
     "websearch": "allow",
     "doom_loop": "deny",
@@ -100,6 +115,7 @@ COURSE_CONTENT_WORKER_PERMISSION = {
     "task": "deny",
     "question": "deny",
     "bash": "deny",
+    "course_pipeline": "deny",
     "webfetch": "deny",
     "websearch": "deny",
     "doom_loop": "deny",
@@ -118,10 +134,36 @@ COURSE_ANIMATION_WORKER_PERMISSION = {
     "task": "deny",
     "question": "deny",
     "bash": "deny",
+    "course_pipeline": "deny",
     "webfetch": "deny",
     "websearch": "deny",
     "doom_loop": "deny",
 }
+
+
+def _course_agents() -> dict:
+    return {
+        "course-outline-creator": {
+            "description": "生成并校验课程范围与完整知识点清单，停在 G2 结构化审核",
+            "mode": "primary",
+            "permission": COURSE_OUTLINE_CREATOR_PERMISSION,
+        },
+        "course-creator": {
+            "description": "在知识点审核通过后生成课程详情、动画与图谱并发布",
+            "mode": "primary",
+            "permission": COURSE_CREATOR_PERMISSION,
+        },
+        "course-content-worker": {
+            "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",
+            "mode": "subagent",
+            "permission": COURSE_CONTENT_WORKER_PERMISSION,
+        },
+        "course-animation-worker": {
+            "description": "按动画清单生成自己负责的教学动画 TSX 与 CSS 组件",
+            "mode": "subagent",
+            "permission": COURSE_ANIMATION_WORKER_PERMISSION,
+        },
+    }
 
 
 def _models_from_file(data: dict) -> list[dict]:
@@ -204,23 +246,7 @@ def main() -> int:
         "provider": providers,
         "model": f"{default_id}/{default_id}",
         "permission": PERMISSION,
-        "agent": {
-            "course-creator": {
-                "description": "按照项目 Skill 流程引导用户创建并发布课程",
-                "mode": "primary",
-                "permission": COURSE_CREATOR_PERMISSION,
-            },
-            "course-content-worker": {
-                "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",
-                "mode": "subagent",
-                "permission": COURSE_CONTENT_WORKER_PERMISSION,
-            },
-            "course-animation-worker": {
-                "description": "按动画清单生成自己负责的教学动画 TSX 与 CSS 组件",
-                "mode": "subagent",
-                "permission": COURSE_ANIMATION_WORKER_PERMISSION,
-            },
-        },
+        "agent": _course_agents(),
     }
 
     out_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")

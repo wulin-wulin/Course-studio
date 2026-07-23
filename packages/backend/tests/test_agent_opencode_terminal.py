@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from fastapi import WebSocketDisconnect
+
 from src.api import agent
 
 
@@ -61,7 +63,7 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
             )
         return result, websocket.messages, abort
 
-    async def test_publish_tool_error_marks_turn_failed_but_consumes_until_idle(self):
+    async def test_structured_publish_tool_error_marks_turn_failed_but_consumes_until_idle(self):
         async def events():
             yield _event(
                 "message.part.updated",
@@ -69,10 +71,10 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
                     "part": {
                         "type": "tool",
                         "id": "tool-1",
-                        "tool": "bash",
+                        "tool": "course_pipeline",
                         "state": {
                             "status": "error",
-                            "input": {"command": "node .opencode/tools/publish-course-pipeline.mjs demo"},
+                            "input": {"action": "publish", "courseId": "demo"},
                             "error": "exit code 1",
                         },
                     }
@@ -92,7 +94,7 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertTrue(any(
             message["type"] == "agent_error"
-            and "工具 bash 执行失败" in message["payload"]["message"]
+            and "工具 course_pipeline 执行失败" in message["payload"]["message"]
             for message in messages
         ))
         abort.assert_not_awaited()
@@ -128,8 +130,6 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
         abort.assert_not_awaited()
 
     async def test_recovered_publish_error_does_not_fail_turn(self):
-        command = "node .opencode/tools/publish-course-pipeline.mjs demo"
-
         async def events():
             yield _event(
                 "message.part.updated",
@@ -137,10 +137,10 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
                     "part": {
                         "type": "tool",
                         "id": "tool-failed",
-                        "tool": "bash",
+                        "tool": "course_pipeline",
                         "state": {
                             "status": "error",
-                            "input": {"command": command},
+                            "input": {"action": "publish", "courseId": "demo"},
                             "error": "first attempt failed",
                         },
                     }
@@ -152,10 +152,10 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
                     "part": {
                         "type": "tool",
                         "id": "tool-retried",
-                        "tool": "bash",
+                        "tool": "course_pipeline",
                         "state": {
                             "status": "completed",
-                            "input": {"command": command},
+                            "input": {"action": "publish", "courseId": "demo"},
                             "output": '{"courseId":"demo"}',
                         },
                     }
@@ -223,6 +223,63 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(ok)
         abort.assert_not_awaited()
+
+    async def test_question_wait_heartbeat_disconnect_aborts_prompt(self):
+        class _DisconnectingWebSocket(_WebSocket):
+            def __init__(self) -> None:
+                super().__init__()
+                self.question_seen = False
+
+            async def send_json(self, message: dict) -> None:
+                if message["type"] == "agent_question":
+                    self.question_seen = True
+                elif message["type"] == "agent_heartbeat" and self.question_seen:
+                    raise WebSocketDisconnect()
+                await super().send_json(message)
+
+        websocket = _DisconnectingWebSocket()
+        prompted = asyncio.Event()
+
+        async def send_prompt(*args, **kwargs) -> None:
+            prompted.set()
+
+        async def event_stream():
+            await prompted.wait()
+            yield _event(
+                "question.asked",
+                {
+                    "id": "question-disconnect",
+                    "questions": [
+                        {
+                            "header": "发布课程",
+                            "question": "是否发布？",
+                            "options": [{"label": "确认", "description": "继续发布"}],
+                        }
+                    ],
+                },
+            )
+            await asyncio.Event().wait()
+
+        abort = AsyncMock()
+        with (
+            patch.object(agent.opencode_client, "prompt", new=send_prompt),
+            patch.object(agent.opencode_client, "events", new=event_stream),
+            patch.object(agent.opencode_client, "abort", new=abort),
+            patch.object(agent, "_websocket_heartbeat_interval", return_value=0.001),
+            patch.object(agent.settings, "opencode_terminal_timeout_seconds", 0.02),
+        ):
+            with self.assertRaises(WebSocketDisconnect):
+                await agent._run_opencode_prompt(
+                    websocket=websocket,
+                    conversation_id="conversation-1",
+                    session_id="session-1",
+                    directory="workspace",
+                    text="test",
+                    images=[],
+                )
+
+        abort.assert_awaited_once_with("session-1")
+        self.assertNotIn("question-disconnect", agent._pending_questions)
 
     async def test_child_permission_request_is_rejected_and_aborts_parent(self):
         async def events():

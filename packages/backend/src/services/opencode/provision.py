@@ -41,8 +41,38 @@ _COURSE_CREATION_TOOLS = (
     "bundle-course-animations.mjs",
     "init-course-pipeline.mjs",
     "layout-course-map.mjs",
+    "prepare-course-review.mjs",
     "publish-course-pipeline.mjs",
+    "run-course-pipeline-step.mjs",
 )
+_COURSE_PIPELINE_TOOL_SOURCE = (
+    _PROJECT_ROOT / ".opencode" / "tools" / "course_pipeline.ts"
+)
+
+
+def _course_outline_creator_permission() -> dict:
+    """Machine gate for G0-G2: only the identity-bearing outline may change."""
+
+    return {
+        "edit": {
+            "**": "deny",
+            "**/pipeline/*/course-content/src/data/course.json": "allow",
+            "**/pipeline/*/course-content/src/data/index.json": "allow",
+            "**/pipeline/*/course-content/generation/manifest.json": "allow",
+        },
+        "skill": {
+            "*": "deny",
+            "candidate-knowledge-point-generator": "allow",
+            "knowledge-pipeline-orchestrator": "allow",
+        },
+        "task": "deny",
+        "question": "allow",
+        "bash": "deny",
+        "course_pipeline": "allow",
+        "webfetch": "allow",
+        "websearch": "allow",
+        "doom_loop": "deny",
+    }
 
 
 def _course_creator_permission() -> dict:
@@ -51,7 +81,10 @@ def _course_creator_permission() -> dict:
     return {
         "edit": {
             "**": "deny",
-            "**/pipeline/*/course-content/**": "allow",
+            "**/pipeline/*/course-content/src/data/course.json": "allow",
+            "**/pipeline/*/course-content/src/data/index.json": "allow",
+            "**/pipeline/*/course-content/generation/manifest.json": "allow",
+            "**/pipeline/*/course-content/generation/animation-manifest.json": "allow",
             "**/pipeline/*/clustered-graph.json": "allow",
         },
         "skill": {
@@ -66,20 +99,11 @@ def _course_creator_permission() -> dict:
             "course-animation-worker": "allow",
         },
         "question": "allow",
-        "bash": {
-            "*": "deny",
-            "node *init-course-pipeline.mjs*": "allow",
-            "node *validate_output.mjs*": "allow",
-            "node *sync_index_from_points.mjs*": "allow",
-            "node *build_animation_registry.mjs*": "allow",
-            "node *assemble-graph-points.mjs*": "allow",
-            "node *check-graph.mjs*": "allow",
-            "node *check-pipeline.mjs*": "allow",
-            "node *publish-course-pipeline.mjs*": "allow",
-            "node --test *candidate-knowledge-point-generator/scripts/*.test.mjs": "allow",
-        },
+        "bash": "deny",
+        "course_pipeline": "allow",
         "webfetch": "allow",
         "websearch": "allow",
+        "doom_loop": "deny",
     }
 
 
@@ -95,8 +119,10 @@ def _course_worker_permission(*edit_patterns: str) -> dict:
         "task": "deny",
         "question": "deny",
         "bash": "deny",
+        "course_pipeline": "deny",
         "webfetch": "deny",
         "websearch": "deny",
+        "doom_loop": "deny",
     }
 
 
@@ -150,11 +176,18 @@ def build_root_config() -> dict:
             "skill": {"*": "allow"},
             "question": "deny",
             "bash": "deny",
+            "course_pipeline": "deny",
             "webfetch": "deny",
+            "doom_loop": "deny",
         },
         "agent": {
+            "course-outline-creator": {
+                "description": "生成并校验课程范围与完整知识点清单，停在 G2 结构化审核",
+                "mode": "primary",
+                "permission": _course_outline_creator_permission(),
+            },
             "course-creator": {
-                "description": "按照项目 Skill 流程引导用户创建并发布课程",
+                "description": "在知识点审核通过后生成课程详情、动画与图谱并发布",
                 "mode": "primary",
                 "permission": _course_creator_permission(),
             },
@@ -255,6 +288,21 @@ def ensure_course_creation_session_assets(conversation_id: str) -> CourseWorkspa
         if not source.is_file():
             raise FileNotFoundError(f"课程创建工具缺失：{source}")
         shutil.copy2(source, tools_target / file_name)
+
+    if not _COURSE_PIPELINE_TOOL_SOURCE.is_file():
+        raise FileNotFoundError(
+            f"课程创建结构化工具缺失：{_COURSE_PIPELINE_TOOL_SOURCE}"
+        )
+    # The structured tool is project-owned and loaded once from the Git root.
+    # Session-local copies force OpenCode to install the plugin independently
+    # for every conversation and can cache a transient dependency failure.
+    session_pipeline_tool = tools_target / "course_pipeline.ts"
+    if session_pipeline_tool.is_symlink() or session_pipeline_tool.is_file():
+        session_pipeline_tool.unlink()
+    elif session_pipeline_tool.exists():
+        raise RuntimeError(
+            f"课程会话中的结构化工具路径不是普通文件：{session_pipeline_tool}"
+        )
 
     (session_root / "pipeline").mkdir(parents=True, exist_ok=True)
     return workspace

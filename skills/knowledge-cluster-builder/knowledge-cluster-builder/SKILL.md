@@ -5,6 +5,22 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 # 知识点聚类与关系构建（适配上游 v2）
 
+> Course Studio 会话中，本 Skill 后文的直接脚本命令只作为阶段语义说明。必须按编排 Skill 改用结构化 `course_pipeline` 工具，不得调用 Bash 或直接执行脚本。
+
+## Course Studio 模式优先规则
+
+当前工作区由 Course Studio 创建、路径形如 `pipeline/<course-id>/...` 时，本节优先于后文全部 Bash 示例。后文命令只服务于脱离 Course Studio 的独立调试，不得在课程 Agent 会话中执行。使用以下固定动作映射：
+
+| 阶段语义 | `course_pipeline.action` |
+|---|---|
+| 上游全量内容校验 | `validate-all` |
+| 装配完整图谱 | `assemble-graph` |
+| 检查装配漂移 | `assemble-graph-check` |
+| 图谱校验 | `check-graph` |
+| JSON 图谱校验报告 | `check-graph-json` |
+
+依赖审核必须回到编排 Skill 使用 `review-prerequisites`；Agent 不得为任何后文命令请求 Bash 权限。
+
 ## 目标与边界
 
 输入上游 v2 生成的**课程内容中间包**，输出在其之上补齐**簇归属、层级角色、横向关联**并透传/优化 `prerequisites` 的知识图谱。上游（`candidate-knowledge-point-generator` v2）已产出完整知识点内容和保证无环的 `prerequisites`，并**有意把知识簇和布局推迟给本阶段**。
@@ -37,7 +53,7 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 ### 1. 载入并核对输入
 
-加载四类来源，建立 `id → point` 索引。确认 `points/*.json` 与 `index.json` 的 id 集合一致、`prerequisites` 只引用已存在 id。建议先跑上游校验器确认输入干净：
+加载四类来源，建立 `id → point` 索引。确认 `points/*.json` 与 `index.json` 的 id 集合一致、`prerequisites` 只引用已存在 id。建议先跑上游校验器确认输入干净（仅独立调试；Course Studio 使用 `validate-all`）：
 
 ```bash
 node <上游 skill>/scripts/validate_output.mjs --root <中间包目录> --phase all
@@ -78,7 +94,7 @@ node <上游 skill>/scripts/validate_output.mjs --root <中间包目录> --phase
 
 ### 7. 保证无环并自检
 
-优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。然后运行综合校验器：
+优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。然后运行综合校验器（仅独立调试；Course Studio 使用 `check-graph`）：
 
 ```bash
 node scripts/check-graph.mjs <你的输出>.json
@@ -86,7 +102,7 @@ node scripts/check-graph.mjs <你的输出>.json
 
 它做两类校验——**对象与引用完整性**（point 必需字段齐全且没有契约外字段、clusterIds 命中簇、prerequisites/related 无悬空、无自环、id 规范；注意 clusterIds 是外键、与 DAG 无关）与**图性质**（prerequisites 无环 + 拓扑排序）。通过（退出 0）才算合格。
 
-失败时加 `--json` 拿结构化问题清单，按每条 finding 的 `pointId + field + value + fix` 定位修改，改完重跑直到 `ok: true`：
+失败时加 `--json` 拿结构化问题清单，按每条 finding 的 `pointId + field + value + fix` 定位修改，改完重跑直到 `ok: true`（仅独立调试；Course Studio 使用 `check-graph-json`）：
 
 ```bash
 node scripts/check-graph.mjs <你的输出>.json --json
@@ -94,7 +110,7 @@ node scripts/check-graph.mjs <你的输出>.json --json
 
 ### 8. 增量叠加输出
 
-先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后必须由脚本按冻结 index 顺序读取 `points/<id>.json`，机械补齐全部 v2 内容字段：
+先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后必须由脚本按冻结 index 顺序读取 `points/<id>.json`，机械补齐全部 v2 内容字段（下列仅为独立调试命令；Course Studio 依次使用 `assemble-graph`、`assemble-graph-check`、`check-graph`）：
 
 ```bash
 node scripts/assemble-graph-points.mjs <CONTENT_ROOT> <GRAPH_FILE>
@@ -103,6 +119,14 @@ node scripts/check-graph.mjs <GRAPH_FILE>
 ```
 
 装配脚本会自动补齐草稿中省略的正文，并用上游 point 文件与 manifest 覆盖草稿里任何被模型改写/精简的正文和 `subject`；若增删知识点、遗漏关系字段或包含契约外字段，则立即失败。只有三条命令都通过，才可把结果视为 `clustered-graph/2.0`。最终对象在上游字段之外只能追加 `clusterIds / role / related`，`prerequisites` 只能按审计记录优化。
+
+### 9. Course Studio prerequisite 审核
+
+在 Course Studio 的课程创建工作流中，图谱校验通过不等于可以发布。必须回到编排 Skill 的 `G6_PREREQUISITE_REVIEW`，通过独立审核页让用户确认最终 `prerequisites`。
+
+- 审核页第一版只允许添加或移除 prerequisite，不开放 `clusterIds / role / related` 或内容字段编辑。
+- 用户变更由后端机械写入并重建 `refinedPrerequisiteEdges`；本 Skill 不根据聊天文字代替用户修改。
+- 只有模型不可写的审核回执与当前知识点身份、最终边集哈希一致，才可进入 G7。
 
 ## 输出契约
 
@@ -154,3 +178,4 @@ node scripts/check-graph.mjs <GRAPH_FILE>
 - [ ] v2 内容字段原样透传，未被改写；未生成布局字段。
 - [ ] 已运行 `assemble-graph-points.mjs`，其 `--check` 模式退出码为 0；没有手工复制或精简 point 正文。
 - [ ] `pointCount` 等于 `points` 长度，`clusterCount` 等于 `clusters` 长度。
+- [ ] Course Studio 工作流已完成 G6 prerequisite 审核，且当前边集与审核回执一致。

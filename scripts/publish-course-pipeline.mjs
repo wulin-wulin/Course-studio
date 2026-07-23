@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
@@ -36,12 +38,180 @@ function timeoutFromEnvironment(name, fallback) {
   return value;
 }
 
-function readJson(filePath, label = "JSON") {
-  if (!fs.existsSync(filePath)) fail(`缺少${label}：${path.relative(process.cwd(), filePath)}`);
+function ensureInside(root, target) {
+  const relative = path.relative(root, target);
+  if (
+    relative === ""
+    || relative === ".."
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    fail(`拒绝访问发布工作区之外的路径：${target}`);
+  }
+}
+
+function assertSafePath(root, target, label, expectedType) {
+  ensureInside(root, target);
+  const rootStat = fs.lstatSync(root);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    fail(`${label}的工作区根目录必须是普通目录`);
+  }
+  let current = root;
+  const segments = path.relative(root, target).split(path.sep).filter(Boolean);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    if (!fs.existsSync(current)) fail(`缺少${label}：${path.relative(root, current)}`);
+    const stat = fs.lstatSync(current);
+    const isLast = index === segments.length - 1;
+    if (stat.isSymbolicLink()) fail(`${label}路径不允许符号链接：${path.relative(root, current)}`);
+    if (!isLast && !stat.isDirectory()) fail(`${label}路径包含非目录项：${path.relative(root, current)}`);
+    if (isLast && expectedType === "file" && !stat.isFile()) fail(`${label}必须是普通文件`);
+    if (isLast && expectedType === "directory" && !stat.isDirectory()) fail(`${label}必须是普通目录`);
+  }
+}
+
+function openRegularFileNoFollow(filePath, label) {
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+  let descriptor;
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    descriptor = fs.openSync(filePath, flags);
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) fail(`${label}必须是普通文件`);
+    return descriptor;
   } catch (error) {
-    fail(`无法读取${label}：${path.relative(process.cwd(), filePath)}\n${error.message}`);
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+    fail(`无法安全读取${label}：${error.message}`);
+  }
+}
+
+function readRegularFile(filePath, label) {
+  const descriptor = openRegularFileNoFollow(filePath, label);
+  try {
+    return fs.readFileSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function readJson(root, filePath, label = "JSON") {
+  assertSafePath(root, filePath, label, "file");
+  try {
+    return JSON.parse(readRegularFile(filePath, label).toString("utf8"));
+  } catch (error) {
+    fail(`无法读取${label}：${path.relative(root, filePath)}\n${error.message}`);
+  }
+}
+
+function copyTreeNoLinks(sourceRoot, targetRoot, label) {
+  const sourceStat = fs.lstatSync(sourceRoot);
+  if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) {
+    fail(`${label}必须是普通目录，且不能包含符号链接`);
+  }
+  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o700 });
+  const entries = fs.readdirSync(sourceRoot, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceRoot, entry.name);
+    const targetPath = path.join(targetRoot, entry.name);
+    const stat = fs.lstatSync(sourcePath);
+    if (entry.isSymbolicLink() || stat.isSymbolicLink()) {
+      fail(`${label}不允许符号链接：${sourcePath}`);
+    }
+    if (stat.isDirectory()) {
+      copyTreeNoLinks(sourcePath, targetPath, label);
+    } else if (stat.isFile()) {
+      const value = readRegularFile(sourcePath, label);
+      fs.writeFileSync(targetPath, value, { flag: "wx", mode: 0o400 });
+    } else {
+      fail(`${label}不允许特殊文件：${sourcePath}`);
+    }
+  }
+}
+
+function fingerprintTree(root) {
+  const rootStat = fs.lstatSync(root);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    fail(`发布目录指纹只接受普通目录：${root}`);
+  }
+  const hash = crypto.createHash("sha256");
+  function visit(directory, relative = "") {
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const nextRelative = relative ? path.join(relative, entry.name) : entry.name;
+      const candidate = path.join(directory, entry.name);
+      const stat = fs.lstatSync(candidate);
+      if (entry.isSymbolicLink() || stat.isSymbolicLink()) {
+        fail(`发布快照不允许符号链接：${nextRelative}`);
+      }
+      if (stat.isDirectory()) {
+        hash.update(`d\0${nextRelative}\0`);
+        visit(candidate, nextRelative);
+      } else if (stat.isFile()) {
+        const value = readRegularFile(candidate, `发布快照文件 ${nextRelative}`);
+        hash.update(`f\0${nextRelative}\0${value.length}\0`);
+        hash.update(value);
+      } else {
+        fail(`发布快照不允许特殊文件：${nextRelative}`);
+      }
+    }
+  }
+  visit(root);
+  return hash.digest("hex");
+}
+
+function reuseIdenticalPublishedCourse(root, targetDirectory, candidateDirectory, courseId) {
+  const existingTarget = fs.lstatSync(targetDirectory, { throwIfNoEntry: false });
+  if (!existingTarget) return false;
+
+  assertSafePath(root, targetDirectory, "已有课程发布目录", "directory");
+  const candidateFingerprint = fingerprintTree(candidateDirectory);
+  const targetFingerprint = fingerprintTree(targetDirectory);
+  if (targetFingerprint !== candidateFingerprint) {
+    fail(
+      `课程 ${courseId} 已存在，但内容与当前已审核流水线生成结果不同；`
+        + "发布工具不会覆盖已有课程",
+    );
+  }
+
+  fs.rmSync(candidateDirectory, { recursive: true, force: true });
+  return true;
+}
+
+function createPublishSnapshot(root, courseId) {
+  const pipelineDirectory = path.join(root, "pipeline", courseId);
+  const approvalDirectory = path.join(root, ".course-review-approvals", courseId);
+  assertSafePath(root, pipelineDirectory, "课程流水线目录", "directory");
+  assertSafePath(root, approvalDirectory, "课程审核回执目录", "directory");
+
+  const snapshotRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(tmpdir(), `course-studio-publish-${courseId}-`)),
+  );
+  try {
+    copyTreeNoLinks(
+      pipelineDirectory,
+      path.join(snapshotRoot, "pipeline", courseId),
+      "课程流水线快照",
+    );
+    copyTreeNoLinks(
+      approvalDirectory,
+      path.join(snapshotRoot, ".course-review-approvals", courseId),
+      "课程审核回执快照",
+    );
+    return {
+      root: snapshotRoot,
+      pipelineDirectory: path.join(snapshotRoot, "pipeline", courseId),
+      fingerprint: fingerprintTree(snapshotRoot),
+    };
+  } catch (error) {
+    fs.rmSync(snapshotRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function assertSnapshotUnchanged(snapshot) {
+  if (fingerprintTree(snapshot.root) !== snapshot.fingerprint) {
+    fail("G7 校验或动画构建期间发布快照发生变化，拒绝发布");
   }
 }
 
@@ -184,11 +354,6 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
 async function publish(courseId) {
   const root = path.resolve(process.cwd());
   const pipelineDirectory = path.join(root, "pipeline", courseId);
-  const contentRoot = path.join(pipelineDirectory, "course-content");
-  const graphPath = path.join(pipelineDirectory, "clustered-graph.json");
-  const sourceCoursePath = path.join(contentRoot, "src", "data", "course.json");
-  const manifestPath = path.join(contentRoot, "generation", "manifest.json");
-  const animationManifestPath = path.join(contentRoot, "generation", "animation-manifest.json");
   const coursesDirectory = path.join(root, "courses");
   const targetDirectory = path.join(coursesDirectory, courseId);
   const pipelineChecker = path.join(
@@ -200,58 +365,89 @@ async function publish(courseId) {
     "check-pipeline.mjs",
   );
 
-  if (!fs.existsSync(contentRoot) || fs.lstatSync(contentRoot).isSymbolicLink()) {
-    fail(`缺少或拒绝使用不安全的内容包：pipeline/${courseId}/course-content`);
+  assertSafePath(root, pipelineDirectory, "课程流水线目录", "directory");
+  assertSafePath(root, pipelineChecker, "G7 流水线校验工具", "file");
+  const existingTarget = fs.lstatSync(targetDirectory, { throwIfNoEntry: false });
+  if (fs.existsSync(coursesDirectory)) {
+    assertSafePath(root, coursesDirectory, "课程发布目录", "directory");
+  } else {
+    fs.mkdirSync(coursesDirectory, { recursive: false, mode: 0o700 });
   }
-  if (!fs.existsSync(graphPath)) fail(`缺少中间产物：pipeline/${courseId}/clustered-graph.json`);
-  if (!fs.existsSync(pipelineChecker)) fail("缺少 G7 流水线校验工具，不能发布");
-  if (fs.existsSync(targetDirectory)) fail(`课程 ${courseId} 已存在；发布工具不会覆盖已有课程`);
-
-  const g7TimeoutMs = timeoutFromEnvironment(
-    "COURSE_PIPELINE_G7_TIMEOUT_MS",
-    DEFAULT_G7_CHECK_TIMEOUT_MS,
-  );
-  const checked = spawnSync(
-    process.execPath,
-    [pipelineChecker, contentRoot, graphPath, "--phase", "all", "--json"],
-    {
-      cwd: root,
-      encoding: "utf8",
-      timeout: g7TimeoutMs,
-      killSignal: "SIGTERM",
-    },
-  );
-  if (checked.error?.code === "ETIMEDOUT") {
-    fail(
-      `G7 流水线校验超时（${g7TimeoutMs}ms），已终止校验进程；`
-        + "请检查校验器或产物规模，必要时通过 COURSE_PIPELINE_G7_TIMEOUT_MS 调整上限",
-    );
-  }
-  if (checked.error) {
-    fail(`G7 流水线校验进程启动失败：${checked.error.message}`);
-  }
-  if (checked.status !== 0) {
-    const detail = (checked.stdout || checked.stderr || "未知校验错误").trim();
-    fail(`G7 流水线校验未通过，不能发布：\n${detail}`);
+  if (existingTarget) {
+    assertSafePath(root, targetDirectory, "已有课程发布目录", "directory");
   }
 
-  const sourceCourse = readJson(sourceCoursePath, "课程元数据");
-  const manifest = readJson(manifestPath, "生成清单");
-  const animationManifest = readJson(animationManifestPath, "动画清单");
-  const graph = readJson(graphPath, "聚类图谱");
-  validateGraphBasics(graph, courseId);
-  if (sourceCourse.id !== courseId || manifest.subject?.id !== courseId) {
-    fail("course.json、generation/manifest.json 与 course-id 不一致");
-  }
-
-  const animations = Array.isArray(animationManifest.animations) ? animationManifest.animations : null;
-  if (animations === null) fail("动画清单格式无效");
-
-  const { course, index, details } = buildCourseData(courseId, sourceCourse, manifest, graph);
-  fs.mkdirSync(coursesDirectory, { recursive: true });
-  const temporaryDirectory = path.join(coursesDirectory, `.publishing-${courseId}-${process.pid}`);
-  fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  let snapshot;
+  let temporaryDirectory;
   try {
+    snapshot = createPublishSnapshot(root, courseId);
+    const contentRoot = path.join(snapshot.pipelineDirectory, "course-content");
+    const graphPath = path.join(snapshot.pipelineDirectory, "clustered-graph.json");
+    const sourceCoursePath = path.join(contentRoot, "src", "data", "course.json");
+    const manifestPath = path.join(contentRoot, "generation", "manifest.json");
+    const animationManifestPath = path.join(contentRoot, "generation", "animation-manifest.json");
+    assertSafePath(snapshot.root, contentRoot, "课程内容快照", "directory");
+    assertSafePath(snapshot.root, graphPath, "聚类图谱快照", "file");
+
+    const g7TimeoutMs = timeoutFromEnvironment(
+      "COURSE_PIPELINE_G7_TIMEOUT_MS",
+      DEFAULT_G7_CHECK_TIMEOUT_MS,
+    );
+    const checked = spawnSync(
+      process.execPath,
+      [pipelineChecker, contentRoot, graphPath, "--phase", "all", "--json"],
+      {
+        cwd: snapshot.root,
+        encoding: "utf8",
+        timeout: g7TimeoutMs,
+        killSignal: "SIGTERM",
+      },
+    );
+    if (checked.error?.code === "ETIMEDOUT") {
+      fail(
+        `G7 流水线校验超时（${g7TimeoutMs}ms），已终止校验进程；`
+          + "请检查校验器或产物规模，必要时通过 COURSE_PIPELINE_G7_TIMEOUT_MS 调整上限",
+      );
+    }
+    if (checked.error) {
+      fail(`G7 流水线校验进程启动失败：${checked.error.message}`);
+    }
+    if (checked.status !== 0) {
+      const detail = (checked.stdout || checked.stderr || "未知校验错误").trim();
+      fail(`G7 流水线校验未通过，不能发布：\n${detail}`);
+    }
+    let checkReport;
+    try {
+      checkReport = JSON.parse(checked.stdout);
+    } catch (error) {
+      fail(`G7 流水线校验未返回有效 JSON，不能确认审核门禁：${error.message}`);
+    }
+    if (
+      checkReport?.ok !== true
+      || checkReport?.phase !== "all"
+      || path.resolve(checkReport?.contentRoot ?? "") !== contentRoot
+      || path.resolve(checkReport?.graphFile ?? "") !== graphPath
+      || checkReport?.counts?.reviewApprovals !== 2
+    ) {
+      fail("G7 流水线校验未确认当前快照和两份有效结构化审核回执，不能发布");
+    }
+    assertSnapshotUnchanged(snapshot);
+
+    const sourceCourse = readJson(snapshot.root, sourceCoursePath, "课程元数据");
+    const manifest = readJson(snapshot.root, manifestPath, "生成清单");
+    const animationManifest = readJson(snapshot.root, animationManifestPath, "动画清单");
+    const graph = readJson(snapshot.root, graphPath, "聚类图谱");
+    validateGraphBasics(graph, courseId);
+    if (sourceCourse.id !== courseId || manifest.subject?.id !== courseId) {
+      fail("course.json、generation/manifest.json 与 course-id 不一致");
+    }
+
+    const animations = Array.isArray(animationManifest.animations) ? animationManifest.animations : null;
+    if (animations === null) fail("动画清单格式无效");
+
+    const { course, index, details } = buildCourseData(courseId, sourceCourse, manifest, graph);
+    temporaryDirectory = path.join(coursesDirectory, `.publishing-${courseId}-${process.pid}`);
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
     writeJson(path.join(temporaryDirectory, "course.json"), course);
     writeJson(path.join(temporaryDirectory, "index.json"), index);
     for (const detail of details) {
@@ -265,19 +461,42 @@ async function publish(courseId) {
         projectRootHint: process.env.COURSE_STUDIO_PROJECT_ROOT,
       });
     }
-    fs.renameSync(temporaryDirectory, targetDirectory);
-  } catch (error) {
-    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
-    throw error;
-  }
+    assertSnapshotUnchanged(snapshot);
+    let recovered = reuseIdenticalPublishedCourse(
+      root,
+      targetDirectory,
+      temporaryDirectory,
+      courseId,
+    );
+    if (!recovered) {
+      try {
+        fs.renameSync(temporaryDirectory, targetDirectory);
+      } catch (error) {
+        recovered = reuseIdenticalPublishedCourse(
+          root,
+          targetDirectory,
+          temporaryDirectory,
+          courseId,
+        );
+        if (!recovered) throw error;
+      }
+    }
+    temporaryDirectory = undefined;
 
-  process.stdout.write(`${JSON.stringify({
-    courseId,
-    clusters: index.clusters.length,
-    points: index.points.length,
-    animations: animations.length,
-    output: `courses/${courseId}`,
-  })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      courseId,
+      clusters: index.clusters.length,
+      points: index.points.length,
+      animations: animations.length,
+      output: `courses/${courseId}`,
+      recovered,
+    })}\n`);
+  } catch (error) {
+    if (temporaryDirectory) fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    throw error;
+  } finally {
+    if (snapshot) fs.rmSync(snapshot.root, { recursive: true, force: true });
+  }
 }
 
 try {

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 
+import crypto from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
@@ -28,6 +31,8 @@ const BUNDLED_CONTENT_SKILL = path.resolve(
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HEX = /^#[0-9a-fA-F]{6}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const ROLES = new Set(['trunk', 'branch', 'leaf']);
 const RELATION_FIELDS = ['clusterIds', 'role', 'related'];
 
@@ -207,6 +212,293 @@ function collectEdges(points) {
     }
   }
   return edges;
+}
+
+function isInside(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function resolveTrustedInput(target) {
+  const absolute = path.resolve(target);
+  const logicalTemporaryRoot = path.resolve(tmpdir());
+  const anchors = [
+    {
+      logical: path.resolve(process.cwd()),
+      physical: realpathSync(process.cwd()),
+    },
+    {
+      logical: logicalTemporaryRoot,
+      physical: realpathSync(logicalTemporaryRoot),
+    },
+  ];
+  for (const anchor of anchors) {
+    for (const candidateRoot of new Set([anchor.logical, anchor.physical])) {
+      if (!isInside(candidateRoot, absolute)) continue;
+      const relative = path.relative(candidateRoot, absolute);
+      return {
+        root: anchor.physical,
+        target: path.join(anchor.physical, relative),
+      };
+    }
+  }
+  throw new Error('输入必须位于当前会话或系统临时工作区内');
+}
+
+function assertSafeInputPath(sessionRoot, target, { directory, label }) {
+  const relative = path.relative(sessionRoot, target);
+  if (
+    relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw new Error(`${label}必须位于当前会话根目录内`);
+  }
+
+  const rootStat = lstatSync(sessionRoot);
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    throw new Error('当前会话根目录不是普通目录或包含符号链接');
+  }
+  let current = sessionRoot;
+  const segments = relative.split(path.sep).filter(Boolean);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch (error) {
+      throw new Error(`${label}路径无法检查：${error.message}`);
+    }
+    const isLast = index === segments.length - 1;
+    if (stat.isSymbolicLink()) throw new Error(`${label}路径包含符号链接：${current}`);
+    if (!isLast && !stat.isDirectory()) {
+      throw new Error(`${label}祖先路径不是目录：${current}`);
+    }
+    if (isLast && (directory ? !stat.isDirectory() : !stat.isFile())) {
+      throw new Error(`${label}${directory ? '不是普通目录' : '不是普通文件'}：${current}`);
+    }
+  }
+
+  if (directory) {
+    const visit = (currentDirectory) => {
+      for (const entry of readdirSync(currentDirectory, { withFileTypes: true })) {
+        const entryPath = path.join(currentDirectory, entry.name);
+        if (entry.isSymbolicLink()) {
+          throw new Error(`${label}内部包含符号链接：${entryPath}`);
+        }
+        if (entry.isDirectory()) visit(entryPath);
+      }
+    };
+    visit(target);
+  }
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
+}
+
+function isIsoUtc(value) {
+  if (typeof value !== 'string' || !ISO_UTC.test(value)) return false;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const normalized = value.includes('.') ? value : value.replace(/Z$/, '.000Z');
+  return parsed.toISOString() === normalized;
+}
+
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function reviewAuditPayload(graph) {
+  const audit = Array.isArray(graph?.generation?.refinedPrerequisiteEdges)
+    ? graph.generation.refinedPrerequisiteEdges
+    : [];
+  return audit.map((entry) => ({
+    op: String(entry?.op ?? '').trim(),
+    from: String(entry?.from ?? '').trim(),
+    to: String(entry?.to ?? '').trim(),
+    reason: String(entry?.reason ?? '').trim(),
+  }));
+}
+
+function reviewApprovalRoot(contentRoot, courseId, findings) {
+  const courseRoot = path.dirname(contentRoot);
+  const pipelineRoot = path.dirname(courseRoot);
+  const sessionRoot = path.dirname(pipelineRoot);
+  if (path.basename(pipelineRoot) !== 'pipeline' || path.basename(courseRoot) !== courseId) {
+    add(
+      findings,
+      'error',
+      'review',
+      'review-root-unresolved',
+      '最终交接必须使用 <session>/pipeline/<course-id>/course-content，才能验证后端持有的审核回执',
+    );
+    return null;
+  }
+  return path.join(sessionRoot, '.course-review-approvals', courseId);
+}
+
+function assertSafeApprovalFile(sessionRoot, file) {
+  const relative = path.relative(sessionRoot, file);
+  if (
+    relative === ''
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw new Error('回执路径越界');
+  }
+  const sessionStat = lstatSync(sessionRoot);
+  if (sessionStat.isSymbolicLink() || !sessionStat.isDirectory()) {
+    throw new Error('会话根路径不是普通目录或包含符号链接');
+  }
+  let current = sessionRoot;
+  const segments = relative.split(path.sep).filter(Boolean);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    if (!existsSync(current)) throw new Error('回执文件不存在');
+    const stat = lstatSync(current);
+    const isLast = index === segments.length - 1;
+    if (stat.isSymbolicLink()) throw new Error('路径包含符号链接');
+    if (isLast ? !stat.isFile() : !stat.isDirectory()) {
+      throw new Error(isLast ? '回执不是普通文件' : '回执父路径不是目录');
+    }
+  }
+}
+
+function loadApproval(file, kind, findings, sessionRoot) {
+  if (!existsSync(file)) {
+    add(
+      findings,
+      'error',
+      'review',
+      `missing-${kind}-approval`,
+      `${kind === 'knowledge-points' ? '知识点清单' : '依赖关系'}尚未获得用户审核`,
+    );
+    return null;
+  }
+  try {
+    assertSafeApprovalFile(sessionRoot, file);
+    const approval = loadJson(file);
+    const required = [
+      'review_id',
+      'course_id',
+      'kind',
+      'gate',
+      'identity_sha256',
+      'approved_at',
+      'operation_count',
+      'submitted_operations',
+      ...(kind === 'prerequisites' ? ['prerequisites_sha256', 'review_audit_sha256'] : []),
+    ];
+    if (
+      approval.schema_version !== 'course-review-approval/1.0'
+      || required.some((key) => !(key in approval))
+      || typeof approval.review_id !== 'string'
+      || !approval.review_id.trim()
+      || !isIsoUtc(approval.approved_at)
+      || !Number.isInteger(approval.operation_count)
+      || approval.operation_count < 0
+      || !Array.isArray(approval.submitted_operations)
+      || approval.submitted_operations.length !== approval.operation_count
+      || !SHA256.test(approval.identity_sha256)
+      || (kind === 'prerequisites' && !SHA256.test(approval.prerequisites_sha256))
+      || (kind === 'prerequisites' && !SHA256.test(approval.review_audit_sha256))
+    ) {
+      throw new Error('回执字段不完整或格式错误');
+    }
+    return approval;
+  } catch (error) {
+    add(
+      findings,
+      'error',
+      'review',
+      `invalid-${kind}-approval`,
+      `${kind === 'knowledge-points' ? '知识点清单' : '依赖关系'}审核回执无效：${error.message}`,
+    );
+    return null;
+  }
+}
+
+function validateReviewApprovals(
+  contentRoot,
+  courseId,
+  graph,
+  findings,
+  { requiredKinds = ['knowledge-points', 'prerequisites'] } = {},
+) {
+  const approvalRoot = reviewApprovalRoot(contentRoot, courseId, findings);
+  if (!approvalRoot) return { reviewApprovals: 0 };
+  const sessionRoot = path.dirname(path.dirname(path.dirname(contentRoot)));
+
+  const identitySha256 = sha256(graph.points.map((point) => [
+    point?.id,
+    typeof point?.title === 'string' ? point.title.trim() : '',
+  ]));
+  const prerequisiteEdges = [...collectEdges(graph.points)]
+    .map(splitEdge)
+    .sort(([leftDependent, leftPrerequisite], [rightDependent, rightPrerequisite]) => (
+      compareText(leftDependent, rightDependent)
+      || compareText(leftPrerequisite, rightPrerequisite)
+    ));
+  const prerequisitesSha256 = sha256(prerequisiteEdges);
+  const reviewAuditSha256 = sha256(reviewAuditPayload(graph));
+  const knowledge = requiredKinds.includes('knowledge-points')
+    ? loadApproval(
+      path.join(approvalRoot, 'knowledge-points.json'),
+      'knowledge-points',
+      findings,
+      sessionRoot,
+    )
+    : null;
+  const prerequisites = requiredKinds.includes('prerequisites')
+    ? loadApproval(
+      path.join(approvalRoot, 'prerequisites.json'),
+      'prerequisites',
+      findings,
+      sessionRoot,
+    )
+    : null;
+
+  let knowledgeValid = Boolean(knowledge);
+  if (knowledge && (
+    knowledge.course_id !== courseId
+    || knowledge.kind !== 'knowledge-points'
+    || knowledge.gate !== 'G2_IDENTITY_REVIEW'
+    || knowledge.identity_sha256 !== identitySha256
+  )) {
+    add(
+      findings,
+      'error',
+      'review',
+      'stale-knowledge-points-approval',
+      '知识点审核后 id/title/顺序发生变化，审核回执已经失效',
+    );
+    knowledgeValid = false;
+  }
+  let prerequisitesValid = Boolean(prerequisites);
+  if (prerequisites && (
+    prerequisites.course_id !== courseId
+    || prerequisites.kind !== 'prerequisites'
+    || prerequisites.gate !== 'G6_PREREQUISITE_REVIEW'
+    || prerequisites.identity_sha256 !== identitySha256
+    || prerequisites.prerequisites_sha256 !== prerequisitesSha256
+    || prerequisites.review_audit_sha256 !== reviewAuditSha256
+  )) {
+    add(
+      findings,
+      'error',
+      'review',
+      'stale-prerequisites-approval',
+      '依赖关系审核后知识点、prerequisites 或带原因的边审计发生变化，审核回执已经失效',
+    );
+    prerequisitesValid = false;
+  }
+  return { reviewApprovals: Number(knowledgeValid) + Number(prerequisitesValid) };
 }
 
 function validateGraphShape(graph, findings) {
@@ -407,7 +699,7 @@ function validateEdgeAudit(sourceEdges, targetEdges, graph, pointIds, findings) 
   });
 }
 
-function validateGraphHandoff(contentRoot, graphFile, findings) {
+function validateGraphHandoff(contentRoot, graphFile, findings, { reviewMode = 'final' } = {}) {
   let course;
   let index;
   let manifest;
@@ -575,6 +867,20 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
 
   validateEdgeAudit(sourceEdges, targetEdges, graph, pointIds, findings);
 
+  const reviewCounts = reviewMode === 'none'
+    ? { reviewApprovals: 0 }
+    : validateReviewApprovals(
+      contentRoot,
+      course.id,
+      graph,
+      findings,
+      {
+        requiredKinds: reviewMode === 'prerequisites-pre-review'
+          ? ['knowledge-points']
+          : ['knowledge-points', 'prerequisites'],
+      },
+    );
+
   const graphCheck = spawnSync(
     process.execPath,
     [GRAPH_CHECKER, graphFile, '--json'],
@@ -599,11 +905,52 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
     brokenCycleEdges: Array.isArray(graph.generation.brokenCycleEdges)
       ? graph.generation.brokenCycleEdges.length
       : 0,
+    ...reviewCounts,
   };
 }
 
-function run(contentRoot, graphFile, phase = 'all') {
+function run(
+  contentRoot,
+  graphFile,
+  phase = 'all',
+  { reviewMode = 'final', enforceInputPaths = true } = {},
+) {
   const findings = [];
+  if (enforceInputPaths) {
+    try {
+      const contentInput = resolveTrustedInput(contentRoot);
+      assertSafeInputPath(contentInput.root, contentInput.target, {
+        directory: true,
+        label: 'content root',
+      });
+      contentRoot = contentInput.target;
+      if (graphFile) {
+        const graphInput = resolveTrustedInput(graphFile);
+        assertSafeInputPath(graphInput.root, graphInput.target, {
+          directory: false,
+          label: 'clustered-graph.json',
+        });
+        graphFile = graphInput.target;
+      }
+    } catch (error) {
+      add(findings, 'error', 'input', 'unsafe-input-path', error.message);
+      return {
+        ok: false,
+        phase,
+        contentRoot: path.resolve(contentRoot),
+        graphFile: graphFile ? path.resolve(graphFile) : null,
+        counts: {
+          indexPoints: 0,
+          pointFiles: 0,
+          animationRequests: 0,
+          animations: 0,
+          errors: 1,
+          warnings: 0,
+        },
+        findings,
+      };
+    }
+  }
   const skillDifferences = compareContentSkillCopies();
   if (skillDifferences.length > 0) {
     add(
@@ -683,6 +1030,7 @@ function run(contentRoot, graphFile, phase = 'all') {
         path.resolve(contentRoot),
         path.resolve(graphFile),
         findings,
+        { reviewMode },
       );
     }
   }
@@ -750,13 +1098,19 @@ async function selfTest() {
     const graphFile = path.join(graphDir, 'clustered-graph.json');
     writeFileSync(graphFile, `${JSON.stringify(graph, null, 2)}\n`, 'utf8');
 
-    const valid = run(root, graphFile);
+    const valid = run(root, graphFile, 'all', {
+      reviewMode: 'none',
+      enforceInputPaths: false,
+    });
     if (!valid.ok) throw new Error(`正例失败: ${JSON.stringify(valid.findings)}`);
 
     const changed = structuredClone(graph);
     changed.points[0].coreIdea = '被下游擅自改写的内容';
     writeFileSync(graphFile, `${JSON.stringify(changed, null, 2)}\n`, 'utf8');
-    const contentChanged = run(root, graphFile);
+    const contentChanged = run(root, graphFile, 'all', {
+      reviewMode: 'none',
+      enforceInputPaths: false,
+    });
     if (!contentChanged.findings.some((finding) => finding.code === 'content-changed')) {
       throw new Error('未捕获内容字段漂移');
     }
@@ -764,7 +1118,10 @@ async function selfTest() {
     const unaudited = structuredClone(graph);
     unaudited.points[2].prerequisites.push('input-state');
     writeFileSync(graphFile, `${JSON.stringify(unaudited, null, 2)}\n`, 'utf8');
-    const auditFailed = run(root, graphFile);
+    const auditFailed = run(root, graphFile, 'all', {
+      reviewMode: 'none',
+      enforceInputPaths: false,
+    });
     if (!auditFailed.findings.some((finding) => finding.code === 'edge-audit-mismatch')) {
       throw new Error('未捕获未经审计的 prerequisite 变化');
     }
@@ -773,7 +1130,10 @@ async function selfTest() {
     conflicted.points[0].related = ['state-transition'];
     conflicted.points[1].related = ['input-state'];
     writeFileSync(graphFile, `${JSON.stringify(conflicted, null, 2)}\n`, 'utf8');
-    const relationFailed = run(root, graphFile);
+    const relationFailed = run(root, graphFile, 'all', {
+      reviewMode: 'none',
+      enforceInputPaths: false,
+    });
     if (!relationFailed.findings.some((finding) => finding.code === 'relation-type-conflict')) {
       throw new Error('未捕获 related/prerequisites 冲突');
     }
@@ -789,6 +1149,7 @@ function parseArgs(argv) {
   const options = {
     asJson: false,
     phase: 'all',
+    preReview: null,
     selfTest: false,
     files: [],
   };
@@ -796,7 +1157,12 @@ function parseArgs(argv) {
     const argument = argv[index];
     if (argument === '--json') options.asJson = true;
     else if (argument === '--self-test') options.selfTest = true;
-    else if (argument === '--phase') {
+    else if (argument === '--pre-review') {
+      options.preReview = argv[index + 1];
+      index += 1;
+    } else if (argument.startsWith('--pre-review=')) {
+      options.preReview = argument.slice('--pre-review='.length);
+    } else if (argument === '--phase') {
       options.phase = argv[index + 1];
       index += 1;
     } else if (argument.startsWith('--phase=')) {
@@ -809,6 +1175,9 @@ function parseArgs(argv) {
   }
   if (!['index', 'points', 'animations', 'all'].includes(options.phase)) {
     throw new Error('--phase 只能是 index/points/animations/all');
+  }
+  if (options.preReview !== null && options.preReview !== 'prerequisites') {
+    throw new Error('--pre-review 目前只能是 prerequisites');
   }
   return options;
 }
@@ -834,12 +1203,21 @@ async function main() {
   }
 
   if (options.files.length < 1 || options.files.length > 2) {
-    console.error('用法: node check-pipeline.mjs <content-root> [clustered-graph.json] [--phase index|points|animations|all] [--json]');
+    console.error('用法: node check-pipeline.mjs <content-root> [clustered-graph.json] [--phase index|points|animations|all] [--pre-review prerequisites] [--json]');
+    process.exitCode = 2;
+    return;
+  }
+  if (options.preReview && (options.files.length !== 2 || options.phase !== 'all')) {
+    console.error('--pre-review prerequisites 必须同时提供 clustered-graph.json 且 --phase 为 all');
     process.exitCode = 2;
     return;
   }
 
-  const result = run(options.files[0], options.files[1], options.phase);
+  const result = run(options.files[0], options.files[1], options.phase, {
+    reviewMode: options.preReview === 'prerequisites'
+      ? 'prerequisites-pre-review'
+      : 'final',
+  });
   if (options.asJson) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -847,6 +1225,7 @@ async function main() {
       `${result.ok ? '✅' : '❌'} v2 流水线校验${result.ok ? '通过' : '失败'}：`
       + `${result.counts.indexPoints} 个索引点，${result.counts.pointFiles} 个详情，`
       + `${result.counts.animations} 个动画类型，${result.counts.clusters ?? 0} 个簇，`
+      + (result.graphFile ? `${result.counts.reviewApprovals ?? 0}/2 份结构化审核回执，` : '')
       + `${result.counts.errors} 个错误，${result.counts.warnings} 个警告。`,
     );
     for (const finding of result.findings) {

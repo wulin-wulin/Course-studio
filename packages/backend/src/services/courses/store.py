@@ -7,7 +7,8 @@ directory and provides three safeguards:
 * paths are constrained to the course JSON contract plus three fixed,
   integrity-checked files under ``<course-id>/animations``;
 * all candidates are parsed and validated before they reach the canonical tree;
-* writes use temporary files plus ``os.replace`` while holding a process lock.
+* complete trees use a journaled directory swap that can finish or roll back
+  after an interrupted process, while holding a process lock.
 
 OpenCode itself writes a per-conversation staging copy.  ``commit_workspace``
 validates that copy and synchronises it only if the canonical tree has not
@@ -16,6 +17,7 @@ changed since the workspace was created.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
@@ -26,9 +28,10 @@ import re
 import shutil
 import threading
 import uuid
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from ...config import settings
+from ..locking import exclusive_file_lock, FileLockError
 
 
 _ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -37,6 +40,8 @@ _COMPONENT_RE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_JSON_BYTES = 8 * 1024 * 1024
 _ANIMATION_RUNTIME_SCHEMA = "course-animation-runtime/1.0"
+_COMMIT_RECEIPT_SCHEMA = "course-workspace-commit/1.0"
+_TREE_TRANSACTION_SCHEMA = "course-tree-transaction/1.0"
 _ANIMATION_ASSET_FILES = frozenset({"manifest.json", "runtime.js", "runtime.css"})
 _POINT_META_FIELDS = (
     "id",
@@ -127,8 +132,14 @@ class CourseStore:
         self.root = (root or settings.course_data_dir).resolve()
         self.workspace_root = (workspace_root or settings.course_agent_workspace_dir).resolve()
         self._lock = threading.RLock()
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.parent.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
+        # A previous process may have stopped between the two directory renames
+        # that publish a validated tree. Recover that transaction before any
+        # caller can observe or mutate the canonical catalog.
+        with self._tree_transaction_lock(recover=False):
+            self._recover_atomic_sync_tree_locked(self.root)
+            self.root.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Safe paths and raw JSON I/O
@@ -233,7 +244,7 @@ class CourseStore:
     # ------------------------------------------------------------------
 
     def list_courses(self) -> list[dict[str, Any]]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             courses: list[dict[str, Any]] = []
             if not self.root.exists():
                 return courses
@@ -261,13 +272,13 @@ class CourseStore:
             return courses
 
     def read_course(self, course_id: str) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             directory = self._course_dir(course_id)
             course = self._read_json(directory / "course.json", root=self.root)
             return _deepcopy_json(course)
 
     def read_index(self, course_id: str) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             directory = self._course_dir(course_id)
             index = self._read_json(directory / "index.json", root=self.root)
             # The source AI course predates CKDS and does not contain courseId.
@@ -279,12 +290,12 @@ class CourseStore:
             return index
 
     def read_point(self, course_id: str, point_id: str) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             point = self._read_json(self._point_path(course_id, point_id), root=self.root)
             return _deepcopy_json(point)
 
     def read_animation_manifest(self, course_id: str) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             _, _, points = self._load_course_objects(self.root, course_id)
             self._animation_dir(course_id, root=self.root)
             validation = self._validate_animation_package(self.root, course_id, points)
@@ -308,7 +319,7 @@ class CourseStore:
     def read_animation_asset(self, course_id: str, file_name: str) -> bytes:
         if file_name not in {"runtime.js", "runtime.css"}:
             raise CourseNotFoundError(f"动画资产不存在：{file_name}")
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             # Validate hashes before serving executable content. A partial or
             # externally modified package must fail closed instead of running.
             self.read_animation_manifest(course_id)
@@ -318,8 +329,9 @@ class CourseStore:
             return path.read_bytes()
 
     def revision(self, course_id: str) -> str:
-        course = self.read_course(course_id)
-        return self._stored_revision(course, self._fingerprint(self.root))
+        with self._lock, self._tree_transaction_lock():
+            course = self.read_course(course_id)
+            return self._stored_revision(course, self._fingerprint(self.root))
 
     # ------------------------------------------------------------------
     # Package validation
@@ -657,7 +669,7 @@ class CourseStore:
         return result
 
     def validate_course(self, course_id: str, *, strict_details: bool = False) -> ValidationResult:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             course, index, points = self._load_course_objects(self.root, course_id)
             result = self._validate_course_objects(
                 course_id, course, index, points, strict_details=strict_details
@@ -722,79 +734,232 @@ class CourseStore:
     def _fingerprint(self, root: Path) -> str:
         return self._fingerprint_from_tree(self._tree_bytes(root))
 
-    def _atomic_sync_tree(self, destination: Path, desired: dict[Path, bytes]) -> None:
-        """Synchronise permitted package files with rollback on a failed replace.
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        """Persist a directory rename where the platform supports it."""
 
-        Individual filesystem replacements are atomic.  A process-wide lock and
-        rollback make a multi-file course update behave transactionally for
-        normal failures, while all data is already validated before this method
-        is called.
+        try:
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        except OSError:
+            # Directory fsync is unavailable on some supported filesystems.
+            pass
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _tree_transaction_paths(
+        destination: Path,
+        transaction_id: str,
+    ) -> tuple[Path, Path, Path]:
+        parent = destination.parent
+        prefix = f".{destination.name}.transaction-{transaction_id}"
+        return (
+            parent / f".{destination.name}.transaction.json",
+            parent / f"{prefix}.next",
+            parent / f"{prefix}.previous",
+        )
+
+    @contextmanager
+    def _tree_transaction_lock(self, *, recover: bool = True) -> Iterator[None]:
+        """Exclude other instances and processes from tree recovery or swaps.
+
+        The lock file lives beside the canonical root, so it is never moved as
+        part of the directory transaction. ``flock`` is released by the kernel
+        when a process exits, allowing the next process to recover a durable
+        journal. The shared ``RLock`` supplies the same exclusion between two
+        CourseStore instances in one process on platforms where flock ownership
+        is process-oriented.
         """
 
-        destination.mkdir(parents=True, exist_ok=True)
-        existing = self._tree_bytes(destination)
-        changed = sorted(
-            (set(existing) | set(desired)), key=lambda item: item.as_posix()
+        lock_path = self.root.parent / f".{self.root.name}.transaction.lock"
+        try:
+            with exclusive_file_lock(lock_path):
+                if recover:
+                    self._recover_atomic_sync_tree_locked(self.root)
+                yield
+        except FileLockError as exc:
+            raise CourseDataError(f"课程数据事务锁失败：{exc}") from exc
+
+    def _recover_atomic_sync_tree_locked(self, destination: Path) -> None:
+        """Finish or roll back one interrupted directory transaction."""
+
+        destination = destination.resolve(strict=False)
+        journal_path = destination.parent / f".{destination.name}.transaction.json"
+        if not journal_path.exists():
+            return
+        journal = self._read_state(journal_path)
+        if not journal or journal.get("schema") != _TREE_TRANSACTION_SCHEMA:
+            raise CourseDataError(f"课程数据事务日志无效：{journal_path}")
+        transaction_id = journal.get("transaction_id")
+        desired_fingerprint = journal.get("desired_fingerprint")
+        previous_fingerprint = journal.get("previous_fingerprint")
+        if (
+            not isinstance(transaction_id, str)
+            or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None
+            or not isinstance(desired_fingerprint, str)
+            or _SHA256_RE.fullmatch(desired_fingerprint) is None
+            or not isinstance(previous_fingerprint, str)
+            or _SHA256_RE.fullmatch(previous_fingerprint) is None
+            or journal.get("destination") != destination.name
+        ):
+            raise CourseDataError(f"课程数据事务日志字段无效：{journal_path}")
+
+        _, staged, previous = self._tree_transaction_paths(
+            destination,
+            transaction_id,
         )
-        changed = [path for path in changed if existing.get(path) != desired.get(path)]
-        if not changed:
+
+        def directory_fingerprint(path: Path) -> str | None:
+            if not path.exists():
+                return None
+            if not path.is_dir() or path.is_symlink():
+                raise CourseDataError(f"课程数据事务路径不安全：{path}")
+            return self._fingerprint(path)
+
+        current_fingerprint = directory_fingerprint(destination)
+        staged_fingerprint = directory_fingerprint(staged)
+        previous_tree_fingerprint = directory_fingerprint(previous)
+
+        if current_fingerprint == desired_fingerprint:
+            shutil.rmtree(staged, ignore_errors=True)
+            shutil.rmtree(previous, ignore_errors=True)
+            journal_path.unlink(missing_ok=True)
+            self._fsync_directory(destination.parent)
             return
 
-        temporary: dict[Path, Path] = {}
-        touched: list[Path] = []
+        if staged_fingerprint == desired_fingerprint:
+            if current_fingerprint is None:
+                if previous_tree_fingerprint != previous_fingerprint:
+                    raise CourseDataError(
+                        "课程数据事务缺少有效的回滚快照"
+                    )
+                os.replace(staged, destination)
+            elif current_fingerprint == previous_fingerprint:
+                if previous_tree_fingerprint not in {None, previous_fingerprint}:
+                    raise CourseDataError("课程数据事务的回滚快照与日志不一致")
+                if previous.exists():
+                    shutil.rmtree(previous)
+                os.replace(destination, previous)
+                os.replace(staged, destination)
+            else:
+                raise CourseDataError("课程数据事务恢复遇到未知的当前目录状态")
+            if self._fingerprint(destination) != desired_fingerprint:
+                raise CourseDataError("课程数据事务恢复后的目录校验失败")
+            shutil.rmtree(previous, ignore_errors=True)
+            journal_path.unlink(missing_ok=True)
+            self._fsync_directory(destination.parent)
+            return
+
+        if (
+            current_fingerprint is None
+            and previous_tree_fingerprint == previous_fingerprint
+        ):
+            os.replace(previous, destination)
+            shutil.rmtree(staged, ignore_errors=True)
+            journal_path.unlink(missing_ok=True)
+            self._fsync_directory(destination.parent)
+            return
+
+        if current_fingerprint == previous_fingerprint:
+            shutil.rmtree(staged, ignore_errors=True)
+            shutil.rmtree(previous, ignore_errors=True)
+            journal_path.unlink(missing_ok=True)
+            self._fsync_directory(destination.parent)
+            return
+
+        raise CourseDataError("课程数据事务无法安全恢复，请检查事务快照")
+
+    def _recover_atomic_sync_tree(self, destination: Path) -> None:
+        with self._tree_transaction_lock(recover=False):
+            self._recover_atomic_sync_tree_locked(destination)
+
+    def _atomic_sync_tree(self, destination: Path, desired: dict[Path, bytes]) -> None:
+        """Publish a complete tree with a crash-recoverable directory swap."""
+
+        with self._tree_transaction_lock(recover=False):
+            self._atomic_sync_tree_locked(destination, desired)
+
+    def _atomic_sync_tree_locked(
+        self,
+        destination: Path,
+        desired: dict[Path, bytes],
+    ) -> None:
+        destination = destination.resolve(strict=False)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._recover_atomic_sync_tree_locked(destination)
+        destination.mkdir(parents=True, exist_ok=True)
+        existing = self._tree_bytes(destination)
+        if existing == desired:
+            return
+
+        transaction_id = uuid.uuid4().hex
+        journal_path, staged, previous = self._tree_transaction_paths(
+            destination,
+            transaction_id,
+        )
+        desired_fingerprint = self._fingerprint_from_tree(desired)
+        previous_fingerprint = self._fingerprint_from_tree(existing)
         try:
-            for relative in changed:
-                content = desired.get(relative)
-                if content is None:
-                    continue
-                target = destination / relative
+            staged.mkdir()
+            for relative, content in desired.items():
+                if not self._allowed_relative_path(relative):
+                    raise CourseDataError(
+                        f"事务包含不允许的课程文件：{relative.as_posix()}"
+                    )
+                target = staged / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                temp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-                with temp.open("xb") as handle:
+                with target.open("xb") as handle:
                     handle.write(content)
                     handle.flush()
                     os.fsync(handle.fileno())
-                temporary[relative] = temp
+            if self._fingerprint(staged) != desired_fingerprint:
+                raise CourseDataError("课程数据事务暂存目录校验失败")
 
-            for relative in changed:
-                target = destination / relative
-                if relative in temporary:
-                    os.replace(temporary[relative], target)
-                elif target.exists():
-                    target.unlink()
-                touched.append(relative)
+            self._write_private_json(
+                journal_path,
+                {
+                    "schema": _TREE_TRANSACTION_SCHEMA,
+                    "transaction_id": transaction_id,
+                    "destination": destination.name,
+                    "previous_fingerprint": previous_fingerprint,
+                    "desired_fingerprint": desired_fingerprint,
+                },
+            )
+            self._fsync_directory(destination.parent)
+            os.replace(destination, previous)
+            os.replace(staged, destination)
+            self._fsync_directory(destination.parent)
+
+            if self._fingerprint(destination) != desired_fingerprint:
+                raise CourseDataError("课程数据事务提交后的目录校验失败")
+            shutil.rmtree(previous)
+            journal_path.unlink()
+            self._fsync_directory(destination.parent)
         except Exception as exc:
-            # Best-effort rollback restores the previous valid snapshot.  If a
-            # filesystem error also prevents rollback, surfacing the original
-            # exception is still safer than silently continuing.
-            for relative in reversed(touched):
-                target = destination / relative
-                previous = existing.get(relative)
+            # If the journal is durable, recovery deterministically completes
+            # the desired swap or restores the previous tree. Before that point
+            # the canonical destination has not been touched.
+            if journal_path.exists():
                 try:
-                    if previous is None:
-                        target.unlink(missing_ok=True)
-                    else:
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        rollback = target.with_name(f".{target.name}.{uuid.uuid4().hex}.rollback")
-                        rollback.write_bytes(previous)
-                        os.replace(rollback, target)
-                except OSError:
-                    pass
+                    self._recover_atomic_sync_tree_locked(destination)
+                except Exception as recovery_exc:
+                    raise CourseDataError(
+                        f"课程数据事务提交失败且无法恢复：{recovery_exc}"
+                    ) from exc
+                if (
+                    destination.is_dir()
+                    and self._fingerprint(destination) == desired_fingerprint
+                ):
+                    return
             raise CourseDataError(f"课程数据原子提交失败：{exc}") from exc
         finally:
-            for temp in temporary.values():
-                try:
-                    temp.unlink(missing_ok=True)
-                except OSError:
-                    pass
-
-        # Remove directories left behind by a deleted point/course, deepest first.
-        for directory in sorted(destination.rglob("*"), key=lambda item: len(item.parts), reverse=True):
-            if directory.is_dir() and directory != destination:
-                try:
-                    directory.rmdir()
-                except OSError:
-                    pass
+            if not journal_path.exists():
+                shutil.rmtree(staged, ignore_errors=True)
+                shutil.rmtree(previous, ignore_errors=True)
 
     def _write_package(self, course_id: str, course: dict[str, Any], index: dict[str, Any], points: dict[str, dict[str, Any]]) -> None:
         # Start from the full canonical tree.  A CRUD operation on one course
@@ -941,7 +1106,7 @@ class CourseStore:
         return course
 
     def create_course(self, course: dict[str, Any], index: dict[str, Any] | None = None) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             course = _deepcopy_json(course)
             course_id = _safe_id(course.get("id"), "course.id")
             if self._course_dir(course_id, required=False).exists():
@@ -962,7 +1127,7 @@ class CourseStore:
             return _deepcopy_json(course)
 
     def update_course(self, course_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             current, index, points = self._load_course_objects(self.root, course_id)
             patch = _deepcopy_json(patch)
             if "id" in patch and patch["id"] != course_id:
@@ -975,7 +1140,7 @@ class CourseStore:
             return _deepcopy_json(current)
 
     def delete_course(self, course_id: str) -> None:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             self._course_dir(course_id)
             current = self._tree_bytes(self.root)
             desired = {
@@ -986,7 +1151,7 @@ class CourseStore:
             self._atomic_sync_tree(self.root, desired)
 
     def create_cluster(self, course_id: str, cluster: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             course, index, points = self._load_course_objects(self.root, course_id)
             cluster = self._normalise_cluster(cluster)
             clusters = list(index.get("clusters") or [])
@@ -1001,7 +1166,7 @@ class CourseStore:
             return _deepcopy_json(cluster)
 
     def update_cluster(self, course_id: str, cluster_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             cluster_id = _safe_id(cluster_id, "cluster_id")
             course, index, points = self._load_course_objects(self.root, course_id)
             index = _deepcopy_json(index)
@@ -1022,7 +1187,7 @@ class CourseStore:
             return _deepcopy_json(target)
 
     def delete_cluster(self, course_id: str, cluster_id: str) -> None:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             cluster_id = _safe_id(cluster_id, "cluster_id")
             course, index, points = self._load_course_objects(self.root, course_id)
             referring = [
@@ -1047,7 +1212,7 @@ class CourseStore:
             self._write_package(course_id, course, index, points)
 
     def create_point(self, course_id: str, point: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             course, index, points = self._load_course_objects(self.root, course_id)
             point = self._normalise_point(point)
             point_id = point["id"]
@@ -1073,7 +1238,7 @@ class CourseStore:
             return _deepcopy_json(point)
 
     def update_point(self, course_id: str, point_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             point_id = _safe_id(point_id, "point_id")
             course, index, points = self._load_course_objects(self.root, course_id)
             current = points.get(point_id)
@@ -1105,7 +1270,7 @@ class CourseStore:
             return _deepcopy_json(current)
 
     def delete_point(self, course_id: str, point_id: str) -> None:
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             point_id = _safe_id(point_id, "point_id")
             course, index, points = self._load_course_objects(self.root, course_id)
             if point_id not in points:
@@ -1142,8 +1307,12 @@ class CourseStore:
         return session_dir / ".course-workspace-state"
 
     @staticmethod
+    def _commit_receipt_path(session_dir: Path) -> Path:
+        return session_dir / ".course-workspace-commit.json"
+
+    @staticmethod
     def _read_state(path: Path) -> dict[str, Any] | None:
-        if not path.is_file():
+        if not path.is_file() or path.is_symlink():
             return None
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
@@ -1153,10 +1322,113 @@ class CourseStore:
 
     @staticmethod
     def _write_state(path: Path, *, base: str, workspace: str) -> None:
-        path.write_text(
-            json.dumps({"base": base, "workspace": workspace}, ensure_ascii=False),
-            encoding="utf-8",
+        CourseStore._write_private_json(
+            path,
+            {"base": base, "workspace": workspace},
         )
+
+    @staticmethod
+    def _write_private_json(path: Path, value: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("x", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    @staticmethod
+    def _review_commit_identity(
+        conversation_id: str,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any]:
+        identity = {
+            "conversation_id": _safe_conversation_id(conversation_id),
+            "review_id": str(receipt.get("review_id") or "").strip(),
+            "review_kind": str(receipt.get("review_kind") or "").strip(),
+            "review_gate": str(receipt.get("review_gate") or "").strip(),
+            "review_revision": receipt.get("review_revision"),
+            "course_id": str(receipt.get("course_id") or "").strip(),
+            "artifact_hash": str(receipt.get("artifact_hash") or "").strip(),
+        }
+        if not identity["review_id"] or len(identity["review_id"]) > 200:
+            raise CourseDataError("课程提交回执缺少有效 review_id")
+        if identity["review_kind"] != "prerequisites":
+            raise CourseDataError("课程提交回执只能绑定 prerequisites 审核")
+        if identity["review_gate"] != "G6_PREREQUISITE_REVIEW":
+            raise CourseDataError("课程提交回执必须绑定 G6 审核")
+        if (
+            not isinstance(identity["review_revision"], int)
+            or isinstance(identity["review_revision"], bool)
+            or identity["review_revision"] < 1
+        ):
+            raise CourseDataError("课程提交回执缺少有效 review_revision")
+        _safe_id(identity["course_id"], "commit_receipt.course_id")
+        if not _SHA256_RE.fullmatch(identity["artifact_hash"]):
+            raise CourseDataError("课程提交回执缺少有效 artifact_hash")
+        return identity
+
+    def review_commit_receipt(
+        self,
+        conversation_id: str,
+        receipt: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Return proof that this exact G6 review reached canonical storage."""
+
+        with self._lock, self._tree_transaction_lock():
+            identity = self._review_commit_identity(conversation_id, receipt)
+            session_dir = self._workspace_session_dir(conversation_id)
+            document = self._read_state(self._commit_receipt_path(session_dir))
+            if not document or document.get("schema") != _COMMIT_RECEIPT_SCHEMA:
+                return None
+            if any(document.get(key) != value for key, value in identity.items()):
+                return None
+            changed_course_ids = document.get("changed_course_ids")
+            if changed_course_ids != [identity["course_id"]]:
+                return None
+            status = document.get("status")
+            if status == "committed":
+                return _deepcopy_json(document)
+            changed_paths = document.get("changed_paths")
+            changed_path_sha256 = document.get("changed_path_sha256")
+            if (
+                status == "prepared"
+                and isinstance(changed_paths, list)
+                and isinstance(changed_path_sha256, dict)
+                and set(changed_path_sha256) == set(changed_paths)
+            ):
+                for raw_path in changed_paths:
+                    if not isinstance(raw_path, str):
+                        return None
+                    relative = Path(raw_path)
+                    if (
+                        relative.is_absolute()
+                        or relative.as_posix() != raw_path
+                        or not self._allowed_relative_path(relative)
+                        or not relative.parts
+                        or relative.parts[0] != identity["course_id"]
+                    ):
+                        return None
+                    expected_hash = changed_path_sha256.get(raw_path)
+                    target = self._within(self.root, self.root / relative)
+                    if expected_hash is None:
+                        if os.path.lexists(target):
+                            return None
+                        continue
+                    if (
+                        not isinstance(expected_hash, str)
+                        or _SHA256_RE.fullmatch(expected_hash) is None
+                        or not target.is_file()
+                        or target.is_symlink()
+                        or hashlib.sha256(target.read_bytes()).hexdigest()
+                        != expected_hash
+                    ):
+                        return None
+                return _deepcopy_json(document)
+            return None
 
     def _copy_canonical_to_workspace(self, workspace: Path) -> None:
         if workspace.exists():
@@ -1168,7 +1440,7 @@ class CourseStore:
     def prepare_workspace(self, conversation_id: str) -> CourseWorkspace:
         """Return a conflict-aware staged copy for one OpenCode conversation."""
 
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             session_dir = self._workspace_session_dir(conversation_id)
             workspace = session_dir / "courses"
             state_path = self._state_path(session_dir)
@@ -1197,7 +1469,7 @@ class CourseStore:
         cannot leak into the canonical course catalog or a later Chat turn.
         """
 
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             scoped_id = f"chat-{_safe_conversation_id(conversation_id)}"[:80]
             session_dir = self._workspace_session_dir(scoped_id)
             workspace = session_dir / "courses"
@@ -1208,17 +1480,22 @@ class CourseStore:
     def restore_readonly_workspace(self, workspace: CourseWorkspace) -> None:
         """Discard all Chat-session file changes and restore its snapshot."""
 
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             session_dir = self._workspace_session_dir(workspace.conversation_id)
             expected_path = (session_dir / "courses").resolve()
             if workspace.path.resolve() != expected_path:
                 raise CourseDataError("无效的只读课程工作区")
             self._copy_canonical_to_workspace(workspace.path)
 
-    def commit_workspace(self, workspace: CourseWorkspace) -> dict[str, Any]:
+    def commit_workspace(
+        self,
+        workspace: CourseWorkspace,
+        *,
+        review_receipt: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Validate a staged OpenCode tree and atomically promote its changes."""
 
-        with self._lock:
+        with self._lock, self._tree_transaction_lock():
             session_dir = self._workspace_session_dir(workspace.conversation_id)
             expected_path = (session_dir / "courses").resolve()
             if workspace.path.resolve() != expected_path:
@@ -1253,6 +1530,10 @@ class CourseStore:
                 key=lambda item: item.as_posix(),
             )
             if not changed_before_revision:
+                if review_receipt is not None:
+                    raise CourseDataError(
+                        "课程工作区没有可绑定到审核恢复任务的新提交"
+                    )
                 return {
                     "changed_paths": [],
                     "course_ids": [],
@@ -1281,7 +1562,55 @@ class CourseStore:
             if not final_validation.ok:
                 raise CourseValidationError(final_validation.errors, final_validation.warnings)
 
-            self._atomic_sync_tree(self.root, desired)
+            canonical_fingerprint = self._fingerprint_from_tree(desired)
+            commit_receipt_path = self._commit_receipt_path(session_dir)
+            commit_receipt: dict[str, Any] | None = None
+            if review_receipt is not None:
+                identity = self._review_commit_identity(
+                    workspace.conversation_id,
+                    review_receipt,
+                )
+                if changed_course_ids != [identity["course_id"]]:
+                    raise CourseDataError(
+                        "审核恢复提交必须只包含对应课程"
+                    )
+                commit_receipt = {
+                    "schema": _COMMIT_RECEIPT_SCHEMA,
+                    "status": "prepared",
+                    **identity,
+                    "base_fingerprint": workspace.base_fingerprint,
+                    "canonical_fingerprint": canonical_fingerprint,
+                    "changed_course_ids": changed_course_ids,
+                    "changed_paths": [
+                        path.as_posix()
+                        for path in sorted(
+                            set(before) | set(desired),
+                            key=lambda item: item.as_posix(),
+                        )
+                        if before.get(path) != desired.get(path)
+                    ],
+                    "changed_path_sha256": {
+                        path.as_posix(): (
+                            hashlib.sha256(desired[path]).hexdigest()
+                            if path in desired
+                            else None
+                        )
+                        for path in sorted(
+                            set(before) | set(desired),
+                            key=lambda item: item.as_posix(),
+                        )
+                        if before.get(path) != desired.get(path)
+                    },
+                    "warnings": final_validation.warnings,
+                    "prepared_at": datetime.now(UTC).isoformat(),
+                }
+                self._write_private_json(commit_receipt_path, commit_receipt)
+
+            self._atomic_sync_tree_locked(self.root, desired)
+            if commit_receipt is not None:
+                commit_receipt["status"] = "committed"
+                commit_receipt["committed_at"] = datetime.now(UTC).isoformat()
+                self._write_private_json(commit_receipt_path, commit_receipt)
             # Reset the staged copy to exactly what was committed so future
             # turns start from a clean, conflict-free snapshot.
             self._copy_canonical_to_workspace(workspace.path)

@@ -29,11 +29,24 @@ import {
 } from "lucide-react";
 import { useChatStore } from "@/stores/chatStore";
 import type { ChatMode } from "@/stores/chatStore";
+import { parseReviewPointer, reviewResumeNavigation } from "@/features/reviews/types";
+import type { ReviewKind, ReviewPointer } from "@/features/reviews/types";
+import {
+  getBrowserReviewResumeOutbox,
+  queueReviewResume,
+  reconcileReviewResume,
+  REVIEW_RESUME_AVAILABLE_EVENT,
+  REVIEW_RESUME_OUTBOX_KEY,
+  reviewResumeDeliveryOutcome,
+  reviewResumeRetryDelay,
+} from "@/features/reviews/resumeDelivery";
 import { getBackendWsUrl } from "@/utils/backendWs";
+import { LatestRequestGuard } from "@/utils/latestRequest";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
 import { ModelControls } from "./ModelControls";
+import { ReviewRequiredCard } from "../review/ReviewRequiredCard";
 
 type AgentEntry = {
   id: string;
@@ -94,6 +107,8 @@ type ConversationDetail = Omit<ConversationSummary, "message_count" | "preview">
     images: string[];
     created_at: string;
   }>;
+  pending_review?: unknown;
+  pending_review_resume?: unknown;
 };
 
 type CourseDeletionCandidate = {
@@ -114,10 +129,13 @@ type HandlerCtx = {
   modeRef: RefObject<ChatMode>;
   workflowRef: RefObject<AgentWorkflow>;
   setPendingQuestion: Dispatch<SetStateAction<AgentQuestionRequest | null>>;
+  setPendingReview: Dispatch<SetStateAction<ReviewPointer | null>>;
+  onOpenReviewRef: RefObject<AgentPanelProps["onOpenReview"]>;
 };
 
 type AgentPanelProps = {
   onCollapse?: () => void;
+  onOpenReview?: (reviewId: string, kind: ReviewKind) => void;
 };
 
 const MODE_COPY: Record<
@@ -161,7 +179,21 @@ const AGENT_SUGGESTIONS = [
   "调整一个知识点的摘要并保持索引同步",
 ];
 
-export function AgentPanel({ onCollapse }: AgentPanelProps) {
+type ReviewResumeRequest = {
+  reviewId: string;
+  conversationId: string;
+  resumeMessage: string;
+  displayContent?: string;
+};
+
+type ReviewResumeRecovery = {
+  reviewId: string;
+  phase: "waiting" | "checking" | "paused" | "exhausted";
+  attempt: number;
+  delayMs?: number;
+};
+
+export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const selectedModel = useChatStore((s) => s.selectedModel);
   const setModel = useChatStore((s) => s.setModel);
   const mode = useChatStore((s) => s.mode);
@@ -182,6 +214,8 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const [historyError, setHistoryError] = useState("");
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [pendingQuestion, setPendingQuestion] = useState<AgentQuestionRequest | null>(null);
+  const [pendingReview, setPendingReview] = useState<ReviewPointer | null>(null);
+  const [reviewResumeRecovery, setReviewResumeRecovery] = useState<ReviewResumeRecovery | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [questionError, setQuestionError] = useState("");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
@@ -193,6 +227,20 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   const lastActiveConversationIdRef = useRef<string | null>(activeConversationId);
   const modeRef = useRef<ChatMode>(mode);
   const workflowRef = useRef<AgentWorkflow>("default");
+  const onOpenReviewRef = useRef(onOpenReview);
+  const deferredReviewResumeRef = useRef<ReviewResumeRequest | null>(null);
+  const deliverPersistedReviewResumeRef = useRef<() => void>(() => undefined);
+  const reconcileDeferredReviewResumeRef = useRef<() => void>(() => undefined);
+  const inFlightReviewResumeRef = useRef<ReviewResumeRequest | null>(null);
+  const consumedReviewResumeIdsRef = useRef<Set<string>>(new Set());
+  const reviewResumeFailureCountsRef = useRef<Map<string, number>>(new Map());
+  const reviewResumeRetryTimerRef = useRef<number | null>(null);
+  const reviewResumeReconcileAbortRef = useRef<AbortController | null>(null);
+  const pausedReviewResumeIdRef = useRef<string | null>(null);
+  const failedReviewResumeTerminalRef = useRef<ReviewResumeRequest | null>(null);
+  const initialConversationRestoreRef = useRef(activeConversationId);
+  const didAttemptInitialConversationRestoreRef = useRef(false);
+  const conversationRestoreGuardRef = useRef(new LatestRequestGuard());
   const streamingIdRef = useRef<string | null>(null);
   const thinkingIdRef = useRef<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -237,20 +285,85 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         window.dispatchEvent(new CustomEvent("course-data-changed", {
           detail: { source: "agent-websocket-connected" },
         }));
+        deliverPersistedReviewResumeRef.current();
+        reconcileDeferredReviewResumeRef.current();
       };
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          handleAgentEvent(data, {
-            setEntries,
-            setIsRunning,
-            setRunStatus,
-            streamingIdRef,
-            thinkingIdRef,
-            modeRef,
-            workflowRef,
-            setPendingQuestion,
-          });
+          const data = JSON.parse(event.data) as {
+            type: string;
+            payload?: Record<string, unknown>;
+          };
+          let suppressAgentEvent = false;
+          const failedReviewResume = failedReviewResumeTerminalRef.current;
+          if (
+            failedReviewResume
+            && data.type === "agent_done"
+            && readNonEmptyString(data.payload?.conversation_id) === failedReviewResume.conversationId
+          ) {
+            failedReviewResumeTerminalRef.current = null;
+            suppressAgentEvent = true;
+          }
+          const activeReviewResume = inFlightReviewResumeRef.current;
+          if (activeReviewResume) {
+            const outcome = reviewResumeDeliveryOutcome(activeReviewResume, data);
+            if (outcome === "consumed") {
+              getBrowserReviewResumeOutbox().remove(activeReviewResume.reviewId);
+              consumedReviewResumeIdsRef.current.add(activeReviewResume.reviewId);
+              reviewResumeFailureCountsRef.current.delete(activeReviewResume.reviewId);
+              inFlightReviewResumeRef.current = null;
+              failedReviewResumeTerminalRef.current = null;
+              pausedReviewResumeIdRef.current = null;
+              reviewResumeReconcileAbortRef.current?.abort();
+              reviewResumeReconcileAbortRef.current = null;
+              if (reviewResumeRetryTimerRef.current !== null) {
+                window.clearTimeout(reviewResumeRetryTimerRef.current);
+                reviewResumeRetryTimerRef.current = null;
+              }
+              setReviewResumeRecovery((current) => (
+                current?.reviewId === activeReviewResume.reviewId ? null : current
+              ));
+              if (deferredReviewResumeRef.current?.reviewId === activeReviewResume.reviewId) {
+                deferredReviewResumeRef.current = null;
+              }
+              if (deferredReviewResumeRef.current) {
+                reconcileDeferredReviewResumeRef.current();
+              } else {
+                deliverPersistedReviewResumeRef.current();
+              }
+            } else if (outcome === "failed") {
+              deferredReviewResumeRef.current = activeReviewResume;
+              inFlightReviewResumeRef.current = null;
+              setIsRunning(false);
+              setRunStatus(null);
+              suppressAgentEvent = true;
+              if (data.type === "agent_error") {
+                failedReviewResumeTerminalRef.current = activeReviewResume;
+              }
+              const failureCount = reviewResumeFailureCountsRef.current.get(
+                activeReviewResume.reviewId,
+              ) ?? 0;
+              reviewResumeFailureCountsRef.current.set(
+                activeReviewResume.reviewId,
+                failureCount + 1,
+              );
+              reconcileDeferredReviewResumeRef.current();
+            }
+          }
+          if (!suppressAgentEvent) {
+            handleAgentEvent(data, {
+              setEntries,
+              setIsRunning,
+              setRunStatus,
+              streamingIdRef,
+              thinkingIdRef,
+              modeRef,
+              workflowRef,
+              setPendingQuestion,
+              setPendingReview,
+              onOpenReviewRef,
+            });
+          }
         } catch {
           setEntries((prev) => [
             ...prev,
@@ -268,6 +381,19 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       ws.onclose = () => {
         window.clearTimeout(openTimer);
         if (wsRef.current === ws) wsRef.current = null;
+        const interruptedReviewResume = inFlightReviewResumeRef.current;
+        if (
+          interruptedReviewResume
+          && !consumedReviewResumeIdsRef.current.has(interruptedReviewResume.reviewId)
+        ) {
+          deferredReviewResumeRef.current = interruptedReviewResume;
+          inFlightReviewResumeRef.current = null;
+          setReviewResumeRecovery({
+            reviewId: interruptedReviewResume.reviewId,
+            phase: "waiting",
+            attempt: reviewResumeFailureCountsRef.current.get(interruptedReviewResume.reviewId) ?? 0,
+          });
+        }
         if (disposed) return;
         setConnectionState("disconnected");
         settleActiveEntries(setEntries, "error");
@@ -287,6 +413,13 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     return () => {
       disposed = true;
       clearReconnectTimer();
+      if (reviewResumeRetryTimerRef.current !== null) {
+        window.clearTimeout(reviewResumeRetryTimerRef.current);
+        reviewResumeRetryTimerRef.current = null;
+      }
+      reviewResumeReconcileAbortRef.current?.abort();
+      reviewResumeReconcileAbortRef.current = null;
+      conversationRestoreGuardRef.current.cancel();
       wsRef.current?.close();
     };
   }, []);
@@ -296,17 +429,44 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   }, [mode]);
 
   useEffect(() => {
+    onOpenReviewRef.current = onOpenReview;
+  }, [onOpenReview]);
+
+  const cancelConversationRestore = useCallback(() => {
+    conversationRestoreGuardRef.current.cancel();
+    setHistoryLoading(false);
+  }, []);
+
+  const cancelDeferredReviewResume = useCallback(() => {
+    if (reviewResumeRetryTimerRef.current !== null) {
+      window.clearTimeout(reviewResumeRetryTimerRef.current);
+      reviewResumeRetryTimerRef.current = null;
+    }
+    reviewResumeReconcileAbortRef.current?.abort();
+    reviewResumeReconcileAbortRef.current = null;
+    const deferred = deferredReviewResumeRef.current;
+    if (deferred) reviewResumeFailureCountsRef.current.delete(deferred.reviewId);
+    deferredReviewResumeRef.current = null;
+    pausedReviewResumeIdRef.current = null;
+    failedReviewResumeTerminalRef.current = null;
+    setReviewResumeRecovery(null);
+  }, []);
+
+  useEffect(() => {
     setQuestionError("");
     setQuestionSubmitting(false);
   }, [pendingQuestion?.requestId]);
 
   useEffect(() => {
     if (!activeConversationId || activeConversationId === lastActiveConversationIdRef.current) return;
+    cancelConversationRestore();
+    cancelDeferredReviewResume();
     lastActiveConversationIdRef.current = activeConversationId;
     setEntries([]);
     setIsRunning(false);
     setRunStatus(null);
     setPendingQuestion(null);
+    setPendingReview(null);
     setQuestionSubmitting(false);
     setQuestionError("");
     setWorkflow("default");
@@ -314,14 +474,14 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     streamingIdRef.current = null;
     thinkingIdRef.current = null;
     stickToBottomRef.current = true;
-  }, [activeConversationId]);
+  }, [activeConversationId, cancelConversationRestore, cancelDeferredReviewResume]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     const container = scrollContainerRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [entries, isRunning, pendingQuestion, runStatus]);
+  }, [entries, isRunning, pendingQuestion, pendingReview, runStatus]);
 
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -332,12 +492,15 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
   }, []);
 
   const resetConversationView = useCallback(() => {
+    cancelConversationRestore();
+    cancelDeferredReviewResume();
     setEntries([]);
     setInput("");
     setImages([]);
     setIsRunning(false);
     setRunStatus(null);
     setPendingQuestion(null);
+    setPendingReview(null);
     setQuestionSubmitting(false);
     setQuestionError("");
     setWorkflow("default");
@@ -345,7 +508,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     streamingIdRef.current = null;
     thinkingIdRef.current = null;
     stickToBottomRef.current = true;
-  }, []);
+  }, [cancelConversationRestore, cancelDeferredReviewResume]);
 
   const loadConversationHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -368,18 +531,27 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
 
   const openHistoricalConversation = useCallback(async (conversationId: string) => {
     if (isRunning) return;
+    cancelDeferredReviewResume();
+    const guardedRequest = conversationRestoreGuardRef.current.start();
     setHistoryLoading(true);
     setHistoryError("");
     try {
       const response = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
         cache: "no-store",
+        signal: guardedRequest.controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const conversation = await response.json() as ConversationDetail;
+      if (!conversationRestoreGuardRef.current.isCurrent(guardedRequest)) return;
       const restoredMode: ChatMode = conversation.mode === "chat" ? "chat" : "agent";
       const restoredWorkflow: AgentWorkflow = conversation.workflow === "course-create"
         ? "course-create"
         : "default";
+      const restoredReview = parseReviewPointer(conversation.pending_review);
+      const restoredResumePointer = parseReviewPointer(conversation.pending_review_resume);
+      const restoredResume = restoredResumePointer
+        ? reviewResumeNavigation(restoredResumePointer)
+        : null;
 
       lastActiveConversationIdRef.current = conversation.id;
       setActiveConversation(conversation.id);
@@ -392,6 +564,7 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       setImages([]);
       setRunStatus(null);
       setPendingQuestion(null);
+      setPendingReview(restoredReview);
       setQuestionSubmitting(false);
       setQuestionError("");
       setEntries(conversation.messages.map((message) => ({
@@ -410,12 +583,27 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       })));
       stickToBottomRef.current = true;
       setHistoryOpen(false);
+      if (restoredReview) {
+        onOpenReviewRef.current?.(restoredReview.id, restoredReview.kind);
+      } else if (restoredResume) {
+        queueReviewResume(restoredResume);
+      }
     } catch (error) {
+      if (!conversationRestoreGuardRef.current.isCurrent(guardedRequest)) return;
       setHistoryError(error instanceof Error ? error.message : "恢复历史对话失败");
     } finally {
-      setHistoryLoading(false);
+      if (conversationRestoreGuardRef.current.finish(guardedRequest)) {
+        setHistoryLoading(false);
+      }
     }
-  }, [isRunning, setActiveConversation, setMode, setModel]);
+  }, [cancelDeferredReviewResume, isRunning, setActiveConversation, setMode, setModel]);
+
+  useEffect(() => {
+    if (didAttemptInitialConversationRestoreRef.current) return;
+    didAttemptInitialConversationRestoreRef.current = true;
+    const conversationId = initialConversationRestoreRef.current;
+    if (conversationId) void openHistoricalConversation(conversationId);
+  }, [openHistoricalConversation]);
 
   const deleteHistoricalConversation = useCallback(async (
     event: React.MouseEvent,
@@ -468,8 +656,12 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
     requestImages: string[],
     requestWorkflow: AgentWorkflow,
     displayContent?: string,
-    replaceEntries = false
+    replaceEntries = false,
+    reviewResumeId?: string,
   ) => {
+    const requestMode = modeRef.current;
+    const socket = wsRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
     streamingIdRef.current = null;
     thinkingIdRef.current = null;
     stickToBottomRef.current = true;
@@ -480,17 +672,8 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       content: displayContent ?? (message || (requestImages.length > 0 ? `已发送 ${requestImages.length} 张图片` : "")),
       images: requestImages.length > 0 ? [...requestImages] : undefined,
     };
-    setEntries((prev) => replaceEntries ? [entry] : [...prev, entry]);
-    setIsRunning(true);
-    setRunStatus(
-      mode === "chat"
-        ? makeRunStatus("正在思考", "正在只读检索课程信息")
-        : requestWorkflow === "course-create"
-          ? makeRunStatus("正在启动课程创建流程", "正在加载课程创建 Skill")
-          : makeRunStatus("Agent 启动中", "正在准备课程数据工作区")
-    );
-    wsRef.current?.send(
-      JSON.stringify({
+    try {
+      socket.send(JSON.stringify({
         type: "agent_request",
         payload: {
           conversation_id: conversationId,
@@ -498,16 +681,37 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
           message,
           images: requestImages,
           model: selectedModel,
-          mode,
+          mode: requestMode,
           workflow: requestWorkflow,
+          ...(displayContent !== undefined ? { display_content: displayContent } : {}),
+          ...(reviewResumeId ? { review_resume_id: reviewResumeId } : {}),
         },
-      })
+      }));
+    } catch {
+      return false;
+    }
+    setEntries((prev) => replaceEntries ? [entry] : [...prev, entry]);
+    setIsRunning(true);
+    setRunStatus(
+      requestMode === "chat"
+        ? makeRunStatus("正在思考", "正在只读检索课程信息")
+        : requestWorkflow === "course-create"
+          ? makeRunStatus("正在启动课程创建流程", "正在加载课程创建 Skill")
+          : makeRunStatus("Agent 启动中", "正在准备课程数据工作区")
     );
-  }, [mode, selectedModel]);
+    return true;
+  }, [selectedModel]);
 
   const send = useCallback(() => {
     const message = input.trim();
-    if ((!message && images.length === 0) || isRunning || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    if (
+      pendingReview
+      || reviewResumeRecovery
+      || (!message && images.length === 0)
+      || isRunning
+      || wsRef.current?.readyState !== WebSocket.OPEN
+    ) return;
+    cancelConversationRestore();
 
     let conversationId = activeConversationId;
     if (!conversationId) {
@@ -515,10 +719,251 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
       lastActiveConversationIdRef.current = conversationId;
     }
 
-    submitRequest(conversationId, message, images, workflow);
+    if (submitRequest(conversationId, message, images, workflow)) {
+      setInput("");
+      setImages([]);
+    }
+  }, [
+    activeConversationId,
+    cancelConversationRestore,
+    createConversation,
+    images,
+    input,
+    isRunning,
+    pendingReview,
+    reviewResumeRecovery,
+    submitRequest,
+    workflow,
+  ]);
+
+  const continueAfterReview = useCallback((request: ReviewResumeRequest) => {
+    cancelConversationRestore();
+    if (consumedReviewResumeIdsRef.current.has(request.reviewId)) {
+      if (deferredReviewResumeRef.current?.reviewId === request.reviewId) {
+        deferredReviewResumeRef.current = null;
+      }
+      return;
+    }
+    const inFlight = inFlightReviewResumeRef.current;
+    if (inFlight) {
+      if (inFlight.reviewId !== request.reviewId) deferredReviewResumeRef.current = request;
+      return;
+    }
+    const isSameConversation = lastActiveConversationIdRef.current === request.conversationId;
+    lastActiveConversationIdRef.current = request.conversationId;
+    setActiveConversation(request.conversationId);
+    setMode("agent");
+    modeRef.current = "agent";
+    setWorkflow("course-create");
+    workflowRef.current = "course-create";
+    setPendingReview(null);
+    setPendingQuestion(null);
+    setQuestionSubmitting(false);
+    setQuestionError("");
     setInput("");
     setImages([]);
-  }, [activeConversationId, createConversation, images, input, isRunning, submitRequest, workflow]);
+    if (!isSameConversation) setEntries([]);
+    if (reviewResumeRetryTimerRef.current !== null) {
+      window.clearTimeout(reviewResumeRetryTimerRef.current);
+      reviewResumeRetryTimerRef.current = null;
+    }
+    reviewResumeReconcileAbortRef.current?.abort();
+    reviewResumeReconcileAbortRef.current = null;
+    pausedReviewResumeIdRef.current = null;
+    failedReviewResumeTerminalRef.current = null;
+    setReviewResumeRecovery(null);
+
+    const sent = submitRequest(
+      request.conversationId,
+      request.resumeMessage,
+      [],
+      "course-create",
+      request.displayContent,
+      false,
+      request.reviewId,
+    );
+    if (sent) {
+      inFlightReviewResumeRef.current = request;
+      deferredReviewResumeRef.current = null;
+      return;
+    }
+    deferredReviewResumeRef.current = request;
+    setIsRunning(false);
+    setRunStatus(null);
+    setReviewResumeRecovery({
+      reviewId: request.reviewId,
+      phase: "waiting",
+      attempt: reviewResumeFailureCountsRef.current.get(request.reviewId) ?? 0,
+    });
+    reconcileDeferredReviewResumeRef.current();
+  }, [cancelConversationRestore, setActiveConversation, setMode, submitRequest]);
+
+  const reconcileDeferredReviewResume = useCallback(async () => {
+    const request = deferredReviewResumeRef.current;
+    if (!request || pausedReviewResumeIdRef.current === request.reviewId) return;
+    reviewResumeReconcileAbortRef.current?.abort();
+    const controller = new AbortController();
+    reviewResumeReconcileAbortRef.current = controller;
+    setReviewResumeRecovery({
+      reviewId: request.reviewId,
+      phase: "checking",
+      attempt: reviewResumeFailureCountsRef.current.get(request.reviewId) ?? 0,
+    });
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(request.conversationId)}`,
+        { cache: "no-store", signal: controller.signal },
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const decision = reconcileReviewResume(request.reviewId, await response.json());
+      if (
+        controller.signal.aborted
+        || reviewResumeReconcileAbortRef.current !== controller
+        || deferredReviewResumeRef.current?.reviewId !== request.reviewId
+      ) return;
+
+      if (decision.kind === "retry") {
+        continueAfterReview({
+          reviewId: decision.navigation.reviewId,
+          conversationId: decision.navigation.conversationId,
+          resumeMessage: decision.navigation.resumeMessage,
+          displayContent: decision.navigation.displayContent,
+        });
+        return;
+      }
+
+      consumedReviewResumeIdsRef.current.add(request.reviewId);
+      getBrowserReviewResumeOutbox().remove(request.reviewId);
+      reviewResumeFailureCountsRef.current.delete(request.reviewId);
+      deferredReviewResumeRef.current = null;
+      pausedReviewResumeIdRef.current = null;
+      setReviewResumeRecovery(null);
+      if (decision.kind === "pending-review") {
+        setPendingReview(decision.review);
+        onOpenReviewRef.current?.(decision.review.id, decision.review.kind);
+      } else {
+        deliverPersistedReviewResumeRef.current();
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      // Keep the durable outbox item for a later reconnect or explicit restore.
+      const failureCount = reviewResumeFailureCountsRef.current.get(request.reviewId) ?? 0;
+      reviewResumeFailureCountsRef.current.set(request.reviewId, failureCount + 1);
+      if (reviewResumeReconcileAbortRef.current === controller) {
+        reviewResumeReconcileAbortRef.current = null;
+      }
+      reconcileDeferredReviewResumeRef.current();
+    } finally {
+      if (reviewResumeReconcileAbortRef.current === controller) {
+        reviewResumeReconcileAbortRef.current = null;
+      }
+    }
+  }, [continueAfterReview]);
+
+  const scheduleDeferredReviewResumeReconciliation = useCallback(() => {
+    const request = deferredReviewResumeRef.current;
+    if (
+      !request
+      || pausedReviewResumeIdRef.current === request.reviewId
+      || reviewResumeRetryTimerRef.current !== null
+      || reviewResumeReconcileAbortRef.current !== null
+    ) return;
+    const failureCount = reviewResumeFailureCountsRef.current.get(request.reviewId) ?? 0;
+    const delay = reviewResumeRetryDelay(failureCount);
+    if (delay === null) {
+      setReviewResumeRecovery({
+        reviewId: request.reviewId,
+        phase: "exhausted",
+        attempt: failureCount,
+      });
+      return;
+    }
+    setReviewResumeRecovery({
+      reviewId: request.reviewId,
+      phase: "waiting",
+      attempt: failureCount,
+      delayMs: delay,
+    });
+    reviewResumeRetryTimerRef.current = window.setTimeout(() => {
+      reviewResumeRetryTimerRef.current = null;
+      void reconcileDeferredReviewResume();
+    }, delay);
+  }, [reconcileDeferredReviewResume]);
+
+  useEffect(() => {
+    reconcileDeferredReviewResumeRef.current = () => {
+      scheduleDeferredReviewResumeReconciliation();
+    };
+    return () => {
+      reconcileDeferredReviewResumeRef.current = () => undefined;
+    };
+  }, [scheduleDeferredReviewResumeReconciliation]);
+
+  useEffect(() => {
+    const deliverPersistedReviewResume = () => {
+      const inFlightReviewId = inFlightReviewResumeRef.current?.reviewId;
+      const request = getBrowserReviewResumeOutbox().list().find((candidate) => (
+        candidate.reviewId !== inFlightReviewId
+        && !consumedReviewResumeIdsRef.current.has(candidate.reviewId)
+      ));
+      if (!request) return;
+      reviewResumeFailureCountsRef.current.delete(request.reviewId);
+      pausedReviewResumeIdRef.current = null;
+      reviewResumeReconcileAbortRef.current?.abort();
+      reviewResumeReconcileAbortRef.current = null;
+      if (reviewResumeRetryTimerRef.current !== null) {
+        window.clearTimeout(reviewResumeRetryTimerRef.current);
+        reviewResumeRetryTimerRef.current = null;
+      }
+      continueAfterReview(request);
+    };
+
+    const storageChanged = (event: StorageEvent) => {
+      if (event.key === null || event.key === REVIEW_RESUME_OUTBOX_KEY) {
+        deliverPersistedReviewResume();
+      }
+    };
+
+    deliverPersistedReviewResumeRef.current = deliverPersistedReviewResume;
+    window.addEventListener(REVIEW_RESUME_AVAILABLE_EVENT, deliverPersistedReviewResume);
+    window.addEventListener("storage", storageChanged);
+    deliverPersistedReviewResume();
+    return () => {
+      deliverPersistedReviewResumeRef.current = () => undefined;
+      window.removeEventListener(REVIEW_RESUME_AVAILABLE_EVENT, deliverPersistedReviewResume);
+      window.removeEventListener("storage", storageChanged);
+    };
+  }, [continueAfterReview]);
+
+  const pauseReviewResumeRecovery = useCallback(() => {
+    const request = deferredReviewResumeRef.current;
+    if (!request) return;
+    if (reviewResumeRetryTimerRef.current !== null) {
+      window.clearTimeout(reviewResumeRetryTimerRef.current);
+      reviewResumeRetryTimerRef.current = null;
+    }
+    reviewResumeReconcileAbortRef.current?.abort();
+    reviewResumeReconcileAbortRef.current = null;
+    pausedReviewResumeIdRef.current = request.reviewId;
+    setReviewResumeRecovery({
+      reviewId: request.reviewId,
+      phase: "paused",
+      attempt: reviewResumeFailureCountsRef.current.get(request.reviewId) ?? 0,
+    });
+  }, []);
+
+  const retryReviewResumeRecovery = useCallback(() => {
+    const request = deferredReviewResumeRef.current;
+    if (!request) return;
+    if (reviewResumeRetryTimerRef.current !== null) {
+      window.clearTimeout(reviewResumeRetryTimerRef.current);
+      reviewResumeRetryTimerRef.current = null;
+    }
+    reviewResumeFailureCountsRef.current.delete(request.reviewId);
+    pausedReviewResumeIdRef.current = null;
+    setReviewResumeRecovery({ reviewId: request.reviewId, phase: "checking", attempt: 0 });
+    void reconcileDeferredReviewResume();
+  }, [reconcileDeferredReviewResume]);
 
   const startCourseCreation = useCallback(() => {
     if (mode !== "agent" || isRunning || workflow === "course-create" || wsRef.current?.readyState !== WebSocket.OPEN) return;
@@ -918,6 +1363,17 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
             onSubmit={submitQuestionAnswers}
             onReject={rejectQuestion}
           />
+        ) : pendingReview ? (
+          <ReviewRequiredCard
+            review={pendingReview}
+            onOpen={() => onOpenReview?.(pendingReview.id, pendingReview.kind)}
+          />
+        ) : reviewResumeRecovery ? (
+          <ReviewResumeRecoveryCard
+            recovery={reviewResumeRecovery}
+            onPause={pauseReviewResumeRecovery}
+            onRetry={retryReviewResumeRecovery}
+          />
         ) : (
           <div className="overflow-hidden rounded-2xl border border-border bg-cream/55 shadow-sm transition-colors focus-within:border-primary/45 focus-within:bg-surface focus-within:shadow-md">
           {images.length > 0 && (
@@ -1017,6 +1473,72 @@ export function AgentPanel({ onCollapse }: AgentPanelProps) {
         )}
       </div>
     </div>
+  );
+}
+
+function ReviewResumeRecoveryCard({
+  recovery,
+  onPause,
+  onRetry,
+}: {
+  recovery: ReviewResumeRecovery;
+  onPause: () => void;
+  onRetry: () => void;
+}) {
+  const waitingSeconds = recovery.delayMs
+    ? Math.max(1, Math.round(recovery.delayMs / 1000))
+    : null;
+  const title = recovery.phase === "paused"
+    ? "课程生成恢复已暂停"
+    : recovery.phase === "exhausted"
+      ? "自动恢复暂未完成"
+      : "正在恢复课程生成";
+  const detail = recovery.phase === "checking"
+    ? "正在核对服务端保存的审核状态。"
+    : recovery.phase === "waiting"
+      ? `审核结果已安全保存，将在${waitingSeconds ? `约 ${waitingSeconds} 秒后` : "连接恢复后"}自动重试。`
+      : "审核结果仍保存在服务端，可随时继续恢复。";
+
+  return (
+    <section className="rounded-xl border border-warning/30 bg-amber-50/70 p-3" aria-live="polite">
+      <div className="flex items-start gap-2.5">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-warning/15 text-amber-700">
+          {recovery.phase === "checking" ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
+          <p className="mt-1 text-xs leading-5 text-text-secondary">{detail}</p>
+          {recovery.attempt > 0 && recovery.phase !== "paused" && (
+            <p className="mt-1 text-[10px] text-text-secondary">已核对 {recovery.attempt} 次</p>
+          )}
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        {recovery.phase === "waiting" && (
+          <button
+            type="button"
+            onClick={onPause}
+            className="h-8 rounded-md border border-warning/35 bg-surface px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            暂停自动重试
+          </button>
+        )}
+        {(recovery.phase === "paused" || recovery.phase === "exhausted") && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-semibold text-white hover:bg-primary-hover"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+            立即重试
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1520,6 +2042,8 @@ function handleAgentEvent(
     modeRef,
     workflowRef,
     setPendingQuestion,
+    setPendingReview,
+    onOpenReviewRef,
   } = ctx;
   const payload = data.payload ?? {};
   const currentMode = modeRef.current;
@@ -1636,6 +2160,32 @@ function handleAgentEvent(
       return;
     }
 
+    case "agent_review_required": {
+      const review = parseReviewPointer(payload);
+      if (!review) return;
+      finalizeStreaming(streamingIdRef, setEntries);
+      finalizeThinking(thinkingIdRef, setEntries);
+      setPendingQuestion(null);
+      setPendingReview(review);
+      setIsRunning(true);
+      updateRunStatus(setRunStatus, "等待课程评审", "请在评审工作区确认后继续");
+      onOpenReviewRef.current?.(review.id, review.kind);
+      return;
+    }
+
+    case "agent_review_resolved": {
+      const nestedReview = isRecord(payload.review) ? payload.review : undefined;
+      const reviewId = readNonEmptyString(payload.review_id)
+        || readNonEmptyString(payload.id)
+        || readNonEmptyString(nestedReview?.id);
+      setPendingReview((current) => {
+        if (!current || (reviewId && current.id !== reviewId)) return current;
+        return null;
+      });
+      updateRunStatus(setRunStatus, "评审已提交", "课程创建流程继续执行");
+      return;
+    }
+
     case "agent_done": {
       finalizeStreaming(streamingIdRef, setEntries);
       finalizeThinking(thinkingIdRef, setEntries);
@@ -1707,6 +2257,10 @@ function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {
       custom: item.custom !== false,
     }];
   });
+}
+
+function readNonEmptyString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

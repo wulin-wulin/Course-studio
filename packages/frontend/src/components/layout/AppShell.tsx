@@ -10,12 +10,16 @@ import { CourseCatalog } from "../course/CourseCatalog";
 import { CourseForestViewport } from "../course/CourseForestViewport";
 import { CourseReadingPage } from "../course/CourseReadingPage";
 import { AgentPanel } from "../chat/AgentPanel";
+import { ReviewWorkspace } from "../review/ReviewWorkspace";
 import type { CourseMeta } from "@/course/forest/types";
+import type { ReviewKind, ReviewSubmissionNavigation } from "@/features/reviews/types";
+import { queueReviewResume } from "@/features/reviews/resumeDelivery";
 
 type AppRoute =
   | { kind: "catalog" }
   | { kind: "forest"; courseId: string }
-  | { kind: "reading"; courseId: string; clusterId: string; pointId: string };
+  | { kind: "reading"; courseId: string; clusterId: string; pointId: string }
+  | { kind: "review"; reviewId: string; reviewKind: ReviewKind };
 
 const AGENT_PANEL_WIDTH_KEY = "course-studio:agent-panel-width";
 const AGENT_PANEL_MIN_WIDTH = 400;
@@ -90,7 +94,7 @@ export function AppShell() {
   const agentDialogRef = useRef<HTMLElement>(null);
   const expandAgentButtonRef = useRef<HTMLButtonElement>(null);
   const wasMobileAgentModalOpenRef = useRef(false);
-  const isMobileAgentModalOpen = isAgentPanelOpen && viewportWidth < 1024;
+  const isMobileAgentModalOpen = route.kind !== "review" && isAgentPanelOpen && viewportWidth < 1024;
 
   const openAgentPanel = useCallback(() => {
     setIsAgentPanelOpen(true);
@@ -99,6 +103,19 @@ export function AppShell() {
   const closeAgentPanel = useCallback(() => {
     setIsAgentPanelOpen(false);
   }, []);
+
+  const openReview = useCallback((reviewId: string, kind: ReviewKind) => {
+    const reviewPath = kind === "knowledge-points" ? "points" : "prerequisites";
+    navigate(`/reviews/${encodeURIComponent(reviewId)}/${reviewPath}`);
+  }, [navigate]);
+
+  const completeReview = useCallback((result: ReviewSubmissionNavigation) => {
+    // Persist before leaving the review route. AgentPanel is deliberately
+    // unmounted on that route, so an event alone can be missed on direct links.
+    queueReviewResume(result);
+    navigate("/");
+    setIsAgentPanelOpen(true);
+  }, [navigate]);
 
   useEffect(() => {
     window.localStorage.setItem(AGENT_PANEL_WIDTH_KEY, String(agentPanelWidth));
@@ -117,7 +134,7 @@ export function AppShell() {
     const handleDeletedCourse = (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail;
       if (
-        route.kind !== "catalog"
+        (route.kind === "forest" || route.kind === "reading")
         && isRecord(detail)
         && detail.deleted === true
         && detail.course_id === route.courseId
@@ -130,7 +147,7 @@ export function AppShell() {
   }, [navigate, route]);
 
   useEffect(() => {
-    if (route.kind === "reading" && window.innerWidth < 1024) {
+    if (route.kind === "review" || (route.kind === "reading" && window.innerWidth < 1024)) {
       setIsAgentPanelOpen(false);
     }
   }, [route]);
@@ -284,16 +301,26 @@ export function AppShell() {
 
   return (
     <div ref={appShellRef} className="h-screen flex flex-col overflow-hidden bg-cream">
-      <TopNav onGoHome={() => navigate("/")} isCatalog={route.kind === "catalog"} />
+      <TopNav
+        onGoHome={() => navigate("/")}
+        context={route.kind === "catalog" ? "catalog" : route.kind === "review" ? route.reviewKind : "course"}
+      />
       <main className="relative flex-1 min-h-0 flex overflow-hidden max-lg:flex-col">
         <section ref={workspaceRef} className="flex-1 min-w-0 min-h-0 relative">
           {route.kind === "catalog" ? (
             <CourseCatalog onOpenCourse={(course) => navigate(`/courses/${encodeURIComponent(course.id)}/forest`)} />
+          ) : route.kind === "review" ? (
+            <ReviewWorkspace
+              reviewId={route.reviewId}
+              expectedKind={route.reviewKind}
+              onSubmitted={completeReview}
+              onBack={() => navigate("/")}
+            />
           ) : (
             <CourseWorkspace route={route} navigate={navigate} />
           )}
         </section>
-        {isAgentPanelOpen && (
+        {route.kind !== "review" && isAgentPanelOpen && (
           <button
             type="button"
             aria-label="收起课程助手"
@@ -310,7 +337,7 @@ export function AppShell() {
           aria-label={isMobileAgentModalOpen ? "课程助手" : undefined}
           tabIndex={isMobileAgentModalOpen ? -1 : undefined}
           style={panelStyle}
-          className={`relative shrink-0 min-h-0 border-l border-border bg-surface max-lg:border-l-0 max-lg:border-t ${
+          className={`${route.kind === "review" ? "hidden" : "relative"} shrink-0 min-h-0 border-l border-border bg-surface max-lg:border-l-0 max-lg:border-t ${
             isResizingAgentPanel ? "" : "transition-[width] duration-200"
           } ${
             isAgentPanelOpen
@@ -342,7 +369,7 @@ export function AppShell() {
             </div>
           )}
           <div id="course-agent-panel" className={isAgentPanelOpen ? "h-full" : "hidden"}>
-            <AgentPanel onCollapse={closeAgentPanel} />
+            <AgentPanel onCollapse={closeAgentPanel} onOpenReview={openReview} />
           </div>
 
           {!isAgentPanelOpen && (
@@ -378,7 +405,7 @@ function CourseWorkspace({
   route,
   navigate,
 }: {
-  route: Exclude<AppRoute, { kind: "catalog" }>;
+  route: Extract<AppRoute, { kind: "forest" | "reading" }>;
   navigate: (path: string) => void;
 }) {
   const [course, setCourse] = useState<CourseMeta | null>(null);
@@ -468,6 +495,17 @@ function currentHashPath() {
 
 function parseRoute(path: string): AppRoute {
   const segments = path.split("/").filter(Boolean).map(decodeSegment);
+  if (segments.length === 3 && segments[0] === "reviews") {
+    const reviewId = segments[1];
+    const reviewPath = segments[2];
+    if (reviewId && (reviewPath === "points" || reviewPath === "prerequisites")) {
+      return {
+        kind: "review",
+        reviewId,
+        reviewKind: reviewPath === "points" ? "knowledge-points" : "prerequisites",
+      };
+    }
+  }
   if (segments.length === 3 && segments[0] === "courses" && segments[2] === "forest") {
     const courseId = segments[1];
     if (courseId) return { kind: "forest", courseId };
