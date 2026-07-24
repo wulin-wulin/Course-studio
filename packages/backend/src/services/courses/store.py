@@ -697,10 +697,10 @@ class CourseStore:
             return {}
         result: dict[Path, bytes] = {}
         for path in root.rglob("*"):
-            if path.is_symlink():
-                raise CourseDataError(f"不允许符号链接：{path.relative_to(root)}")
             if path.is_dir():
                 continue
+            if path.is_symlink():
+                raise CourseDataError(f"不允许符号链接：{path.relative_to(root)}")
             relative = path.relative_to(root)
             if not self._allowed_relative_path(relative):
                 raise CourseDataError(f"工作区包含不允许的文件：{relative.as_posix()}")
@@ -722,13 +722,7 @@ class CourseStore:
     def _fingerprint(self, root: Path) -> str:
         return self._fingerprint_from_tree(self._tree_bytes(root))
 
-    def _atomic_sync_tree(
-        self,
-        destination: Path,
-        desired: dict[Path, bytes],
-        *,
-        expected_fingerprint: str | None = None,
-    ) -> None:
+    def _atomic_sync_tree(self, destination: Path, desired: dict[Path, bytes]) -> None:
         """Synchronise permitted package files with rollback on a failed replace.
 
         Individual filesystem replacements are atomic.  A process-wide lock and
@@ -739,13 +733,6 @@ class CourseStore:
 
         destination.mkdir(parents=True, exist_ok=True)
         existing = self._tree_bytes(destination)
-        if (
-            expected_fingerprint is not None
-            and self._fingerprint_from_tree(existing) != expected_fingerprint
-        ):
-            raise CourseConflictError(
-                "课程数据在校验期间被其他会话更新，请重新开始本次修改"
-            )
         changed = sorted(
             (set(existing) | set(desired)), key=lambda item: item.as_posix()
         )
@@ -1187,19 +1174,17 @@ class CourseStore:
             state_path = self._state_path(session_dir)
             current = self._fingerprint(self.root)
             state = self._read_state(state_path)
-            if workspace.is_dir() and not workspace.is_symlink() and state:
+            if workspace.is_dir() and state:
+                workspace_fingerprint = self._fingerprint(workspace)
                 if state.get("base") == current:
                     return CourseWorkspace(conversation_id, workspace, current)
-                workspace_fingerprint = self._fingerprint(workspace)
                 if state.get("workspace") != workspace_fingerprint:
                     raise CourseConflictError(
                         "课程数据已被其他会话更新，当前暂存工作区仍有未提交修改；请先完成或丢弃该会话。"
                     )
             self._copy_canonical_to_workspace(workspace)
-            # ``copytree`` either completes with byte-identical files or raises.
-            # Re-reading the entire copy only to rediscover ``current`` adds no
-            # conflict protection.
-            self._write_state(state_path, base=current, workspace=current)
+            workspace_fingerprint = self._fingerprint(workspace)
+            self._write_state(state_path, base=current, workspace=workspace_fingerprint)
             return CourseWorkspace(conversation_id, workspace, current)
 
     def prepare_readonly_workspace(self, conversation_id: str) -> CourseWorkspace:
@@ -1217,14 +1202,7 @@ class CourseStore:
             session_dir = self._workspace_session_dir(scoped_id)
             workspace = session_dir / "courses"
             current = self._fingerprint(self.root)
-            reusable = False
-            if workspace.is_dir() and not workspace.is_symlink():
-                try:
-                    reusable = self._fingerprint(workspace) == current
-                except CourseDataError:
-                    reusable = False
-            if not reusable:
-                self._copy_canonical_to_workspace(workspace)
+            self._copy_canonical_to_workspace(workspace)
             return CourseWorkspace(scoped_id, workspace, current)
 
     def restore_readonly_workspace(self, workspace: CourseWorkspace) -> None:
@@ -1235,13 +1213,7 @@ class CourseStore:
             expected_path = (session_dir / "courses").resolve()
             if workspace.path.resolve() != expected_path:
                 raise CourseDataError("无效的只读课程工作区")
-            current = self._fingerprint(self.root)
-            try:
-                clean = self._fingerprint(workspace.path) == current
-            except CourseDataError:
-                clean = False
-            if not clean:
-                self._copy_canonical_to_workspace(workspace.path)
+            self._copy_canonical_to_workspace(workspace.path)
 
     def discard_conversation_workspaces(self, conversation_id: str) -> list[str]:
         """Delete private Agent/Chat workspaces without touching canonical courses."""
@@ -1268,26 +1240,8 @@ class CourseStore:
             expected_path = (session_dir / "courses").resolve()
             if workspace.path.resolve() != expected_path:
                 raise CourseDataError("无效的课程暂存工作区")
-            before = self._tree_bytes(self.root)
-            canonical_fingerprint = self._fingerprint_from_tree(before)
-            if canonical_fingerprint != workspace.base_fingerprint:
+            if self._fingerprint(self.root) != workspace.base_fingerprint:
                 raise CourseConflictError("课程数据已被其他会话更新，请重新开始本次修改")
-
-            desired = self._tree_bytes(workspace.path)
-            changed_before_revision = sorted(
-                [
-                    path for path in set(before) | set(desired)
-                    if before.get(path) != desired.get(path)
-                ],
-                key=lambda item: item.as_posix(),
-            )
-            if not changed_before_revision:
-                return {
-                    "changed_paths": [],
-                    "course_ids": [],
-                    "revision": canonical_fingerprint,
-                    "warnings": [],
-                }
 
             # ``strict_details=False`` deliberately accepts the handful of
             # legacy source warnings while still rejecting malformed JSON,
@@ -1305,6 +1259,23 @@ class CourseStore:
             validation.warnings = list(
                 dict.fromkeys(validation.warnings + changed_validation.warnings)
             )
+
+            before = self._tree_bytes(self.root)
+            desired = self._tree_bytes(workspace.path)
+            changed_before_revision = sorted(
+                [
+                    path for path in set(before) | set(desired)
+                    if before.get(path) != desired.get(path)
+                ],
+                key=lambda item: item.as_posix(),
+            )
+            if not changed_before_revision:
+                return {
+                    "changed_paths": [],
+                    "course_ids": [],
+                    "revision": self._fingerprint_from_tree(before),
+                    "warnings": validation.warnings,
+                }
 
             changed_course_ids = sorted({path.parts[0] for path in changed_before_revision})
             # Revision metadata belongs to every changed course, including a
@@ -1327,21 +1298,15 @@ class CourseStore:
             if not final_validation.ok:
                 raise CourseValidationError(final_validation.errors, final_validation.warnings)
 
-            self._atomic_sync_tree(
-                self.root,
-                desired,
-                expected_fingerprint=canonical_fingerprint,
-            )
+            self._atomic_sync_tree(self.root, desired)
             # Reset the staged copy to exactly what was committed so future
-            # turns start from a clean, conflict-free snapshot.  Incrementally
-            # synchronising the already validated workspace avoids deleting and
-            # copying every unchanged course package after each turn.
-            self._atomic_sync_tree(workspace.path, desired)
-            canonical_fingerprint = self._fingerprint_from_tree(desired)
+            # turns start from a clean, conflict-free snapshot.
+            self._copy_canonical_to_workspace(workspace.path)
+            canonical_fingerprint = self._fingerprint(self.root)
             self._write_state(
                 self._state_path(session_dir),
                 base=canonical_fingerprint,
-                workspace=canonical_fingerprint,
+                workspace=self._fingerprint(workspace.path),
             )
             final_changed_paths = sorted(
                 [

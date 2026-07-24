@@ -3,8 +3,6 @@ import type { ForestCluster } from "@/course/forest/types";
 import type {
   CourseGenerationEvent,
   CourseGenerationSnapshot,
-  GenerationActivityEvent,
-  GenerationActivityState,
   GenerationCourse,
   GenerationGate,
   GenerationPointState,
@@ -24,16 +22,6 @@ type CourseGenerationState = {
   totalPoints: number;
   points: GenerationPointState[];
   clusters: ForestCluster[];
-  activityState: GenerationActivityState;
-  activityLabel: string;
-  pointCompleted: number;
-  animationCompleted: number;
-  animationTotal: number;
-  waitingFor: string | null;
-  startedAt: number | null;
-  phaseStartedAt: number | null;
-  lastActivityAt: number | null;
-  recentActivities: GenerationActivityEvent[];
   speed: number;
   error: string | null;
   liveRuns: Record<string, LiveCourseGenerationRun>;
@@ -41,16 +29,8 @@ type CourseGenerationState = {
   startLive: (conversationId: string) => void;
   openLive: (conversationId: string) => void;
   applySnapshot: (snapshot: unknown) => void;
-  applyAgentStatus: (payload: unknown) => void;
   touchLive: (conversationId: string, now?: number) => void;
-  pauseLive: (
-    conversationId: string,
-    message?: string,
-    reason?: "paused" | "disconnected"
-  ) => void;
-  waitForReview: (conversationId: string, reviewKind?: string) => void;
-  waitForUser: (conversationId: string, label?: string) => void;
-  beginResume: (conversationId: string, label?: string) => void;
+  pauseLive: (conversationId: string, message?: string) => void;
   resumeLive: (conversationId: string) => void;
   pauseStaleLiveRuns: (now?: number) => void;
   markLiveError: (conversationId: string, message: string) => void;
@@ -63,16 +43,6 @@ type CourseGenerationState = {
   leaveView: () => void;
   reset: () => void;
 };
-
-type CourseGenerationSetter = (
-  partial:
-    | CourseGenerationState
-    | Partial<CourseGenerationState>
-    | ((
-        state: CourseGenerationState
-      ) => CourseGenerationState | Partial<CourseGenerationState>),
-  replace?: false
-) => void;
 
 const STORAGE_KEY = "course-studio:live-course-generations:v1";
 const MAX_PERSISTED_RUNS = 8;
@@ -91,25 +61,6 @@ export function isPersistableLiveGenerationConversationId(conversationId: string
   return normalizedId.length > 0 && !normalizedId.startsWith(SYNTHETIC_RUN_PREFIX);
 }
 
-export function shouldPauseGenerationAfterAgentDone(
-  payload: unknown,
-  run:
-    | Pick<LiveCourseGenerationRun, "published" | "activityState">
-    | undefined
-): boolean {
-  if (!run || run.published) return false;
-  if (
-    isRecord(payload) &&
-    (payload.awaiting_review === true || payload.awaitingReview === true)
-  ) {
-    return false;
-  }
-  return (
-    run.activityState !== "waiting-review" &&
-    run.activityState !== "waiting-user"
-  );
-}
-
 const EMPTY_ACTIVE_STATE = {
   status: "idle" as const,
   mode: "demo" as const,
@@ -121,16 +72,6 @@ const EMPTY_ACTIVE_STATE = {
   totalPoints: 0,
   points: [],
   clusters: [],
-  activityState: "working" as const,
-  activityLabel: "",
-  pointCompleted: 0,
-  animationCompleted: 0,
-  animationTotal: 0,
-  waitingFor: null,
-  startedAt: null,
-  phaseStartedAt: null,
-  lastActivityAt: null,
-  recentActivities: [],
   speed: 1,
   error: null,
 };
@@ -262,74 +203,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
     });
   },
 
-  applyAgentStatus: (value) => {
-    if (!isRecord(value)) return;
-    const conversationId = readString(value, "conversation_id", "conversationId");
-    if (!isPersistableLiveGenerationConversationId(conversationId)) return;
-    set((state) => {
-      const previous = state.liveRuns[conversationId];
-      if (!previous || previous.published || previous.status === "completed") {
-        return state;
-      }
-      const now = readTimestamp(value, "last_activity_at", "lastActivityAt") ?? Date.now();
-      const activityLabel =
-        readString(value, "activity_label", "activityLabel", "label") ||
-        previous.activityLabel ||
-        previous.phaseLabel;
-      const stageLabel = readString(value, "stage_label", "stageLabel");
-      const stageDetail = readString(value, "stage_detail", "stageDetail", "detail");
-      const phaseStartedAt =
-        readTimestamp(value, "phase_started_at", "phaseStartedAt") ??
-        (() => {
-          const phaseElapsedMs = readNumber(
-            value,
-            "phase_elapsed_ms",
-            "phaseElapsedMs"
-          );
-          return phaseElapsedMs === undefined
-            ? previous.phaseStartedAt
-            : now - Math.max(0, phaseElapsedMs);
-        })();
-      const statusActivities = normalizeActivityEvents(
-        value.recent_events ?? value.recentEvents
-      );
-      const waitingFor = normalizeWaitingFor(
-        readString(value, "waiting_for", "waitingFor")
-      );
-      const activityState = waitingFor
-        ? activityStateFromWaiting(waitingFor)
-        : previous.activityState === "waiting-review" ||
-            previous.activityState === "waiting-user"
-          ? previous.activityState
-          : "working";
-      const run: LiveCourseGenerationRun = {
-        ...previous,
-        status: "running",
-        phaseLabel: stageLabel || previous.phaseLabel,
-        phaseDetail: stageDetail || previous.phaseDetail,
-        activityState,
-        activityLabel,
-        waitingFor: waitingFor ?? previous.waitingFor,
-        phaseStartedAt: phaseStartedAt ?? previous.phaseStartedAt,
-        lastActivityAt: now,
-        recentActivities: mergeActivities(
-          previous.recentActivities,
-          statusActivities,
-          activityLabel,
-          now,
-          readString(value, "phase")
-        ),
-        error: null,
-        updatedAt: now,
-      };
-      const liveRuns = { ...state.liveRuns, [conversationId]: run };
-      if (state.mode === "live" && state.conversationId === conversationId) {
-        return { ...state, ...activeStateFromRun(run), liveRuns };
-      }
-      return { ...state, liveRuns };
-    });
-  },
-
   touchLive: (conversationId, now = Date.now()) => {
     const normalizedId = conversationId.trim();
     if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
@@ -345,12 +218,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       const run: LiveCourseGenerationRun = {
         ...previous,
         status: "running",
-        activityState:
-          previous.activityState === "waiting-review" ||
-          previous.activityState === "waiting-user"
-            ? previous.activityState
-            : "working",
-        lastActivityAt: now,
         error: null,
         updatedAt: now,
       };
@@ -362,11 +229,7 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
     });
   },
 
-  pauseLive: (
-    conversationId,
-    message = INTERRUPTED_RUN_MESSAGE,
-    reason = "paused"
-  ) => {
+  pauseLive: (conversationId, message = INTERRUPTED_RUN_MESSAGE) => {
     const normalizedId = conversationId.trim();
     const normalizedMessage = message.trim() || INTERRUPTED_RUN_MESSAGE;
     if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
@@ -382,11 +245,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       const run: LiveCourseGenerationRun = {
         ...previous,
         status: "paused",
-        activityState: reason,
-        activityLabel:
-          reason === "disconnected" ? "连接已中断" : "课程创建已暂停",
-        waitingFor: null,
-        lastActivityAt: Date.now(),
         error: normalizedMessage,
         updatedAt: Date.now(),
       };
@@ -395,39 +253,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
         return { ...state, ...activeStateFromRun(run), liveRuns };
       }
       return { ...state, liveRuns };
-    });
-  },
-
-  waitForReview: (conversationId, reviewKind = "review") => {
-    updateRunActivity(set, conversationId, {
-      activityState: "waiting-review",
-      activityLabel:
-        reviewKind.includes("graph") || reviewKind.includes("图谱")
-          ? "等待知识图谱审核"
-          : "等待知识点审核",
-      waitingFor: reviewKind,
-      status: "running",
-      error: null,
-    });
-  },
-
-  waitForUser: (conversationId, label = "等待你的确认") => {
-    updateRunActivity(set, conversationId, {
-      activityState: "waiting-user",
-      activityLabel: label,
-      waitingFor: "user",
-      status: "running",
-      error: null,
-    });
-  },
-
-  beginResume: (conversationId, label = "正在恢复课程创建") => {
-    updateRunActivity(set, conversationId, {
-      activityState: "resuming",
-      activityLabel: label,
-      waitingFor: null,
-      status: "running",
-      error: null,
     });
   },
 
@@ -440,10 +265,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       const run: LiveCourseGenerationRun = {
         ...previous,
         status: "running",
-        activityState: "resuming",
-        activityLabel: "正在恢复课程创建",
-        waitingFor: null,
-        lastActivityAt: Date.now(),
         error: null,
         updatedAt: Date.now(),
       };
@@ -462,8 +283,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       for (const [conversationId, previous] of Object.entries(liveRuns)) {
         if (
           previous.status !== "running" ||
-          previous.activityState === "waiting-review" ||
-          previous.activityState === "waiting-user" ||
           previous.published ||
           now - previous.updatedAt <= LIVE_RUN_STALE_AFTER_MS
         ) {
@@ -473,9 +292,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
         liveRuns[conversationId] = {
           ...previous,
           status: "paused",
-          activityState: "paused",
-          activityLabel: "长时间未收到活动",
-          waitingFor: null,
           error: INTERRUPTED_RUN_MESSAGE,
           updatedAt: now,
         };
@@ -502,10 +318,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       const run: LiveCourseGenerationRun = {
         ...previous,
         status: "error",
-        activityState: "error",
-        activityLabel: "课程创建遇到问题",
-        waitingFor: null,
-        lastActivityAt: Date.now(),
         error: normalizedMessage,
         updatedAt: Date.now(),
       };
@@ -591,10 +403,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
           gate: event.gate,
           phaseLabel: event.label,
           phaseDetail: event.detail,
-          activityState: state.status === "paused" ? "paused" : "working",
-          activityLabel: event.label,
-          phaseStartedAt: Date.now(),
-          lastActivityAt: Date.now(),
           error: null,
         }));
         return;
@@ -620,13 +428,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       case "point_grown":
         set((state) => ({
           ...state,
-          pointCompleted: state.points.filter(
-            (point) =>
-              point.id === event.pointId ||
-              point.status === "grown" ||
-              point.status === "clustered"
-          ).length,
-          lastActivityAt: Date.now(),
           points: state.points.map((point) =>
             point.id === event.pointId
               ? { ...point, status: "grown", progress: 100 }
@@ -651,8 +452,6 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
         set((state) => ({
           ...state,
           status: "completed",
-          activityState: "completed",
-          activityLabel: "课程发布完成",
           gate: "G7_RELEASE_READY",
           phaseLabel: "课程发布完成",
           phaseDetail: "知识点、知识簇和学习路径已经汇成完整森林。",
@@ -665,13 +464,7 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
         return;
 
       case "generation_failed":
-        set((state) => ({
-          ...state,
-          status: "error",
-          activityState: "error",
-          activityLabel: "课程生成失败",
-          error: event.message,
-        }));
+        set((state) => ({ ...state, status: "error", error: event.message }));
     }
   },
 
@@ -684,12 +477,7 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
       ) {
         return state;
       }
-      return {
-        ...state,
-        status: paused ? "paused" : "running",
-        activityState: paused ? "paused" : "working",
-        activityLabel: paused ? "演示已暂停" : state.phaseLabel,
-      };
+      return { ...state, status: paused ? "paused" : "running" };
     });
   },
 
@@ -720,7 +508,6 @@ if (typeof window !== "undefined") {
 }
 
 function makePlaceholderRun(conversationId: string): LiveCourseGenerationRun {
-  const now = Date.now();
   return {
     conversationId,
     status: "running",
@@ -734,19 +521,7 @@ function makePlaceholderRun(conversationId: string): LiveCourseGenerationRun {
     published: false,
     publishedCourseId: null,
     error: null,
-    activityState: "working",
-    activityLabel: "正在启动课程创建",
-    pointCompleted: 0,
-    animationCompleted: 0,
-    animationTotal: 0,
-    waitingFor: null,
-    startedAt: now,
-    phaseStartedAt: now,
-    lastActivityAt: now,
-    recentActivities: [
-      { at: now, label: "正在启动课程创建", kind: "start" },
-    ],
-    updatedAt: now,
+    updatedAt: Date.now(),
     snapshotKey: "",
   };
 }
@@ -763,16 +538,6 @@ function activeStateFromRun(run: LiveCourseGenerationRun) {
     totalPoints: run.totalPoints,
     points: run.points,
     clusters: run.clusters,
-    activityState: run.activityState,
-    activityLabel: run.activityLabel,
-    pointCompleted: run.pointCompleted,
-    animationCompleted: run.animationCompleted,
-    animationTotal: run.animationTotal,
-    waitingFor: run.waitingFor,
-    startedAt: run.startedAt,
-    phaseStartedAt: run.phaseStartedAt,
-    lastActivityAt: run.lastActivityAt,
-    recentActivities: run.recentActivities,
     error: run.error,
   };
 }
@@ -839,62 +604,20 @@ function runFromSnapshot(
         progressStartedAt,
       };
     });
-  const pointCompleted = Math.max(
-    points.filter((point) => point.status === "grown" || point.status === "clustered").length,
-    snapshot.point_completed ?? 0
-  );
-  const waitingFor = normalizeWaitingFor(snapshot.waiting_for ?? "");
-  const phaseChanged = previous.gate !== gate;
-  const reportedStartedAt = snapshot.started_at ?? previous.startedAt ?? now;
-  const startedAt = previous.snapshotKey && previous.startedAt
-    ? Math.min(previous.startedAt, reportedStartedAt)
-    : reportedStartedAt;
-  const reportedLastActivityAt = snapshot.last_activity_at ?? now;
-  const lastActivityAt = previous.snapshotKey
-    ? Math.max(previous.lastActivityAt ?? 0, reportedLastActivityAt)
-    : reportedLastActivityAt;
-  const phaseStartedAt = phaseChanged
-    ? Math.max(startedAt, lastActivityAt - (snapshot.telemetry?.phase_elapsed_ms ?? 0))
-    : previous.phaseStartedAt ?? lastActivityAt;
-  const phaseLabel = snapshot.stage_label || phase.label;
-  const phaseDetail = snapshot.stage_detail || phase.detail;
-  const activityLabel = snapshot.activity_label || phaseLabel;
-  const activityState: GenerationActivityState = snapshot.published
-    ? "completed"
-    : waitingFor
-      ? activityStateFromWaiting(waitingFor)
-      : "working";
-  const recentActivities = mergeActivities(
-    previous.recentActivities,
-    snapshot.telemetry?.recent_events ?? [],
-    activityLabel,
-    lastActivityAt,
-    snapshot.gate
-  );
 
   return {
     conversationId: snapshot.conversation_id,
     status: snapshot.published ? "completed" : "running",
     course: snapshot.course,
     gate,
-    phaseLabel,
-    phaseDetail,
-    totalPoints: Math.max(snapshot.total_points, snapshot.point_total ?? 0, points.length),
+    phaseLabel: phase.label,
+    phaseDetail: phase.detail,
+    totalPoints: Math.max(snapshot.total_points, points.length),
     points,
     clusters,
     published: snapshot.published,
     publishedCourseId: snapshot.published ? snapshot.course?.id ?? null : null,
     error: null,
-    activityState,
-    activityLabel,
-    pointCompleted,
-    animationCompleted: snapshot.animation_completed ?? previous.animationCompleted ?? 0,
-    animationTotal: snapshot.animation_total ?? previous.animationTotal ?? 0,
-    waitingFor,
-    startedAt,
-    phaseStartedAt,
-    lastActivityAt,
-    recentActivities,
     updatedAt: now,
     snapshotKey,
   };
@@ -1001,8 +724,6 @@ function normalizeSnapshot(value: unknown): CourseGenerationSnapshot | null {
         }];
       })
     : [];
-  const telemetry =
-    normalizeTelemetry(value.telemetry) ?? normalizeTelemetry(value);
   return {
     conversation_id: conversationId,
     gate: rawGate,
@@ -1011,26 +732,6 @@ function normalizeSnapshot(value: unknown): CourseGenerationSnapshot | null {
     points,
     clusters,
     published: value.published === true,
-    stage_label: readString(value, "stage_label", "stageLabel") || undefined,
-    stage_detail: readString(value, "stage_detail", "stageDetail") || undefined,
-    activity_label:
-      readString(value, "activity_label", "activityLabel") || undefined,
-    point_completed: readCount(value, "point_completed", "pointCompleted"),
-    point_total: readCount(value, "point_total", "pointTotal"),
-    animation_completed: readCount(
-      value,
-      "animation_completed",
-      "animationCompleted"
-    ),
-    animation_total: readCount(value, "animation_total", "animationTotal"),
-    waiting_for: readString(value, "waiting_for", "waitingFor") || undefined,
-    started_at: readTimestamp(value, "started_at", "startedAt"),
-    last_activity_at: readTimestamp(
-      value,
-      "last_activity_at",
-      "lastActivityAt"
-    ),
-    ...(telemetry ? { telemetry } : {}),
   };
 }
 
@@ -1151,18 +852,6 @@ export function normalizePersistedRun(
       ? "completed"
       : "paused";
   const persistedError = readString(value, "error");
-  const updatedAt = readNumber(value, "updatedAt") ?? Date.now();
-  const persistedActivityState = readActivityState(value.activityState);
-  const activityState: GenerationActivityState =
-    status === "completed"
-      ? "completed"
-      : status === "error"
-        ? "error"
-        : persistedActivityState === "waiting-review" ||
-            persistedActivityState === "waiting-user" ||
-            persistedActivityState === "disconnected"
-          ? persistedActivityState
-          : "paused";
   return {
     conversationId,
     status,
@@ -1179,27 +868,7 @@ export function normalizePersistedRun(
       status === "paused"
         ? persistedError || INTERRUPTED_RUN_MESSAGE
         : persistedError || null,
-    activityState,
-    activityLabel:
-      readString(value, "activityLabel") ||
-      (activityState === "disconnected"
-        ? "连接已中断"
-        : activityState === "paused"
-          ? "课程创建已暂停"
-          : PHASE_COPY[rawGate].label),
-    pointCompleted:
-      readCount(value, "pointCompleted") ??
-      points.filter(
-        (point) => point.status === "grown" || point.status === "clustered"
-      ).length,
-    animationCompleted: readCount(value, "animationCompleted") ?? 0,
-    animationTotal: readCount(value, "animationTotal") ?? 0,
-    waitingFor: readString(value, "waitingFor") || null,
-    startedAt: readNumber(value, "startedAt") ?? updatedAt,
-    phaseStartedAt: readNumber(value, "phaseStartedAt") ?? updatedAt,
-    lastActivityAt: readNumber(value, "lastActivityAt") ?? updatedAt,
-    recentActivities: normalizePersistedActivities(value.recentActivities),
-    updatedAt,
+    updatedAt: readNumber(value, "updatedAt") ?? Date.now(),
     snapshotKey: readString(value, "snapshotKey"),
   };
 }
@@ -1226,168 +895,12 @@ function isPersistedCluster(value: unknown): value is ForestCluster {
   );
 }
 
-function updateRunActivity(
-  set: CourseGenerationSetter,
-  conversationId: string,
-  patch: Partial<LiveCourseGenerationRun>
-) {
-  const normalizedId = conversationId.trim();
-  if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
-  set((state) => {
-    const previous = state.liveRuns[normalizedId];
-    if (!previous || previous.published || previous.status === "completed") {
-      return state;
-    }
-    const now = Date.now();
-    const activityLabel = patch.activityLabel || previous.activityLabel;
-    const run: LiveCourseGenerationRun = {
-      ...previous,
-      ...patch,
-      lastActivityAt: now,
-      updatedAt: now,
-      recentActivities: appendActivity(
-        previous.recentActivities,
-        activityLabel,
-        now,
-        patch.activityState
-      ),
-    };
-    const liveRuns = { ...state.liveRuns, [normalizedId]: run };
-    if (state.mode === "live" && state.conversationId === normalizedId) {
-      return { ...state, ...activeStateFromRun(run), liveRuns };
-    }
-    return { ...state, liveRuns };
-  });
-}
-
-function normalizeWaitingFor(value: string): string | null {
-  const normalized = value.trim();
-  if (!normalized || ["none", "null", "false", "working"].includes(normalized.toLowerCase())) {
-    return null;
-  }
-  return normalized;
-}
-
-function activityStateFromWaiting(waitingFor: string): GenerationActivityState {
-  const normalized = waitingFor.toLowerCase();
-  return normalized.includes("review") ||
-    normalized.includes("审核") ||
-    normalized.includes("knowledge-points") ||
-    normalized.includes("knowledge-graph")
-    ? "waiting-review"
-    : "waiting-user";
-}
-
-function appendActivity(
-  activities: GenerationActivityEvent[],
-  label: string,
-  at: number,
-  kind?: string
-): GenerationActivityEvent[] {
-  const normalizedLabel = label.trim();
-  if (!normalizedLabel) return activities.slice(-5);
-  const latest = activities[activities.length - 1];
-  if (latest?.label === normalizedLabel && latest.kind === (kind || undefined)) {
-    if (latest.at === at) return activities;
-    return [...activities.slice(0, -1), { ...latest, at }].slice(-6);
-  }
-  return [
-    ...activities,
-    { at, label: normalizedLabel, ...(kind ? { kind } : {}) },
-  ].slice(-6);
-}
-
-function mergeActivities(
-  previous: GenerationActivityEvent[],
-  incoming: GenerationActivityEvent[],
-  currentLabel: string,
-  currentAt: number,
-  currentKind?: string
-) {
-  let result = previous;
-  for (const event of incoming) {
-    result = appendActivity(result, event.label, event.at, event.kind);
-  }
-  return appendActivity(result, currentLabel, currentAt, currentKind);
-}
-
-function normalizeTelemetry(
-  value: unknown
-): CourseGenerationSnapshot["telemetry"] | undefined {
-  if (!isRecord(value)) return undefined;
-  const phaseElapsed = readNumber(value, "phase_elapsed_ms", "phaseElapsedMs");
-  const recentEvents = normalizeActivityEvents(
-    value.recent_events ?? value.recentEvents
-  );
-  if (phaseElapsed === undefined && recentEvents.length === 0) return undefined;
-  return {
-    ...(phaseElapsed !== undefined && phaseElapsed >= 0
-      ? { phase_elapsed_ms: phaseElapsed }
-      : {}),
-    ...(recentEvents.length > 0 ? { recent_events: recentEvents } : {}),
-  };
-}
-
-function normalizeActivityEvents(value: unknown): GenerationActivityEvent[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!isRecord(item)) return [];
-    const label = readString(item, "label", "activity_label", "activityLabel");
-    if (!label) return [];
-    const at = readTimestamp(item, "at", "timestamp", "created_at", "createdAt");
-    if (at === undefined) return [];
-    const kind = readString(item, "kind", "phase");
-    return [{ at, label, ...(kind ? { kind } : {}) }];
-  }).slice(-6);
-}
-
-function normalizePersistedActivities(value: unknown): GenerationActivityEvent[] {
-  return normalizeActivityEvents(value);
-}
-
-function readActivityState(value: unknown): GenerationActivityState | null {
-  return [
-    "working",
-    "waiting-review",
-    "waiting-user",
-    "resuming",
-    "paused",
-    "disconnected",
-    "completed",
-    "error",
-  ].includes(String(value))
-    ? (value as GenerationActivityState)
-    : null;
-}
-
 function readString(value: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {
     const candidate = value[key];
     if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
   }
   return "";
-}
-
-function readCount(value: Record<string, unknown>, ...keys: string[]) {
-  const number = readNumber(value, ...keys);
-  return number === undefined || number < 0 ? undefined : Math.round(number);
-}
-
-function readTimestamp(value: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const candidate = value[key];
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      // Accept seconds, milliseconds, and Python/JS epoch timestamps.
-      return candidate > 0 && candidate < 10_000_000_000
-        ? Math.round(candidate * 1000)
-        : Math.round(candidate);
-    }
-    if (typeof candidate === "string" && candidate.trim()) {
-      const parsed = Date.parse(candidate);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return undefined;
 }
 
 function readNumber(value: Record<string, unknown>, ...keys: string[]) {

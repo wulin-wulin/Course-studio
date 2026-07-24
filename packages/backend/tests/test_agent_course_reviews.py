@@ -59,40 +59,6 @@ def _resume(kind: str) -> dict:
 class AgentCourseReviewTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         agent._opencode_sessions.clear()
-        agent._status_telemetry.clear()
-
-    async def test_status_events_include_bounded_phase_telemetry(self):
-        websocket = _WebSocket()
-
-        await agent._send_status(
-            websocket,
-            "conversation-review",
-            "provision",
-            "正在恢复课程工作区",
-        )
-        await agent._send_status(
-            websocket,
-            "conversation-review",
-            "done",
-            "完成",
-        )
-
-        first = websocket.messages[0]["payload"]
-        final = websocket.messages[1]["payload"]
-        self.assertEqual(first["phase_elapsed_ms"], 0)
-        self.assertIn("phase_started_at", first)
-        self.assertIn("last_activity_at", first)
-        self.assertEqual(final["recent_events"][0]["phase"], "provision")
-        self.assertNotIn("conversation-review", agent._status_telemetry)
-
-    async def test_course_creation_prompt_defers_to_single_orchestrator(self):
-        prompt = agent._course_creation_prompt("继续创建")
-
-        self.assertIn("knowledge-pipeline-orchestrator", prompt)
-        self.assertIn("G0/G7 使用 question", prompt)
-        self.assertIn("G2/G6", prompt)
-        self.assertNotIn("validate-index", prompt)
-        self.assertLess(len(prompt), 700)
 
     async def test_pending_review_stops_before_runtime_or_history(self):
         websocket = _WebSocket()

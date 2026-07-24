@@ -3,8 +3,6 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
-  ClipboardCheck,
-  Clock3,
   Loader2,
   Pause,
   Play,
@@ -13,7 +11,6 @@ import {
   SkipForward,
   Sparkles,
   Sprout,
-  WifiOff,
   X,
 } from "lucide-react";
 import type { CourseMeta, ForestIndex } from "@/course/forest/types";
@@ -23,7 +20,6 @@ import { GenerationForestCanvas } from "@/course/generation/GenerationForestCanv
 import { useCourseGenerationStore } from "@/course/generation/generationStore";
 import {
   GENERATION_GATES,
-  type GenerationActivityState,
   type GenerationGate,
   type GenerationPointState,
 } from "@/course/generation/types";
@@ -63,19 +59,6 @@ export function CourseGenerationView({
   const points = useCourseGenerationStore((state) => state.points);
   const clusters = useCourseGenerationStore((state) => state.clusters);
   const totalPoints = useCourseGenerationStore((state) => state.totalPoints);
-  const conversationId = useCourseGenerationStore((state) => state.conversationId);
-  const activityState = useCourseGenerationStore((state) => state.activityState);
-  const activityLabel = useCourseGenerationStore((state) => state.activityLabel);
-  const pointCompleted = useCourseGenerationStore((state) => state.pointCompleted);
-  const animationCompleted = useCourseGenerationStore(
-    (state) => state.animationCompleted
-  );
-  const animationTotal = useCourseGenerationStore((state) => state.animationTotal);
-  const startedAt = useCourseGenerationStore((state) => state.startedAt);
-  const lastActivityAt = useCourseGenerationStore((state) => state.lastActivityAt);
-  const recentActivities = useCourseGenerationStore(
-    (state) => state.recentActivities
-  );
   const speed = useCourseGenerationStore((state) => state.speed);
   const error = useCourseGenerationStore((state) => state.error);
   const markLoading = useCourseGenerationStore((state) => state.markLoading);
@@ -84,15 +67,12 @@ export function CourseGenerationView({
   const setSpeed = useCourseGenerationStore((state) => state.setSpeed);
   const reset = useCourseGenerationStore((state) => state.reset);
   const requestDemo = useCourseGenerationStore((state) => state.requestDemo);
-  const beginResume = useCourseGenerationStore((state) => state.beginResume);
   const leaveView = useCourseGenerationStore((state) =>
     (state as typeof state & { leaveView?: () => void }).leaveView
   );
   const replayRef = useRef<DemoReplaySource | null>(null);
-  const resumePendingRef = useRef(false);
   const [timelineProgress, setTimelineProgress] = useState(0);
   const [reloadVersion, setReloadVersion] = useState(0);
-  const [clock, setClock] = useState(Date.now());
   const isDemo = mode === "demo";
 
   useEffect(() => {
@@ -158,19 +138,6 @@ export function CourseGenerationView({
     };
   }, [applyEvent, isDemo, markLoading, reloadVersion]);
 
-  useEffect(() => {
-    if (isDemo || status === "completed") return;
-    setClock(Date.now());
-    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [isDemo, status]);
-
-  useEffect(() => {
-    if (activityState !== "resuming") {
-      resumePendingRef.current = false;
-    }
-  }, [activityState]);
-
   const completedPoints = useMemo(
     () => points.filter((point) => isPointComplete(point)),
     [points]
@@ -190,24 +157,10 @@ export function CourseGenerationView({
   const isPaused = status === "paused";
   const isCompleted = status === "completed";
   const isLoading = status === "requested" || status === "loading";
-  const isResuming = !isDemo && activityState === "resuming";
-  const isWaitingReview = !isDemo && activityState === "waiting-review";
-  const isDisconnected = !isDemo && activityState === "disconnected";
   const courseTitle = course?.title || (isDemo ? "软件工程" : "新课程");
-  const completedPointCount = Math.max(completedPoints.length, pointCompleted);
   const completedRatio = totalPoints > 0
-    ? Math.min(1, completedPointCount / totalPoints)
+    ? completedPoints.length / totalPoints
     : 0;
-  const animationRatio = animationTotal > 0
-    ? Math.min(1, animationCompleted / animationTotal)
-    : 0;
-  const elapsedSeconds = startedAt
-    ? Math.max(0, Math.floor((clock - startedAt) / 1_000))
-    : 0;
-  const activityAgoSeconds = lastActivityAt
-    ? Math.max(0, Math.floor((clock - lastActivityAt) / 1_000))
-    : null;
-  const stateCopy = generationStateCopy(activityState, activityLabel);
 
   const togglePlayback = () => {
     if (isPaused) {
@@ -232,9 +185,6 @@ export function CourseGenerationView({
 
   const retry = () => {
     if (!isDemo) {
-      if (isResuming || resumePendingRef.current) return;
-      resumePendingRef.current = true;
-      if (conversationId) beginResume(conversationId);
       onResume();
       return;
     }
@@ -273,47 +223,26 @@ export function CourseGenerationView({
           </span>
           <div>
             <div className="course-generation__title-row">
-              <strong>
-                {courseTitle}
-                {isCompleted
-                  ? "课程已完成"
-                  : isWaitingReview
-                    ? "课程等待审核"
-                    : isDisconnected
-                      ? "课程创建已断线"
-                      : isPaused
-                        ? "课程创建已暂停"
-                        : "课程正在生长"}
-              </strong>
+              <strong>{courseTitle}课程正在生长</strong>
               <span
                 className={`course-generation__mode-badge ${
-                  isDemo
-                    ? "is-demo"
-                    : `is-live is-${activityState}`
+                  isDemo ? "is-demo" : "is-live"
                 }`}
               >
                 {isDemo ? (
                   <Sparkles aria-hidden="true" size={11} />
-                ) : isDisconnected ? (
-                  <WifiOff aria-hidden="true" size={11} />
-                ) : isWaitingReview ? (
-                  <ClipboardCheck aria-hidden="true" size={11} />
                 ) : (
                   <Radio aria-hidden="true" size={11} />
                 )}
-                {isDemo ? "演示模式" : stateCopy.badge}
+                {isDemo ? "演示模式" : "实时生成"}
               </span>
             </div>
             <span>
               {isDemo
                 ? "使用预定义课程数据回放真实生成流程"
-                : isDisconnected
-                  ? "连接恢复后可以从已保存进度继续"
-                  : isWaitingReview
-                    ? "确认审核结果后流程会自动继续"
-                    : course
-                      ? "生成结果会随智能体工作实时更新"
-                      : "等待智能体确认课程范围和名称"}
+                : course
+                  ? "生成结果会随智能体工作实时更新"
+                  : "等待智能体确认课程范围和名称"}
             </span>
           </div>
         </div>
@@ -372,59 +301,31 @@ export function CourseGenerationView({
 
         <aside className="course-generation__status-card" aria-live="polite">
           <span className="course-generation__status-kicker">
-            {isCompleted
-              ? "森林已完成"
-              : !isDemo && activityState !== "working"
-                ? stateCopy.badge
-                : gate
-                  ? GATE_LABELS[gate]
-                  : "准备中"}
+            {isCompleted ? "森林已完成" : gate ? GATE_LABELS[gate] : "准备中"}
           </span>
           <h2>
             {isLoading
               ? isDemo
                 ? "正在准备演示数据"
                 : "正在连接课程生成状态"
-              : !isDemo && activityState !== "working"
-                ? stateCopy.title
-                : activityLabel ||
-                  phaseLabel ||
-                  (isDemo ? "课程生成即将开始" : "等待课程范围确认")}
+              : phaseLabel || (isDemo ? "课程生成即将开始" : "等待课程范围确认")}
           </h2>
           <p>
             {isLoading
               ? isDemo
                 ? "正在读取预定义的课程目录和知识点。"
                 : "正在同步智能体已生成的课程文件。"
-              : !isDemo && activityState !== "working"
-                ? stateCopy.detail
-                : phaseDetail ||
-                  (isDemo
-                    ? "稍候，第一颗知识树马上长出。"
-                    : "你可以继续在右侧对话；确认后，知识树会在这里依次出现。")}
+              : phaseDetail
+                || (isDemo
+                  ? "稍候，第一颗知识树马上长出。"
+                  : "你可以继续在右侧对话；确认后，知识树会在这里依次出现。")}
           </p>
-
-          {!isDemo && (
-            <dl className="course-generation__timing">
-              <div>
-                <dt>
-                  <Clock3 aria-hidden="true" size={11} />
-                  已用时
-                </dt>
-                <dd>{formatDuration(elapsedSeconds)}</dd>
-              </div>
-              <div>
-                <dt>最后活动</dt>
-                <dd>{formatActivityAge(activityAgoSeconds)}</dd>
-              </div>
-            </dl>
-          )}
 
           <div className="course-generation__point-progress">
             <div>
               <span>已完成知识点</span>
               <strong>
-                {completedPointCount}
+                {completedPoints.length}
                 <small> / {totalPoints || "—"}</small>
               </strong>
             </div>
@@ -434,33 +335,11 @@ export function CourseGenerationView({
               aria-label="知识点编写进度"
               aria-valuemin={0}
               aria-valuemax={totalPoints || 1}
-              aria-valuenow={completedPointCount}
+              aria-valuenow={completedPoints.length}
             >
               <i style={{ width: `${completedRatio * 100}%` }} />
             </div>
           </div>
-
-          {!isDemo && animationTotal > 0 && (
-            <div className="course-generation__animation-progress">
-              <div>
-                <span>教学动画</span>
-                <strong>
-                  {animationCompleted}
-                  <small> / {animationTotal}</small>
-                </strong>
-              </div>
-              <div
-                className="course-generation__point-progress-track"
-                role="progressbar"
-                aria-label="教学动画生成进度"
-                aria-valuemin={0}
-                aria-valuemax={animationTotal}
-                aria-valuenow={animationCompleted}
-              >
-                <i style={{ width: `${animationRatio * 100}%` }} />
-              </div>
-            </div>
-          )}
 
           {generatingPoints.length > 0 && (
             <div className="course-generation__working">
@@ -476,26 +355,7 @@ export function CourseGenerationView({
             </div>
           )}
 
-          {!isDemo && recentActivities.length > 0 ? (
-            <div className="course-generation__recent">
-              <span>最近活动</span>
-              <ul>
-                {recentActivities
-                  .slice(-3)
-                  .reverse()
-                  .map((activity, index) => (
-                    <li
-                      key={`${activity.at}:${activity.label}`}
-                      className={index === 0 ? "is-latest" : ""}
-                    >
-                      <CheckCircle2 aria-hidden="true" size={13} />
-                      <span>{activity.label}</span>
-                      <time>{formatActivityAge(Math.max(0, Math.floor((clock - activity.at) / 1_000)))}</time>
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          ) : recentPoints.length > 0 && (
+          {recentPoints.length > 0 && (
             <div className="course-generation__recent">
               <span>最近长成</span>
               <ul>
@@ -527,26 +387,11 @@ export function CourseGenerationView({
           </aside>
         )}
 
-        {(status === "error" ||
-          (!isDemo &&
-            (activityState === "paused" || activityState === "disconnected"))) && (
-          <div
-            className={`course-generation__error ${
-              isDisconnected ? "is-disconnected" : ""
-            }`}
-            role="alert"
-          >
-            {isDisconnected ? (
-              <WifiOff aria-hidden="true" size={23} />
-            ) : (
-              <AlertTriangle aria-hidden="true" size={23} />
-            )}
+        {(status === "error" || (!isDemo && isPaused)) && (
+          <div className="course-generation__error" role="alert">
+            <AlertTriangle aria-hidden="true" size={23} />
             <strong>
-              {isDemo
-                ? "演示暂时无法启动"
-                : isDisconnected
-                  ? "与课程助手的连接已中断"
-                  : "课程创建已暂停"}
+              {isDemo ? "演示暂时无法启动" : "课程创建已暂停"}
             </strong>
             <span>
               {error ||
@@ -554,27 +399,15 @@ export function CourseGenerationView({
             </span>
             <button type="button" onClick={retry}>
               {!isDemo && <Play aria-hidden="true" size={14} />}
-              {isDemo ? "重试" : isDisconnected ? "重新连接后继续" : "继续创建"}
+              {isDemo ? "重试" : "继续创建"}
             </button>
           </div>
         )}
 
-        {isWaitingReview && (
-          <div className="course-generation__notice is-review" role="status">
-            <ClipboardCheck aria-hidden="true" size={23} />
-            <strong>等待你的审核</strong>
-            <span>审核页已经准备好；确认知识结构后，课程创建会自动继续。</span>
-          </div>
-        )}
-
-        {(isLoading || isResuming) && (
+        {isLoading && (
           <div className="course-generation__loading" role="status">
             <Loader2 aria-hidden="true" size={21} />
-            {isDemo
-              ? "正在装载课程种子"
-              : isResuming
-                ? "正在恢复课程创建，请稍候"
-                : "正在同步生成现场"}
+            {isDemo ? "正在装载课程种子" : "正在同步生成现场"}
           </div>
         )}
 
@@ -650,77 +483,6 @@ function pointProgress(point: GenerationPointState) {
   return Number.isFinite(candidate)
     ? Math.max(0, Math.min(100, candidate ?? 0))
     : 0;
-}
-
-function generationStateCopy(state: GenerationActivityState, activityLabel: string) {
-  switch (state) {
-    case "waiting-review":
-      return {
-        badge: "等待审核",
-        title: activityLabel || "等待你的审核",
-        detail: "审核结果提交后，系统会自动从当前 Gate 继续。",
-      };
-    case "waiting-user":
-      return {
-        badge: "等待确认",
-        title: activityLabel || "等待你的确认",
-        detail: "请在右侧课程助手中完成选择，流程会立即继续。",
-      };
-    case "resuming":
-      return {
-        badge: "正在恢复",
-        title: activityLabel || "正在恢复课程创建",
-        detail: "正在读取已保存的产物和审核状态，不会重复生成已完成内容。",
-      };
-    case "paused":
-      return {
-        badge: "已暂停",
-        title: activityLabel || "课程创建已暂停",
-        detail: "已生成的数据和对话仍然保留，可以继续创建。",
-      };
-    case "disconnected":
-      return {
-        badge: "连接中断",
-        title: "与课程助手的连接已中断",
-        detail: "系统正在尝试重新连接，现有进度不会丢失。",
-      };
-    case "completed":
-      return {
-        badge: "已完成",
-        title: "课程发布完成",
-        detail: "课程内容、知识图谱和动画资源已经准备完成。",
-      };
-    case "error":
-      return {
-        badge: "遇到问题",
-        title: "课程创建遇到问题",
-        detail: "当前进度已经保留，可以查看提示后重试。",
-      };
-    default:
-      return {
-        badge: "实时生成",
-        title: activityLabel || "课程创建中",
-        detail: "课程助手正在推进当前阶段。",
-      };
-  }
-}
-
-function formatDuration(seconds: number) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remaining = seconds % 60;
-  if (hours > 0) return `${hours}时${String(minutes).padStart(2, "0")}分`;
-  if (minutes > 0) return `${minutes}分${String(remaining).padStart(2, "0")}秒`;
-  return `${remaining}秒`;
-}
-
-function formatActivityAge(seconds: number | null) {
-  if (seconds === null) return "等待首次活动";
-  if (seconds < 5) return "刚刚";
-  if (seconds < 60) return `${seconds}秒前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分钟前`;
-  return `${Math.floor(minutes / 60)}小时前`;
 }
 
 function unwrapCourse(payload: unknown): CourseMeta | null {

@@ -74,8 +74,7 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 ### 7. 保证无环并自检
 
-优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。
-在编排流程中由主智能体调用一次 `assemble-graph`，随后 `review-knowledge-graph` 会在创建 G6 审核前统一执行图谱完整性和图性质校验，不再重复单独调用 `assemble-graph-check`、`check-graph`。
+优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。然后由主智能体调用 `course_pipeline` 的 `check-graph`。
 
 它做两类校验——**对象与引用完整性**（point 必需字段齐全且没有契约外字段、clusterIds 命中簇、prerequisites/related 无悬空、无自环、id 规范；注意 clusterIds 是外键、与 DAG 无关）与**图性质**（prerequisites 无环 + 拓扑排序）。通过（退出 0）才算合格。
 
@@ -83,9 +82,9 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 ### 8. 增量叠加输出
 
-先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后由主智能体调用一次 `assemble-graph`，让受信脚本按冻结 index 顺序机械补齐全部 v2 内容字段；紧接着调用 `review-knowledge-graph`，由它执行合并后的全量图谱预审核校验。
+先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后由主智能体依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`，让受信脚本按冻结 index 顺序机械补齐全部 v2 内容字段。
 
-装配脚本会自动补齐草稿中省略的正文，并用上游 point 文件与 manifest 覆盖草稿里任何被模型改写/精简的正文和 `subject`；若增删知识点、遗漏关系字段或包含契约外字段，则立即失败。只有机械装配和统一预审核都通过，才可把结果视为可审核的 `clustered-graph/2.0`。最终对象在上游字段之外只能追加 `clusterIds / role / related`，`prerequisites` 只能按审计记录优化。
+装配脚本会自动补齐草稿中省略的正文，并用上游 point 文件与 manifest 覆盖草稿里任何被模型改写/精简的正文和 `subject`；若增删知识点、遗漏关系字段或包含契约外字段，则立即失败。只有三条命令都通过，才可把结果视为 `clustered-graph/2.0`。最终对象在上游字段之外只能追加 `clusterIds / role / related`，`prerequisites` 只能按审计记录优化。
 
 ## 输出契约
 

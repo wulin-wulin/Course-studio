@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from datetime import UTC, datetime
 import json
 import re
 from pathlib import Path
-import time
 from typing import Any, Awaitable, Callable
 
 
@@ -43,17 +41,6 @@ _POINT_REQUIRED = {
 JsonCache = dict[Path, tuple[int, int, dict[str, Any]]]
 SnapshotSender = Callable[[dict[str, Any]], Awaitable[None]]
 
-_STAGE_LABELS = {
-    "G0": "正在确定课程范围",
-    "G1": "正在规划知识点清单",
-    "G2": "知识点清单已准备审核",
-    "G3": "正在生成知识点内容",
-    "G4": "正在生成教学动画",
-    "G5": "正在校验课程内容",
-    "G6": "知识图谱已准备审核",
-    "G7": "课程已发布",
-}
-
 
 def _text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
@@ -64,11 +51,7 @@ def _safe_id(value: Any) -> str:
     return value if _ID_RE.fullmatch(value) else ""
 
 
-def _safe_json_object(
-    path: Path,
-    cache: JsonCache | None = None,
-    activity_mtimes: list[int] | None = None,
-) -> dict[str, Any] | None:
+def _safe_json_object(path: Path, cache: JsonCache | None = None) -> dict[str, Any] | None:
     """Return one stable JSON object, or ``None`` while it is not usable."""
 
     try:
@@ -82,8 +65,6 @@ def _safe_json_object(
         cache_key = (before.st_mtime_ns, before.st_size)
         cached = cache.get(path) if cache is not None else None
         if cached and cached[:2] == cache_key:
-            if activity_mtimes is not None:
-                activity_mtimes.append(before.st_mtime_ns)
             return cached[2]
         raw = path.read_bytes()
         after = path.stat()
@@ -98,8 +79,6 @@ def _safe_json_object(
         return None
     if not isinstance(value, dict):
         return None
-    if activity_mtimes is not None:
-        activity_mtimes.append(after.st_mtime_ns)
     if cache is not None:
         cache[path] = (after.st_mtime_ns, after.st_size, value)
     return value
@@ -132,26 +111,6 @@ def _pipeline_candidates(pipeline_root: Path) -> list[Path]:
         except (OSError, ValueError):
             continue
     return [entry for _, entry in sorted(candidates, key=lambda item: item[0], reverse=True)]
-
-
-def _pipeline_from_hint(pipeline_root: Path, pipeline_hint: Path | None) -> Path | None:
-    if pipeline_hint is None:
-        return None
-    try:
-        if pipeline_hint.is_symlink():
-            return None
-        resolved_root = pipeline_root.resolve()
-        resolved_hint = pipeline_hint.resolve()
-        resolved_hint.relative_to(resolved_root)
-        if (
-            resolved_hint.parent != resolved_root
-            or not resolved_hint.is_dir()
-            or not _ID_RE.fullmatch(resolved_hint.name)
-        ):
-            return None
-    except (OSError, ValueError):
-        return None
-    return resolved_hint
 
 
 def _valid_course(value: dict[str, Any] | None, course_id: str) -> dict[str, Any] | None:
@@ -274,91 +233,21 @@ def _valid_animation_manifest(value: dict[str, Any] | None) -> list[str] | None:
     return components
 
 
-def _animation_progress(
-    content_root: Path,
-    components: list[str],
-    activity_mtimes: list[int],
-) -> tuple[int, bool]:
-    registry_files = [
+def _animation_registry_ready(content_root: Path, components: list[str]) -> bool:
+    required = [
         content_root / "src/data/courseKnowledge.ts",
         content_root / "src/components/AnimationBlock.tsx",
         content_root / "src/components/AnimationBlock.css",
     ]
-    registry_ready = True
+    for component in components:
+        required.extend([
+            content_root / f"src/animations/{component}.tsx",
+            content_root / f"src/animations/{component}.css",
+        ])
     try:
-        for path in registry_files:
-            if path.is_symlink() or not path.is_file():
-                registry_ready = False
-                continue
-            stat = path.stat()
-            activity_mtimes.append(stat.st_mtime_ns)
-            if stat.st_size <= 0:
-                registry_ready = False
-
-        completed = 0
-        for component in components:
-            component_ready = True
-            for suffix in ("tsx", "css"):
-                path = content_root / f"src/animations/{component}.{suffix}"
-                if path.is_symlink() or not path.is_file():
-                    component_ready = False
-                    continue
-                stat = path.stat()
-                activity_mtimes.append(stat.st_mtime_ns)
-                if stat.st_size <= 0:
-                    component_ready = False
-            if component_ready:
-                completed += 1
-        return completed, registry_ready and completed == len(components)
+        return all(path.is_file() and not path.is_symlink() and path.stat().st_size > 0 for path in required)
     except OSError:
-        return 0, False
-
-
-def _iso_from_ns(value: int | None) -> str | None:
-    if not value:
-        return None
-    return datetime.fromtimestamp(value / 1_000_000_000, tz=UTC).isoformat().replace(
-        "+00:00",
-        "Z",
-    )
-
-
-def _snapshot_labels(snapshot: dict[str, Any]) -> None:
-    gate = str(snapshot.get("gate") or "G0")
-    point_completed = int(snapshot.get("point_completed") or 0)
-    point_total = int(snapshot.get("point_total") or 0)
-    animation_completed = int(snapshot.get("animation_completed") or 0)
-    animation_total = int(snapshot.get("animation_total") or 0)
-    snapshot["stage_label"] = _STAGE_LABELS.get(gate, "正在创建课程")
-
-    if gate == "G3":
-        detail = f"已完成 {point_completed}/{point_total} 个知识点"
-        activity = f"知识点内容 {point_completed}/{point_total}"
-    elif gate == "G4":
-        detail = (
-            f"已完成 {animation_completed}/{animation_total} 个动画"
-            if animation_total
-            else "正在生成无动画课程的注册文件"
-        )
-        activity = (
-            f"教学动画 {animation_completed}/{animation_total}"
-            if animation_total
-            else "动画清单已确认"
-        )
-    elif gate in {"G5", "G6", "G7"}:
-        detail = (
-            f"{point_completed}/{point_total} 个知识点，"
-            f"{animation_completed}/{animation_total} 个动画"
-        )
-        activity = snapshot["stage_label"]
-    elif gate in {"G1", "G2"}:
-        detail = f"已规划 {point_total} 个知识点"
-        activity = snapshot["stage_label"]
-    else:
-        detail = "正在收集课程范围与目标"
-        activity = snapshot["stage_label"]
-    snapshot["stage_detail"] = detail
-    snapshot["activity_label"] = activity
+        return False
 
 
 def _valid_graph(
@@ -443,7 +332,6 @@ def build_course_generation_snapshot(
     *,
     published: bool = False,
     cache: JsonCache | None = None,
-    pipeline_hint: Path | None = None,
 ) -> dict[str, Any]:
     """Build the best complete snapshot currently visible below ``pipeline``."""
 
@@ -455,60 +343,28 @@ def build_course_generation_snapshot(
         "points": [],
         "clusters": [],
         "published": False,
-        "stage_label": _STAGE_LABELS["G0"],
-        "stage_detail": "正在收集课程范围与目标",
-        "activity_label": _STAGE_LABELS["G0"],
-        "point_completed": 0,
-        "point_total": 0,
-        "animation_completed": 0,
-        "animation_total": 0,
-        "waiting_for": "none",
-        "started_at": None,
-        "last_activity_at": None,
     }
-    hinted = _pipeline_from_hint(pipeline_root, pipeline_hint)
-    candidates = [hinted] if hinted is not None else _pipeline_candidates(pipeline_root)
+    candidates = _pipeline_candidates(pipeline_root)
     if not candidates:
         return base
 
     pipeline = candidates[0]
-    activity_mtimes: list[int] = []
-    try:
-        activity_mtimes.append(pipeline.stat().st_mtime_ns)
-    except OSError:
-        pass
     course_id = pipeline.name
     content_root = pipeline / "course-content"
     data_root = content_root / "src/data"
-    course = _valid_course(
-        _safe_json_object(data_root / "course.json", cache, activity_mtimes),
-        course_id,
-    )
+    course = _valid_course(_safe_json_object(data_root / "course.json", cache), course_id)
     if course is None:
-        if activity_mtimes:
-            base["started_at"] = _iso_from_ns(min(activity_mtimes))
-            base["last_activity_at"] = _iso_from_ns(max(activity_mtimes))
         return base
     base["course"] = course
 
-    points = _valid_index(
-        _safe_json_object(data_root / "index.json", cache, activity_mtimes),
-        course_id,
-    )
+    points = _valid_index(_safe_json_object(data_root / "index.json", cache), course_id)
     if points is None:
-        base["started_at"] = _iso_from_ns(min(activity_mtimes))
-        base["last_activity_at"] = _iso_from_ns(max(activity_mtimes))
         return base
     base["gate"] = "G1"
     base["total_points"] = len(points)
-    base["point_total"] = len(points)
     base["points"] = points
 
-    manifest = _safe_json_object(
-        content_root / "generation/manifest.json",
-        cache,
-        activity_mtimes,
-    )
+    manifest = _safe_json_object(content_root / "generation/manifest.json", cache)
     if _valid_generation_manifest(manifest, points):
         base["gate"] = "G2"
 
@@ -522,9 +378,8 @@ def build_course_generation_snapshot(
             )
         except OSError:
             pass
-        detail = _safe_json_object(detail_path, cache, activity_mtimes)
+        detail = _safe_json_object(detail_path, cache)
         point["complete"] = _valid_point(detail, point)
-    base["point_completed"] = sum(point["complete"] is True for point in points)
     # ``init-course-pipeline --stage points`` creates one ordinary placeholder
     # per indexed point immediately before content workers start. This is the
     # earliest reliable G3 signal and lets the UI predict progress for the very
@@ -533,30 +388,15 @@ def build_course_generation_snapshot(
         base["gate"] = "G3"
 
     animation_components = _valid_animation_manifest(
-        _safe_json_object(
-            content_root / "generation/animation-manifest.json",
-            cache,
-            activity_mtimes,
-        )
+        _safe_json_object(content_root / "generation/animation-manifest.json", cache)
     )
     if animation_components is not None:
         base["gate"] = "G4"
-        base["animation_total"] = len(animation_components)
-        animation_completed, registry_ready = _animation_progress(
-            content_root,
-            animation_components,
-            activity_mtimes,
-        )
-        base["animation_completed"] = animation_completed
-        if registry_ready:
+        if _animation_registry_ready(content_root, animation_components):
             base["gate"] = "G5"
 
     graph = _valid_graph(
-        _safe_json_object(
-            pipeline / "clustered-graph.json",
-            cache,
-            activity_mtimes,
-        ),
+        _safe_json_object(pipeline / "clustered-graph.json", cache),
         course_id,
         points,
     )
@@ -570,10 +410,6 @@ def build_course_generation_snapshot(
     if published and graph is not None:
         base["gate"] = "G7"
         base["published"] = True
-    if activity_mtimes:
-        base["started_at"] = _iso_from_ns(min(activity_mtimes))
-        base["last_activity_at"] = _iso_from_ns(max(activity_mtimes))
-    _snapshot_labels(base)
     return base
 
 
@@ -618,18 +454,6 @@ def _monotonic_snapshot(
         return copy.deepcopy(previous)
 
     merged = copy.deepcopy(current)
-    previous_started = previous.get("started_at")
-    current_started = merged.get("started_at")
-    if isinstance(previous_started, str) and (
-        not isinstance(current_started, str) or previous_started < current_started
-    ):
-        merged["started_at"] = previous_started
-    previous_activity = previous.get("last_activity_at")
-    current_activity = merged.get("last_activity_at")
-    if isinstance(previous_activity, str) and (
-        not isinstance(current_activity, str) or previous_activity > current_activity
-    ):
-        merged["last_activity_at"] = previous_activity
     previous_points = previous.get("points")
     current_points = merged.get("points")
     if (
@@ -667,81 +491,13 @@ class CourseGenerationObserver:
         conversation_id: str,
         *,
         interval_seconds: float = 0.75,
-        heartbeat_seconds: float = 5.0,
     ) -> None:
         self.pipeline_root = pipeline_root
         self.conversation_id = conversation_id
         self.interval_seconds = interval_seconds
-        self.heartbeat_seconds = max(interval_seconds, heartbeat_seconds)
         self._cache: JsonCache = {}
         self._last_signature: str | None = None
         self._last_snapshot: dict[str, Any] | None = None
-        self._pipeline_hint: Path | None = None
-        self._last_emit_monotonic: float | None = None
-        self._phase_gate: str | None = None
-        self._phase_started_monotonic = time.monotonic()
-        self._observer_started_at = datetime.now(UTC).isoformat().replace(
-            "+00:00",
-            "Z",
-        )
-        self._recent_events: list[dict[str, Any]] = []
-        self._waiting_for = "none"
-        self._activity_override: str | None = None
-        self._last_enriched_snapshot: dict[str, Any] | None = None
-
-    def set_waiting_for(
-        self,
-        waiting_for: str,
-        *,
-        activity_label: str | None = None,
-    ) -> None:
-        self._waiting_for = waiting_for or "none"
-        self._activity_override = activity_label
-
-    def _add_telemetry(self, snapshot: dict[str, Any]) -> dict[str, Any]:
-        now = time.monotonic()
-        gate = str(snapshot.get("gate") or "G0")
-        if self._phase_gate is None:
-            self._phase_gate = gate
-            self._phase_started_monotonic = now
-        elif gate != self._phase_gate:
-            self._recent_events.append({
-                "at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                "kind": "stage_completed",
-                "phase": self._phase_gate,
-                "label": _STAGE_LABELS.get(self._phase_gate, self._phase_gate),
-                "elapsed_ms": max(
-                    0,
-                    round((now - self._phase_started_monotonic) * 1000),
-                ),
-            })
-            self._recent_events = self._recent_events[-8:]
-            self._phase_gate = gate
-            self._phase_started_monotonic = now
-
-        enriched = copy.deepcopy(snapshot)
-        enriched["phase_elapsed_ms"] = max(
-            0,
-            round((now - self._phase_started_monotonic) * 1000),
-        )
-        enriched["recent_events"] = copy.deepcopy(self._recent_events)
-        enriched["waiting_for"] = self._waiting_for
-        if self._activity_override:
-            enriched["activity_label"] = self._activity_override
-        if enriched.get("started_at") is None:
-            enriched["started_at"] = self._observer_started_at
-        return enriched
-
-    @staticmethod
-    def _stable_signature(snapshot: dict[str, Any]) -> str:
-        stable = copy.deepcopy(snapshot)
-        stable.pop("phase_elapsed_ms", None)
-        return json.dumps(
-            stable,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
 
     async def emit_if_changed(
         self,
@@ -756,34 +512,14 @@ class CourseGenerationObserver:
             self.conversation_id,
             published=published,
             cache=self._cache,
-            pipeline_hint=self._pipeline_hint,
         )
         snapshot = _monotonic_snapshot(self._last_snapshot, raw_snapshot)
-        points = snapshot.get("points")
-        if isinstance(points, list):
-            snapshot["point_completed"] = sum(
-                isinstance(point, dict) and point.get("complete") is True
-                for point in points
-            )
-        _snapshot_labels(snapshot)
         self._last_snapshot = copy.deepcopy(snapshot)
-        course = snapshot.get("course")
-        if isinstance(course, dict) and _safe_id(course.get("id")):
-            self._pipeline_hint = self.pipeline_root / course["id"]
-        snapshot = self._add_telemetry(snapshot)
-        signature = self._stable_signature(snapshot)
-        now = time.monotonic()
-        heartbeat_due = (
-            self._last_emit_monotonic is not None
-            and now - self._last_emit_monotonic >= self.heartbeat_seconds
-        )
-        if force or signature != self._last_signature or heartbeat_due:
+        signature = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if force or signature != self._last_signature:
             await send({"type": "course_generation_snapshot", "payload": snapshot})
             self._last_signature = signature
-            self._last_emit_monotonic = now
-            self._last_enriched_snapshot = copy.deepcopy(snapshot)
-            return snapshot
-        return copy.deepcopy(self._last_enriched_snapshot or snapshot)
+        return snapshot
 
     async def run(self, send: SnapshotSender) -> None:
         while True:

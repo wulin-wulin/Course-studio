@@ -33,7 +33,6 @@ import { getBackendWsUrl } from "@/utils/backendWs";
 import { LatestRequestGuard } from "@/utils/latestRequest";
 import {
   COURSE_GENERATION_RESUME_EVENT,
-  shouldPauseGenerationAfterAgentDone,
   useCourseGenerationStore,
 } from "@/course/generation/generationStore";
 import {
@@ -372,8 +371,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         ) {
           generation.pauseLive(
             liveConversationId,
-            "与课程助手的连接已中断。对话和已生成数据仍然保留，重新连接后可以继续创建。",
-            "disconnected"
+            "与课程助手的连接已中断。对话和已生成数据仍然保留，重新连接后可以继续创建。"
           );
         }
         setConnectionState("disconnected");
@@ -708,34 +706,21 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       }
       return;
     }
-    generation.beginResume(normalizedId);
-    setRunStatus(makeRunStatus("正在恢复课程创建", "正在读取上次保存的流程状态"));
 
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       generation.pauseLive(
         normalizedId,
-        "课程助手尚未连接，当前进度已经保留。连接恢复后请再次点击“继续创建”。",
-        "disconnected"
+        "课程助手尚未连接，当前进度已经保留。连接恢复后请再次点击“继续创建”。"
       );
-      setRunStatus(null);
       return;
     }
 
     const conversation = await openHistoricalConversation(normalizedId);
-    if (!conversation) {
-      generation.pauseLive(
-        normalizedId,
-        "暂时无法读取历史流程，当前进度仍然保留，请稍后重试。"
-      );
-      setRunStatus(null);
-      return;
-    }
-    const blockedReview =
+    if (!conversation) return;
+    if (
       parseReviewPointer(conversation.pending_review) ||
-      parseReviewPointer(conversation.pending_review_resume);
-    if (blockedReview) {
-      generation.waitForReview(normalizedId, blockedReview.kind);
-      setRunStatus(null);
+      parseReviewPointer(conversation.pending_review_resume)
+    ) {
       return;
     }
 
@@ -976,10 +961,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     if (!question || questionSubmitting) return;
     setQuestionSubmitting(true);
     setQuestionError("");
-    useCourseGenerationStore
-      .getState()
-      .beginResume(question.conversationId, "正在提交你的确认");
-    updateRunStatus(setRunStatus, "正在提交确认", "提交成功后流程会自动继续");
     try {
       const response = await fetch(
         `/api/agent/questions/${encodeURIComponent(question.requestId)}/reply`,
@@ -1010,9 +991,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       stickToBottomRef.current = true;
     } catch (error) {
       setQuestionError(error instanceof Error ? error.message : "提交确认失败");
-      useCourseGenerationStore
-        .getState()
-        .waitForUser(question.conversationId, "等待你的确认");
     } finally {
       setQuestionSubmitting(false);
     }
@@ -1023,9 +1001,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     if (!question || questionSubmitting) return;
     setQuestionSubmitting(true);
     setQuestionError("");
-    useCourseGenerationStore
-      .getState()
-      .beginResume(question.conversationId, "正在提交暂停请求");
     try {
       const response = await fetch(
         `/api/agent/questions/${encodeURIComponent(question.requestId)}/reject`,
@@ -1050,9 +1025,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       stickToBottomRef.current = true;
     } catch (error) {
       setQuestionError(error instanceof Error ? error.message : "取消确认失败");
-      useCourseGenerationStore
-        .getState()
-        .waitForUser(question.conversationId, "等待你的确认");
     } finally {
       setQuestionSubmitting(false);
     }
@@ -1085,9 +1057,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
 
   const isConnected = connectionState === "connected";
   const elapsedSeconds = runStatus ? Math.max(0, Math.floor((clock - runStatus.startedAt) / 1000)) : 0;
-  const lastActivitySeconds = runStatus
-    ? Math.max(0, Math.floor((clock - runStatus.updatedAt) / 1000))
-    : 0;
   const modeCopy = MODE_COPY[mode];
   const suggestions = mode === "chat" ? CHAT_SUGGESTIONS : AGENT_SUGGESTIONS;
   const inputPlaceholder = workflow === "course-create"
@@ -1374,12 +1343,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         ))}
 
         {isRunning && (
-          <AgentRunStatusView
-            status={runStatus}
-            elapsedSeconds={elapsedSeconds}
-            lastActivitySeconds={lastActivitySeconds}
-            mode={mode}
-          />
+          <AgentRunStatusView status={runStatus} elapsedSeconds={elapsedSeconds} mode={mode} />
         )}
       </div>
 
@@ -2038,10 +2002,7 @@ function handleAgentEvent(
       return;
 
     case "agent_start":
-      applyLiveAgentStatus(payload, {
-        label: isCourseCreation ? "课程创建中" : "Agent 启动中",
-        detail: isCourseCreation ? "正在按照 Skill 工作流推进" : "正在准备工作环境",
-      });
+      touchLiveGeneration(payload);
       updateRunStatus(
         setRunStatus,
         currentMode === "chat" ? "正在思考" : isCourseCreation ? "课程创建中" : "Agent 启动中",
@@ -2054,12 +2015,8 @@ function handleAgentEvent(
       return;
 
     case "agent_status":
-      applyLiveAgentStatus(payload);
-      updateRunStatus(
-        setRunStatus,
-        String(payload.label ?? payload.activity_label ?? "Agent 工作中"),
-        stringOrUndefined(payload.detail ?? payload.stage_detail)
-      );
+      touchLiveGeneration(payload);
+      updateRunStatus(setRunStatus, String(payload.label ?? "Agent 工作中"));
       return;
 
     case "agent_thinking_delta": {
@@ -2135,9 +2092,6 @@ function handleAgentEvent(
       finalizeThinking(thinkingIdRef, setEntries);
       setPendingQuestion(null);
       setPendingReview(review);
-      useCourseGenerationStore
-        .getState()
-        .waitForReview(review.conversation_id, review.kind);
       setIsRunning(false);
       setRunStatus(null);
       onOpenReviewRef.current?.(review.id, review.kind);
@@ -2146,11 +2100,6 @@ function handleAgentEvent(
 
     case "agent_review_resolved": {
       setPendingReview(null);
-      const generation = useCourseGenerationStore.getState();
-      const conversationId = generationConversationId(payload, generation);
-      if (conversationId) {
-        generation.beginResume(conversationId, "审核已确认，正在恢复流程");
-      }
       return;
     }
 
@@ -2178,7 +2127,7 @@ function handleAgentEvent(
       ) {
         updateRunStatus(
           setRunStatus,
-          currentRun?.activityLabel || currentRun?.phaseLabel || "课程创建中",
+          currentRun?.phaseLabel ?? "课程创建中",
           currentRun?.phaseDetail
         );
       }
@@ -2209,9 +2158,6 @@ function handleAgentEvent(
       finalizeStreaming(streamingIdRef, setEntries);
       finalizeThinking(thinkingIdRef, setEntries);
       setPendingQuestion({ requestId, conversationId, questions });
-      useCourseGenerationStore
-        .getState()
-        .waitForUser(conversationId, "等待你的确认");
       setIsRunning(true);
       updateRunStatus(setRunStatus, "等待你的确认", "选择一个选项或填写自定义答案");
       return;
@@ -2220,13 +2166,6 @@ function handleAgentEvent(
     case "agent_question_resolved": {
       const requestId = String(payload.request_id ?? "").trim();
       setPendingQuestion((current) => current?.requestId === requestId ? null : current);
-      {
-        const generation = useCourseGenerationStore.getState();
-        const conversationId = generationConversationId(payload, generation);
-        if (conversationId) {
-          generation.beginResume(conversationId, "已收到确认，正在继续流程");
-        }
-      }
       updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
       return;
     }
@@ -2245,7 +2184,7 @@ function handleAgentEvent(
         const liveRun = conversationId
           ? generation.liveRuns[conversationId]
           : undefined;
-        if (shouldPauseGenerationAfterAgentDone(payload, liveRun)) {
+        if (liveRun && !liveRun.published) {
           generation.pauseLive(
             conversationId,
             "本轮执行已经结束，课程进度和对话均已保留，可以继续下一步。"
@@ -2336,25 +2275,6 @@ function touchLiveGeneration(payload: Record<string, unknown>) {
   if (conversationId && generation.liveRuns[conversationId]) {
     generation.touchLive(conversationId);
   }
-}
-
-function applyLiveAgentStatus(
-  payload: Record<string, unknown>,
-  fallback?: { label?: string; detail?: string }
-) {
-  const generation = useCourseGenerationStore.getState();
-  const conversationId = generationConversationId(payload, generation);
-  if (!conversationId || !generation.liveRuns[conversationId]) return;
-  generation.applyAgentStatus({
-    ...payload,
-    conversation_id: conversationId,
-    ...(!payload.label && fallback?.label ? { label: fallback.label } : {}),
-    ...(!payload.detail && fallback?.detail ? { detail: fallback.detail } : {}),
-  });
-}
-
-function stringOrUndefined(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {
@@ -2499,12 +2419,10 @@ function updateRunStatus(
 function AgentRunStatusView({
   status,
   elapsedSeconds,
-  lastActivitySeconds,
   mode,
 }: {
   status: AgentRunStatus | null;
   elapsedSeconds: number;
-  lastActivitySeconds: number;
   mode: ChatMode;
 }) {
   const label = status?.label ?? (mode === "chat" ? "正在思考" : "Agent 工作中");
@@ -2520,11 +2438,6 @@ function AgentRunStatusView({
         </span>
       </div>
       {detail && <div className="mt-1 pl-5 text-[11px] text-text-secondary/80">{detail}</div>}
-      <div className="mt-1 pl-5 text-[10px] text-text-secondary/60">
-        {lastActivitySeconds < 5
-          ? "刚刚收到活动"
-          : `${formatElapsed(lastActivitySeconds)} 前收到活动`}
-      </div>
     </div>
   );
 }

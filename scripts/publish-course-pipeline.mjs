@@ -1,18 +1,14 @@
 #!/usr/bin/env node
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { createCourseMapLayout } from "./layout-course-map.mjs";
 import { buildCourseAnimationRuntime } from "./bundle-course-animations.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DEFAULT_G7_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
-const VALIDATION_RECEIPT_SCHEMA = "course-pipeline-validation-receipt/1.0";
-const VALIDATION_RECEIPT_GATE = "G7_RELEASE_READY";
 const PALETTE = [
   ["#2F7A65", "#E2F4EC", "#185342"],
   ["#A86132", "#F8E8DA", "#6E381C"],
@@ -54,221 +50,13 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function sha256(value) {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
-function slashPath(value) {
-  return value.split(path.sep).join("/");
-}
-
-function assertNoSymbolicLinkComponents(target, label) {
-  const absolute = path.resolve(target);
-  const parsed = path.parse(absolute);
-  let current = parsed.root;
-  for (const segment of absolute.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
-    current = path.join(current, segment);
-    if (!fs.existsSync(current)) continue;
-    if (fs.lstatSync(current).isSymbolicLink()) {
-      fail(`${label}路径不允许符号链接：${current}`);
-    }
-  }
-}
-
-function assertRegularFile(filePath, label) {
-  if (!fs.existsSync(filePath)) fail(`缺少${label}：${path.relative(process.cwd(), filePath)}`);
-  assertNoSymbolicLinkComponents(filePath, label);
-  const stat = fs.lstatSync(filePath);
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    fail(`${label}必须是普通文件且不允许符号链接：${filePath}`);
-  }
-  return stat;
-}
-
-function fileFingerprint(filePath, label) {
-  const stat = assertRegularFile(filePath, label);
-  return {
-    bytes: stat.size,
-    sha256: sha256(fs.readFileSync(filePath)),
-  };
-}
-
-function treeFingerprint(root, label) {
-  if (!fs.existsSync(root)) fail(`缺少${label}：${root}`);
-  assertNoSymbolicLinkComponents(root, label);
-  const rootStat = fs.lstatSync(root);
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
-    fail(`${label}必须是普通目录且不允许符号链接：${root}`);
-  }
-
-  const entries = [];
-  const visit = (directory) => {
-    const children = fs.readdirSync(directory, { withFileTypes: true })
-      .sort((left, right) => (
-        left.name < right.name ? -1 : left.name > right.name ? 1 : 0
-      ));
-    for (const child of children) {
-      const absolute = path.join(directory, child.name);
-      const stat = fs.lstatSync(absolute);
-      if (stat.isSymbolicLink()) fail(`${label}不允许符号链接：${absolute}`);
-      if (stat.isDirectory()) {
-        visit(absolute);
-        continue;
-      }
-      if (!stat.isFile()) fail(`${label}包含不支持的目录项：${absolute}`);
-      entries.push({
-        path: slashPath(path.relative(root, absolute)),
-        bytes: stat.size,
-        sha256: sha256(fs.readFileSync(absolute)),
-      });
-    }
-  };
-  visit(root);
-  return {
-    files: entries.length,
-    bytes: entries.reduce((total, entry) => total + entry.bytes, 0),
-    sha256: sha256(JSON.stringify(entries)),
-  };
-}
-
-function validatorFingerprint(root) {
-  const components = [
-    {
-      name: "publisher",
-      ...fileFingerprint(fileURLToPath(import.meta.url), "发布工具"),
-    },
-    ...[
-      "candidate-knowledge-point-generator",
-      "knowledge-cluster-builder",
-      "knowledge-pipeline-orchestrator",
-    ].map((name) => ({
-      name,
-      ...treeFingerprint(
-        path.join(root, ".opencode", "skills", name),
-        `校验 Skill ${name}`,
-      ),
-    })),
-  ];
-  return {
-    components,
-    sha256: sha256(JSON.stringify(components)),
-  };
-}
-
-function validationSnapshot({
-  root,
-  courseId,
-  contentRoot,
-  graphPath,
-}) {
-  const approvalRoot = path.join(root, ".course-review-approvals", courseId);
-  const content = treeFingerprint(contentRoot, "课程内容包");
-  const graph = fileFingerprint(graphPath, "聚类图谱");
-  const knowledgePointsApproval = fileFingerprint(
-    path.join(approvalRoot, "knowledge-points.json"),
-    "G2 知识点审核回执",
-  );
-  const knowledgeGraphApproval = fileFingerprint(
-    path.join(approvalRoot, "knowledge-graph.json"),
-    "G6 知识图谱审核回执",
-  );
-  const validator = validatorFingerprint(root);
-  const binding = {
-    schema_version: VALIDATION_RECEIPT_SCHEMA,
-    gate: VALIDATION_RECEIPT_GATE,
-    course_id: courseId,
-    content_sha256: content.sha256,
-    graph_sha256: graph.sha256,
-    knowledge_points_approval_sha256: knowledgePointsApproval.sha256,
-    knowledge_graph_approval_sha256: knowledgeGraphApproval.sha256,
-    validator_sha256: validator.sha256,
-  };
-  return {
-    ...binding,
-    input_sha256: sha256(JSON.stringify(binding)),
-    stats: {
-      contentFiles: content.files,
-      contentBytes: content.bytes,
-      validatorFiles: validator.components.reduce(
-        (total, component) => total + (component.files ?? 1),
-        0,
-      ),
-    },
-  };
-}
-
-function readValidationReceipt(receiptPath) {
-  if (!fs.existsSync(receiptPath)) return null;
-  assertNoSymbolicLinkComponents(receiptPath, "G7 校验凭据");
-  if (fs.lstatSync(receiptPath).isSymbolicLink()) {
-    fail(`G7 校验凭据不允许符号链接：${receiptPath}`);
-  }
-  try {
-    return JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function writeJsonAtomic(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  assertNoSymbolicLinkComponents(path.dirname(filePath), "G7 校验凭据目录");
-  const directoryStat = fs.lstatSync(path.dirname(filePath));
-  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
-    fail(`G7 校验凭据目录必须是普通目录：${path.dirname(filePath)}`);
-  }
-  if (fs.existsSync(filePath) && fs.lstatSync(filePath).isSymbolicLink()) {
-    fail(`G7 校验凭据不允许符号链接：${filePath}`);
-  }
-  const temporary = path.join(
-    path.dirname(filePath),
-    `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-  );
-  try {
-    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-    });
-    fs.renameSync(temporary, filePath);
-  } finally {
-    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
-  }
-}
-
-function receiptMatches(receipt, snapshot) {
-  if (
-    !receipt
-    || receipt.schema_version !== VALIDATION_RECEIPT_SCHEMA
-    || receipt.gate !== VALIDATION_RECEIPT_GATE
-    || receipt.course_id !== snapshot.course_id
-    || receipt.input_sha256 !== snapshot.input_sha256
-    || receipt.content_sha256 !== snapshot.content_sha256
-    || receipt.graph_sha256 !== snapshot.graph_sha256
-    || receipt.knowledge_points_approval_sha256
-      !== snapshot.knowledge_points_approval_sha256
-    || receipt.knowledge_graph_approval_sha256
-      !== snapshot.knowledge_graph_approval_sha256
-    || receipt.validator_sha256 !== snapshot.validator_sha256
-  ) return false;
-  return (
-    receipt.check?.ok === true
-    && receipt.check?.phase === "all"
-    && receipt.check?.reviewApprovals === 2
-  );
-}
-
 function parseArgs(argv) {
-  const [courseId, ...options] = argv.slice(2);
+  const courseId = argv[2];
   if (!courseId || !ID_PATTERN.test(courseId)) {
-    fail(
-      "用法：node .opencode/tools/publish-course-pipeline.mjs "
-      + "<course-id> [--check]",
-    );
+    fail("用法：node .opencode/tools/publish-course-pipeline.mjs <course-id>");
   }
-  if (options.length > 1 || (options.length === 1 && options[0] !== "--check")) {
-    fail(`未知参数：${options.join(" ")}`);
-  }
-  return { courseId, checkOnly: options[0] === "--check" };
+  if (argv.length > 3) fail(`未知参数：${argv.slice(3).join(" ")}`);
+  return courseId;
 }
 
 function validateGraphBasics(graph, courseId) {
@@ -393,24 +181,32 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
   return { course, index: layout.index, details };
 }
 
-function assertSuccessfulG7Report(report, contentRoot, graphPath) {
-  if (
-    report?.ok !== true
-    || report?.phase !== "all"
-    || path.resolve(report?.contentRoot ?? "") !== contentRoot
-    || path.resolve(report?.graphFile ?? "") !== graphPath
-    || report?.counts?.reviewApprovals !== 2
-  ) {
-    fail("G7 流水线校验未确认当前课程和两份有效结构化审核回执，不能发布");
-  }
-}
+async function publish(courseId) {
+  const root = path.resolve(process.cwd());
+  const pipelineDirectory = path.join(root, "pipeline", courseId);
+  const contentRoot = path.join(pipelineDirectory, "course-content");
+  const graphPath = path.join(pipelineDirectory, "clustered-graph.json");
+  const sourceCoursePath = path.join(contentRoot, "src", "data", "course.json");
+  const manifestPath = path.join(contentRoot, "generation", "manifest.json");
+  const animationManifestPath = path.join(contentRoot, "generation", "animation-manifest.json");
+  const coursesDirectory = path.join(root, "courses");
+  const targetDirectory = path.join(coursesDirectory, courseId);
+  const pipelineChecker = path.join(
+    root,
+    ".opencode",
+    "skills",
+    "knowledge-pipeline-orchestrator",
+    "scripts",
+    "check-pipeline.mjs",
+  );
 
-function runFullG7Check({
-  root,
-  contentRoot,
-  graphPath,
-  pipelineChecker,
-}) {
+  if (!fs.existsSync(contentRoot) || fs.lstatSync(contentRoot).isSymbolicLink()) {
+    fail(`缺少或拒绝使用不安全的内容包：pipeline/${courseId}/course-content`);
+  }
+  if (!fs.existsSync(graphPath)) fail(`缺少中间产物：pipeline/${courseId}/clustered-graph.json`);
+  if (!fs.existsSync(pipelineChecker)) fail("缺少 G7 流水线校验工具，不能发布");
+  if (fs.existsSync(targetDirectory)) fail(`课程 ${courseId} 已存在；发布工具不会覆盖已有课程`);
+
   const g7TimeoutMs = timeoutFromEnvironment(
     "COURSE_PIPELINE_G7_TIMEOUT_MS",
     DEFAULT_G7_CHECK_TIMEOUT_MS,
@@ -438,133 +234,20 @@ function runFullG7Check({
     const detail = (checked.stdout || checked.stderr || "未知校验错误").trim();
     fail(`G7 流水线校验未通过，不能发布：\n${detail}`);
   }
-  let report;
+  let checkReport;
   try {
-    report = JSON.parse(checked.stdout);
+    checkReport = JSON.parse(checked.stdout);
   } catch (error) {
     fail(`G7 流水线校验未返回有效 JSON，不能确认审核门禁：${error.message}`);
   }
-  assertSuccessfulG7Report(report, contentRoot, graphPath);
-  return report;
-}
-
-function ensureG7Validation({
-  root,
-  courseId,
-  contentRoot,
-  graphPath,
-  pipelineChecker,
-  receiptPath,
-}) {
-  const startedAt = Date.now();
-  const before = validationSnapshot({
-    root,
-    courseId,
-    contentRoot,
-    graphPath,
-  });
-  const cached = readValidationReceipt(receiptPath);
-  if (receiptMatches(cached, before)) {
-    return {
-      source: "receipt",
-      snapshot: before,
-      durationMs: Date.now() - startedAt,
-    };
-  }
-
-  const report = runFullG7Check({
-    root,
-    contentRoot,
-    graphPath,
-    pipelineChecker,
-  });
-  const after = validationSnapshot({
-    root,
-    courseId,
-    contentRoot,
-    graphPath,
-  });
-  if (after.input_sha256 !== before.input_sha256) {
-    fail("G7 校验期间课程、图谱、审核回执或校验器发生变化，请重新执行发布前检查");
-  }
-  writeJsonAtomic(receiptPath, {
-    schema_version: VALIDATION_RECEIPT_SCHEMA,
-    gate: VALIDATION_RECEIPT_GATE,
-    course_id: courseId,
-    validated_at: new Date().toISOString(),
-    input_sha256: after.input_sha256,
-    content_sha256: after.content_sha256,
-    graph_sha256: after.graph_sha256,
-    knowledge_points_approval_sha256: after.knowledge_points_approval_sha256,
-    knowledge_graph_approval_sha256: after.knowledge_graph_approval_sha256,
-    validator_sha256: after.validator_sha256,
-    check: {
-      ok: true,
-      phase: report.phase,
-      reviewApprovals: report.counts.reviewApprovals,
-      errors: report.counts.errors,
-      warnings: report.counts.warnings,
-    },
-    stats: after.stats,
-  });
-  return {
-    source: "fresh",
-    snapshot: after,
-    durationMs: Date.now() - startedAt,
-  };
-}
-
-async function publish({ courseId, checkOnly }) {
-  const root = path.resolve(process.cwd());
-  const pipelineDirectory = path.join(root, "pipeline", courseId);
-  const contentRoot = path.join(pipelineDirectory, "course-content");
-  const graphPath = path.join(pipelineDirectory, "clustered-graph.json");
-  const receiptPath = path.join(
-    pipelineDirectory,
-    "reviews",
-    "g7-release.validation.json",
-  );
-  const sourceCoursePath = path.join(contentRoot, "src", "data", "course.json");
-  const manifestPath = path.join(contentRoot, "generation", "manifest.json");
-  const animationManifestPath = path.join(contentRoot, "generation", "animation-manifest.json");
-  const coursesDirectory = path.join(root, "courses");
-  const targetDirectory = path.join(coursesDirectory, courseId);
-  const pipelineChecker = path.join(
-    root,
-    ".opencode",
-    "skills",
-    "knowledge-pipeline-orchestrator",
-    "scripts",
-    "check-pipeline.mjs",
-  );
-
-  if (!fs.existsSync(contentRoot) || fs.lstatSync(contentRoot).isSymbolicLink()) {
-    fail(`缺少或拒绝使用不安全的内容包：pipeline/${courseId}/course-content`);
-  }
-  if (!fs.existsSync(graphPath)) fail(`缺少中间产物：pipeline/${courseId}/clustered-graph.json`);
-  if (!fs.existsSync(pipelineChecker)) fail("缺少 G7 流水线校验工具，不能发布");
-  if (fs.existsSync(targetDirectory)) fail(`课程 ${courseId} 已存在；发布工具不会覆盖已有课程`);
-
-  const validation = ensureG7Validation({
-    root,
-    courseId,
-    contentRoot,
-    graphPath,
-    pipelineChecker,
-    receiptPath,
-  });
-  if (checkOnly) {
-    process.stdout.write(`${JSON.stringify({
-      action: "release-check",
-      courseId,
-      gate: VALIDATION_RECEIPT_GATE,
-      status: "ready",
-      validationSource: validation.source,
-      validationMs: validation.durationMs,
-      inputSha256: validation.snapshot.input_sha256,
-      receipt: slashPath(path.relative(root, receiptPath)),
-    })}\n`);
-    return;
+  if (
+    checkReport?.ok !== true
+    || checkReport?.phase !== "all"
+    || path.resolve(checkReport?.contentRoot ?? "") !== contentRoot
+    || path.resolve(checkReport?.graphFile ?? "") !== graphPath
+    || checkReport?.counts?.reviewApprovals !== 2
+  ) {
+    fail("G7 流水线校验未确认当前课程和两份有效结构化审核回执，不能发布");
   }
 
   const sourceCourse = readJson(sourceCoursePath, "课程元数据");
@@ -597,15 +280,6 @@ async function publish({ courseId, checkOnly }) {
         projectRootHint: process.env.COURSE_STUDIO_PROJECT_ROOT,
       });
     }
-    const beforePromotion = validationSnapshot({
-      root,
-      courseId,
-      contentRoot,
-      graphPath,
-    });
-    if (beforePromotion.input_sha256 !== validation.snapshot.input_sha256) {
-      fail("生产构建期间课程、图谱、审核回执或校验器发生变化，已取消原子发布");
-    }
     fs.renameSync(temporaryDirectory, targetDirectory);
   } catch (error) {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -618,8 +292,6 @@ async function publish({ courseId, checkOnly }) {
     points: index.points.length,
     animations: animations.length,
     output: `courses/${courseId}`,
-    validationSource: validation.source,
-    validationMs: validation.durationMs,
   })}\n`);
 }
 

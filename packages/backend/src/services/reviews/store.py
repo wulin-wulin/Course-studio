@@ -2428,12 +2428,12 @@ class CourseReviewStore:
             )
             resume_message = (
                 f"知识点审核 {review_id} 已由用户在结构化审核页完成，"
-                "后端已机械应用并写入有效回执。加载 knowledge-pipeline-orchestrator，"
-                "直接调用 course_pipeline "
-                f'{{"action":"init-points","courseId":"{course_id}"}} 并从 G3 继续；'
-                "该动作会验证有效 G2 回执，无需重放 review-knowledge-points。详情生成完成后"
-                "使用 finalize-points 收敛并校验。不要再次询问相同审核，也不要重放旧的"
-                "多 action 校验链。"
+                "后端已机械应用并写入有效回执。请依次调用 course_pipeline 的 "
+                f'{{"action":"validate-index","courseId":"{course_id}"}}、'
+                f'{{"action":"review-knowledge-points","courseId":"{course_id}"}}；'
+                "确认返回 status=approved 后，再调用 "
+                f'{{"action":"init-points","courseId":"{course_id}"}} '
+                "并从 G3 继续。不要再次询问相同审核。"
             )
         else:
             display_content = (
@@ -2442,12 +2442,12 @@ class CourseReviewStore:
             )
             resume_message = (
                 f"知识图谱审核 {review_id} 已由用户在结构化审核页完成，"
-                "后端已验证聚类、DAG、互斥关系并写入有效回执。加载 "
-                "knowledge-pipeline-orchestrator，直接调用 course_pipeline "
-                f'{{"action":"release-check","courseId":"{course_id}"}}。成功后必须在同一个 '
-                "OpenCode turn 使用 question 提供“确认发布/暂不发布”；用户确认后立即调用 "
-                "publish，暂不发布则保留产物并结束。不要再次调用图谱审核，也不要重放 "
-                "assemble/check 多 action 链。"
+                "后端已验证聚类、DAG、互斥关系并写入有效回执。请依次调用 course_pipeline 的 "
+                f'{{"action":"assemble-graph","courseId":"{course_id}"}}、'
+                f'{{"action":"assemble-graph-check","courseId":"{course_id}"}}、'
+                f'{{"action":"check-graph","courseId":"{course_id}"}} 和 '
+                f'{{"action":"review-knowledge-graph","courseId":"{course_id}"}}；'
+                "确认返回 status=approved 后进入 G7。不要再次询问相同审核。"
             )
         return display_content, resume_message
 

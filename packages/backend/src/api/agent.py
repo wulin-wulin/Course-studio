@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
 import json
 from pathlib import Path
-import time
 from typing import Any, Literal
 import uuid
 
@@ -68,9 +66,6 @@ _opencode_sessions: dict[str, str] = {}
 # model is paused. The browser answers them over a small HTTP endpoint so the
 # same OpenCode turn can resume without starting a second chat turn.
 _pending_questions: dict[str, dict[str, Any]] = {}
-# Bounded per-turn phase history lets the client distinguish real progress
-# from an idle spinner without persisting operational telemetry in course data.
-_status_telemetry: dict[str, dict[str, Any]] = {}
 
 InteractionMode = Literal["chat", "agent"]
 AgentWorkflow = Literal["default", "course-create"]
@@ -90,7 +85,6 @@ def forget_opencode_conversation(
             _opencode_sessions.pop(key, None)
     if session_id:
         _clear_pending_questions_for_session(session_id)
-    _status_telemetry.pop(safe_id, None)
 
 
 class AgentQuestionReply(BaseModel):
@@ -483,65 +477,24 @@ def _request_history_content(
 
 def _course_creation_prompt(message: str) -> str:
     return (
-        "继续当前 Course Studio v2 课程创建工作流。立即加载并严格遵循唯一编排入口 "
-        "`knowledge-pipeline-orchestrator` Skill；不要重新复述或自行改写它的 G0-G7 流程。\n\n"
+        "当前是 Course Studio 的课程创建工作流。必须加载并遵循 "
+        "knowledge-pipeline-orchestrator Skill，通过多轮对话推进 v2 的 G0-G7 门禁和最终发布确认。\n\n"
         f"用户本轮输入：\n{message}\n\n"
-        "本轮只补充不可绕过约束：G0/G7 使用 question；G2/G6 必须使用 course_pipeline "
-        "结构化审核，pending 后立即结束 turn。审核恢复消息是后端已机械应用的事实，直接从对应 "
-        "Skill Gate 继续；不得重复询问或把审核降级为聊天确认。正式发布仍须满足 G6 审核凭证、"
-        "用户 G7 明确确认和全部自动校验。"
+        "G0 范围补充和 G7 最终发布确认必须调用 question 工具提供选项和自定义填写，"
+        "不要只在普通回复末尾提问。G2 知识点清单审核和 G6 知识簇及前后依赖审核必须调用 "
+        "course_pipeline 的结构化审核动作；进入 pending 后结束当前 turn，由 Course Studio "
+        "审核工作区完成，不能用聊天文字或 question 替代。知识点正文与动画不进入生成期人工审核，"
+        "但必须通过全部自动结构、构建、安全和完整性校验。不要在 G6 审核通过、用户明确确认发布"
+        "且 G7 校验通过前生成 courses 下的正式课程。"
+        "不得生成或继续使用 v1 中间产物。"
     )
 
 
 async def _send_status(websocket: WebSocket, conversation_id: str, phase: str, label: str) -> None:
-    now_monotonic = time.monotonic()
-    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-    state = _status_telemetry.get(conversation_id)
-    if state is None:
-        state = {
-            "phase": phase,
-            "label": label,
-            "phase_started": now_monotonic,
-            "phase_started_at": now,
-            "events": [],
-        }
-        _status_telemetry[conversation_id] = state
-    elif state["phase"] != phase or state["label"] != label:
-        state["events"].append({
-            "at": now,
-            "kind": "stage_completed",
-            "phase": state["phase"],
-            "label": state["label"],
-            "elapsed_ms": max(
-                0,
-                round((now_monotonic - state["phase_started"]) * 1000),
-            ),
-        })
-        state["events"] = state["events"][-10:]
-        state.update({
-            "phase": phase,
-            "label": label,
-            "phase_started": now_monotonic,
-            "phase_started_at": now,
-        })
-
-    payload = {
-        "phase": phase,
-        "label": label,
-        "conversation_id": conversation_id,
-        "phase_started_at": state["phase_started_at"],
-        "phase_elapsed_ms": max(
-            0,
-            round((now_monotonic - state["phase_started"]) * 1000),
-        ),
-        "last_activity_at": now,
-        "recent_events": list(state["events"]),
-    }
-    try:
-        await websocket.send_json({"type": "agent_status", "payload": payload})
-    finally:
-        if phase in {"done", "error"}:
-            _status_telemetry.pop(conversation_id, None)
+    await websocket.send_json({
+        "type": "agent_status",
+        "payload": {"phase": phase, "label": label, "conversation_id": conversation_id},
+    })
 
 
 async def _emit_course_change(
@@ -605,23 +558,7 @@ async def _finish_for_review(
     conversation_id: str,
     mode: InteractionMode,
     review: dict[str, Any],
-    generation_observer: CourseGenerationObserver | None = None,
 ) -> None:
-    if generation_observer is not None:
-        waiting_for = (
-            "review:knowledge-graph"
-            if review.get("kind") == "knowledge-graph"
-            else "review:knowledge-points"
-        )
-        generation_observer.set_waiting_for(
-            waiting_for,
-            activity_label="课程已暂停，等待你完成结构化审核",
-        )
-        with contextlib.suppress(Exception):
-            await generation_observer.emit_if_changed(
-                websocket.send_json,
-                force=True,
-            )
     await _send_status(websocket, conversation_id, "waiting", "等待课程审核")
     await websocket.send_json({
         "type": "agent_review_required",
@@ -637,7 +574,6 @@ async def _finish_for_review(
             "review_id": review["id"],
         },
     })
-    _status_telemetry.pop(conversation_id, None)
 
 
 async def _resume_claim_heartbeat(
@@ -825,7 +761,6 @@ async def _run_agent_turn_opencode_unlocked(
         return
 
     conversation_id = _safe_conversation_id(payload.get("conversation_id") or "default")
-    _status_telemetry.pop(conversation_id, None)
     mode = _request_mode(payload)
     workflow = _request_workflow(payload)
     creating_course = workflow == "course-create"
@@ -1011,13 +946,7 @@ async def _run_agent_turn_opencode_unlocked(
         websocket,
         conversation_id,
         "provision",
-        (
-            "审核已确认，正在恢复课程流程"
-            if resume_response is not None
-            else "正在恢复课程工作区"
-        )
-        if creating_course
-        else "正在准备课程工作区",
+        "正在恢复课程工作区" if creating_course else "正在准备课程工作区",
     )
     try:
         if readonly:
@@ -1433,13 +1362,7 @@ async def _run_agent_turn_opencode_unlocked(
                         "conversation_id": conversation_id,
                     },
                 })
-            await _finish_for_review(
-                websocket,
-                conversation_id,
-                mode,
-                review,
-                generation_observer,
-            )
+            await _finish_for_review(websocket, conversation_id, mode, review)
             active_session["id"] = None
             return
 
