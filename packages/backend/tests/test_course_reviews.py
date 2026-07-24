@@ -306,6 +306,31 @@ class CourseReviewStoreTest(unittest.TestCase):
         )
         self.store._run_validator = Mock()
 
+    def test_resume_messages_use_composite_pipeline_actions(self):
+        base = {
+            "id": "review-1",
+            "course_id": COURSE_ID,
+            "course_title": "演示课程",
+        }
+        _, points_message = CourseReviewStore._resume_content(
+            {**base, "kind": "knowledge-points"},
+            2,
+        )
+        _, graph_message = CourseReviewStore._resume_content(
+            {**base, "kind": "knowledge-graph"},
+            1,
+        )
+
+        self.assertIn("finalize-points", points_message)
+        self.assertIn('"action":"init-points"', points_message)
+        self.assertNotIn('"action":"review-knowledge-points"', points_message)
+        self.assertNotIn("validate-index", points_message)
+        self.assertIn("release-check", graph_message)
+        self.assertIn("同一个 OpenCode turn", graph_message)
+        self.assertIn("确认发布/暂不发布", graph_message)
+        self.assertNotIn('"action":"review-knowledge-graph"', graph_message)
+        self.assertNotIn("assemble-graph-check", graph_message)
+
     def pending(self, kind: str) -> dict:
         self.fixture.write_marker(kind)
         resources = self.store.pending_for_conversation(CONVERSATION_ID)

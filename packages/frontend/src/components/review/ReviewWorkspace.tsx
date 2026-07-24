@@ -9,6 +9,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { fetchReview, ReviewApiError, submitReview } from "@/features/reviews/api";
+import { useCourseGenerationStore } from "@/course/generation/generationStore";
 import {
   isReviewReadOnly,
   reviewKindLabel,
@@ -54,6 +55,7 @@ export function ReviewWorkspace({
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
   const [reloadVersion, setReloadVersion] = useState(0);
   const contentRef = useRef<HTMLDivElement>(null);
+  const submitInFlightRef = useRef(false);
 
   useEffect(() => {
     contentRef.current?.scrollTo({ top: 0 });
@@ -82,6 +84,11 @@ export function ReviewWorkspace({
     if (state.phase !== "ready" || !state.review) return;
     const navigation = reviewResumeNavigation(state.review);
     if (navigation) onSubmitted(navigation);
+    else if (!isReviewReadOnly(state.review.status)) {
+      useCourseGenerationStore
+        .getState()
+        .waitForReview(state.review.conversation_id, state.review.kind);
+    }
   }, [onSubmitted, state.phase, state.review]);
 
   const submit = useCallback(
@@ -90,11 +97,16 @@ export function ReviewWorkspace({
       if (
         !review ||
         state.phase !== "ready" ||
-        isReviewReadOnly(review.status)
+        isReviewReadOnly(review.status) ||
+        submitInFlightRef.current
       ) {
         return;
       }
+      submitInFlightRef.current = true;
       dispatch({ type: "submitting" });
+      useCourseGenerationStore
+        .getState()
+        .beginResume(review.conversation_id, "正在提交审核结果");
       const controller = new AbortController();
       const timeout = window.setTimeout(
         () => controller.abort(),
@@ -125,7 +137,11 @@ export function ReviewWorkspace({
         } else {
           dispatch({ type: "submit-error", error: message });
         }
+        useCourseGenerationStore
+          .getState()
+          .waitForReview(review.conversation_id, review.kind);
       } finally {
+        submitInFlightRef.current = false;
         window.clearTimeout(timeout);
       }
     },
@@ -204,7 +220,11 @@ export function ReviewWorkspace({
               ? "border-primary/25 bg-primary-light text-primary"
               : "border-warning/30 bg-amber-50 text-amber-700"
           }`}>
-            {readOnly ? "已完成" : "等待你的确认"}
+            {state.phase === "submitting"
+              ? "正在提交"
+              : readOnly
+                ? "已完成"
+                : "等待你的确认"}
           </span>
         </div>
         <ReviewSummary review={review} />

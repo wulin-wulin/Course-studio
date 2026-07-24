@@ -15,6 +15,7 @@ const ACTION_NAMES = [
   "validate-points",
   "validate-animations",
   "validate-all",
+  "finalize-points",
   "sync-index",
   "sync-index-check",
   "build-animation-registry",
@@ -26,58 +27,170 @@ const ACTION_NAMES = [
   "check-pipeline-json",
   "check-pipeline-all",
   "check-pipeline-all-json",
+  "release-check",
   "publish",
 ] as const
 
 type Action = (typeof ACTION_NAMES)[number]
 
 type Invocation = {
-  script: string
+  script: readonly string[]
   args: (courseId: string) => string[]
+}
+
+const TOOL_SCRIPT_ROOT = [".opencode", "tools"] as const
+const CONTENT_SCRIPT_ROOT = [
+  ".opencode",
+  "skills",
+  "candidate-knowledge-point-generator",
+  "scripts",
+] as const
+const GRAPH_SCRIPT_ROOT = [
+  ".opencode",
+  "skills",
+  "knowledge-cluster-builder",
+  "knowledge-cluster-builder",
+  "scripts",
+] as const
+const ORCHESTRATOR_SCRIPT_ROOT = [
+  ".opencode",
+  "skills",
+  "knowledge-pipeline-orchestrator",
+  "scripts",
+] as const
+
+function toolScript(name: string): readonly string[] {
+  return [...TOOL_SCRIPT_ROOT, name]
+}
+
+function contentPaths(courseId: string) {
+  return {
+    contentRoot: `pipeline/${courseId}/course-content`,
+    graphFile: `pipeline/${courseId}/clustered-graph.json`,
+  }
+}
+
+function validatorScript(
+  root: readonly string[],
+  name: string,
+  args: (paths: ReturnType<typeof contentPaths>) => string[],
+): Invocation {
+  return {
+    script: [...root, name],
+    args: (courseId) => args(contentPaths(courseId)),
+  }
 }
 
 const ACTIONS: Record<Action, Invocation> = {
   init: {
-    script: "init-course-pipeline.mjs",
+    script: toolScript("init-course-pipeline.mjs"),
     args: (courseId) => [courseId],
   },
   "init-points": {
-    script: "init-course-pipeline.mjs",
+    script: toolScript("init-course-pipeline.mjs"),
     args: (courseId) => [courseId, "--stage", "points"],
   },
   "init-animation-manifest": {
-    script: "init-course-pipeline.mjs",
+    script: toolScript("init-course-pipeline.mjs"),
     args: (courseId) => [courseId, "--stage", "animation-manifest"],
   },
   "init-animations": {
-    script: "init-course-pipeline.mjs",
+    script: toolScript("init-course-pipeline.mjs"),
     args: (courseId) => [courseId, "--stage", "animations"],
   },
   "review-knowledge-points": {
-    script: "prepare-course-review.mjs",
+    script: toolScript("prepare-course-review.mjs"),
     args: (courseId) => ["knowledge-points", courseId],
   },
   "review-knowledge-graph": {
-    script: "prepare-course-review.mjs",
+    script: toolScript("prepare-course-review.mjs"),
     args: (courseId) => ["knowledge-graph", courseId],
   },
-  "validate-index": pipelineStep("validate-index"),
-  "validate-points": pipelineStep("validate-points"),
-  "validate-animations": pipelineStep("validate-animations"),
-  "validate-all": pipelineStep("validate-all"),
-  "sync-index": pipelineStep("sync-index"),
-  "sync-index-check": pipelineStep("sync-index-check"),
-  "build-animation-registry": pipelineStep("build-animation-registry"),
-  "assemble-graph": pipelineStep("assemble-graph"),
-  "assemble-graph-check": pipelineStep("assemble-graph-check"),
-  "check-graph": pipelineStep("check-graph"),
-  "check-graph-json": pipelineStep("check-graph-json"),
-  "check-content-all": pipelineStep("check-content-all"),
-  "check-pipeline-json": pipelineStep("check-pipeline-json"),
-  "check-pipeline-all": pipelineStep("check-pipeline-all"),
-  "check-pipeline-all-json": pipelineStep("check-pipeline-all-json"),
+  "validate-index": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "validate_output.mjs",
+    ({ contentRoot }) => ["--root", contentRoot, "--phase", "index"],
+  ),
+  "validate-points": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "validate_output.mjs",
+    ({ contentRoot }) => ["--root", contentRoot, "--phase", "points"],
+  ),
+  "validate-animations": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "validate_output.mjs",
+    ({ contentRoot }) => ["--root", contentRoot, "--phase", "animations"],
+  ),
+  "validate-all": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "validate_output.mjs",
+    ({ contentRoot }) => ["--root", contentRoot, "--phase", "all"],
+  ),
+  "finalize-points": {
+    script: toolScript("run-course-pipeline-step.mjs"),
+    args: (courseId) => ["finalize-points", courseId],
+  },
+  "sync-index": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "sync_index_from_points.mjs",
+    ({ contentRoot }) => ["--root", contentRoot],
+  ),
+  "sync-index-check": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "sync_index_from_points.mjs",
+    ({ contentRoot }) => ["--root", contentRoot, "--check"],
+  ),
+  "build-animation-registry": validatorScript(
+    CONTENT_SCRIPT_ROOT,
+    "build_animation_registry.mjs",
+    ({ contentRoot }) => ["--root", contentRoot],
+  ),
+  "assemble-graph": validatorScript(
+    GRAPH_SCRIPT_ROOT,
+    "assemble-graph-points.mjs",
+    ({ contentRoot, graphFile }) => [contentRoot, graphFile],
+  ),
+  "assemble-graph-check": validatorScript(
+    GRAPH_SCRIPT_ROOT,
+    "assemble-graph-points.mjs",
+    ({ contentRoot, graphFile }) => [contentRoot, graphFile, "--check"],
+  ),
+  "check-graph": validatorScript(
+    GRAPH_SCRIPT_ROOT,
+    "check-graph.mjs",
+    ({ graphFile }) => [graphFile],
+  ),
+  "check-graph-json": validatorScript(
+    GRAPH_SCRIPT_ROOT,
+    "check-graph.mjs",
+    ({ graphFile }) => [graphFile, "--json"],
+  ),
+  "check-content-all": validatorScript(
+    ORCHESTRATOR_SCRIPT_ROOT,
+    "check-pipeline.mjs",
+    ({ contentRoot }) => [contentRoot, "--phase", "all"],
+  ),
+  "check-pipeline-json": validatorScript(
+    ORCHESTRATOR_SCRIPT_ROOT,
+    "check-pipeline.mjs",
+    ({ contentRoot, graphFile }) => [contentRoot, graphFile, "--json"],
+  ),
+  "check-pipeline-all": validatorScript(
+    ORCHESTRATOR_SCRIPT_ROOT,
+    "check-pipeline.mjs",
+    ({ contentRoot, graphFile }) => [contentRoot, graphFile, "--phase", "all"],
+  ),
+  "check-pipeline-all-json": validatorScript(
+    ORCHESTRATOR_SCRIPT_ROOT,
+    "check-pipeline.mjs",
+    ({ contentRoot, graphFile }) => [contentRoot, graphFile, "--phase", "all", "--json"],
+  ),
+  "release-check": {
+    script: toolScript("publish-course-pipeline.mjs"),
+    args: (courseId) => [courseId, "--check"],
+  },
   publish: {
-    script: "publish-course-pipeline.mjs",
+    script: toolScript("publish-course-pipeline.mjs"),
     args: (courseId) => [courseId],
   },
 }
@@ -93,14 +206,7 @@ const AGENT_ACTIONS: Readonly<Record<string, ReadonlySet<Action>>> = {
   "course-creator": CREATOR_ACTIONS,
 }
 
-function pipelineStep(action: string): Invocation {
-  return {
-    script: "run-course-pipeline-step.mjs",
-    args: (courseId) => [action, courseId],
-  }
-}
-
-function assertTrustedScript(directory: string, scriptName: string): string {
+function assertTrustedScript(directory: string, segments: readonly string[]): string {
   const root = path.resolve(directory)
   const rootStat = fs.lstatSync(root)
   if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
@@ -108,20 +214,29 @@ function assertTrustedScript(directory: string, scriptName: string): string {
   }
 
   let current = root
-  for (const [index, segment] of [".opencode", "tools", scriptName].entries()) {
+  for (const [index, segment] of segments.entries()) {
+    if (
+      !segment
+      || segment === "."
+      || segment === ".."
+      || segment.includes("/")
+      || segment.includes("\\")
+    ) {
+      throw new Error("受信课程流水线脚本路径不合法")
+    }
     current = path.join(current, segment)
     if (!fs.existsSync(current)) {
-      throw new Error(`缺少受信课程流水线脚本：${scriptName}`)
+      throw new Error(`缺少受信课程流水线脚本：${segments.join("/")}`)
     }
     const stat = fs.lstatSync(current)
     if (stat.isSymbolicLink()) {
       throw new Error(`受信课程流水线路径不允许符号链接：${segment}`)
     }
-    if (index < 2 && !stat.isDirectory()) {
+    if (index < segments.length - 1 && !stat.isDirectory()) {
       throw new Error(`受信课程流水线路径不是目录：${segment}`)
     }
-    if (index === 2 && !stat.isFile()) {
-      throw new Error(`受信课程流水线脚本不是普通文件：${scriptName}`)
+    if (index === segments.length - 1 && !stat.isFile()) {
+      throw new Error(`受信课程流水线脚本不是普通文件：${segments.join("/")}`)
     }
   }
   return current

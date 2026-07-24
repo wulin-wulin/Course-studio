@@ -38,6 +38,25 @@ test("pipeline step runner maps fixed actions to one course-local path", () => {
   assert.equal(invocation.courseRoot, path.join(PROJECT_ROOT, "pipeline", "demo-course"));
 });
 
+test("finalize-points is one fixed in-process composite over sync and validation", () => {
+  const invocation = buildPipelineStepInvocation(
+    "finalize-points",
+    "demo-course",
+    PROJECT_ROOT,
+  );
+  assert.equal(invocation.composite, "finalize-points");
+  assert.deepEqual(
+    invocation.scripts.map((script) => path.basename(script)),
+    ["validate_output.mjs", "sync_index_from_points.mjs"],
+  );
+  assert.deepEqual(invocation.args, [
+    "--root",
+    "pipeline/demo-course/course-content",
+    "--phase",
+    "points",
+  ]);
+});
+
 test("every pipeline action is fixed and rejects attacker-controlled path syntax", () => {
   assert.ok(pipelineStepActions().length >= 10);
   for (const action of pipelineStepActions()) {

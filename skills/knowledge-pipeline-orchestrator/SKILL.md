@@ -74,11 +74,9 @@ pipeline/<course-id>/
 - 先调用 `init-points`；该 action 会验证 G2 回执，无有效回执时必须阻断。
 - 按内容 Skill 的文件所有权和自适应拆分规则，让内容子智能体生成各自的 `points/<id>.json` 和同名动画请求。
 - 子智能体不得修改共享 index、manifest、清单或注册文件。
-- 全局复核正文区分度、事实、前置引用与 DAG 后，依次调用：
-
-  1. `validate-points`
-  2. `sync-index`
-  3. `validate-points`
+- 全局复核正文区分度、事实、前置引用与 DAG 后，只调用一次 `finalize-points`。该固定 action
+  在写 index 前先校验完整知识点，再以受信同步器回写派生字段，最后校验同步后的完整结果；失败时保留产物并定点修复，
+  不得退回到多次模型—工具往返。
 
 ### G4_ANIMATIONS
 
@@ -98,7 +96,8 @@ pipeline/<course-id>/
 - 点集及 index 顺序不变，全部正文原样透传。
 - `prerequisites` 默认透传；每条增删必须与审核记录一一对应。
 - 新增 `clusters / clusterIds / role / related`，不生成布局。
-- 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
+- 调用一次 `assemble-graph` 机械装配上游正文。不要再单独调用 `assemble-graph-check` 或
+  `check-graph`；紧接着的 `review-knowledge-graph` 会在创建审核请求前执行包含这两类约束的全量图谱预审核。
 
 ### G6_GRAPH_REVIEW
 
@@ -108,14 +107,14 @@ pipeline/<course-id>/
 
 ### G7_RELEASE_READY
 
-依次调用：
+- G6 审核通过后只调用一次 `release-check`。该固定 action 合并图谱一致性、完整内容、关系审计以及两份结构化回执检查，
+  并生成绑定当前内容树、图谱、G2/G6 回执和校验器版本的 G7 校验凭据。
+- `release-check` 返回 `ready` 后在同一 turn 立即调用 `question`，只提供“确认发布”和“暂不发布”两个明确选项；
+  不得先结束本轮或要求用户另发一条消息。用户选择“暂不发布”时停止并保留凭据。
+- 用户选择“确认发布”后只调用一次 `publish`。仅当上述四类哈希全部与 G7 凭据一致时才复用检查；
+  任一输入或校验器变化都会自动执行一次完整 G7 重验，不能凭过期凭据发布。
 
-1. `assemble-graph-check`
-2. `check-graph`
-3. `check-pipeline-all`
-4. `publish`
-
-最终 checker 必须确认当前内容/图谱和两份有效结构化回执。发布工具会对动画源码执行真实生产 bundle，生成带 SHA-256 完整性清单的独立 iframe 运行包；源码校验、生产构建、依赖边界或资产完整性任一失败时整次发布原子失败。发布不读取旧 G5 人工动画凭据。
+最终 checker 必须确认当前内容/图谱和两份有效结构化回执。发布工具会对动画源码执行真实生产 bundle，生成带 SHA-256 完整性清单的独立 iframe 运行包；生产构建期间再次核对完整绑定哈希，任何并发漂移、源码校验、生产构建、依赖边界或资产完整性失败都会使整次发布原子失败。发布不读取旧 G5 人工动画凭据。
 
 ## 恢复与失效
 
@@ -130,6 +129,8 @@ pipeline/<course-id>/
 - `check-content-all`：只校验内容包。
 - `check-pipeline-json`：检查图谱交接并返回机器结果。
 - `check-pipeline-all` / `check-pipeline-all-json`：执行最终全量门禁。
+- `finalize-points`：单次工具调用内完成同步前校验、index 派生字段同步和同步后最终校验。
+- `release-check`：一次执行 G7 发布前全量门禁并生成哈希绑定校验凭据，不实际发布。
 
 最终全量门禁必须显示 `reviewApprovals: 2`。
 

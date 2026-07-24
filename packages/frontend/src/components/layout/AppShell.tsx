@@ -201,6 +201,10 @@ export function AppShell() {
       if (!generation.liveRuns[result.conversationId]) {
         generation.startLive(result.conversationId);
       }
+      generation.beginResume(
+        result.conversationId,
+        "审核已提交，正在恢复课程创建"
+      );
       navigate(`/generation/${encodeURIComponent(result.conversationId)}`);
       setIsAgentPanelOpen(true);
     },

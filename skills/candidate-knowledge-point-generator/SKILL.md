@@ -186,7 +186,8 @@ generation/animation-requests/<id>.json
 5. 难度、重要性和摘要与目标受众是否一致；
 6. 公式、历史、年份和事实归属是否可核实。
 
-由主智能体依次调用 `course_pipeline` 的 `validate-points`、`sync-index`、`validate-points`。子智能体不得自行运行脚本。
+由主智能体只调用一次 `course_pipeline` 的 `finalize-points`；该固定 action 会先校验完整知识点，
+再安全同步索引派生字段并复验同步后的结果。子智能体不得自行运行脚本。
 
 同步脚本冻结 `id`、`title` 和顺序，只从详情回写 `shortSummary`、`difficulty`、`importance`、`keyTerms`。
 

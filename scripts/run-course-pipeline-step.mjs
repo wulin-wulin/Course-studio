@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const COURSE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -36,6 +36,17 @@ function contentPaths(courseId) {
 }
 
 const ACTIONS = new Map([
+  [
+    "finalize-points",
+    {
+      script: [...CONTENT_SCRIPT_ROOT, "validate_output.mjs"],
+      additionalScripts: [
+        [...CONTENT_SCRIPT_ROOT, "sync_index_from_points.mjs"],
+      ],
+      args: ({ contentRoot }) => ["--root", contentRoot, "--phase", "points"],
+      composite: "finalize-points",
+    },
+  ],
   ...["index", "points", "animations", "all"].map((phase) => [
     `validate-${phase}`,
     {
@@ -172,8 +183,15 @@ export function buildPipelineStepInvocation(action, courseId, root = process.cwd
   const definition = ACTIONS.get(action);
   const paths = contentPaths(courseId);
   const script = path.resolve(workspaceRoot, ...definition.script);
+  const scripts = [
+    script,
+    ...(definition.additionalScripts ?? []).map((segments) => (
+      path.resolve(workspaceRoot, ...segments)
+    )),
+  ];
   const courseRoot = path.resolve(workspaceRoot, "pipeline", courseId);
   ensureInside(workspaceRoot, script);
+  for (const trustedScript of scripts) ensureInside(workspaceRoot, trustedScript);
   ensureInside(workspaceRoot, courseRoot);
   return {
     action,
@@ -181,18 +199,53 @@ export function buildPipelineStepInvocation(action, courseId, root = process.cwd
     workspaceRoot,
     courseRoot,
     script,
+    scripts,
     args: definition.args(paths),
+    composite: definition.composite ?? null,
+    paths,
   };
 }
 
-export function runPipelineStep(argv = process.argv.slice(2)) {
+async function finalizePoints(invocation) {
+  const validateModule = await import(pathToFileURL(invocation.scripts[0]).href);
+  const syncModule = await import(pathToFileURL(invocation.scripts[1]).href);
+  const beforeSync = validateModule.validateProject(invocation.paths.contentRoot, {
+    phase: "points",
+  });
+  if (beforeSync.errors.length > 0) {
+    fail(`知识点同步前校验失败：\n- ${beforeSync.errors.join("\n- ")}`);
+  }
+  const sync = syncModule.syncIndexFromPoints(invocation.paths.contentRoot);
+  const validation = validateModule.validateProject(invocation.paths.contentRoot, {
+    phase: "points",
+  });
+  if (validation.errors.length > 0) {
+    fail(`知识点最终校验失败：\n- ${validation.errors.join("\n- ")}`);
+  }
+  process.stdout.write(`${JSON.stringify({
+    action: "finalize-points",
+    courseId: invocation.courseId,
+    status: "completed",
+    pointCount: validation.counts.pointFiles,
+    indexChanged: sync.changed,
+    warnings: validation.warnings.length,
+  })}\n`);
+}
+
+export async function runPipelineStep(argv = process.argv.slice(2)) {
   const [action, courseId, ...extra] = argv;
   if (extra.length > 0) fail(`未知额外参数：${extra.join(" ")}`);
   const invocation = buildPipelineStepInvocation(action, courseId);
-  assertNoSymlink(invocation.workspaceRoot, invocation.script, "受信脚本");
+  for (const trustedScript of invocation.scripts) {
+    assertNoSymlink(invocation.workspaceRoot, trustedScript, "受信脚本");
+    if (!fs.existsSync(trustedScript) || !fs.lstatSync(trustedScript).isFile()) {
+      fail(`缺少受信流水线脚本：${trustedScript}`);
+    }
+  }
   assertNoSymlink(invocation.workspaceRoot, invocation.courseRoot, "课程流水线");
-  if (!fs.existsSync(invocation.script) || !fs.lstatSync(invocation.script).isFile()) {
-    fail(`缺少受信流水线脚本：${invocation.script}`);
+  if (invocation.composite === "finalize-points") {
+    await finalizePoints(invocation);
+    return 0;
   }
 
   const result = spawnSync(process.execPath, [invocation.script, ...invocation.args], {
@@ -211,7 +264,7 @@ const isDirectRun = process.argv[1]
 
 if (isDirectRun) {
   try {
-    process.exitCode = runPipelineStep();
+    process.exitCode = await runPipelineStep();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

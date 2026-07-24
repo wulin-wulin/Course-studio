@@ -83,6 +83,11 @@ class CourseGenerationSnapshotTest(unittest.TestCase):
         indexed = self.snapshot()
         self.assertEqual(indexed["gate"], "G1")
         self.assertEqual(indexed["total_points"], 2)
+        self.assertEqual(indexed["point_total"], 2)
+        self.assertEqual(indexed["point_completed"], 0)
+        self.assertEqual(indexed["stage_label"], "正在规划知识点清单")
+        self.assertIsNotNone(indexed["started_at"])
+        self.assertIsNotNone(indexed["last_activity_at"])
         self.assertFalse(any(point["complete"] for point in indexed["points"]))
 
         _write(self.content / "generation/manifest.json", {
@@ -110,6 +115,8 @@ class CourseGenerationSnapshotTest(unittest.TestCase):
         _write(self.data / "points/first-point.json", first)
         content = self.snapshot()
         self.assertEqual(content["gate"], "G3")
+        self.assertEqual(content["point_completed"], 1)
+        self.assertEqual(content["stage_detail"], "已完成 1/2 个知识点")
         self.assertEqual(
             [point["complete"] for point in content["points"]],
             [True, False],
@@ -160,6 +167,38 @@ class CourseGenerationSnapshotTest(unittest.TestCase):
         published = self.snapshot(published=True)
         self.assertEqual(published["gate"], "G7")
         self.assertTrue(published["published"])
+
+    def test_reports_incremental_animation_progress(self):
+        self.write_course_and_index()
+        for point in self.index_points:
+            _write(
+                self.data / "points" / f"{point['id']}.json",
+                _complete_point(point["id"], point["title"], point["importance"]),
+            )
+        _write(self.content / "generation/animation-manifest.json", {
+            "schema_version": "course-content-animations/1.0",
+            "animations": [{
+                "type": "demoAnimation",
+                "component": "DemoAnimation",
+                "bindings": [{"pointId": "first-point"}],
+            }],
+        })
+
+        source = self.content / "src/animations/DemoAnimation.tsx"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("export default function DemoAnimation() {}", encoding="utf-8")
+        partial = self.snapshot()
+        self.assertEqual(partial["gate"], "G4")
+        self.assertEqual(partial["animation_total"], 1)
+        self.assertEqual(partial["animation_completed"], 0)
+
+        (source.parent / "DemoAnimation.css").write_text(".demo {}", encoding="utf-8")
+        complete_component = self.snapshot()
+        self.assertEqual(complete_component["animation_completed"], 1)
+        self.assertEqual(
+            complete_component["stage_detail"],
+            "已完成 1/1 个动画",
+        )
 
 
 class CourseGenerationObserverTest(unittest.IsolatedAsyncioTestCase):
@@ -296,6 +335,38 @@ class CourseGenerationObserverTest(unittest.IsolatedAsyncioTestCase):
             emitted = len(messages)
             await asyncio.sleep(0.025)
             self.assertEqual(len(messages), emitted)
+
+    async def test_emits_bounded_heartbeat_and_review_waiting_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pipeline_root = Path(temporary) / "pipeline"
+            observer = CourseGenerationObserver(
+                pipeline_root,
+                "conversation-heartbeat",
+                interval_seconds=0.005,
+                heartbeat_seconds=0.01,
+            )
+            messages: list[dict] = []
+
+            async def send(message: dict) -> None:
+                messages.append(message)
+
+            first = await observer.emit_if_changed(send)
+            await observer.emit_if_changed(send)
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(first["waiting_for"], "none")
+
+            await asyncio.sleep(0.012)
+            heartbeat = await observer.emit_if_changed(send)
+            self.assertEqual(len(messages), 2)
+            self.assertGreaterEqual(heartbeat["phase_elapsed_ms"], 1)
+
+            observer.set_waiting_for(
+                "review:knowledge-points",
+                activity_label="等待结构化审核",
+            )
+            waiting = await observer.emit_if_changed(send, force=True)
+            self.assertEqual(waiting["waiting_for"], "review:knowledge-points")
+            self.assertEqual(waiting["activity_label"], "等待结构化审核")
 
 
 if __name__ == "__main__":

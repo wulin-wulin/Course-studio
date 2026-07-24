@@ -25,6 +25,14 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
     ]) {
       fs.writeFileSync(path.join(toolsRoot, script), "// test fixture\n");
     }
+    for (const relative of [
+      ["candidate-knowledge-point-generator", "scripts", "validate_output.mjs"],
+      ["knowledge-cluster-builder", "knowledge-cluster-builder", "scripts", "assemble-graph-points.mjs"],
+    ]) {
+      const target = path.join(temporaryRoot, ".opencode", "skills", ...relative);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "// test fixture\n");
+    }
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({ name: "@opencode-ai/plugin", type: "module", exports: "./index.js" }),
@@ -96,7 +104,9 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       const creatorCases = [
         ["init-points", "init-course-pipeline.mjs", ["demo-course", "--stage", "points"]],
         ["review-knowledge-graph", "prepare-course-review.mjs", ["knowledge-graph", "demo-course"]],
-        ["assemble-graph-check", "run-course-pipeline-step.mjs", ["assemble-graph-check", "demo-course"]],
+        ["validate-points", "validate_output.mjs", ["--root", "pipeline/demo-course/course-content", "--phase", "points"]],
+        ["assemble-graph-check", "assemble-graph-points.mjs", ["pipeline/demo-course/course-content", "pipeline/demo-course/clustered-graph.json", "--check"]],
+        ["release-check", "publish-course-pipeline.mjs", ["demo-course", "--check"]],
         ["publish", "publish-course-pipeline.mjs", ["demo-course"]],
       ]
       for (const [action, script, trailingArgs] of creatorCases) {
@@ -105,6 +115,10 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
         assert.deepEqual(calls.at(-1).argv.slice(2), trailingArgs)
         assert.equal("shell" in calls.at(-1).options, false)
       }
+      assert.ok(
+        calls.find((call) => path.basename(call.argv[1]) === "validate_output.mjs")
+          .argv[1].includes(path.join(".opencode", "skills")),
+      )
     `);
 
     const result = spawnSync(process.execPath, ["--experimental-strip-types", harness], {

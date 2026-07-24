@@ -14,7 +14,7 @@ before(async () => {
         'export * from "./src/features/reviews/types.ts";',
         'export * from "./src/features/reviews/resumeDelivery.ts";',
         'export * from "./src/utils/latestRequest.ts";',
-        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
+        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldPauseGenerationAfterAgentDone, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
       ].join("\n"),
       resolveDir: frontendRoot,
       sourcefile: "review-contract-entry.ts",
@@ -319,4 +319,132 @@ test("stale live generations pause and can explicitly resume", () => {
   assert.equal(store.getState().liveRuns[conversationId].status, "running");
   assert.equal(store.getState().liveRuns[conversationId].error, null);
   store.getState().removeLive(conversationId);
+});
+
+test("generation snapshots preserve fine-grained progress and timing telemetry", () => {
+  const conversationId = "telemetry-course-conversation";
+  const store = contracts.useCourseGenerationStore;
+  store.getState().startLive(conversationId);
+  store.getState().applySnapshot({
+    conversation_id: conversationId,
+    gate: "G4",
+    course: { id: "telemetry-course", title: "Telemetry Course" },
+    total_points: 10,
+    point_completed: 6,
+    point_total: 10,
+    animation_completed: 2,
+    animation_total: 4,
+    stage_label: "生成教学动画",
+    stage_detail: "正在构建第 3 个动画",
+    activity_label: "构建概率分布动画",
+    started_at: "2026-07-24T01:00:00.000Z",
+    last_activity_at: "2026-07-24T01:03:00.000Z",
+    points: Array.from({ length: 10 }, (_, index) => ({
+      id: `point-${index + 1}`,
+      title: `Point ${index + 1}`,
+      order: index,
+      complete: index < 6,
+    })),
+    clusters: [],
+    published: false,
+    phase_elapsed_ms: 45_000,
+    recent_events: [
+      {
+        at: "2026-07-24T01:02:50.000Z",
+        label: "动画 2/4 已完成",
+        kind: "animation",
+      },
+    ],
+  });
+
+  const run = store.getState().liveRuns[conversationId];
+  assert.equal(run.phaseLabel, "生成教学动画");
+  assert.equal(run.phaseDetail, "正在构建第 3 个动画");
+  assert.equal(run.activityLabel, "构建概率分布动画");
+  assert.equal(run.pointCompleted, 6);
+  assert.equal(run.animationCompleted, 2);
+  assert.equal(run.animationTotal, 4);
+  assert.equal(run.activityState, "working");
+  assert.equal(run.startedAt, Date.parse("2026-07-24T01:00:00.000Z"));
+  assert.equal(run.lastActivityAt, Date.parse("2026-07-24T01:03:00.000Z"));
+  assert.equal(run.recentActivities.at(-2)?.label, "动画 2/4 已完成");
+  assert.equal(run.recentActivities.at(-1)?.label, "构建概率分布动画");
+  store.getState().removeLive(conversationId);
+});
+
+test("review waits do not become false pauses and resume is immediately visible", () => {
+  const conversationId = "review-wait-course-conversation";
+  const store = contracts.useCourseGenerationStore;
+  store.getState().startLive(conversationId);
+  const startedAt = store.getState().liveRuns[conversationId].updatedAt;
+
+  store.getState().waitForReview(conversationId, "knowledge-graph");
+  assert.equal(store.getState().liveRuns[conversationId].activityState, "waiting-review");
+  assert.match(store.getState().liveRuns[conversationId].activityLabel, /知识图谱/);
+
+  store.getState().pauseStaleLiveRuns(startedAt + 300_000);
+  assert.equal(store.getState().liveRuns[conversationId].status, "running");
+  assert.equal(store.getState().liveRuns[conversationId].activityState, "waiting-review");
+
+  store.getState().beginResume(conversationId);
+  assert.equal(store.getState().liveRuns[conversationId].activityState, "resuming");
+  store.getState().pauseLive(conversationId, "network lost", "disconnected");
+  assert.equal(store.getState().liveRuns[conversationId].activityState, "disconnected");
+  store.getState().removeLive(conversationId);
+});
+
+test("agent status updates the visible activity without resetting total elapsed time", () => {
+  const conversationId = "agent-status-course-conversation";
+  const store = contracts.useCourseGenerationStore;
+  store.getState().startLive(conversationId);
+  const startedAt = store.getState().liveRuns[conversationId].startedAt;
+
+  store.getState().applyAgentStatus({
+    conversation_id: conversationId,
+    label: "正在校验课程内容",
+    detail: "检查知识点文件 8/10",
+    phase: "validation",
+    last_activity_at: "2026-07-24T02:00:00.000Z",
+  });
+
+  const run = store.getState().liveRuns[conversationId];
+  assert.equal(run.activityLabel, "正在校验课程内容");
+  assert.equal(run.phaseDetail, "检查知识点文件 8/10");
+  assert.equal(run.startedAt, startedAt);
+  assert.equal(run.lastActivityAt, Date.parse("2026-07-24T02:00:00.000Z"));
+  store.getState().removeLive(conversationId);
+});
+
+test("agent_done awaiting review never overwrites the durable waiting state", () => {
+  const waitingReviewRun = {
+    published: false,
+    activityState: "waiting-review",
+  };
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone(
+      { awaiting_review: true },
+      waitingReviewRun,
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone({}, waitingReviewRun),
+    false,
+    "the stored waiting state also protects against older terminal payloads",
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone(
+      { awaiting_review: true },
+      { published: false, activityState: "working" },
+    ),
+    false,
+    "the terminal payload wins when review_required arrived just before store projection",
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone(
+      {},
+      { published: false, activityState: "working" },
+    ),
+    true,
+  );
 });

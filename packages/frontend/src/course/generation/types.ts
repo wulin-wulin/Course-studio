@@ -91,6 +91,22 @@ export type GenerationRunStatus =
   | "completed"
   | "error";
 
+export type GenerationActivityState =
+  | "working"
+  | "waiting-review"
+  | "waiting-user"
+  | "resuming"
+  | "paused"
+  | "disconnected"
+  | "completed"
+  | "error";
+
+export type GenerationActivityEvent = {
+  at: number;
+  label: string;
+  kind?: string;
+};
+
 export type CourseGenerationSnapshotPoint = {
   id: string;
   title: string;
@@ -120,6 +136,20 @@ export type CourseGenerationSnapshot = {
   points: CourseGenerationSnapshotPoint[];
   clusters: CourseGenerationSnapshotCluster[];
   published: boolean;
+  stage_label?: string;
+  stage_detail?: string;
+  activity_label?: string;
+  point_completed?: number;
+  point_total?: number;
+  animation_completed?: number;
+  animation_total?: number;
+  waiting_for?: string;
+  started_at?: number;
+  last_activity_at?: number;
+  telemetry?: {
+    phase_elapsed_ms?: number;
+    recent_events?: GenerationActivityEvent[];
+  };
 };
 
 export type LiveCourseGenerationRun = {
@@ -135,6 +165,16 @@ export type LiveCourseGenerationRun = {
   published: boolean;
   publishedCourseId: string | null;
   error: string | null;
+  activityState: GenerationActivityState;
+  activityLabel: string;
+  pointCompleted: number;
+  animationCompleted: number;
+  animationTotal: number;
+  waitingFor: string | null;
+  startedAt: number;
+  phaseStartedAt: number;
+  lastActivityAt: number;
+  recentActivities: GenerationActivityEvent[];
   updatedAt: number;
   snapshotKey: string;
 };

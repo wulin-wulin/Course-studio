@@ -22,6 +22,11 @@ import { reviewHashes } from "./prepare-course-review.mjs";
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INIT_SCRIPT = path.join(PROJECT_ROOT, "scripts", "init-course-pipeline.mjs");
 const PUBLISH_SCRIPT = path.join(PROJECT_ROOT, "scripts", "publish-course-pipeline.mjs");
+const PIPELINE_STEP_SCRIPT = path.join(
+  PROJECT_ROOT,
+  "scripts",
+  "run-course-pipeline-step.mjs",
+);
 
 function writeJson(filePath, value) {
   mkdirSync(path.dirname(filePath), { recursive: true });
@@ -221,6 +226,161 @@ test("v2 初始化器分阶段创建动态占位且不会覆盖已有内容", (t
   assert.ok(existsSync(path.join(contentRoot, "src", "animations", "ExampleAnimation.css")));
 });
 
+test("v2 finalize-points 一次同步 index 并执行同步后的最终校验", (t) => {
+  const { workspace, courseId, contentRoot } = preparePublishFixture(t, {
+    withAnimation: false,
+  });
+  const indexPath = path.join(contentRoot, "src", "data", "index.json");
+  const index = readJson(indexPath);
+  const pointPath = path.join(
+    contentRoot,
+    "src",
+    "data",
+    "points",
+    `${index.points[0].id}.json`,
+  );
+  const sourceSummary = Array.from(readJson(pointPath).shortSummary);
+  sourceSummary[0] = sourceSummary[0] === "临" ? "暂" : "临";
+  index.points[0].shortSummary = sourceSummary.join("");
+  writeJson(indexPath, index);
+
+  const finalized = run(PIPELINE_STEP_SCRIPT, ["finalize-points", courseId], workspace);
+  assertSuccess(finalized);
+  const report = JSON.parse(finalized.stdout);
+  assert.equal(report.action, "finalize-points");
+  assert.equal(report.indexChanged, true);
+  const point = readJson(pointPath);
+  assert.equal(readJson(indexPath).points[0].shortSummary, point.shortSummary);
+
+  const invalidIndex = readJson(indexPath);
+  const invalidSummary = Array.from(point.shortSummary);
+  invalidSummary[0] = invalidSummary[0] === "未" ? "暂" : "未";
+  invalidIndex.points[0].shortSummary = invalidSummary.join("");
+  writeJson(indexPath, invalidIndex);
+  point.prerequisites = ["missing-point"];
+  writeJson(pointPath, point);
+  const invalid = run(PIPELINE_STEP_SCRIPT, ["finalize-points", courseId], workspace);
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /知识点同步前校验失败/);
+  assert.equal(
+    readJson(indexPath).points[0].shortSummary,
+    invalidIndex.points[0].shortSummary,
+    "同步前校验失败时不得改写 index",
+  );
+});
+
+test("v2 release-check 合并 G7 门禁并让未变化的发布复用哈希凭据", (t) => {
+  const { workspace, courseId } = preparePublishFixture(t, { withAnimation: false });
+  const checked = run(PUBLISH_SCRIPT, [courseId, "--check"], workspace);
+  assertSuccess(checked);
+  const firstReport = JSON.parse(checked.stdout);
+  assert.equal(firstReport.action, "release-check");
+  assert.equal(firstReport.status, "ready");
+  assert.equal(firstReport.validationSource, "fresh");
+  assert.match(firstReport.inputSha256, /^[0-9a-f]{64}$/);
+  assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+
+  const receiptPath = path.join(
+    workspace,
+    "pipeline",
+    courseId,
+    "reviews",
+    "g7-release.validation.json",
+  );
+  const receipt = readJson(receiptPath);
+  assert.equal(receipt.schema_version, "course-pipeline-validation-receipt/1.0");
+  assert.equal(receipt.check.reviewApprovals, 2);
+  for (const field of [
+    "input_sha256",
+    "content_sha256",
+    "graph_sha256",
+    "knowledge_points_approval_sha256",
+    "knowledge_graph_approval_sha256",
+    "validator_sha256",
+  ]) {
+    assert.match(receipt[field], /^[0-9a-f]{64}$/, field);
+  }
+
+  const rechecked = run(PUBLISH_SCRIPT, [courseId, "--check"], workspace);
+  assertSuccess(rechecked);
+  const cachedReport = JSON.parse(rechecked.stdout);
+  assert.equal(cachedReport.validationSource, "receipt");
+
+  const published = run(PUBLISH_SCRIPT, [courseId], workspace);
+  assertSuccess(published);
+  const publishedReport = JSON.parse(published.stdout);
+  assert.equal(publishedReport.validationSource, "receipt");
+  if (process.env.COURSE_PIPELINE_BENCHMARK === "1") {
+    console.log(JSON.stringify({
+      fullValidationMs: firstReport.validationMs,
+      cachedValidationMs: cachedReport.validationMs,
+      publishReceiptValidationMs: publishedReport.validationMs,
+    }));
+  }
+});
+
+test("v2 审核回执字节变化会使 G7 凭据失效并自动完整重验", (t) => {
+  const { workspace, courseId } = preparePublishFixture(t, { withAnimation: false });
+  assertSuccess(run(PUBLISH_SCRIPT, [courseId, "--check"], workspace));
+  const approvalPath = path.join(
+    workspace,
+    ".course-review-approvals",
+    courseId,
+    "knowledge-graph.json",
+  );
+  const approval = readJson(approvalPath);
+  writeFileSync(approvalPath, JSON.stringify(approval), "utf8");
+
+  const published = run(PUBLISH_SCRIPT, [courseId], workspace);
+  assertSuccess(published);
+  assert.equal(JSON.parse(published.stdout).validationSource, "fresh");
+});
+
+test("v2 内容在 release-check 后变化会使凭据失效且不能绕过图谱交接校验", (t) => {
+  const { workspace, courseId, contentRoot } = preparePublishFixture(t, {
+    withAnimation: false,
+  });
+  assertSuccess(run(PUBLISH_SCRIPT, [courseId, "--check"], workspace));
+  const index = readJson(path.join(contentRoot, "src", "data", "index.json"));
+  const pointPath = path.join(
+    contentRoot,
+    "src",
+    "data",
+    "points",
+    `${index.points[0].id}.json`,
+  );
+  const point = readJson(pointPath);
+  point.coreIdea = `${point.coreIdea}（发布前变化）`;
+  writeJson(pointPath, point);
+
+  const published = run(PUBLISH_SCRIPT, [courseId], workspace);
+  assert.notEqual(published.status, 0);
+  assert.match(published.stderr, /G7 流水线校验未通过/);
+  assert.equal(existsSync(path.join(workspace, "courses", courseId)), false);
+});
+
+test("v2 校验器版本变化会使 G7 凭据失效并自动完整重验", (t) => {
+  const { workspace, courseId } = preparePublishFixture(t, { withAnimation: false });
+  assertSuccess(run(PUBLISH_SCRIPT, [courseId, "--check"], workspace));
+  const checkerPath = path.join(
+    workspace,
+    ".opencode",
+    "skills",
+    "knowledge-pipeline-orchestrator",
+    "scripts",
+    "check-pipeline.mjs",
+  );
+  writeFileSync(
+    checkerPath,
+    `${readFileSync(checkerPath, "utf8")}\n// test validator version bump\n`,
+    "utf8",
+  );
+
+  const published = run(PUBLISH_SCRIPT, [courseId], workspace);
+  assertSuccess(published);
+  assert.equal(JSON.parse(published.stdout).validationSource, "fresh");
+});
+
 test("v2 无动画内容包可发布并完整保留正文、关系与主簇适配", (t) => {
   const { workspace, courseId, graph } = preparePublishFixture(t, { withAnimation: false });
   const result = run(PUBLISH_SCRIPT, [courseId], workspace);
@@ -275,6 +435,7 @@ test("v2 发布不要求旧 G5 人工动画凭据", (t) => {
 
 test("v2 图谱审核后簇定义发生变化会阻止发布", (t) => {
   const { workspace, courseId, graph } = preparePublishFixture(t, { withAnimation: false });
+  assertSuccess(run(PUBLISH_SCRIPT, [courseId, "--check"], workspace));
   graph.clusters[0].description = `${graph.clusters[0].description}（审核后变化）`;
   writeJson(path.join(workspace, "pipeline", courseId, "clustered-graph.json"), graph);
 
