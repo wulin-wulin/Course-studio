@@ -13,8 +13,9 @@ before(async () => {
       contents: [
         'export * from "./src/features/reviews/types.ts";',
         'export * from "./src/features/reviews/resumeDelivery.ts";',
+        'export * from "./src/features/courseCreation/setup.ts";',
         'export * from "./src/utils/latestRequest.ts";',
-        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
+        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldPauseGenerationAfterAgentDone, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
       ].join("\n"),
       resolveDir: frontendRoot,
       sourcefile: "review-contract-entry.ts",
@@ -205,6 +206,32 @@ test("resume outbox survives remount and removes only acknowledged work", () => 
   assert.deepEqual(outbox.list(), []);
 });
 
+test("resume delivery stays locked while retry reconciliation is pending", () => {
+  const ready = {
+    inFlight: false,
+    retryScheduled: false,
+    reconcileInProgress: false,
+    socketOpen: true,
+  };
+  assert.equal(contracts.shouldDeliverReviewResume(ready), true);
+  assert.equal(
+    contracts.shouldDeliverReviewResume({ ...ready, inFlight: true }),
+    false,
+  );
+  assert.equal(
+    contracts.shouldDeliverReviewResume({ ...ready, retryScheduled: true }),
+    false,
+  );
+  assert.equal(
+    contracts.shouldDeliverReviewResume({ ...ready, reconcileInProgress: true }),
+    false,
+  );
+  assert.equal(
+    contracts.shouldDeliverReviewResume({ ...ready, socketOpen: false }),
+    false,
+  );
+});
+
 test("conversation cleanup removes every queued review resume for that flow", () => {
   const outbox = new contracts.ReviewResumeOutbox(new MemoryStorage());
   outbox.enqueue({
@@ -225,6 +252,57 @@ test("conversation cleanup removes every queued review resume for that flow", ()
   assert.deepEqual(outbox.list().map((item) => item.reviewId), ["review-b"]);
 });
 
+test("a canonical resume replaces a stale resume from the same conversation", () => {
+  const outbox = new contracts.ReviewResumeOutbox(new MemoryStorage());
+  outbox.enqueue({
+    reviewId: "stale-review",
+    conversationId: "conversation-a",
+    resumeMessage: "continue stale",
+    displayContent: "已确认旧审核",
+  });
+  outbox.enqueue({
+    reviewId: "other-review",
+    conversationId: "conversation-b",
+    resumeMessage: "continue other",
+    displayContent: "已确认其他审核",
+  });
+  const canonical = {
+    reviewId: "canonical-review",
+    conversationId: "conversation-a",
+    resumeMessage: "continue canonical",
+    displayContent: "已确认最新审核",
+  };
+
+  outbox.enqueue(canonical);
+
+  assert.deepEqual(outbox.list(), [
+    {
+      reviewId: "other-review",
+      conversationId: "conversation-b",
+      resumeMessage: "continue other",
+      displayContent: "已确认其他审核",
+    },
+    canonical,
+  ]);
+});
+
+test("course creation setup normalizes the locally collected topic", () => {
+  assert.equal(
+    contracts.normalizeCourseCreationTopic([["  编译原理  "], ["  "]]),
+    "编译原理",
+  );
+  assert.equal(contracts.normalizeCourseCreationTopic([[]]), "");
+});
+
+test("course creation starts with the confirmed topic in the first message", () => {
+  assert.equal(contracts.prepareCourseCreationRequest([[]]), null);
+  const request = contracts.prepareCourseCreationRequest([["软件工程"]]);
+  assert.equal(request.topic, "软件工程");
+  assert.match(request.message, /课程或领域名称：软件工程/);
+  assert.doesNotMatch(request.message, /如果我还没有提供/);
+  assert.equal(request.displayContent, "创建课程：软件工程");
+});
+
 test("stale conversation reconciliation prefers the next pending review", () => {
   const decision = contracts.reconcileReviewResume("review-1", {
     pending_review: pointer({
@@ -236,6 +314,29 @@ test("stale conversation reconciliation prefers the next pending review", () => 
   });
   assert.equal(decision.kind, "pending-review");
   assert.equal(decision.review.id, "review-2");
+});
+
+test("stale resume reconciliation adopts the server canonical review", () => {
+  const decision = contracts.reconcileReviewResume("stale-review", {
+    pending_review: null,
+    pending_review_resume: pointer({
+      id: "canonical-review",
+      status: "resolved",
+      resume_pending: true,
+      resume_message: "continue canonical",
+      display_content: "已确认最新审核",
+    }),
+  });
+
+  assert.deepEqual(decision, {
+    kind: "retry",
+    navigation: {
+      reviewId: "canonical-review",
+      conversationId: "conversation-1",
+      resumeMessage: "continue canonical",
+      displayContent: "已确认最新审核",
+    },
+  });
 });
 
 test("synthetic course-creation smoke runs are excluded from persistence", () => {
@@ -293,6 +394,36 @@ test("a live generation left running across reload is restored as resumable", ()
 
   assert.equal(run.status, "paused");
   assert.match(run.error, /可以从当前进度继续/);
+});
+
+test("agent done preserves a live generation that is waiting for review", () => {
+  const activeRun = { published: false };
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone({}, activeRun),
+    true,
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone(
+      { awaiting_review: true },
+      activeRun,
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone(
+      { awaitingReview: true },
+      activeRun,
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone({}, { published: true }),
+    false,
+  );
+  assert.equal(
+    contracts.shouldPauseGenerationAfterAgentDone({}, undefined),
+    false,
+  );
 });
 
 test("stale live generations pause and can explicitly resume", () => {

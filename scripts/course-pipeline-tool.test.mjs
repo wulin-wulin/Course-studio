@@ -133,15 +133,28 @@ test("both OpenCode launchers provision the custom-tool runtime dependency", () 
     "utf8",
   ));
   assert.equal(manifest.type, "module");
-  assert.equal(manifest.dependencies["@opencode-ai/plugin"], "1.18.1");
+  assert.equal(
+    typeof manifest.dependencies["@opencode-ai/plugin"],
+    "string",
+  );
 
   const bashLauncher = fs.readFileSync(
     path.join(PROJECT_ROOT, "scripts", "opencode.sh"),
     "utf8",
   );
   assert.match(bashLauncher, /opencode-tool-package\.json/);
-  assert.match(bashLauncher, /\.opencode\/package\.json/);
+  assert.match(bashLauncher, /OPENCODE_PROJECT_DIR[^]*package\.json/);
   assert.match(bashLauncher, /NPM_CONFIG_CACHE/);
+  assert.match(bashLauncher, /OPENCODE_VERSION/);
+  assert.match(bashLauncher, /npm install/);
+  assert.match(bashLauncher, /--prefer-offline/);
+  assert.match(bashLauncher, /--fetch-retries=0/);
+  assert.match(bashLauncher, /--fetch-timeout=10000/);
+  assert.match(
+    bashLauncher,
+    /"@opencode-ai\/plugin": "\$OPENCODE_VERSION"/,
+  );
+  assert.doesNotMatch(bashLauncher, /cp "\$OPENCODE_TOOL_PACKAGE"/);
 
   const powershellLauncher = fs.readFileSync(
     path.join(PROJECT_ROOT, "scripts", "opencode.ps1"),
@@ -150,4 +163,14 @@ test("both OpenCode launchers provision the custom-tool runtime dependency", () 
   assert.match(powershellLauncher, /opencode-tool-package\.json/);
   assert.match(powershellLauncher, /"package\.json"/);
   assert.match(powershellLauncher, /NPM_CONFIG_CACHE/);
+  assert.match(powershellLauncher, /OpenCodeVersion/);
+  assert.match(powershellLauncher, /npmCommand/);
+  assert.match(powershellLauncher, /--prefer-offline/);
+  assert.match(powershellLauncher, /--fetch-retries=0/);
+  assert.match(powershellLauncher, /--fetch-timeout=10000/);
+  assert.match(
+    powershellLauncher,
+    /"@opencode-ai\/plugin": "\$OpenCodeVersion"/,
+  );
+  assert.doesNotMatch(powershellLauncher, /Copy-Item[^]*OpenCodeToolPackage/);
 });

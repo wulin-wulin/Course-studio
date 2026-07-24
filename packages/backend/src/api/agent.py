@@ -1219,6 +1219,27 @@ async def _run_agent_turn_opencode_unlocked(
             )
         else:
             ok, response_text = await prompt_call
+    except CourseReviewError as exc:
+        if resume_claim_active:
+            with contextlib.suppress(Exception):
+                await release_resume_claim()
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "message": f"审核恢复状态已失效：{exc}",
+                "conversation_id": conversation_id,
+            },
+        })
+        await websocket.send_json({
+            "type": "agent_done",
+            "payload": {
+                "return_code": 1,
+                "conversation_id": conversation_id,
+                "mode": mode,
+            },
+        })
+        active_session["id"] = None
+        return
     except BaseException:
         if resume_claim_active:
             with contextlib.suppress(Exception):

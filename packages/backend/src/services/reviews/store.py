@@ -1459,6 +1459,7 @@ class CourseReviewStore:
             or (
                 isinstance(previous, dict)
                 and isinstance(approval, dict)
+                and previous.get("id") == approval.get("review_id")
                 and all(previous.get(key) == approval.get(key) for key in approval_fields)
             )
         )
@@ -1475,7 +1476,12 @@ class CourseReviewStore:
             and operation_count is None
         ):
             return previous
-        review_id = preserve_review_id or (
+        approved_review_id = (
+            str(approval["review_id"]).strip()
+            if approved and isinstance(approval, dict)
+            else None
+        )
+        review_id = preserve_review_id or approved_review_id or (
             str(previous.get("id")) if same_artifact and previous else str(uuid.uuid4())
         )
         revision = int(previous.get("revision") or 0) if same_artifact and previous else 0

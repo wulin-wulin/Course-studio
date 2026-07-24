@@ -606,6 +606,72 @@ class CourseReviewStoreTest(unittest.TestCase):
             self.store.resume_pending_for_conversation(CONVERSATION_ID)
         )
 
+    def test_identity_approval_keeps_id_across_content_sync(self):
+        resource = self.pending("knowledge-points")
+        review_id = self.submit(resource, [])["review"]["id"]
+        claimed = self.store.claim_resume(
+            review_id,
+            conversation_id=CONVERSATION_ID,
+            claim_id="claim-one",
+        )
+        original_artifact_hash = claimed["review"]["artifact_hash"]
+
+        index_path = self.fixture.data_root / "index.json"
+        index = _read_json(index_path)
+        index["points"][0]["shortSummary"] = (
+            "Alpha 正文生成完成后同步的新摘要，只改变展示内容，不改变知识点身份。"
+        )
+        index["points"][0]["keyTerms"] = ["Alpha", "同步后的术语"]
+        _write_json(index_path, index)
+
+        self.assertEqual(
+            self.store.pending_for_conversation(CONVERSATION_ID),
+            [],
+        )
+        refreshed = _read_json(
+            self.fixture.resource_root / "knowledge-points.json"
+        )
+        self.assertEqual(refreshed["id"], review_id)
+        self.assertNotEqual(refreshed["artifact_hash"], original_artifact_hash)
+
+        # Older builds could leave an approved marker under a newly generated
+        # resource ID while the approval still referenced the original ID.
+        # A read must repair that split identity before the resume heartbeat.
+        refreshed["id"] = "00000000-0000-4000-8000-000000000001"
+        _write_json(
+            self.fixture.resource_root / "knowledge-points.json",
+            refreshed,
+        )
+        self.assertEqual(
+            self.store.pending_for_conversation(CONVERSATION_ID),
+            [],
+        )
+        healed = _read_json(
+            self.fixture.resource_root / "knowledge-points.json"
+        )
+        self.assertEqual(healed["id"], review_id)
+
+        renewed = self.store.renew_resume_claim(
+            review_id,
+            conversation_id=CONVERSATION_ID,
+            claim_id="claim-one",
+        )
+        self.assertEqual(renewed["review"]["id"], review_id)
+        self.assertEqual(renewed["review"]["resume_claim_id"], "claim-one")
+
+        index = _read_json(index_path)
+        index["points"][0]["title"] = "Alpha Revised"
+        _write_json(index_path, index)
+        manifest_path = self.fixture.content_root / "generation" / "manifest.json"
+        manifest = _read_json(manifest_path)
+        manifest["pointEvidence"][0]["title"] = "Alpha Revised"
+        _write_json(manifest_path, manifest)
+
+        pending = self.store.pending_for_conversation(CONVERSATION_ID)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["status"], "pending")
+        self.assertNotEqual(pending[0]["id"], review_id)
+
     def test_g6_submission_completes_and_supersedes_stale_g2_resume(self):
         identity = self.pending("knowledge-points")
         submitted = self.submit(identity, [])

@@ -61,6 +61,20 @@ export function isPersistableLiveGenerationConversationId(conversationId: string
   return normalizedId.length > 0 && !normalizedId.startsWith(SYNTHETIC_RUN_PREFIX);
 }
 
+export function shouldPauseGenerationAfterAgentDone(
+  payload: unknown,
+  run: Pick<LiveCourseGenerationRun, "published"> | undefined
+): boolean {
+  if (!run || run.published) return false;
+  if (
+    isRecord(payload) &&
+    (payload.awaiting_review === true || payload.awaitingReview === true)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 const EMPTY_ACTIVE_STATE = {
   status: "idle" as const,
   mode: "demo" as const,

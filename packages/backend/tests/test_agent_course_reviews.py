@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
@@ -306,6 +307,89 @@ class AgentCourseReviewTest(unittest.IsolatedAsyncioTestCase):
             any(message["type"] == "agent_review_resolved" for message in websocket.messages)
         )
         self.assertEqual(websocket.messages[-1]["type"], "agent_done")
+
+    async def test_resume_heartbeat_failure_sends_terminal_error(self):
+        websocket = _WebSocket()
+        conversation_store = Mock()
+        conversation_store.get_opencode_session.return_value = "session-heartbeat"
+        review_store = Mock()
+        canonical = _resume("knowledge-points")
+        review_store.get_resume.return_value = canonical
+        review_store.claim_resume.return_value = canonical
+        review_store.has_resolved_knowledge_review.return_value = True
+        workspace = SimpleNamespace(path=None)
+        active_session = {"id": None}
+        prompt_started = asyncio.Event()
+
+        async def wait_for_prompt(**kwargs):
+            prompt_started.set()
+            await asyncio.Event().wait()
+            return True, ""
+
+        async def fail_heartbeat(*args, **kwargs):
+            await prompt_started.wait()
+            raise agent.CourseReviewError("续租失败")
+
+        abort = AsyncMock()
+        with (
+            patch.object(
+                agent,
+                "_pending_review",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(agent, "get_course_review_store", return_value=review_store),
+            patch.object(agent, "get_conversation_store", return_value=conversation_store),
+            patch.object(agent, "_resolve_opencode_model", return_value="model"),
+            patch.object(
+                agent.model_config,
+                "get_model",
+                return_value=SimpleNamespace(base_url="http://model", api_key="key"),
+            ),
+            patch.object(
+                agent.opencode_provision,
+                "ensure_course_creation_session_assets",
+                return_value=workspace,
+            ),
+            patch.object(
+                agent.opencode_provision,
+                "host_course_creation_workspace_dir",
+                return_value="workspace",
+            ),
+            patch.object(agent.opencode_client, "health", new=AsyncMock(return_value={})),
+            patch.object(agent.opencode_client, "abort", new=abort),
+            patch.object(agent, "_run_opencode_prompt", new=wait_for_prompt),
+            patch.object(agent, "_resume_claim_heartbeat", new=fail_heartbeat),
+        ):
+            await agent._run_agent_turn_opencode(
+                websocket,
+                {
+                    "review_resume_id": "review-points",
+                    "conversation_id": "conversation-review",
+                    "mode": "agent",
+                    "workflow": "course-create",
+                },
+                active_session,
+            )
+
+        self.assertEqual(
+            [message["type"] for message in websocket.messages[-2:]],
+            ["agent_error", "agent_done"],
+        )
+        self.assertEqual(
+            websocket.messages[-2]["payload"]["conversation_id"],
+            "conversation-review",
+        )
+        self.assertEqual(
+            websocket.messages[-1]["payload"],
+            {
+                "return_code": 1,
+                "conversation_id": "conversation-review",
+                "mode": "agent",
+            },
+        )
+        review_store.release_resume.assert_called_once()
+        abort.assert_awaited_once_with("session-heartbeat")
+        self.assertIsNone(active_session["id"])
 
 
 if __name__ == "__main__":

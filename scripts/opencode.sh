@@ -25,9 +25,8 @@ export NPM_CONFIG_CACHE="$NPM_CACHE"
 export npm_config_cache="$NPM_CACHE"
 mkdir -p "$NPM_CACHE"
 
-# .opencode/package.json is a generated, ignored runtime file. Recreate it from
-# the tracked manifest so every launch uses the plugin version expected by the
-# project-owned custom tool.
+# Validate the tracked dependency declaration now. The ignored runtime manifest
+# is generated after resolving the OpenCode binary so both versions match.
 OPENCODE_TOOL_PACKAGE="$SCRIPT_DIR/opencode-tool-package.json"
 OPENCODE_PROJECT_DIR="$ROOT_DIR/.opencode"
 if [ ! -f "$OPENCODE_TOOL_PACKAGE" ]; then
@@ -35,7 +34,6 @@ if [ ! -f "$OPENCODE_TOOL_PACKAGE" ]; then
     exit 1
 fi
 mkdir -p "$OPENCODE_PROJECT_DIR"
-cp "$OPENCODE_TOOL_PACKAGE" "$OPENCODE_PROJECT_DIR/package.json"
 
 PORT="${OPENCODE_PORT:-4096}"
 HOSTNAME="${OPENCODE_HOSTNAME:-127.0.0.1}"
@@ -63,6 +61,47 @@ if [ -z "$OPENCODE_BIN" ]; then
     echo "  1) curl -fsSL https://opencode.ai/install | bash"
     echo "  2) brew install sst/tap/opencode"
     exit 1
+fi
+
+OPENCODE_VERSION="$("$OPENCODE_BIN" --version | tail -n 1 | tr -d '\r[:space:]')"
+if [[ ! "$OPENCODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+    echo "无法识别 OpenCode 版本：$OPENCODE_VERSION"
+    exit 1
+fi
+
+cat > "$OPENCODE_PROJECT_DIR/package.json" <<EOF
+{
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "$OPENCODE_VERSION"
+  }
+}
+EOF
+
+PLUGIN_MANIFEST="$OPENCODE_PROJECT_DIR/node_modules/@opencode-ai/plugin/package.json"
+INSTALLED_PLUGIN_VERSION=""
+if [ -f "$PLUGIN_MANIFEST" ] && command -v node >/dev/null 2>&1; then
+    INSTALLED_PLUGIN_VERSION="$(
+        node -p "require(process.argv[1]).version" "$PLUGIN_MANIFEST" 2>/dev/null || true
+    )"
+fi
+if [ "$INSTALLED_PLUGIN_VERSION" != "$OPENCODE_VERSION" ]; then
+    if command -v npm >/dev/null 2>&1; then
+        echo "Pre-warming the shared OpenCode tool runtime..."
+        if ! npm install \
+            --prefix "$OPENCODE_PROJECT_DIR" \
+            --no-audit \
+            --no-fund \
+            --prefer-offline \
+            --fetch-retries=0 \
+            --fetch-timeout=10000 \
+            --save-exact \
+            "@opencode-ai/plugin@$OPENCODE_VERSION"; then
+            echo "OpenCode runtime pre-warm failed; per-session installation remains available."
+        fi
+    else
+        echo "npm was not found; per-session OpenCode dependency installation remains available."
+    fi
 fi
 
 # opencode reads config from $XDG_CONFIG_HOME (default ~/.config). If that path

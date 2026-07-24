@@ -60,7 +60,11 @@ export class ReviewResumeOutbox {
     const item = parseNavigation(value);
     if (!item) throw new TypeError("审核恢复任务格式无效");
     const next = [
-      ...this.list().filter((candidate) => candidate.reviewId !== item.reviewId),
+      ...this.list().filter(
+        (candidate) =>
+          candidate.reviewId !== item.reviewId &&
+          candidate.conversationId !== item.conversationId,
+      ),
       item,
     ].slice(-MAX_ITEMS);
     this.persist(next);
@@ -119,6 +123,20 @@ export type ActiveReviewResume = {
   conversationId: string;
 };
 
+export function shouldDeliverReviewResume({
+  inFlight,
+  retryScheduled,
+  reconcileInProgress,
+  socketOpen,
+}: {
+  inFlight: boolean;
+  retryScheduled: boolean;
+  reconcileInProgress: boolean;
+  socketOpen: boolean;
+}) {
+  return socketOpen && !inFlight && !retryScheduled && !reconcileInProgress;
+}
+
 export function reviewResumeDeliveryOutcome(
   active: ActiveReviewResume,
   event: { type: string; payload?: Record<string, unknown> },
@@ -173,8 +191,11 @@ export function reconcileReviewResume(
     throw new InvalidReviewPayloadError("历史会话中的审核恢复任务格式无效");
   }
   const navigation = reviewResumeNavigation(pointer);
-  if (!navigation || navigation.reviewId !== reviewId) {
+  if (!navigation) {
     return { kind: "consumed" };
+  }
+  if (navigation.reviewId !== reviewId) {
+    return { kind: "retry", navigation };
   }
   return { kind: "retry", navigation };
 }

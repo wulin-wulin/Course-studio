@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -39,12 +40,17 @@ class CourseReviewProvisionTest(unittest.TestCase):
                 provision,
                 "get_course_store",
                 return_value=course_store,
-            ):
+            ), patch.object(
+                provision,
+                "_seed_session_opencode_runtime",
+                return_value=True,
+            ) as seed_runtime:
                 returned = provision.ensure_course_creation_session_assets(
                     "conversation-1"
                 )
 
             self.assertEqual(returned, workspace)
+            seed_runtime.assert_called_once_with(session_root)
             tools = session_root / ".opencode" / "tools"
             for file_name in (
                 "prepare-course-review.mjs",
@@ -67,6 +73,101 @@ class CourseReviewProvisionTest(unittest.TestCase):
                 prompt,
             )
             self.assertNotIn("node .opencode/tools/", prompt)
+
+    def test_runtime_seed_uses_hardlinks_and_cleanup_preserves_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "shared-node-modules"
+            plugin = source / "@opencode-ai" / "plugin"
+            plugin.mkdir(parents=True)
+            source_manifest = plugin / "package.json"
+            source_manifest.write_text(
+                '{"name":"@opencode-ai/plugin","version":"1.17.20"}\n',
+                encoding="utf-8",
+            )
+            (source.parent / "package.json").write_text(
+                '{"dependencies":{"@opencode-ai/plugin":"1.17.20"}}\n',
+                encoding="utf-8",
+            )
+            marker = source / "runtime-marker.txt"
+            marker.write_text("preserved", encoding="utf-8")
+            session_root = root / "sessions" / "conversation-1"
+            (session_root / ".opencode").mkdir(parents=True)
+
+            with patch.object(
+                provision,
+                "_SHARED_OPENCODE_NODE_MODULES",
+                source,
+            ):
+                seeded = provision._seed_session_opencode_runtime(session_root)
+
+            destination = session_root / ".opencode" / "node_modules"
+            self.assertTrue(seeded)
+            self.assertFalse(destination.is_symlink())
+            self.assertTrue(
+                (destination / "@opencode-ai" / "plugin" / "package.json").is_file()
+            )
+            self.assertTrue(
+                (destination / "@opencode-ai" / "plugin" / "package.json").samefile(
+                    source_manifest
+                )
+            )
+
+            shutil.rmtree(session_root)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "preserved")
+
+    def test_runtime_seed_falls_back_without_pre_warmed_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session_root = root / "conversation-1"
+            (session_root / ".opencode").mkdir(parents=True)
+            with patch.object(
+                provision,
+                "_SHARED_OPENCODE_NODE_MODULES",
+                root / "missing",
+            ):
+                seeded = provision._seed_session_opencode_runtime(session_root)
+
+            self.assertFalse(seeded)
+            self.assertFalse((session_root / ".opencode" / "node_modules").exists())
+
+    def test_runtime_seed_falls_back_for_non_object_manifests(self):
+        cases = (
+            ("[]", '{"dependencies":{"@opencode-ai/plugin":"1.17.20"}}'),
+            ('{"version":"1.17.20"}', "[]"),
+            ('{"version":"1.17.20"}', '{"dependencies":[]}'),
+        )
+        for source_json, runtime_json in cases:
+            with self.subTest(
+                source_json=source_json,
+                runtime_json=runtime_json,
+            ), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "shared-node-modules"
+                plugin = source / "@opencode-ai" / "plugin"
+                plugin.mkdir(parents=True)
+                (plugin / "package.json").write_text(
+                    source_json,
+                    encoding="utf-8",
+                )
+                (source.parent / "package.json").write_text(
+                    runtime_json,
+                    encoding="utf-8",
+                )
+                session_root = root / "conversation-1"
+                (session_root / ".opencode").mkdir(parents=True)
+
+                with patch.object(
+                    provision,
+                    "_SHARED_OPENCODE_NODE_MODULES",
+                    source,
+                ):
+                    seeded = provision._seed_session_opencode_runtime(session_root)
+
+                self.assertFalse(seeded)
+                self.assertFalse(
+                    (session_root / ".opencode" / "node_modules").exists()
+                )
 
     def test_only_primary_creation_agents_can_call_pipeline(self):
         config = provision.build_root_config()

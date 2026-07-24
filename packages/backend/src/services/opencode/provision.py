@@ -8,7 +8,9 @@ the course store validates and promotes that copy only after a successful turn.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import uuid
 from pathlib import Path
 
 from ...config import PROJECT_ROOT, settings
@@ -48,6 +50,76 @@ _COURSE_CREATION_TOOLS = (
 _COURSE_PIPELINE_TOOL_SOURCE = (
     _PROJECT_ROOT / ".opencode" / "tools" / "course_pipeline.ts"
 )
+_SHARED_OPENCODE_NODE_MODULES = _PROJECT_ROOT / ".opencode" / "node_modules"
+
+
+def _seed_session_opencode_runtime(session_root: Path) -> bool:
+    """Seed a normal session dependency tree with filesystem hard links.
+
+    OpenCode runs its dependency installer for every session-local
+    ``.opencode`` directory.  The launcher pre-warms the matching dependency
+    tree once at project level; hard-linking those ordinary files gives Bun a
+    complete, version-matched install without copying roughly 55 MB per
+    conversation.  Skills and trusted tools remain private to the session.
+
+    Hard links need no Windows elevation and deleting a session only decrements
+    link counts. If the filesystem cannot create them (for example across
+    volumes), returning ``False`` preserves OpenCode's original install path.
+    """
+
+    source = _SHARED_OPENCODE_NODE_MODULES
+    source_plugin = source / "@opencode-ai" / "plugin" / "package.json"
+    runtime_package = source.parent / "package.json"
+    if (
+        not source.is_dir()
+        or source.is_symlink()
+        or not source_plugin.is_file()
+        or source_plugin.is_symlink()
+        or not runtime_package.is_file()
+        or runtime_package.is_symlink()
+    ):
+        return False
+    try:
+        source_package = json.loads(source_plugin.read_text(encoding="utf-8"))
+        runtime = json.loads(runtime_package.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(source_package, dict) or not isinstance(runtime, dict):
+        return False
+    dependencies = runtime.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return False
+    source_version = source_package.get("version")
+    expected_version = dependencies.get("@opencode-ai/plugin")
+    if (
+        not isinstance(source_version, str)
+        or not source_version
+        or expected_version != source_version
+    ):
+        return False
+
+    opencode_dir = session_root / ".opencode"
+    destination = opencode_dir / "node_modules"
+    if destination.exists() or destination.is_symlink():
+        # Preserve resumed sessions and never replace a running private install.
+        return False
+
+    # Keep the staging component shorter than "node_modules": Windows course
+    # session paths are already long, and the copied dependency tree is deep.
+    temporary = opencode_dir / f".n-{uuid.uuid4().hex[:6]}"
+    try:
+        shutil.copytree(source, temporary, copy_function=os.link, symlinks=True)
+        seeded_plugin = temporary / "@opencode-ai" / "plugin" / "package.json"
+        seeded_package = json.loads(seeded_plugin.read_text(encoding="utf-8"))
+        if seeded_package.get("version") != source_version:
+            raise OSError("Seeded OpenCode runtime version changed during copy")
+        if not os.path.samefile(source_plugin, seeded_plugin):
+            raise OSError("Seeded OpenCode runtime is not hard-linked")
+        os.replace(temporary, destination)
+        return True
+    except (OSError, json.JSONDecodeError, shutil.Error):
+        shutil.rmtree(temporary, ignore_errors=True)
+        return False
 
 
 def _course_outline_creator_permission() -> dict:
@@ -303,6 +375,7 @@ def ensure_course_creation_session_assets(conversation_id: str) -> CourseWorkspa
             f"课程会话中的结构化工具路径不是普通文件：{session_pipeline_tool}"
         )
 
+    _seed_session_opencode_runtime(session_root)
     (session_root / "pipeline").mkdir(parents=True, exist_ok=True)
     return workspace
 

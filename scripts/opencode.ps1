@@ -34,9 +34,8 @@ function Import-DotEnv([string]$Path) {
 
 Import-DotEnv $EnvFile
 
-# OpenCode installs custom-tool dependencies in the background. Keep npm's
-# cache inside the project and recreate the ignored runtime package manifest
-# from its tracked source before the server starts.
+# Keep npm's cache inside the project. The custom-tool runtime is pre-warmed
+# after resolving the OpenCode binary so its plugin version can match exactly.
 $NpmCache = if ($env:NPM_CONFIG_CACHE) {
     $env:NPM_CONFIG_CACHE
 } elseif ($env:npm_config_cache) {
@@ -54,10 +53,6 @@ if (-not (Test-Path -LiteralPath $OpenCodeToolPackage -PathType Leaf)) {
 }
 $OpenCodeProjectDir = Join-Path $RootDir ".opencode"
 New-Item -ItemType Directory -Force -Path $OpenCodeProjectDir | Out-Null
-Copy-Item `
-    -LiteralPath $OpenCodeToolPackage `
-    -Destination (Join-Path $OpenCodeProjectDir "package.json") `
-    -Force
 
 # Explicit command-line parameters win; otherwise let the shared .env control
 # the OpenCode listener just like the Bash launcher does.
@@ -105,6 +100,79 @@ if (-not $opencode) {
 }
 if (-not $opencode) {
     throw "opencode was not found. Install it and make sure it is on PATH."
+}
+
+$OpenCodeVersionOutput = @(& $opencode --version)
+if ($LASTEXITCODE -ne 0 -or $OpenCodeVersionOutput.Count -eq 0) {
+    throw "Unable to determine the installed OpenCode version."
+}
+$OpenCodeVersion = $OpenCodeVersionOutput[-1].Trim()
+if ($OpenCodeVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
+    throw "OpenCode returned an invalid version: $OpenCodeVersion"
+}
+
+$TrackedToolPackage = Get-Content -Raw -LiteralPath $OpenCodeToolPackage | ConvertFrom-Json
+if (-not $TrackedToolPackage.dependencies.'@opencode-ai/plugin') {
+    throw "The OpenCode custom-tool package manifest is invalid."
+}
+$RuntimePackagePath = Join-Path $OpenCodeProjectDir "package.json"
+$RuntimePackageJson = @"
+{
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "$OpenCodeVersion"
+  }
+}
+"@
+$RuntimePackageJson += "`n"
+$ExistingRuntimePackage = if (Test-Path -LiteralPath $RuntimePackagePath) {
+    Get-Content -Raw -LiteralPath $RuntimePackagePath
+} else {
+    $null
+}
+if ($ExistingRuntimePackage -ne $RuntimePackageJson) {
+    [IO.File]::WriteAllText(
+        $RuntimePackagePath,
+        $RuntimePackageJson,
+        [Text.UTF8Encoding]::new($false)
+    )
+}
+
+$InstalledPluginManifest = Join-Path `
+    $OpenCodeProjectDir `
+    "node_modules/@opencode-ai/plugin/package.json"
+$InstalledPluginVersion = $null
+if (Test-Path -LiteralPath $InstalledPluginManifest -PathType Leaf) {
+    try {
+        $InstalledPluginVersion = (
+            Get-Content -Raw -LiteralPath $InstalledPluginManifest | ConvertFrom-Json
+        ).version
+    } catch {
+        $InstalledPluginVersion = $null
+    }
+}
+if ($InstalledPluginVersion -ne $OpenCodeVersion) {
+    $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npmCommand) {
+        $npmCommand = Get-Command npm -ErrorAction SilentlyContinue
+    }
+    if ($npmCommand) {
+        Write-Host "Pre-warming the shared OpenCode tool runtime..."
+        & $npmCommand.Source install `
+            --prefix $OpenCodeProjectDir `
+            --no-audit `
+            --no-fund `
+            --prefer-offline `
+            --fetch-retries=0 `
+            --fetch-timeout=10000 `
+            --save-exact `
+            "@opencode-ai/plugin@$OpenCodeVersion"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "OpenCode runtime pre-warm failed; per-session installation remains available."
+        }
+    } else {
+        Write-Warning "npm was not found; per-session OpenCode dependency installation remains available."
+    }
 }
 
 $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
