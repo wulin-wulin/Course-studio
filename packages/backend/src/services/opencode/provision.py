@@ -32,6 +32,7 @@ _COURSE_CREATOR_PROMPT_PATH = (
 _PROJECT_ROOT = PROJECT_ROOT
 _PROJECT_SKILLS_PATH = _PROJECT_ROOT / "skills"
 _COURSE_CREATION_SKILLS = (
+    ("textbook-outline-generator", Path("SKILL.md")),
     ("candidate-knowledge-point-generator", Path("SKILL.md")),
     (
         "knowledge-cluster-builder",
@@ -46,6 +47,7 @@ _COURSE_CREATION_TOOLS = (
     "prepare-course-review.mjs",
     "publish-course-pipeline.mjs",
     "run-course-pipeline-step.mjs",
+    "validate-textbook-outline.mjs",
 )
 _COURSE_PIPELINE_TOOL_SOURCE = (
     _PROJECT_ROOT / ".opencode" / "tools" / "course_pipeline.ts"
@@ -131,10 +133,12 @@ def _course_outline_creator_permission() -> dict:
             "**/pipeline/*/course-content/src/data/course.json": "allow",
             "**/pipeline/*/course-content/src/data/index.json": "allow",
             "**/pipeline/*/course-content/generation/manifest.json": "allow",
+            "**/pipeline/*/textbook-outline.json": "allow",
         },
         "skill": {
             "*": "deny",
             "candidate-knowledge-point-generator": "allow",
+            "textbook-outline-generator": "allow",
             "knowledge-pipeline-orchestrator": "allow",
         },
         "task": "deny",
@@ -158,12 +162,14 @@ def _course_creator_permission() -> dict:
             "**/pipeline/*/course-content/generation/manifest.json": "allow",
             "**/pipeline/*/course-content/generation/animation-manifest.json": "allow",
             "**/pipeline/*/clustered-graph.json": "allow",
+            "**/pipeline/*/textbook-outline.json": "allow",
         },
         "skill": {
             "*": "deny",
             "candidate-knowledge-point-generator": "allow",
             "knowledge-cluster-builder": "allow",
             "knowledge-pipeline-orchestrator": "allow",
+            "textbook-outline-generator": "allow",
         },
         "task": {
             "*": "deny",

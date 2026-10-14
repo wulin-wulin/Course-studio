@@ -12,6 +12,7 @@ import {
   ChevronRight,
   CircleHelp,
   Database,
+  FileText,
   History,
   ImagePlus,
   Loader2,
@@ -55,7 +56,10 @@ import {
 import {
   COURSE_CREATION_SETUP_QUESTION,
   prepareCourseCreationRequest,
+  preparePdfCourseCreationRequest,
 } from "@/features/courseCreation/setup";
+import { PdfCourseCreationForm } from "@/features/courseCreation/PdfCourseCreationForm";
+import type { TextbookDocumentMetadata } from "@/features/courseCreation/api";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
@@ -81,6 +85,7 @@ type AgentRunStatus = {
 
 type ConnectionState = "connecting" | "connected" | "disconnected";
 type AgentWorkflow = "default" | "course-create";
+type CourseCreationSource = "topic" | "pdf";
 
 type AgentQuestionOption = {
   label: string;
@@ -231,6 +236,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const [questionError, setQuestionError] = useState("");
   const [courseCreationSetupOpen, setCourseCreationSetupOpen] = useState(false);
   const [courseCreationSetupError, setCourseCreationSetupError] = useState("");
+  const [courseCreationSource, setCourseCreationSource] =
+    useState<CourseCreationSource>("topic");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
   const [courseDeleteOpen, setCourseDeleteOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -451,6 +458,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setQuestionError("");
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
+    setCourseCreationSource("topic");
     setWorkflow("default");
     workflowRef.current = "default";
     streamingIdRef.current = null;
@@ -493,6 +501,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setQuestionError("");
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
+    setCourseCreationSource("topic");
     setHistoryLoading(false);
     setWorkflow("default");
     workflowRef.current = "default";
@@ -552,6 +561,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
 
       setCourseCreationSetupOpen(false);
       setCourseCreationSetupError("");
+      setCourseCreationSource("topic");
       lastActiveConversationIdRef.current = conversation.id;
       setActiveConversation(conversation.id);
       setMode(restoredMode);
@@ -685,6 +695,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     replaceEntries = false,
     reviewResumeId?: string,
     modelOverride?: string,
+    textbookDocumentId?: string,
   ) => {
     const requestMode: ChatMode =
       requestWorkflow === "course-create" ? "agent" : mode;
@@ -726,6 +737,9 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
           mode: requestMode,
           workflow: requestWorkflow,
           ...(reviewResumeId ? { review_resume_id: reviewResumeId } : {}),
+          ...(textbookDocumentId
+            ? { textbook_document_id: textbookDocumentId }
+            : {}),
         },
       })
     );
@@ -967,11 +981,16 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setModeInfoOpen(false);
     setCourseDeleteOpen(false);
     setCourseCreationSetupError("");
+    setCourseCreationSource("topic");
     setCourseCreationSetupOpen(true);
     stickToBottomRef.current = true;
   }, [isRunning, mode, workflow]);
 
-  const confirmCourseCreation = useCallback((answers: string[][]) => {
+  const launchCourseCreation = useCallback((request: {
+    message: string;
+    displayContent: string;
+    textbookDocumentId?: string;
+  }) => {
     if (
       !courseCreationSetupOpen ||
       mode !== "agent" ||
@@ -981,13 +1000,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       setCourseCreationSetupError("另一个课程流程已经开始，请等待当前流程结束后再创建。");
       return;
     }
-    const request = prepareCourseCreationRequest(answers);
-    if (!request) {
-      setCourseCreationSetupError("请先填写课程名称或学习领域。");
-      return;
-    }
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
-      setCourseCreationSetupError("课程助手仍在连接，请稍后再确认。你填写的内容不会丢失。");
+      setCourseCreationSetupError("课程助手连接已断开，请等待连接恢复后重试。当前输入和已解析教材不会丢失。");
       return;
     }
     const conversationId = createConversation();
@@ -1005,7 +1019,10 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       [],
       "course-create",
       request.displayContent,
-      true
+      true,
+      undefined,
+      undefined,
+      request.textbookDocumentId,
     );
   }, [
     courseCreationSetupOpen,
@@ -1018,9 +1035,34 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     workflow,
   ]);
 
+  const confirmCourseCreation = useCallback((answers: string[][]) => {
+    const request = prepareCourseCreationRequest(answers);
+    if (!request) {
+      setCourseCreationSetupError("请先填写课程名称或学习领域。");
+      return;
+    }
+    launchCourseCreation(request);
+  }, [launchCourseCreation]);
+
+  const confirmPdfCourseCreation = useCallback((
+    document: TextbookDocumentMetadata,
+  ) => {
+    const request = preparePdfCourseCreationRequest(document);
+    if (!request) {
+      setCourseCreationSetupError("教材信息不完整，请重新上传 PDF。");
+      return;
+    }
+    launchCourseCreation({
+      message: request.message,
+      displayContent: request.displayContent,
+      textbookDocumentId: request.documentId,
+    });
+  }, [launchCourseCreation]);
+
   const cancelCourseCreationSetup = useCallback(() => {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
+    setCourseCreationSource("topic");
   }, []);
 
   const startGenerationDemo = useCallback(() => {
@@ -1450,13 +1492,64 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
             onReject={rejectQuestion}
           />
         ) : courseCreationSetupOpen ? (
-          <AgentQuestionCard
-            request={COURSE_CREATION_SETUP_REQUEST}
-            submitting={false}
-            error={courseCreationSetupError}
-            onSubmit={confirmCourseCreation}
-            onReject={cancelCourseCreationSetup}
-          />
+          <div className="space-y-2">
+            <div
+              className="grid grid-cols-2 rounded-xl border border-border bg-cream/75 p-1"
+              role="tablist"
+              aria-label="课程创建方式"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={courseCreationSource === "topic"}
+                onClick={() => {
+                  setCourseCreationSource("topic");
+                  setCourseCreationSetupError("");
+                }}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  courseCreationSource === "topic"
+                    ? "bg-surface text-primary shadow-sm"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                <BookPlus className="h-3.5 w-3.5" />
+                按主题创建
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={courseCreationSource === "pdf"}
+                onClick={() => {
+                  setCourseCreationSource("pdf");
+                  setCourseCreationSetupError("");
+                }}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  courseCreationSource === "pdf"
+                    ? "bg-surface text-primary shadow-sm"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                上传教材 PDF
+              </button>
+            </div>
+            {courseCreationSource === "topic" ? (
+              <AgentQuestionCard
+                request={COURSE_CREATION_SETUP_REQUEST}
+                submitting={false}
+                error={courseCreationSetupError}
+                onSubmit={confirmCourseCreation}
+                onReject={cancelCourseCreationSetup}
+              />
+            ) : (
+              <PdfCourseCreationForm
+                disabled={isRunning}
+                externalError={courseCreationSetupError}
+                onReady={confirmPdfCourseCreation}
+                onCancel={cancelCourseCreationSetup}
+              />
+            )}
+          </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-border bg-cream/55 shadow-sm transition-colors focus-within:border-primary/45 focus-within:bg-surface focus-within:shadow-md">
           {images.length > 0 && (

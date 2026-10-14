@@ -76,6 +76,23 @@ BACKEND_PORT=8000
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 VITE_API_URL=http://127.0.0.1:8000
 VITE_WS_URL=ws://127.0.0.1:8000
+
+# 教材 PDF 导入（可选；下面是默认值）
+# 上传的原始 PDF 和解析纲要保存在 generated/document_library，
+# 不会进入正式 course-data 课程包。
+DOCUMENT_LIBRARY_DIR=generated/document_library
+DOCUMENT_MAX_UPLOAD_BYTES=104857600
+# 在前多少页查找“目录”；目录较晚时可适当调大。
+DOCUMENT_TOC_SCAN_PAGES=40
+DOCUMENT_PARSE_TIMEOUT_SECONDS=180
+# Windows 可填写 pdftotext.exe 的绝对路径；Linux/macOS 通常只需填 pdftotext。
+DOCUMENT_PDFTOTEXT_EXECUTABLE=pdftotext
+
+# MinerU 云端解析的预留配置。当前版本的 /api/documents/{id}/parse
+# 固定使用本地 Poppler；配置这些变量不会自动切换解析器。
+MINERU_API_BASE=
+MINERU_API_TOKEN=
+MINERU_TIMEOUT_SECONDS=300
 ```
 
 在根目录创建 `models.json`，每个模型都需要完整的 `id`、`base_url` 和
@@ -96,6 +113,118 @@ VITE_WS_URL=ws://127.0.0.1:8000
 ```
 
 `models.json` 与 `.env` 都被 Git 忽略，不要提交密钥。
+
+教材扩充阶段使用的模型也从 `models.json` 读取。Moonshot/Kimi 使用 OpenAI
+兼容配置，例如：
+
+```json
+{
+  "default": "kimi-k2.6",
+  "models": [
+    {
+      "id": "kimi-k2.6",
+      "name": "Kimi K2.6",
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_key": "sk-替换为自己的密钥"
+    }
+  ]
+}
+```
+
+`id` 必须是当前 Moonshot 账号可用的模型名；如果账号开放的是其他 Kimi
+版本，替换 `default` 和模型条目的 `id` 即可。密钥只放在本机被忽略的
+`models.json` 或通过应用的模型配置界面填写。
+
+## 教材 PDF 创建课程
+
+当前教材流程以“结构优先”为准：先从 PDF 目录恢复章节和教材知识点，再在
+章节内部由 LLM 增加扩展点并生成内容。教材章节会一一对应最终知识簇，教材点
+必须保留其顺序和归属；后续图谱阶段不能把教材点重新聚类到其他章节。
+
+### 使用界面
+
+1. 按“本地运行”启动后端、前端和 OpenCode。
+2. 在右侧 Agent 面板选择 **上传教材 PDF**，选择一本可复制文本的 PDF。
+3. 前端会自动上传并解析，显示章节数和知识点数；解析成功后点击
+   **使用此教材创建**。
+4. 课程创建会固定教材 `document_id` 和对应的 `textbook-<id>` 课程 ID，先进入
+   G2 结构审核。审核通过后才会进行内容扩充、图谱装配和 G6/G7 校验。
+
+上传、解析和课程创建是可重试的：同一 PDF 的重复上传会复用其 SHA-256 对应的
+文档记录，恢复会话时也会继续使用原教材，不会把教材结构悄悄换成另一份文件。
+
+### HTTP 接口验证
+
+后端启动后，可以不用前端直接验证文档服务。以下命令适用于 PowerShell；把路径
+替换为实际 PDF 路径：
+
+```powershell
+# 1. 上传（返回 id，例如 doc-012345...）
+$uploaded = curl.exe -sS `
+  -F "file=@D:\教材\深度学习.pdf;type=application/pdf" `
+  http://127.0.0.1:8000/api/documents | ConvertFrom-Json
+$documentId = $uploaded.id
+
+# 2. 解析目录和知识点
+curl.exe -sS -X POST `
+  "http://127.0.0.1:8000/api/documents/$documentId/parse"
+
+# 3. 查看规范化的两层纲要
+curl.exe -sS `
+  "http://127.0.0.1:8000/api/documents/$documentId/outline"
+```
+
+上传接口把 `Content-Type` 当作提示而不是文件真实性证明：空值、
+`application/octet-stream`、`binary/octet-stream` 和 `application/x-pdf` 也可以上传，
+但文件内容必须以 `%PDF-` 开头；明确声明为其他媒体类型的请求会返回 415。
+
+三个接口的职责分别是：`POST /api/documents` 保存 PDF，
+`POST /api/documents/{id}/parse` 提取目录并生成 `textbook-outline/1.0`，
+`GET /api/documents/{id}/outline` 读取已经校验的纲要。解析尚未完成时读取纲要
+会返回冲突错误；失败后再次调用 `parse` 可以重试。
+
+### Poppler、本地解析和 MinerU
+
+默认解析器调用 Poppler 的 `pdftotext -layout`，只扫描前
+`DOCUMENT_TOC_SCAN_PAGES` 页（默认 40 页），先查找“目录”标题，再识别编号目录项，
+例如 `1`、`1.1`、`1.2`。目录中没有编号的条目（如“前言”“安装”“符号”或
+“Bibliography”）会保留在保留章节 `chapter-0`（`number: "0"`）中，按
+`0.1`、`0.2`……作为教材知识点；不编号条目集中在该保留章节内并保持彼此的目录顺序，
+这是为了兼容当前两层结构，原条目的标题和页码仍会保留。
+如果目录页码被 PDF 文本提取器拆到下一行，解析器会在列位置和页码顺序都吻合时自动合并。
+Docker 镜像已经安装 `poppler-utils`；宿主机本地运行时请自行安装
+并确认命令可执行：
+
+```powershell
+# Windows（winget）
+winget install --id oschwartz10612.Poppler -e
+pdftotext -v
+```
+
+```bash
+# macOS
+brew install poppler
+
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y poppler-utils
+pdftotext -v
+```
+
+如果 Windows 没有把 Poppler 放进 `PATH`，可以在 `.env` 中把
+`DOCUMENT_PDFTOTEXT_EXECUTABLE` 改成 `pdftotext.exe` 的绝对路径，然后重启后端。
+目录不在前 40 页时调大 `DOCUMENT_TOC_SCAN_PAGES`；大 PDF 还可以调高
+`DOCUMENT_PARSE_TIMEOUT_SECONDS`。单个上传默认上限为 100 MiB，可通过
+`DOCUMENT_MAX_UPLOAD_BYTES` 调整。
+
+配置中的 `MINERU_API_BASE`、`MINERU_API_TOKEN` 和 `MINERU_TIMEOUT_SECONDS` 是
+为后续 MinerU 适配器保留的后端设置。当前版本没有在上传接口中调用 MinerU，因而
+没有 Token 也可以使用本地流程；接入云端适配器后，Token 仍只应放在 `.env`，不应
+写进课程数据、Skill 或前端代码。
+
+本地 `pdftotext` 对扫描件、图片目录、复杂多栏排版、目录页码跨行方式特殊的 PDF 仍可能无法
+恢复完整结构。此时接口会返回解析失败或漏项，应该先进行 OCR/版面转换，或在后续
+MinerU 适配器可用后切换解析器，再进入课程创建；不要把不完整的纲要直接当成正式
+课程结构。
 
 ## 本地运行
 
@@ -238,10 +367,30 @@ G7 校验和动画构建分别有 120 秒、300 秒的默认超时，超时会�
 可以单独验证 v2 发布器和动画安全边界：
 
 ```powershell
+# 后端文档服务、教材绑定和 API 契约
+cd packages\backend
+.\.venv\Scripts\python.exe -m unittest tests.test_documents -v
+
+# 流水线与教材结构校验器
+cd ..\..
 node --test scripts/course-pipeline-v2.test.mjs
+node --test scripts/course-pipeline-tool.test.mjs scripts/textbook-outline.test.mjs
+
+# 全部后端单元测试
 cd packages\backend
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+
+# 前端契约测试和生产构建
+cd ..\frontend
+npm test
+npm run build
 ```
+
+`textbook-outline.test.mjs` 会验证两层教材树、章节到知识簇的固定映射、扩展点
+锚点和顺序约束。它使用临时工作区，不会改动正式课程数据。运行真实教材验证时，
+请先启动后端，再按上面的 HTTP 示例上传和解析；若要继续完整的 G0-G7 课程创建，
+还需要启动 OpenCode，并在 `models.json` 中配置可用模型。真实模型调用可能产生费用，
+不会由单元测试自动触发。
 
 后端与 OpenCode 已启动时，可以运行真实端到端冒烟测试。它会通过 WebSocket 使用
 一个唯一的概念型课程主题，依次经过 G0-G7、正式发布和后端读取，

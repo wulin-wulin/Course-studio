@@ -2,6 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# The local textbook parser uses Poppler's pdftotext for layout-preserving
+# extraction.  pypdf remains responsible only for reliable page counting.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY packages/backend/pyproject.toml ./pyproject.toml
 COPY packages/backend/src/ ./src/
 COPY course-data/ ./course-data/

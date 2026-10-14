@@ -11,6 +11,8 @@ const ACTION_NAMES = [
   "init-animations",
   "review-knowledge-points",
   "review-knowledge-graph",
+  "validate-textbook-outline",
+  "validate-textbook-graph",
   "validate-index",
   "validate-points",
   "validate-animations",
@@ -61,6 +63,14 @@ const ACTIONS: Record<Action, Invocation> = {
     script: "prepare-course-review.mjs",
     args: (courseId) => ["knowledge-graph", courseId],
   },
+  "validate-textbook-outline": {
+    script: "validate-textbook-outline.mjs",
+    args: (courseId) => ["outline", courseId],
+  },
+  "validate-textbook-graph": {
+    script: "validate-textbook-outline.mjs",
+    args: (courseId) => ["graph", courseId],
+  },
   "validate-index": pipelineStep("validate-index"),
   "validate-points": pipelineStep("validate-points"),
   "validate-animations": pipelineStep("validate-animations"),
@@ -85,6 +95,7 @@ const ACTIONS: Record<Action, Invocation> = {
 const OUTLINE_ACTIONS = new Set<Action>([
   "init",
   "validate-index",
+  "validate-textbook-outline",
   "review-knowledge-points",
 ])
 const CREATOR_ACTIONS = new Set<Action>(ACTION_NAMES)

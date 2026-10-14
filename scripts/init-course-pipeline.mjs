@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
+import {
+  assertTextbookSourceUnchanged,
+  textbookStructureSha256,
+} from "../skills/knowledge-pipeline-orchestrator/scripts/textbook-structure.mjs";
+
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ISO_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -41,6 +46,42 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function assertTextbookSource(paths, courseId, outline) {
+  const bindingPath = path.join(paths.workspaceRoot, "textbook-binding.json");
+  const inputRoot = path.join(paths.workspaceRoot, "textbook-input");
+  const hasBinding = fs.existsSync(bindingPath);
+  const hasInputRoot = fs.existsSync(inputRoot);
+  if (!hasBinding && !hasInputRoot) return;
+  const documentId = String(outline?.document_id ?? "").trim();
+  if (
+    !documentId
+    || documentId.includes("/")
+    || documentId.includes("\\")
+    || documentId === "."
+    || documentId === ".."
+  ) {
+    fail("教材结构 document_id 不能用于定位教材输入结构");
+  }
+  const inputPath = path.join(inputRoot, documentId, "outline.json");
+  const input = readJson(inputPath, "教材输入结构", paths.workspaceRoot);
+  try {
+    assertTextbookSourceUnchanged(input, outline, { courseId });
+  } catch (error) {
+    fail(`教材原始结构不可变校验失败：${error.message}`);
+  }
+  if (hasBinding) {
+    const binding = readJson(bindingPath, "教材绑定记录", paths.workspaceRoot);
+    if (
+      binding.document_id !== documentId
+      || binding.course_id !== courseId
+      || binding.output_outline_path !== `pipeline/${courseId}/textbook-outline.json`
+      || binding.structure_sha256 !== textbookStructureSha256(input, { courseId })
+    ) {
+      fail("教材输入结构完整性摘要或绑定记录不一致");
+    }
+  }
+}
+
 function assertKnowledgePointApproval(paths, courseId, points) {
   const identity = points.map((point, index) => {
     if (typeof point?.title !== "string" || !point.title.trim()) {
@@ -59,6 +100,19 @@ function assertKnowledgePointApproval(paths, courseId, points) {
     fail("知识点清单尚未获得用户审核，不能创建详情任务");
   }
   const approval = readJson(approvalPath, "知识点审核回执", paths.workspaceRoot);
+  let textbookStructureHash = null;
+  const textbookOutlinePath = path.join(paths.courseRoot, "textbook-outline.json");
+  if (fs.existsSync(textbookOutlinePath)) {
+    const outline = readJson(
+      textbookOutlinePath,
+      "教材结构",
+      paths.workspaceRoot,
+    );
+    assertTextbookSource(paths, courseId, outline);
+    textbookStructureHash = textbookStructureSha256(outline, { courseId });
+  } else if (fs.existsSync(path.join(paths.workspaceRoot, "textbook-binding.json"))) {
+    fail("教材绑定存在但缺少教材工作流结构");
+  }
   if (
     approval.schema_version !== "course-review-approval/1.0"
     || typeof approval.review_id !== "string"
@@ -75,8 +129,15 @@ function assertKnowledgePointApproval(paths, courseId, points) {
     || !approval.submitted_operations.every(isRecord)
     || !SHA256_PATTERN.test(approval.identity_sha256 ?? "")
     || approval.identity_sha256 !== sha256(identity)
+    || (
+      textbookStructureHash !== null
+      && (
+        !SHA256_PATTERN.test(approval.textbook_structure_sha256 ?? "")
+        || approval.textbook_structure_sha256 !== textbookStructureHash
+      )
+    )
   ) {
-    fail("知识点审核回执缺失、格式错误或已因 id/title/顺序变化而失效");
+    fail("知识点审核回执缺失、格式错误或已因 id/title/顺序/教材章节变化而失效");
   }
 }
 

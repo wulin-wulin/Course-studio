@@ -50,10 +50,38 @@ export type ReviewPoint = {
   role?: string;
 };
 
+export type TextbookOutlinePoint = {
+  id: string;
+  title: string;
+  order?: number;
+  origin?: "textbook" | "llm-extension" | "user" | string;
+  page?: number;
+  anchorPointId?: string;
+  extensionReason?: string;
+};
+
+export type TextbookOutlineChapter = {
+  id: string;
+  title: string;
+  order?: number;
+  number?: string;
+  page?: number;
+  points: TextbookOutlinePoint[];
+};
+
+export type TextbookOutline = {
+  schemaVersion: string;
+  documentId: string;
+  title: string;
+  chapters: TextbookOutlineChapter[];
+};
+
 export type ReviewResource = ReviewPointer & {
   clusters: ReviewCluster[];
   points: ReviewPoint[];
   review_queue: ReviewIssue[];
+  textbookOutline?: TextbookOutline;
+  textbookStructureSha256?: string;
 };
 
 export type PointReviewOperation =
@@ -181,11 +209,20 @@ export function parseReviewResource(value: unknown): ReviewResource {
     }
   }
 
+  const textbookOutline = parseTextbookOutline(
+    candidate.textbook_outline ?? candidate.textbookOutline,
+  );
+  const textbookStructureSha256 = readSha256(
+    candidate.textbook_structure_sha256 ?? candidate.textbookStructureSha256,
+  );
+
   return {
     ...pointer,
     clusters,
     points,
     review_queue: parseReviewQueue(candidate.review_queue),
+    ...(textbookOutline ? { textbookOutline } : {}),
+    ...(textbookStructureSha256 ? { textbookStructureSha256 } : {}),
   };
 }
 
@@ -334,6 +371,81 @@ function parseReviewQueue(value: unknown): ReviewIssue[] {
   });
 }
 
+function parseTextbookOutline(value: unknown): TextbookOutline | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)) {
+    throw new InvalidReviewPayloadError("审核数据中的 textbook_outline 必须是对象");
+  }
+  const schemaVersion = readNonEmptyString(value.schema_version ?? value.schemaVersion);
+  const documentId = readNonEmptyString(value.document_id ?? value.documentId);
+  const title = readNonEmptyString(value.title);
+  if (!schemaVersion || !documentId || !title || schemaVersion !== "textbook-outline/1.0") {
+    throw new InvalidReviewPayloadError("教材结构缺少有效 schema_version、document_id 或 title");
+  }
+  if (!Array.isArray(value.chapters) || value.chapters.length === 0) {
+    throw new InvalidReviewPayloadError("教材结构中的 chapters 必须是非空数组");
+  }
+  const chapterIds = new Set<string>();
+  const pointIds = new Set<string>();
+  const chapters = value.chapters.map((rawChapter, chapterIndex) => {
+    if (!isRecord(rawChapter)) {
+      throw new InvalidReviewPayloadError(`第 ${chapterIndex + 1} 个教材章节格式无效`);
+    }
+    const id = readNonEmptyString(rawChapter.id);
+    const chapterTitle = readNonEmptyString(rawChapter.title);
+    if (!id || !chapterTitle || chapterIds.has(id)) {
+      throw new InvalidReviewPayloadError(`第 ${chapterIndex + 1} 个教材章节缺少唯一 id/title`);
+    }
+    if (!Array.isArray(rawChapter.points) || rawChapter.points.length === 0) {
+      throw new InvalidReviewPayloadError(`教材章节 ${id} 必须包含知识点`);
+    }
+    chapterIds.add(id);
+    const points = rawChapter.points.map((rawPoint, pointIndex) => {
+      if (!isRecord(rawPoint)) {
+        throw new InvalidReviewPayloadError(`教材章节 ${id} 的第 ${pointIndex + 1} 个知识点格式无效`);
+      }
+      const pointId = readNonEmptyString(rawPoint.id);
+      const pointTitle = readNonEmptyString(rawPoint.title);
+      if (!pointId || !pointTitle || pointIds.has(pointId)) {
+        throw new InvalidReviewPayloadError(`教材知识点缺少唯一 id/title：${id}`);
+      }
+      pointIds.add(pointId);
+      return {
+        id: pointId,
+        title: pointTitle,
+        ...optionalInteger("order", rawPoint.order),
+        ...optionalString("origin", rawPoint.origin),
+        ...optionalInteger("page", rawPoint.page),
+        ...optionalString(
+          "anchorPointId",
+          rawPoint.anchor_point_id ?? rawPoint.anchorPointId,
+        ),
+        ...optionalString(
+          "extensionReason",
+          rawPoint.extension_reason ?? rawPoint.extensionReason,
+        ),
+      };
+    });
+    return {
+      id,
+      title: chapterTitle,
+      ...optionalInteger("order", rawChapter.order),
+      ...optionalString("number", rawChapter.number),
+      ...optionalInteger("page", rawChapter.page),
+      points,
+    };
+  });
+  return { schemaVersion, documentId, title, chapters };
+}
+
+function readSha256(value: unknown): string | null {
+  const text = readNonEmptyString(value);
+  if (value !== undefined && value !== null && (!text || !/^[a-f0-9]{64}$/.test(text))) {
+    throw new InvalidReviewPayloadError("教材结构哈希必须是 64 位十六进制字符串");
+  }
+  return text;
+}
+
 function parsePointIssues(value: unknown, pointId: string) {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => parseReviewIssue(item, pointId));
@@ -412,6 +524,15 @@ function optionalNumber<Key extends string>(
   value: unknown,
 ): Partial<Record<Key, number>> {
   return typeof value === "number" && Number.isFinite(value)
+    ? ({ [key]: value } as Record<Key, number>)
+    : {};
+}
+
+function optionalInteger<Key extends string>(
+  key: Key,
+  value: unknown,
+): Partial<Record<Key, number>> {
+  return typeof value === "number" && Number.isInteger(value)
     ? ({ [key]: value } as Record<Key, number>)
     : {};
 }

@@ -1,4 +1,5 @@
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 import openai
 import httpx
@@ -8,8 +9,9 @@ from .base import AbstractAIProvider, AIRequest, StreamChunk, split_image_data
 
 class GatewayProvider(AbstractAIProvider):
     def __init__(self, base_url: str, api_key: str, models: list[str], names: dict[str, str] | None = None):
+        self.base_url = base_url.rstrip("/")
         self.client = openai.AsyncOpenAI(
-            base_url=base_url,
+            base_url=self.base_url,
             api_key=api_key,
             timeout=httpx.Timeout(60.0, connect=10.0),
         )
@@ -32,12 +34,12 @@ class GatewayProvider(AbstractAIProvider):
         messages = self._build_messages(request)
 
         stream = await self.client.chat.completions.create(
-            model=request.model,
-            messages=messages,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
-            stream=True,
-            extra_body={"reasoning_effort": request.reasoning_effort},
+            **self._completion_kwargs(
+                request,
+                messages,
+                stream=True,
+                extra_body={"reasoning_effort": request.reasoning_effort},
+            ),
         )
 
         async for chunk in stream:
@@ -55,13 +57,39 @@ class GatewayProvider(AbstractAIProvider):
         messages = self._build_messages(request)
 
         response = await self.client.chat.completions.create(
-            model=request.model,
-            messages=messages,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
+            **self._completion_kwargs(request, messages),
         )
 
         return response.choices[0].message.content or ""
+
+    def _completion_kwargs(
+        self,
+        request: AIRequest,
+        messages: list[dict],
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Build portable OpenAI-compatible request arguments.
+
+        Moonshot's Kimi K2 endpoints currently reject every explicit
+        temperature except ``1``.  The shared request model historically used
+        ``0`` as its default, so sending that field made the configured Kimi
+        model fail before it could process a textbook prompt.  Omitting the
+        field lets the provider apply its documented default.  For other
+        providers, preserve an explicitly positive temperature while omitting
+        the legacy zero default, which is accepted by all supported gateways.
+        """
+
+        kwargs: dict[str, Any] = {
+            "model": request.model,
+            "messages": messages,
+            "max_tokens": request.max_tokens,
+            **extra,
+        }
+        hostname = (urlparse(self.base_url).hostname or "").lower()
+        is_moonshot = hostname == "moonshot.cn" or hostname.endswith(".moonshot.cn")
+        if request.temperature > 0 and not is_moonshot:
+            kwargs["temperature"] = request.temperature
+        return kwargs
 
     def _build_messages(self, request: AIRequest) -> list[dict]:
         messages = [{"role": "system", "content": request.system_prompt}]

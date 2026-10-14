@@ -7,6 +7,7 @@ from .courses import router as courses_router
 from .models import router as models_router
 from .conversations import router as conversations_router
 from .reviews import router as reviews_router
+from .documents import router as documents_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
@@ -24,3 +25,4 @@ api_router.include_router(
     prefix="/conversations",
     tags=["conversations"],
 )
+api_router.include_router(documents_router, prefix="/documents", tags=["documents"])

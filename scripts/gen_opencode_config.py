@@ -59,10 +59,12 @@ COURSE_OUTLINE_CREATOR_PERMISSION = {
         "**/pipeline/*/course-content/src/data/course.json": "allow",
         "**/pipeline/*/course-content/src/data/index.json": "allow",
         "**/pipeline/*/course-content/generation/manifest.json": "allow",
+        "**/pipeline/*/textbook-outline.json": "allow",
     },
     "skill": {
         "*": "deny",
         "candidate-knowledge-point-generator": "allow",
+        "textbook-outline-generator": "allow",
         "knowledge-pipeline-orchestrator": "allow",
     },
     "task": "deny",
@@ -82,12 +84,14 @@ COURSE_CREATOR_PERMISSION = {
         "**/pipeline/*/course-content/generation/manifest.json": "allow",
         "**/pipeline/*/course-content/generation/animation-manifest.json": "allow",
         "**/pipeline/*/clustered-graph.json": "allow",
+        "**/pipeline/*/textbook-outline.json": "allow",
     },
     "skill": {
         "*": "deny",
         "candidate-knowledge-point-generator": "allow",
         "knowledge-cluster-builder": "allow",
         "knowledge-pipeline-orchestrator": "allow",
+        "textbook-outline-generator": "allow",
     },
     "task": {
         "*": "deny",

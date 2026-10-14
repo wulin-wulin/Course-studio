@@ -55,6 +55,7 @@ class CourseReviewProvisionTest(unittest.TestCase):
             for file_name in (
                 "prepare-course-review.mjs",
                 "run-course-pipeline-step.mjs",
+                "validate-textbook-outline.mjs",
             ):
                 copied = tools / file_name
                 self.assertTrue(copied.is_file())
@@ -209,6 +210,7 @@ class CourseReviewProvisionTest(unittest.TestCase):
                 "**/pipeline/*/course-content/src/data/course.json": "allow",
                 "**/pipeline/*/course-content/src/data/index.json": "allow",
                 "**/pipeline/*/course-content/generation/manifest.json": "allow",
+                "**/pipeline/*/textbook-outline.json": "allow",
             },
         )
         self.assertNotIn("knowledge-cluster-builder", permission["skill"])

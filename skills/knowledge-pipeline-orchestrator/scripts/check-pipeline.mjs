@@ -16,6 +16,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { validateProject } from '../../candidate-knowledge-point-generator/scripts/validate_output.mjs';
+import {
+  assertTextbookSourceUnchanged,
+  textbookStructureSha256,
+} from './textbook-structure.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GRAPH_CHECKER = path.resolve(
@@ -187,7 +191,14 @@ function graphReviewAuditPayload(graph) {
   };
 }
 
-function approvalCommonMatches(approval, courseId, kind, gate, identitySha256) {
+function approvalCommonMatches(
+  approval,
+  courseId,
+  kind,
+  gate,
+  identitySha256,
+  textbookStructureHash = null,
+) {
   return Boolean(
     isRecord(approval)
     && approval.schema_version === 'course-review-approval/1.0'
@@ -204,6 +215,13 @@ function approvalCommonMatches(approval, courseId, kind, gate, identitySha256) {
     && approval.submitted_operations.length === approval.operation_count
     && approval.submitted_operations.every(isRecord)
     && approval.identity_sha256 === identitySha256
+    && (
+      textbookStructureHash === null
+      || (
+        /^[0-9a-f]{64}$/.test(approval.textbook_structure_sha256 ?? '')
+        && approval.textbook_structure_sha256 === textbookStructureHash
+      )
+    )
   );
 }
 
@@ -237,6 +255,83 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
   const index = loadJson(path.join(contentRoot, 'src/data/index.json'));
   const courseId = index.courseId;
   const workspaceRoot = reviewWorkspace(contentRoot, courseId);
+  let textbookStructureHash = null;
+  const textbookOutlinePath = path.join(
+    workspaceRoot,
+    'pipeline',
+    courseId,
+    'textbook-outline.json',
+  );
+  const textbookBindingPath = path.join(workspaceRoot, 'textbook-binding.json');
+  const textbookInputRoot = path.join(workspaceRoot, 'textbook-input');
+  const hasTextbookBinding = existsSync(textbookBindingPath);
+  const hasTextbookInputRoot = existsSync(textbookInputRoot);
+  if (!existsSync(textbookOutlinePath) && hasTextbookBinding) {
+    add(
+      findings,
+      'error',
+      'review',
+      'invalid-textbook-structure',
+      '教材绑定存在但缺少教材工作流结构',
+    );
+    return 0;
+  }
+  if (existsSync(textbookOutlinePath)) {
+    try {
+      const outline = loadJson(
+        assertSafeRegularFile(textbookOutlinePath, '教材结构'),
+      );
+      textbookStructureHash = textbookStructureSha256(outline, { courseId });
+      if (hasTextbookBinding || hasTextbookInputRoot) {
+        const documentId = String(outline.document_id ?? '').trim();
+        if (
+          !documentId
+          || documentId.includes('/')
+          || documentId.includes('\\')
+          || documentId === '.'
+          || documentId === '..'
+        ) {
+          throw new Error('教材结构 document_id 不能用于定位教材输入结构');
+        }
+        const inputPath = path.join(
+          textbookInputRoot,
+          documentId,
+          'outline.json',
+        );
+        const inputOutline = loadJson(
+          assertSafeRegularFile(inputPath, '教材输入结构'),
+        );
+        assertTextbookSourceUnchanged(inputOutline, outline, { courseId });
+        if (hasTextbookBinding) {
+          const binding = loadJson(
+            assertSafeRegularFile(textbookBindingPath, '教材绑定记录'),
+          );
+          if (
+            binding.document_id !== documentId
+            || binding.course_id !== courseId
+            || binding.output_outline_path !== `pipeline/${courseId}/textbook-outline.json`
+          ) {
+            throw new Error('教材绑定记录与工作流结构不一致');
+          }
+          if (
+            binding.structure_sha256
+            !== textbookStructureSha256(inputOutline, { courseId })
+          ) {
+            throw new Error('教材输入结构完整性摘要与绑定记录不一致');
+          }
+        }
+      }
+    } catch (error) {
+      add(
+        findings,
+        'error',
+        'review',
+        'invalid-textbook-structure',
+        `教材结构无法参与审核哈希校验：${error.message}`,
+      );
+      return 0;
+    }
+  }
   const identitySha256 = sha256Json(identityPayload(index.points));
   let count = 0;
 
@@ -252,6 +347,7 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
     'knowledge-points',
     'G2_IDENTITY_REVIEW',
     identitySha256,
+    textbookStructureHash,
   )) {
     count += 1;
   } else if (knowledgeApproval) {
@@ -284,6 +380,7 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
       'knowledge-graph',
       'G6_GRAPH_REVIEW',
       graphIdentitySha256,
+      textbookStructureHash,
     )
     && graphApproval.clusters_sha256 === clustersSha256
     && graphApproval.prerequisites_sha256 === prerequisitesSha256

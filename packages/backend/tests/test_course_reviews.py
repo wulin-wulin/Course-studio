@@ -344,6 +344,215 @@ class CourseReviewStoreTest(unittest.TestCase):
         self.assertEqual(len(resources), 1)
         return resources[0]
 
+    def write_textbook_outline(self) -> None:
+        _write_json(
+            self.fixture.course_root / "textbook-outline.json",
+            {
+                "schema_version": "textbook-outline/1.0",
+                "document_id": "doc-1234567890abcdef12345678",
+                "title": "教材课程",
+                "course": {"id": COURSE_ID, "title": "Demo Course"},
+                "source": {"sha256": "f" * 64},
+                "chapters": [
+                    {
+                        "id": "chapter-one",
+                        "title": "第一章",
+                        "order": 0,
+                        "points": [
+                            {"id": "alpha", "title": "Alpha", "origin": "textbook", "order": 0},
+                            {"id": "beta", "title": "Beta", "origin": "textbook", "order": 1},
+                        ],
+                    },
+                    {
+                        "id": "chapter-two",
+                        "title": "第二章",
+                        "order": 1,
+                        "points": [
+                            {"id": "gamma", "title": "Gamma", "origin": "textbook", "order": 0},
+                        ],
+                    },
+                ],
+            },
+        )
+
+    def write_textbook_graph(self, *, wrong_point_id: str | None = None) -> None:
+        """Write a graph whose clusters mirror the bound textbook chapters.
+
+        ``ReviewFixture.write_graph`` intentionally creates the generic
+        non-textbook graph used by the rest of this module.  Textbook review
+        tests need the chapter IDs/titles in the graph before they can test a
+        point-to-chapter mismatch.
+        """
+
+        self.fixture.write_graph()
+        graph_path = self.fixture.course_root / "clustered-graph.json"
+        graph = _read_json(graph_path)
+        graph["clusters"] = [
+            {
+                "id": "chapter-one",
+                "title": "第一章",
+                "subtitle": "第一章知识点",
+                "description": "教材第一章知识点。",
+                "order": 0,
+            },
+            {
+                "id": "chapter-two",
+                "title": "第二章",
+                "subtitle": "第二章知识点",
+                "description": "教材第二章知识点。",
+                "order": 1,
+            },
+        ]
+        expected_cluster = {
+            "alpha": "chapter-one",
+            "beta": "chapter-one",
+            "gamma": "chapter-two",
+        }
+        for point in graph["points"]:
+            point["clusterIds"] = [expected_cluster[point["id"]]]
+        if wrong_point_id is not None:
+            point = next(
+                point for point in graph["points"] if point["id"] == wrong_point_id
+            )
+            point["clusterIds"] = [
+                "chapter-two"
+                if expected_cluster[wrong_point_id] == "chapter-one"
+                else "chapter-one"
+            ]
+        _write_json(graph_path, graph)
+
+    def test_textbook_g2_exposes_tree_and_invalidates_approval_on_structure_change(self):
+        self.write_textbook_outline()
+        resource = self.pending("knowledge-points")
+        self.assertEqual(resource["textbook_outline"]["chapters"][0]["title"], "第一章")
+        self.assertEqual(
+            [point["id"] for point in resource["textbook_outline"]["chapters"][0]["points"]],
+            ["alpha", "beta"],
+        )
+        self.assertRegex(resource["textbook_structure_sha256"], r"^[a-f0-9]{64}$")
+        original_hash = resource["artifact_hash"]
+        submitted = self.submit(resource, [])
+        self.assertEqual(submitted["review"]["status"], "resolved")
+
+        outline_path = self.fixture.course_root / "textbook-outline.json"
+        outline = _read_json(outline_path)
+        # Keep the flattened index identity unchanged while changing chapter
+        # metadata.  This isolates the chapter-assignment hash contract.
+        outline["chapters"][1]["title"] = "第二章（修订版）"
+        _write_json(outline_path, outline)
+        refreshed = self.store.pending_for_conversation(CONVERSATION_ID)
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(refreshed[0]["status"], "pending")
+        self.assertNotEqual(refreshed[0]["artifact_hash"], original_hash)
+        self.assertNotEqual(refreshed[0]["id"], submitted["review"]["id"])
+
+    def test_textbook_g2_rejects_mutations_without_chapter_aware_operations(self):
+        self.write_textbook_outline()
+        resource = self.pending("knowledge-points")
+        with self.assertRaises(CourseReviewValidationError):
+            self.submit(resource, [{"op": "delete", "point_id": "alpha"}])
+
+    def test_textbook_g2_zero_modification_still_resolves(self):
+        self.write_textbook_outline()
+        resource = self.pending("knowledge-points")
+
+        result = self.submit(resource, [])
+
+        self.assertEqual(result["review"]["status"], "resolved")
+        self.assertEqual(result["review"]["submitted_operations"], [])
+        approval = _read_json(
+            self.fixture.approval_root / "knowledge-points.json"
+        )
+        self.assertEqual(
+            approval["textbook_structure_sha256"],
+            resource["textbook_structure_sha256"],
+        )
+
+    def test_textbook_g2_rejects_outline_index_identity_mismatch(self):
+        self.write_textbook_outline()
+        index_path = self.fixture.data_root / "index.json"
+        index = _read_json(index_path)
+        index["points"][1]["title"] = "Beta（索引标题不一致）"
+        _write_json(index_path, index)
+        self.fixture.write_marker("knowledge-points")
+
+        with self.assertRaisesRegex(
+            CourseReviewValidationError,
+            "教材结构与课程索引的知识点 ID、标题或顺序不一致",
+        ):
+            self.store.pending_for_conversation(CONVERSATION_ID)
+
+    def test_textbook_review_rejects_sidecar_mutation_against_input_snapshot(self):
+        self.write_textbook_outline()
+        outline_path = self.fixture.course_root / "textbook-outline.json"
+        outline = _read_json(outline_path)
+        input_path = (
+            self.fixture.session_root
+            / "textbook-input"
+            / outline["document_id"]
+            / "outline.json"
+        )
+        _write_json(input_path, deepcopy(outline))
+
+        outline["chapters"][0]["points"][0]["origin"] = "llm-extension"
+        outline["chapters"][0]["points"][0]["anchor_point_id"] = "beta"
+        outline["chapters"][0]["points"][0]["extension_reason"] = "伪造来源"
+        _write_json(outline_path, outline)
+        self.fixture.write_marker("knowledge-points")
+
+        with self.assertRaisesRegex(
+            CourseReviewValidationError,
+            "教材原始结构不可变校验失败",
+        ):
+            self.store.pending_for_conversation(CONVERSATION_ID)
+
+    def test_textbook_review_rejects_missing_sidecar_when_binding_exists(self):
+        self.write_textbook_outline()
+        outline_path = self.fixture.course_root / "textbook-outline.json"
+        outline = _read_json(outline_path)
+        _write_json(
+            self.fixture.session_root / "textbook-binding.json",
+            {
+                "schema_version": "textbook-binding/1.0",
+                "document_id": outline["document_id"],
+                "course_id": COURSE_ID,
+                "output_outline_path": f"pipeline/{COURSE_ID}/textbook-outline.json",
+            },
+        )
+        outline_path.unlink()
+        self.fixture.write_marker("knowledge-points")
+
+        with self.assertRaisesRegex(
+            CourseReviewValidationError,
+            "缺少教材工作流结构",
+        ):
+            self.store.pending_for_conversation(CONVERSATION_ID)
+
+    def test_textbook_graph_rejects_point_mapped_to_wrong_chapter(self):
+        self.write_textbook_outline()
+        self.approve_identity()
+        self.write_textbook_graph(wrong_point_id="gamma")
+
+        with self.assertRaisesRegex(
+            CourseReviewValidationError,
+            "知识点 gamma 的主知识簇不是其教材章节",
+        ):
+            self.store.pending_for_conversation(CONVERSATION_ID)
+
+    def test_textbook_graph_with_chapter_mapping_generates_resource(self):
+        self.write_textbook_outline()
+        self.approve_identity()
+        self.write_textbook_graph()
+
+        resources = self.store.pending_for_conversation(CONVERSATION_ID)
+
+        self.assertEqual(len(resources), 1)
+        self.assertEqual(resources[0]["kind"], "knowledge-graph")
+        self.assertEqual(
+            [cluster["id"] for cluster in resources[0]["clusters"]],
+            ["chapter-one", "chapter-two"],
+        )
+
     def test_knowledge_review_add_delete_signs_revision_hash_and_operations(self):
         resource = self.pending("knowledge-points")
         operations = [

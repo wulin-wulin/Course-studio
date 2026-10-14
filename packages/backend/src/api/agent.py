@@ -32,6 +32,11 @@ from ..services.courses import (
 )
 from ..services.courses.generation import CourseGenerationObserver
 from ..services.conversations import get_conversation_store
+from ..services.documents import (
+    DocumentError,
+    TextbookBinding,
+    bind_textbook_workspace,
+)
 from ..services.opencode import client as opencode_client
 from ..services.opencode import provision as opencode_provision
 from ..services.reviews import (
@@ -475,7 +480,15 @@ def _request_history_content(
     return message or (f"发送了 {len(images)} 张图片" if images else "")
 
 
-def _course_creation_prompt(message: str) -> str:
+def _course_creation_prompt(
+    message: str,
+    textbook_binding: TextbookBinding | None = None,
+) -> str:
+    textbook_context = (
+        f"\n\n{textbook_binding.prompt_context()}\n"
+        if textbook_binding is not None
+        else ""
+    )
     return (
         "当前是 Course Studio 的课程创建工作流。必须加载并遵循 "
         "knowledge-pipeline-orchestrator Skill，通过多轮对话推进 v2 的 G0-G7 门禁和最终发布确认。\n\n"
@@ -487,6 +500,7 @@ def _course_creation_prompt(message: str) -> str:
         "但必须通过全部自动结构、构建、安全和完整性校验。不要在 G6 审核通过、用户明确确认发布"
         "且 G7 校验通过前生成 courses 下的正式课程。"
         "不得生成或继续使用 v1 中间产物。"
+        f"{textbook_context}"
     )
 
 
@@ -765,6 +779,8 @@ async def _run_agent_turn_opencode_unlocked(
     workflow = _request_workflow(payload)
     creating_course = workflow == "course-create"
     readonly = mode == "chat"
+    textbook_document_id = str(payload.get("textbook_document_id") or "").strip()
+    textbook_binding: TextbookBinding | None = None
     resume_response: dict[str, Any] | None = None
     review_store = get_course_review_store() if creating_course else None
 
@@ -973,6 +989,60 @@ async def _run_agent_turn_opencode_unlocked(
             "payload": {"message": str(exc), "conversation_id": conversation_id},
         })
         return
+
+    # Ordinary topic-based course creation keeps its existing test doubles and
+    # path contract. Only invoke the document binder when this request carries
+    # a document id or a previous PDF turn left a durable binding record.
+    session_root_value = getattr(workspace, "path", None)
+    binding_exists = False
+    if session_root_value:
+        try:
+            binding_exists = (Path(session_root_value).parent / "textbook-binding.json").is_file()
+        except (TypeError, OSError):
+            binding_exists = False
+    if creating_course and (textbook_document_id or binding_exists):
+        if not session_root_value:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": "教材绑定失败：课程工作区路径不可用",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
+        try:
+            textbook_binding = await asyncio.to_thread(
+                bind_textbook_workspace,
+                Path(session_root_value).parent,
+                document_id=textbook_document_id or None,
+            )
+        except DocumentError as exc:
+            await websocket.send_json({
+                "type": "agent_error",
+                "payload": {
+                    "message": f"教材绑定失败：{exc}",
+                    "conversation_id": conversation_id,
+                },
+            })
+            await websocket.send_json({
+                "type": "agent_done",
+                "payload": {
+                    "return_code": 1,
+                    "conversation_id": conversation_id,
+                    "mode": mode,
+                },
+            })
+            active_session["id"] = None
+            return
 
     try:
         await opencode_client.health()
@@ -1192,7 +1262,7 @@ async def _run_agent_turn_opencode_unlocked(
     if readonly:
         prompt = _chat_prompt(message) if message else "请只读分析上传内容并回答问题。"
     elif creating_course:
-        prompt = _course_creation_prompt(message)
+        prompt = _course_creation_prompt(message, textbook_binding)
     else:
         prompt = _agent_prompt(message) if message else "请根据上传内容维护课程知识数据。"
     try:

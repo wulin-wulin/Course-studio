@@ -24,10 +24,15 @@ from typing import Any, Iterator
 
 from ...config import PROJECT_ROOT, settings
 from ..locking import exclusive_file_lock, FileLockError
+from ..documents.structure import (
+    TextbookStructureIntegrityError,
+    assert_textbook_source_unchanged,
+)
 
 
 _COURSE_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _GRAPH_ROLES = {"trunk", "branch", "leaf"}
+_TEXTBOOK_ORIGINS = {"textbook", "llm-extension", "user"}
 _REVIEW_KINDS = {
     "knowledge-points": "G2_IDENTITY_REVIEW",
     "knowledge-graph": "G6_GRAPH_REVIEW",
@@ -125,6 +130,183 @@ def _hash_json(value: Any, *, sort_keys: bool = False) -> str:
         sort_keys=sort_keys,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _normalize_textbook_outline(
+    outline: dict[str, Any],
+    *,
+    course_id: str,
+    path: Path,
+) -> tuple[dict[str, Any], str]:
+    """Return the review-safe textbook tree and its canonical structure hash.
+
+    The sidecar is owned by the textbook binding service, but review resources
+    must still validate it before exposing its contents.  The hash deliberately
+    covers the same structural payload as ``binding.py`` (document, course and
+    ordered chapters/points), so a chapter reassignment cannot leave an old
+    approval valid while ordinary content-only changes remain independent.
+    """
+
+    if outline.get("schema_version") != "textbook-outline/1.0":
+        raise CourseReviewValidationError(
+            f"教材结构必须使用 textbook-outline/1.0：{path}"
+        )
+    document_id = str(outline.get("document_id") or "").strip()
+    course = outline.get("course")
+    if not document_id or not isinstance(course, dict):
+        raise CourseReviewValidationError(f"教材结构缺少 document_id/course：{path}")
+    if str(course.get("id") or "") != course_id:
+        raise CourseReviewValidationError(
+            f"教材结构 course.id 与审核课程不一致：{path}"
+        )
+    course_title = str(course.get("title") or "").strip()
+    if not course_title:
+        raise CourseReviewValidationError(f"教材结构缺少课程标题：{path}")
+    chapters = outline.get("chapters")
+    if not isinstance(chapters, list) or not chapters:
+        raise CourseReviewValidationError(f"教材结构必须包含章节：{path}")
+
+    normalized_chapters: list[dict[str, Any]] = []
+    chapter_ids: set[str] = set()
+    point_ids: set[str] = set()
+    for chapter_index, raw_chapter in enumerate(chapters):
+        if not isinstance(raw_chapter, dict):
+            raise CourseReviewValidationError(
+                f"教材章节 {chapter_index + 1} 格式无效：{path}"
+            )
+        chapter_id = str(raw_chapter.get("id") or "").strip()
+        chapter_title = str(raw_chapter.get("title") or "").strip()
+        if (
+            not _COURSE_ID.fullmatch(chapter_id)
+            or not chapter_title
+            or chapter_id in chapter_ids
+        ):
+            raise CourseReviewValidationError(
+                f"教材章节 {chapter_index + 1} 缺少合法且唯一的 id/title：{path}"
+            )
+        raw_points = raw_chapter.get("points")
+        if not isinstance(raw_points, list) or not raw_points:
+            raise CourseReviewValidationError(
+                f"教材章节 {chapter_id} 必须包含知识点：{path}"
+            )
+        chapter_ids.add(chapter_id)
+        normalized_points: list[dict[str, Any]] = []
+        for point_index, raw_point in enumerate(raw_points):
+            if not isinstance(raw_point, dict):
+                raise CourseReviewValidationError(
+                    f"教材知识点 {chapter_id}/{point_index + 1} 格式无效：{path}"
+                )
+            point_id = str(raw_point.get("id") or "").strip()
+            point_title = str(raw_point.get("title") or "").strip()
+            if (
+                not _COURSE_ID.fullmatch(point_id)
+                or not point_title
+                or point_id in point_ids
+            ):
+                raise CourseReviewValidationError(
+                    f"教材知识点 {chapter_id}/{point_index + 1} 缺少合法且唯一的 id/title：{path}"
+                )
+            point_ids.add(point_id)
+            point = deepcopy(raw_point)
+            point["id"] = point_id
+            point["title"] = point_title
+            point["order"] = point_index
+            origin = str(point.get("origin") or "textbook").strip()
+            if origin not in _TEXTBOOK_ORIGINS:
+                raise CourseReviewValidationError(
+                    f"教材知识点 {point_id} 的 origin 无效：{path}"
+                )
+            point["origin"] = origin
+            normalized_points.append(point)
+        chapter = deepcopy(raw_chapter)
+        chapter["id"] = chapter_id
+        chapter["title"] = chapter_title
+        chapter["order"] = chapter_index
+        chapter["points"] = normalized_points
+        normalized_chapters.append(chapter)
+
+    normalized = {
+        "schema_version": "textbook-outline/1.0",
+        "document_id": document_id,
+        "course": {"id": course_id, "title": course_title},
+        "title": str(outline.get("title") or course_title).strip() or course_title,
+        "chapters": normalized_chapters,
+    }
+    structure_hash = _hash_json(
+        {
+            "document_id": normalized["document_id"],
+            "course": normalized["course"],
+            "chapters": normalized["chapters"],
+        },
+        sort_keys=True,
+    )
+    return normalized, structure_hash
+
+
+def _textbook_outline_identity(outline: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return the ordered, flattened textbook identity used by review gates."""
+
+    return [
+        (str(point["id"]), str(point["title"]).strip())
+        for chapter in outline["chapters"]
+        for point in chapter["points"]
+    ]
+
+
+def _assert_textbook_index_alignment(
+    source: dict[str, Any],
+    points: list[dict[str, Any]],
+) -> None:
+    outline = source.get("textbook_outline")
+    if outline is None:
+        return
+    expected = _textbook_outline_identity(outline)
+    actual = [
+        (str(point.get("id") or ""), str(point.get("title") or "").strip())
+        for point in points
+    ]
+    if actual != expected:
+        raise CourseReviewValidationError(
+            "教材结构与课程索引的知识点 ID、标题或顺序不一致"
+        )
+
+
+def _assert_textbook_graph_alignment(
+    source: dict[str, Any],
+    points: list[dict[str, Any]],
+    clusters: list[dict[str, Any]],
+) -> None:
+    outline = source.get("textbook_outline")
+    if outline is None:
+        return
+    _assert_textbook_index_alignment(source, points)
+    expected_chapters = outline["chapters"]
+    if len(clusters) != len(expected_chapters):
+        raise CourseReviewValidationError(
+            "教材课程的知识簇数量必须与章节数量一致"
+        )
+    chapter_by_point = {}
+    for chapter, cluster in zip(expected_chapters, clusters):
+        if (
+            cluster.get("id") != chapter["id"]
+            or str(cluster.get("title") or "").strip() != chapter["title"]
+        ):
+            raise CourseReviewValidationError(
+                "知识图谱的知识簇必须按顺序一一对应教材章节"
+            )
+        for point in chapter["points"]:
+            chapter_by_point[point["id"]] = chapter["id"]
+    for point in points:
+        point_id = str(point.get("id") or "")
+        cluster_ids = point.get("clusterIds")
+        if (
+            not isinstance(cluster_ids, list)
+            or not cluster_ids
+            or cluster_ids[0] != chapter_by_point.get(point_id)
+        ):
+            raise CourseReviewValidationError(
+                f"知识点 {point_id} 的主知识簇不是其教材章节"
+            )
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:
@@ -906,6 +1088,7 @@ class CourseReviewStore:
             "manifest": content_root / "generation" / "manifest.json",
             "points": content_root / "src" / "data" / "points",
             "graph": course_root / "clustered-graph.json",
+            "textbook_outline": course_root / "textbook-outline.json",
         }
 
     @staticmethod
@@ -914,6 +1097,79 @@ class CourseReviewStore:
         if content is None:
             raise CourseReviewValidationError(f"缺少{label}：{path}")
         return content, _parse_json_bytes(content, label, path)
+
+    def _textbook_input_source(
+        self,
+        session_root: Path,
+        course_id: str,
+        workflow_outline: dict[str, Any],
+    ) -> tuple[Path, bytes, dict[str, Any]] | None:
+        """Load and verify the backend-owned textbook input snapshot.
+
+        Older hand-authored generic review fixtures can contain a sidecar
+        without a binding. A real PDF session always has a binding record or
+        ``textbook-input`` directory; once either marker exists, a missing or
+        changed input snapshot is a hard review error.
+        """
+
+        input_root = session_root / "textbook-input"
+        binding_path = session_root / "textbook-binding.json"
+        input_root_exists = os.path.lexists(input_root)
+        binding_exists = os.path.lexists(binding_path)
+        if not input_root_exists and not binding_exists:
+            return None
+
+        document_id = str(workflow_outline.get("document_id") or "").strip()
+        if (
+            not document_id
+            or "/" in document_id
+            or "\\" in document_id
+            or document_id in {".", ".."}
+        ):
+            raise CourseReviewValidationError(
+                "教材结构 document_id 不能用于定位教材输入结构"
+            )
+        input_path = self._within(
+            session_root,
+            input_root / document_id / "outline.json",
+        )
+        input_bytes, input_outline = self._required_document(
+            input_path,
+            "教材输入结构",
+        )
+        try:
+            assert_textbook_source_unchanged(
+                input_outline,
+                workflow_outline,
+                course_id=course_id,
+            )
+        except TextbookStructureIntegrityError as exc:
+            raise CourseReviewValidationError(
+                f"教材原始结构不可变校验失败：{exc}"
+            ) from exc
+
+        if binding_exists:
+            binding = _read_json(binding_path, "教材绑定记录")
+            expected_output = f"pipeline/{course_id}/textbook-outline.json"
+            if (
+                binding.get("document_id") != document_id
+                or binding.get("course_id") != course_id
+                or binding.get("output_outline_path") != expected_output
+            ):
+                raise CourseReviewValidationError("教材绑定记录与工作流结构不一致")
+            try:
+                _, source_hash = _normalize_textbook_outline(
+                    input_outline,
+                    course_id=course_id,
+                    path=input_path,
+                )
+            except CourseReviewValidationError:
+                raise
+            if binding.get("structure_sha256") != source_hash:
+                raise CourseReviewValidationError(
+                    "教材输入结构完整性摘要与绑定记录不一致"
+                )
+        return input_path, input_bytes, input_outline
 
     def _knowledge_source(
         self, session_root: Path, course_id: str
@@ -929,6 +1185,39 @@ class CourseReviewStore:
             content, document = self._required_document(paths[key], label)
             originals[paths[key]] = content
             documents[key] = document
+        outline_bytes = _capture_bytes(paths["textbook_outline"])
+        if outline_bytes is None and os.path.lexists(session_root / "textbook-binding.json"):
+            raise CourseReviewValidationError(
+                "教材绑定存在但缺少教材工作流结构："
+                f"{paths['textbook_outline']}"
+            )
+        if outline_bytes is not None:
+            raw_outline = _parse_json_bytes(
+                outline_bytes,
+                "教材结构",
+                paths["textbook_outline"],
+            )
+            outline, structure_hash = _normalize_textbook_outline(
+                raw_outline,
+                course_id=course_id,
+                path=paths["textbook_outline"],
+            )
+            documents["textbook_outline"] = outline
+            documents["textbook_outline_source"] = raw_outline
+            documents["textbook_structure_sha256"] = structure_hash
+            textbook_input = self._textbook_input_source(
+                session_root,
+                course_id,
+                raw_outline,
+            )
+            if textbook_input is not None:
+                input_path, input_bytes, input_outline = textbook_input
+                documents["textbook_input_outline"] = input_outline
+                originals[input_path] = input_bytes
+            # The sidecar is read-only during G2, but it is still part of the
+            # source snapshot so a concurrent chapter edit cannot be hidden by
+            # an otherwise unchanged index/manifest pair.
+            originals[paths["textbook_outline"]] = outline_bytes
         return documents, originals
 
     def _graph_source(
@@ -941,6 +1230,36 @@ class CourseReviewStore:
             content, document = self._required_document(paths[key], label)
             originals[paths[key]] = content
             documents[key] = document
+        outline_bytes = _capture_bytes(paths["textbook_outline"])
+        if outline_bytes is None and os.path.lexists(session_root / "textbook-binding.json"):
+            raise CourseReviewValidationError(
+                "教材绑定存在但缺少教材工作流结构："
+                f"{paths['textbook_outline']}"
+            )
+        if outline_bytes is not None:
+            raw_outline = _parse_json_bytes(
+                outline_bytes,
+                "教材结构",
+                paths["textbook_outline"],
+            )
+            outline, structure_hash = _normalize_textbook_outline(
+                raw_outline,
+                course_id=course_id,
+                path=paths["textbook_outline"],
+            )
+            documents["textbook_outline"] = outline
+            documents["textbook_outline_source"] = raw_outline
+            documents["textbook_structure_sha256"] = structure_hash
+            textbook_input = self._textbook_input_source(
+                session_root,
+                course_id,
+                raw_outline,
+            )
+            if textbook_input is not None:
+                input_path, input_bytes, input_outline = textbook_input
+                documents["textbook_input_outline"] = input_outline
+                originals[input_path] = input_bytes
+            originals[paths["textbook_outline"]] = outline_bytes
         graph_points = documents["graph"].get("points")
         if not isinstance(graph_points, list) or not all(
             isinstance(item, dict) for item in graph_points
@@ -966,6 +1285,7 @@ class CourseReviewStore:
         course_id: str,
         kind: str,
         identity_sha256: str,
+        textbook_structure_sha256: str | None = None,
         clusters_sha256: str | None = None,
         prerequisites_sha256: str | None = None,
         review_audit_sha256: str | None = None,
@@ -1003,6 +1323,10 @@ class CourseReviewStore:
             or approval.get("identity_sha256") != identity_sha256
         ):
             return False
+        if textbook_structure_sha256 is not None and (
+            approval.get("textbook_structure_sha256") != textbook_structure_sha256
+        ):
+            return False
         if kind != "knowledge-graph":
             return True
         return bool(
@@ -1019,6 +1343,7 @@ class CourseReviewStore:
         session_root: Path,
         course_id: str,
         identity_sha256: str,
+        textbook_structure_sha256: str | None = None,
     ) -> dict[str, Any]:
         approval = _read_optional_json(
             self._approval_path(session_root, course_id, "knowledge-points")
@@ -1028,6 +1353,7 @@ class CourseReviewStore:
             course_id=course_id,
             kind="knowledge-points",
             identity_sha256=identity_sha256,
+            textbook_structure_sha256=textbook_structure_sha256,
         ):
             raise CourseReviewConflictError(
                 "知识点审核回执缺失或已经失效，不能开始依赖关系审核"
@@ -1039,11 +1365,13 @@ class CourseReviewStore:
         session_root: Path,
         course_id: str,
         identity_sha256: str,
+        textbook_structure_sha256: str | None = None,
     ) -> dict[str, Any]:
         approval = self._require_knowledge_approval(
             session_root,
             course_id,
             identity_sha256,
+            textbook_structure_sha256,
         )
         if approval.get("resume_pending") is not False:
             raise CourseReviewConflictError(
@@ -1056,6 +1384,7 @@ class CourseReviewStore:
         session_root: Path,
         course_id: str,
         identity_sha256: str,
+        textbook_structure_sha256: str | None = None,
     ) -> dict[str, Any]:
         """Close a stale G2 resume once its durable G6 successor is submitted.
 
@@ -1070,6 +1399,7 @@ class CourseReviewStore:
             session_root,
             course_id,
             identity_sha256,
+            textbook_structure_sha256,
         )
         if approval.get("resume_pending") is False:
             return approval
@@ -1100,6 +1430,11 @@ class CourseReviewStore:
             or resource.get("course_id") != course_id
             or resource.get("status") != "resolved"
             or resource.get("identity_sha256") != identity_sha256
+            or (
+                textbook_structure_sha256 is not None
+                and resource.get("textbook_structure_sha256")
+                != textbook_structure_sha256
+            )
         ):
             raise CourseReviewConflictError(
                 "知识点审核恢复状态与当前知识图谱不匹配，不能自动续接"
@@ -1193,6 +1528,7 @@ class CourseReviewStore:
             raise CourseReviewValidationError("manifest.reviewQueue 必须是数组")
 
         identity = _identity_payload(points)
+        _assert_textbook_index_alignment(source, points)
         identity_sha256 = _hash_json(identity)
         evidence_by_id = {
             str(item.get("pointId") or ""): item for item in evidence
@@ -1223,9 +1559,30 @@ class CourseReviewStore:
             })
 
         artifact_hash = _hash_json(
-            {"course": course, "index": index, "manifest": manifest},
+            {
+                "course": course,
+                "index": index,
+                "manifest": manifest,
+                **(
+                    {
+                        "textbookStructureSha256": source[
+                            "textbook_structure_sha256"
+                        ]
+                    }
+                    if source.get("textbook_structure_sha256")
+                    else {}
+                ),
+            },
             sort_keys=True,
         )
+        textbook_fields = {}
+        if source.get("textbook_outline") is not None:
+            textbook_fields = {
+                "textbook_outline": deepcopy(source["textbook_outline"]),
+                "textbook_structure_sha256": str(
+                    source["textbook_structure_sha256"]
+                ),
+            }
         summary = {
             "total": len(public_points),
             "core": sum(item["scope_status"] == "core" for item in public_points),
@@ -1248,6 +1605,7 @@ class CourseReviewStore:
             "edges": [],
             "related_pairs": [],
             "broken_cycle_edges": [],
+            **textbook_fields,
         }
         return snapshot, artifact_hash, identity_sha256
 
@@ -1268,6 +1626,7 @@ class CourseReviewStore:
         identity = _identity_payload(points)
         identity_sha256 = _hash_json(identity)
         clusters, cluster_ids = _graph_clusters(graph)
+        _assert_textbook_graph_alignment(source, points, clusters)
         cluster_assignments = _cluster_payload(points, cluster_ids)
         clusters_sha256 = _hash_json(
             {
@@ -1372,9 +1731,27 @@ class CourseReviewStore:
                 "course": course,
                 "graph": graph,
                 "sourcePoints": source["source_points"],
+                **(
+                    {
+                        "textbookStructureSha256": source[
+                            "textbook_structure_sha256"
+                        ]
+                    }
+                    if source.get("textbook_structure_sha256")
+                    else {}
+                ),
             },
             sort_keys=True,
         )
+        textbook_fields = {}
+        if source.get("textbook_outline") is not None:
+            textbook_fields = {
+                "textbook_outline": deepcopy(source["textbook_outline"]),
+                "textbook_structure_sha256": str(
+                    source["textbook_structure_sha256"]
+                ),
+            }
+        snapshot.update(textbook_fields)
         return (
             snapshot,
             artifact_hash,
@@ -1409,6 +1786,7 @@ class CourseReviewStore:
             snapshot, artifact_hash, identity_sha256 = self._knowledge_snapshot(
                 session_root, course_id
             )
+            textbook_structure_sha256 = snapshot.get("textbook_structure_sha256")
             clusters_sha256 = None
             prerequisites_sha256 = None
             review_audit_sha256 = None
@@ -1421,10 +1799,12 @@ class CourseReviewStore:
                 prerequisites_sha256,
                 review_audit_sha256,
             ) = self._graph_snapshot(session_root, course_id)
+            textbook_structure_sha256 = snapshot.get("textbook_structure_sha256")
             self._require_knowledge_approval(
                 session_root,
                 course_id,
                 identity_sha256,
+                textbook_structure_sha256,
             )
 
         approval = _read_optional_json(self._approval_path(session_root, course_id, kind))
@@ -1433,6 +1813,7 @@ class CourseReviewStore:
             course_id=course_id,
             kind=kind,
             identity_sha256=identity_sha256,
+            textbook_structure_sha256=textbook_structure_sha256,
             clusters_sha256=clusters_sha256,
             prerequisites_sha256=prerequisites_sha256,
             review_audit_sha256=review_audit_sha256,
@@ -1808,6 +2189,14 @@ class CourseReviewStore:
     ) -> dict[Path, bytes]:
         course_id = str(resource["course_id"])
         paths = self._pipeline_paths(session_root, course_id)
+        if source.get("textbook_outline") is not None and operations:
+            # The current review operation contract has no chapter field.  A
+            # delete/add here would desynchronise index.json from the bound
+            # textbook tree, so textbook G2 is intentionally structure-locked
+            # until chapter-aware operations are introduced.
+            raise CourseReviewValidationError(
+                "教材模式的章节与知识点结构已锁定，当前只能零修改通过审核"
+            )
         _assert_safe_path_chain(paths["points"])
         details = list(paths["points"].glob("*.json")) if paths["points"].is_dir() else []
         if details:
@@ -2301,7 +2690,7 @@ class CourseReviewStore:
             else:
                 source, source_bytes = self._graph_source(session_root, course_id)
                 (
-                    _,
+                    graph_snapshot,
                     current_artifact_hash,
                     current_identity_sha256,
                     _,
@@ -2312,11 +2701,13 @@ class CourseReviewStore:
                     session_root,
                     course_id,
                     current_identity_sha256,
+                    graph_snapshot.get("textbook_structure_sha256"),
                 )
                 self._require_completed_knowledge_approval(
                     session_root,
                     course_id,
                     current_identity_sha256,
+                    graph_snapshot.get("textbook_structure_sha256"),
                 )
                 mutable_paths = [paths["graph"], prerequisite_approval, resource_path]
             if current_artifact_hash != artifact_hash:
@@ -2339,6 +2730,15 @@ class CourseReviewStore:
                 "resume_pending": True,
                 "resume_message": resume_message,
                 "display_content": display_content,
+                **(
+                    {
+                        "textbook_structure_sha256": source[
+                            "textbook_structure_sha256"
+                        ]
+                    }
+                    if source.get("textbook_structure_sha256")
+                    else {}
+                ),
             }
             transaction_journal = self._begin_review_transaction(
                 session_root,
@@ -2364,6 +2764,10 @@ class CourseReviewStore:
                         updated_source, course_id
                     )
                     approval["identity_sha256"] = identity_sha256
+                    if updated_source.get("textbook_structure_sha256"):
+                        approval["textbook_structure_sha256"] = updated_source[
+                            "textbook_structure_sha256"
+                        ]
                     self._assert_output_unchanged(signed_state)
                     approval_output = self._write_review_transaction_json_cas(
                         transaction_journal,

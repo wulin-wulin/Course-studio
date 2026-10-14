@@ -54,11 +54,41 @@ export function KnowledgePointReview({
         : review.points,
     [normalizedQuery, review.points],
   );
+  const textbookOutline = review.textbookOutline;
+  const textbookPointIds = useMemo(
+    () =>
+      new Set(
+        textbookOutline?.chapters.flatMap((chapter) =>
+          chapter.points.map((point) => point.id),
+        ) ?? [],
+      ),
+    [textbookOutline],
+  );
+  const textbookGroups = useMemo(() => {
+    if (!textbookOutline) return [];
+    const visibleIds = new Set(visible.map((point) => point.id));
+    return textbookOutline.chapters.map((chapter) => ({
+      chapter,
+      points: review.points.filter(
+        (point) =>
+          visibleIds.has(point.id) &&
+          chapter.points.some((outlinePoint) => outlinePoint.id === point.id),
+      ),
+    }));
+  }, [review.points, textbookOutline, visible]);
+  const unassignedVisible = textbookOutline
+    ? visible.filter((point) => !textbookPointIds.has(point.id))
+    : [];
+  const structureLocked = Boolean(textbookOutline);
   const operations: PointReviewOperation[] = [
-    ...review.points.flatMap((point): PointReviewOperation[] =>
-      deletedIds.has(point.id) ? [{ op: "delete", point_id: point.id }] : [],
-    ),
-    ...added.map((point): PointReviewOperation => ({ op: "add", point })),
+    ...(structureLocked
+      ? []
+      : review.points.flatMap((point): PointReviewOperation[] =>
+          deletedIds.has(point.id) ? [{ op: "delete", point_id: point.id }] : [],
+        )),
+    ...(structureLocked
+      ? []
+      : added.map((point): PointReviewOperation => ({ op: "add", point }))),
   ];
   const finalCount = review.points.length - deletedIds.size + added.length;
 
@@ -82,6 +112,78 @@ export function KnowledgePointReview({
     setNewId("");
     setNewTitle("");
     setFormError("");
+  };
+
+  const renderPointCard = (point: ReviewResource["points"][number], index: number) => {
+    const deleted = deletedIds.has(point.id);
+    const issueCount =
+      point.issues.length +
+      review.review_queue.filter((issue) => issue.pointId === point.id).length;
+    return (
+      <article
+        key={point.id}
+        className={`flex items-start gap-3 rounded-lg border p-4 ${
+          deleted
+            ? "border-error/25 bg-error/5"
+            : issueCount
+              ? "border-warning/35 bg-surface"
+              : "border-border bg-surface"
+        }`}
+      >
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary-light text-xs font-semibold text-primary">
+          {index + 1}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong
+              className={`text-sm ${
+                deleted ? "text-text-secondary line-through" : "text-text-primary"
+              }`}
+            >
+              {point.title}
+            </strong>
+            <code className="text-[11px] text-text-secondary">{point.id}</code>
+            {issueCount > 0 && !deleted && (
+              <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
+                {issueCount} 项待复核
+              </span>
+            )}
+          </div>
+          {point.shortSummary && (
+            <p className="mt-1.5 text-xs leading-5 text-text-secondary">
+              {point.shortSummary}
+            </p>
+          )}
+          {point.keyTerms.length > 0 && (
+            <p className="mt-2 text-[11px] text-text-secondary">
+              关键词：{point.keyTerms.join("、")}
+            </p>
+          )}
+        </div>
+        {!readOnly && !structureLocked && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() =>
+              setDeletedIds((current) => {
+                const next = new Set(current);
+                if (next.has(point.id)) next.delete(point.id);
+                else next.add(point.id);
+                return next;
+              })
+            }
+            className={`grid h-9 w-9 shrink-0 place-items-center rounded-md border disabled:opacity-45 ${
+              deleted
+                ? "border-primary/25 bg-primary-light text-primary"
+                : "border-border text-text-secondary hover:border-error/30 hover:text-error"
+            }`}
+            aria-label={`${deleted ? "恢复" : "删除"}${point.title}`}
+          >
+            {deleted ? <RotateCcw className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+          </button>
+        )}
+      </article>
+    );
   };
 
   return (
@@ -116,78 +218,79 @@ export function KnowledgePointReview({
         </label>
       </div>
 
-      <div className="mt-4 space-y-2">
-        {visible.map((point, index) => {
-          const deleted = deletedIds.has(point.id);
-          const issueCount =
-            point.issues.length +
-            review.review_queue.filter((issue) => issue.pointId === point.id).length;
-          return (
-            <article
-              key={point.id}
-              className={`flex items-start gap-3 rounded-lg border p-4 ${
-                deleted
-                  ? "border-error/25 bg-error/5"
-                  : issueCount
-                    ? "border-warning/35 bg-surface"
-                    : "border-border bg-surface"
-              }`}
-            >
-              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary-light text-xs font-semibold text-primary">
-                {index + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <strong
-                    className={`text-sm ${
-                      deleted ? "text-text-secondary line-through" : "text-text-primary"
-                    }`}
-                  >
-                    {point.title}
-                  </strong>
-                  <code className="text-[11px] text-text-secondary">{point.id}</code>
-                  {issueCount > 0 && !deleted && (
-                    <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
-                      {issueCount} 项待复核
-                    </span>
+      {structureLocked && (
+        <section
+          className="mt-4 rounded-lg border border-primary/20 bg-primary-light/35 p-4"
+          aria-label="教材章节知识点树"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">
+                教材结构 · 章节 → 知识点
+              </h3>
+              <p className="mt-1 text-xs text-text-secondary">
+                当前审核按教材目录展示，章节和教材知识点身份已锁定；扩展内容将在后续阶段生成。
+              </p>
+            </div>
+            {review.textbookStructureSha256 && (
+              <code className="max-w-full truncate text-[10px] text-text-secondary" title={review.textbookStructureSha256}>
+                结构哈希 · {review.textbookStructureSha256.slice(0, 12)}…
+              </code>
+            )}
+          </div>
+          <ol className="mt-3 grid gap-1.5 sm:grid-cols-2">
+            {textbookGroups.map(({ chapter, points }) => (
+              <li
+                key={chapter.id}
+                className="flex items-center justify-between rounded-md border border-primary/10 bg-surface/70 px-3 py-2 text-xs"
+              >
+                <span className="truncate text-text-primary">
+                  <span className="mr-1.5 text-primary">
+                    {chapter.number && chapter.number !== "0"
+                      ? `${chapter.number}.`
+                      : chapter.number === "0"
+                        ? "前置"
+                      : chapter.order !== undefined
+                        ? `${chapter.order + 1}.`
+                        : "•"}
+                  </span>
+                  {chapter.title}
+                </span>
+                <span className="ml-2 shrink-0 text-text-secondary">{points.length} 个知识点</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
+      <div className="mt-4 space-y-4">
+        {structureLocked
+          ? textbookGroups.map(({ chapter, points }) => (
+              <section key={chapter.id} aria-labelledby={`chapter-${chapter.id}`}>
+                <div className="mb-2 flex items-center gap-2 border-b border-border-light pb-2">
+                  <span className="h-2 w-2 rounded-full bg-primary" aria-hidden="true" />
+                  <h3 id={`chapter-${chapter.id}`} className="text-sm font-semibold text-text-primary">
+                    {chapter.number && chapter.number !== "0" ? `${chapter.number} ` : ""}{chapter.title}
+                  </h3>
+                </div>
+                <div className="space-y-2 border-l-2 border-primary/15 pl-3">
+                  {points.map((point) =>
+                    renderPointCard(point, review.points.findIndex((item) => item.id === point.id)),
                   )}
                 </div>
-                {point.shortSummary && (
-                  <p className="mt-1.5 text-xs leading-5 text-text-secondary">
-                    {point.shortSummary}
-                  </p>
-                )}
-                {point.keyTerms.length > 0 && (
-                  <p className="mt-2 text-[11px] text-text-secondary">
-                    关键词：{point.keyTerms.join("、")}
-                  </p>
-                )}
-              </div>
-              {!readOnly && (
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() =>
-                    setDeletedIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(point.id)) next.delete(point.id);
-                      else next.add(point.id);
-                      return next;
-                    })
-                  }
-                  className={`grid h-9 w-9 shrink-0 place-items-center rounded-md border disabled:opacity-45 ${
-                    deleted
-                      ? "border-primary/25 bg-primary-light text-primary"
-                      : "border-border text-text-secondary hover:border-error/30 hover:text-error"
-                  }`}
-                  aria-label={`${deleted ? "恢复" : "删除"}${point.title}`}
-                >
-                  {deleted ? <RotateCcw className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
-                </button>
+              </section>
+            ))
+          : visible.map((point) => renderPointCard(point, review.points.indexOf(point)))}
+        {structureLocked && unassignedVisible.length > 0 && (
+          <section aria-label="未分配知识点">
+            <h3 className="mb-2 text-sm font-semibold text-warning">未绑定教材章节</h3>
+            <div className="space-y-2 border-l-2 border-warning/25 pl-3">
+              {unassignedVisible.map((point) =>
+                renderPointCard(point, review.points.findIndex((item) => item.id === point.id)),
               )}
-            </article>
-          );
-        })}
+            </div>
+          </section>
+        )}
         {visible.length === 0 && (
           <div className="grid min-h-28 place-items-center rounded-lg border border-dashed border-border bg-surface text-sm text-text-secondary">
             没有匹配的知识点
@@ -195,7 +298,7 @@ export function KnowledgePointReview({
         )}
       </div>
 
-      {added.length > 0 && (
+      {!structureLocked && added.length > 0 && (
         <section className="mt-6 space-y-2" aria-label="待新增知识点">
           <h3 className="text-sm font-semibold text-text-primary">待新增知识点</h3>
           {added.map((point) => (
@@ -225,7 +328,7 @@ export function KnowledgePointReview({
         </section>
       )}
 
-      {!readOnly && (
+      {!readOnly && !structureLocked && (
         <form
           onSubmit={addPoint}
           className="mt-7 grid gap-3 border-t border-border pt-5 sm:grid-cols-[0.8fr_1.2fr_auto] sm:items-end"
@@ -277,9 +380,11 @@ export function KnowledgePointReview({
           <span className="text-xs text-text-secondary">
             {readOnly
               ? "该审核已完成"
-              : operations.length === 0
-                ? "不修改，直接通过当前知识点清单"
-                : `将提交 ${operations.length} 项变更`}
+              : structureLocked
+                ? "教材章节与知识点结构已锁定，确认当前清单后继续"
+                : operations.length === 0
+                  ? "不修改，直接通过当前知识点清单"
+                  : `将提交 ${operations.length} 项变更`}
           </span>
           <button
             type="button"

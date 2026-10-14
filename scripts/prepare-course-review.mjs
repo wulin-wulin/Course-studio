@@ -7,6 +7,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { textbookStructureSha256 as hashTextbookStructure } from "../skills/knowledge-pipeline-orchestrator/scripts/textbook-structure.mjs";
+
 const COURSE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ISO_UTC_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
@@ -17,6 +19,14 @@ const REVIEW_KINDS = new Map([
 const PIPELINE_CHECKER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../skills/knowledge-pipeline-orchestrator/scripts/check-pipeline.mjs",
+);
+// The validator is provisioned next to this script in the session-local
+// `.opencode/tools` directory.  Resolving it relative to the current module
+// keeps the review gate effective both for the repository copy (tests/local
+// runs) and for the copied OpenCode workspace.
+const TEXTBOOK_VALIDATOR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "validate-textbook-outline.mjs",
 );
 
 function fail(message) {
@@ -269,14 +279,26 @@ export function reviewAuditPayload(graph) {
   };
 }
 
-export function reviewHashes(kind, points, graph = null) {
+export function reviewHashes(
+  kind,
+  points,
+  graph = null,
+  textbookStructureSha256 = null,
+) {
   const identitySha256 = sha256(identityPayload(points, `${kind}.points`));
-  if (kind === "knowledge-points") return { identitySha256 };
+  const hashes = { identitySha256 };
+  const structureHash = isRecord(textbookStructureSha256)
+    ? textbookStructureSha256.textbookStructureSha256
+    : textbookStructureSha256;
+  if (typeof structureHash === "string" && structureHash) {
+    hashes.textbookStructureSha256 = structureHash;
+  }
+  if (kind === "knowledge-points") return hashes;
   const clustersSha256 = sha256(clusterReviewPayload(graph), { stableKeys: true });
   const prerequisitesSha256 = sha256(prerequisitePayload(points));
   const reviewAuditSha256 = sha256(reviewAuditPayload(graph), { stableKeys: true });
   return {
-    identitySha256,
+    ...hashes,
     clustersSha256,
     prerequisitesSha256,
     reviewAuditSha256,
@@ -300,6 +322,13 @@ export function approvalMatches(approval, { courseId, kind, gate, hashes }) {
     || !approval.submitted_operations.every(isRecord)
     || !SHA256_PATTERN.test(approval.identity_sha256 ?? "")
     || approval.identity_sha256 !== hashes.identitySha256
+  ) return false;
+  if (
+    hashes.textbookStructureSha256 !== undefined
+    && (
+      !SHA256_PATTERN.test(approval.textbook_structure_sha256 ?? "")
+      || approval.textbook_structure_sha256 !== hashes.textbookStructureSha256
+    )
   ) return false;
   if (kind !== "knowledge-graph") return true;
   return [
@@ -336,6 +365,34 @@ function runPipelineCheck(root, args, label) {
   }
 }
 
+function runTextbookValidation(root, courseId, mode) {
+  const outlinePath = path.join(root, "pipeline", courseId, "textbook-outline.json");
+  // Courses created before the PDF workflow do not have a textbook sidecar;
+  // retain their existing review contract.  Once the sidecar exists, however,
+  // the corresponding canonical validator is a hard gate rather than a Skill
+  // instruction that an agent may accidentally skip.
+  assertSafePath(root, outlinePath, { file: true });
+  if (!fs.existsSync(outlinePath)) return;
+  if (!fs.existsSync(TEXTBOOK_VALIDATOR) || !fs.lstatSync(TEXTBOOK_VALIDATOR).isFile()) {
+    fail(`教材课程缺少结构校验器：${TEXTBOOK_VALIDATOR}`);
+  }
+  const result = spawnSync(
+    process.execPath,
+    [TEXTBOOK_VALIDATOR, mode, courseId],
+    { cwd: root, encoding: "utf8" },
+  );
+  const action = mode === "graph"
+    ? "validate-textbook-graph"
+    : "validate-textbook-outline";
+  if (result.error) {
+    fail(`教材${mode === "graph" ? "图谱" : "结构"}校验（${action}）无法启动：${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || "校验未通过").trim();
+    fail(`教材${mode === "graph" ? "图谱" : "结构"}校验（${action}）未通过：${detail}`);
+  }
+}
+
 function parseArgs(argv) {
   const [kind, courseId, ...extra] = argv.slice(2);
   if (!REVIEW_KINDS.has(kind) || !COURSE_ID_PATTERN.test(courseId ?? "") || extra.length > 0) {
@@ -359,6 +416,11 @@ function prepare() {
   const requestPath = path.join(courseRoot, "reviews", `${kind}.request.json`);
 
   assertSafePath(root, courseRoot);
+  runTextbookValidation(
+    root,
+    courseId,
+    kind === "knowledge-points" ? "outline" : "graph",
+  );
   runPipelineCheck(
     root,
     kind === "knowledge-points"
@@ -373,7 +435,12 @@ function prepare() {
   const points = kind === "knowledge-points"
     ? readJson(root, indexPath, "课程知识点索引").points
     : graph.points;
-  const hashes = reviewHashes(kind, points, graph);
+  const outlinePath = path.join(courseRoot, "textbook-outline.json");
+  const outline = readOptionalJson(root, outlinePath);
+  const textbookStructureSha256 = outline
+    ? hashTextbookStructure(outline, { courseId })
+    : null;
+  const hashes = reviewHashes(kind, points, graph, textbookStructureSha256);
 
   if (kind === "knowledge-graph") {
     const identityApproval = readOptionalJson(
@@ -384,7 +451,12 @@ function prepare() {
       courseId,
       kind: "knowledge-points",
       gate: REVIEW_KINDS.get("knowledge-points"),
-      hashes: { identitySha256: hashes.identitySha256 },
+      hashes: {
+        identitySha256: hashes.identitySha256,
+        ...(hashes.textbookStructureSha256
+          ? { textbookStructureSha256: hashes.textbookStructureSha256 }
+          : {}),
+      },
     })) {
       fail("知识点清单尚未审核，或知识点 id/title/顺序已在审核后改变；不能开始知识图谱审核");
     }

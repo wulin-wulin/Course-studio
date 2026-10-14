@@ -14,12 +14,14 @@ description: 端到端编排 v2 课程知识流水线：生成完整课程内容
 ```text
 pipeline/<course-id>/
 ├── course-content/
-└── clustered-graph.json
+├── clustered-graph.json
+└── textbook-outline.json  # 仅教材 PDF 模式
 ```
 
 确定一种模式：
 
 - `full`：从课程名或领域名依次完成全部门禁。
+- `textbook`：从后端绑定的两层教材结构开始，章节归属在 G1 冻结并贯穿 G6。
 - `resume`：从现有产物和审核回执定位最早未通过阶段，不重建已通过阶段。
 - `validate`：只调用固定校验 action，不改写课程内容。
 - `dry-run`：只返回本文规定的固定状态对象。
@@ -32,6 +34,7 @@ pipeline/<course-id>/
 
 1. 内容阶段：`candidate-knowledge-point-generator/SKILL.md`、`data-contract.md`、`orchestration.md`、`animation-contract.md`。
 2. 图阶段：`knowledge-cluster-builder/knowledge-cluster-builder/SKILL.md`、关系启发式、Schema。
+3. 教材模式：在上述 Skill 之前读取 `textbook-outline-generator/SKILL.md`。
 
 同名打包内容 Skill 与 canonical 副本有任何差异时，以 `duplicate-skill-drift` 阻断。
 
@@ -61,6 +64,7 @@ pipeline/<course-id>/
 - 冻结 index 的 `id`、`title` 和数组顺序；`pointEvidence` 必须同序。
 - 不生成详情、动画实现、知识簇、关系或布局字段。
 - 调用 `validate-index`，失败则修复后重跑。
+- 教材模式必须先用 `textbook-outline.json` 决定完整点集，调用 `validate-textbook-outline` 后才可调用 `validate-index`；不得从内容反向聚类出教材结构。
 
 ### G2_IDENTITY_REVIEW
 
@@ -99,6 +103,7 @@ pipeline/<course-id>/
 - `prerequisites` 默认透传；每条增删必须与审核记录一一对应。
 - 新增 `clusters / clusterIds / role / related`，不生成布局。
 - 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
+- 教材模式不执行自由聚类：章节一一成为 cluster，点的首个 `clusterIds` 固定为所属章节。完成上述装配检查后再调用 `validate-textbook-graph`。
 
 ### G6_GRAPH_REVIEW
 
@@ -121,6 +126,7 @@ pipeline/<course-id>/
 
 - 依次调用 `validate-index / validate-points / validate-all` 定位可复用阶段，不凭文件存在判断成功。
 - G1 身份发生变化时，G2 回执和 G3–G7 全部失效。
+- 教材模式的章节、章节顺序或点所属章节变化，视同 G1 身份变化。
 - 点正文或动画变化后重新执行 G5–G7。
 - 簇定义、`clusterIds / role / related / prerequisites` 或图谱审核记录变化后，G6 图谱回执和 G7 失效。
 - `check-pipeline` 报内容漂移、点顺序变化或边审计不匹配时，图立即视为过期。
@@ -130,6 +136,7 @@ pipeline/<course-id>/
 - `check-content-all`：只校验内容包。
 - `check-pipeline-json`：检查图谱交接并返回机器结果。
 - `check-pipeline-all` / `check-pipeline-all-json`：执行最终全量门禁。
+- `validate-textbook-outline` / `validate-textbook-graph`：分别校验两层教材树与索引、最终章节映射；只在教材模式调用。
 
 最终全量门禁必须显示 `reviewApprovals: 2`。
 

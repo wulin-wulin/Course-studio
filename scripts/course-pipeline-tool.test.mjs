@@ -22,6 +22,7 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       "prepare-course-review.mjs",
       "run-course-pipeline-step.mjs",
       "publish-course-pipeline.mjs",
+      "validate-textbook-outline.mjs",
     ]) {
       fs.writeFileSync(path.join(toolsRoot, script), "// test fixture\n");
     }
@@ -75,6 +76,12 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       )
       assert.deepEqual(calls.at(-1).argv.slice(-2), ["knowledge-points", "demo-course"])
 
+      await definition.execute(
+        { action: "validate-textbook-outline", courseId: "demo-course" },
+        context("course-outline-creator"),
+      )
+      assert.deepEqual(calls.at(-1).argv.slice(-2), ["outline", "demo-course"])
+
       for (const action of ["init-points", "review-knowledge-graph", "publish"]) {
         await assert.rejects(
           definition.execute({ action, courseId: "demo-course" }, context("course-outline-creator")),
@@ -97,6 +104,7 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
         ["init-points", "init-course-pipeline.mjs", ["demo-course", "--stage", "points"]],
         ["review-knowledge-graph", "prepare-course-review.mjs", ["knowledge-graph", "demo-course"]],
         ["assemble-graph-check", "run-course-pipeline-step.mjs", ["assemble-graph-check", "demo-course"]],
+        ["validate-textbook-graph", "validate-textbook-outline.mjs", ["graph", "demo-course"]],
         ["publish", "publish-course-pipeline.mjs", ["demo-course"]],
       ]
       for (const [action, script, trailingArgs] of creatorCases) {

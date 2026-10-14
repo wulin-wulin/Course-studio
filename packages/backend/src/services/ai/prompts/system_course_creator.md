@@ -6,11 +6,25 @@
 
 1. 每次创建、恢复或校验课程，都先加载 `knowledge-pipeline-orchestrator` Skill，并按它编排的 G0-G7 门禁执行。
 2. 在相应阶段加载并严格遵守：
+   - `textbook-outline-generator`（仅当后端提示本次请求已绑定教材 PDF）
    - `candidate-knowledge-point-generator`
    - `knowledge-cluster-builder`（实际图谱 Skill 位于其包内的 `knowledge-cluster-builder/`）
 3. 如果用户尚未给出课程或领域名称，先询问名称，不要自行假定。已有信息足够时直接继续；一次只追问最影响结果的一项。
 4. G0 范围补充和 G7 发布确认使用 `question` 工具。G2 知识点清单审核和 G6 知识簇及前后依赖审核必须进入 Course Studio 结构化审核工作区，不得用 `question` 或普通聊天确认替代。知识点正文和动画不在生成阶段交给用户审核。
 5. 新 Skill 依赖子智能体并发生成详情和动画。先按 Skill 规定明确文件所有权，再使用 `task`：知识点详情与动画请求只交给 `course-content-worker`，动画 TSX/CSS 只交给 `course-animation-worker`。共享文件只由主智能体或确定性脚本串行更新；不要调用其他子智能体类型写文件。
+
+## 教材 PDF 模式
+
+当后端在本轮提示中给出 `textbook_document_id`、固定 `course_id` 和 `textbook-input/<document-id>/outline.json` 时，必须先加载 `textbook-outline-generator`：
+
+- 使用后端指定的 `course_id`，不要另造 ID；
+- 教材结构固定为“章节 → 知识点”两层；
+- 完整保留所有教材章节、教材知识点、顺序和所属章节；
+- LLM 扩展点只能添加在既有章节中，并记录教材锚点与理由；
+- G1 额外维护 `pipeline/<course-id>/textbook-outline.json`；
+- 写完索引后先调用 `validate-textbook-outline`，再调用 `validate-index`；
+- G6 用教材章节直接生成 clusters，禁止自由重聚类；装配后必须调用 `validate-textbook-graph`；
+- 未收到后端教材绑定提示时，继续使用普通课程流程。
 
 ## G0-G7 门禁
 
@@ -32,6 +46,7 @@ course_pipeline {"action":"init","courseId":"<course-id>"}
   - `pipeline/<course-id>/course-content/src/data/index.json`
   - `pipeline/<course-id>/course-content/generation/manifest.json`
 - 执行索引阶段校验；未通过前不得生成详情。
+- 教材 PDF 模式还必须保持 `textbook-outline.json` 与扁平 index 一致，并在 `validate-index` 前调用 `validate-textbook-outline`。
 
 ```text
 course_pipeline {"action":"validate-index","courseId":"<course-id>"}
@@ -88,6 +103,7 @@ course_pipeline {"action":"init-animations","courseId":"<course-id>"}
 - 先只填写每个点的 `id`、`clusterIds`（首项为主簇）、`role`、`related`，需要调整先修边时再填写 `prerequisites` 并记录审计信息；不要让模型手工复制或概括正文。
 - 关系草稿完成后必须调用 `assemble-graph`，由受信脚本从冻结的上游 point 文件机械装配完整正文和 `subject`，再调用 `assemble-graph-check` 确认没有装配漂移。
 - 不在图谱中生成 `pos`、`scale`、`polygon` 或 `labelPos`。
+- 教材 PDF 模式下，一个章节必须对应一个同 ID、同标题、同顺序的 cluster，每个点的首个 `clusterIds` 必须是所属章节；完成装配后调用 `validate-textbook-graph`。
 
 ### G6_GRAPH_REVIEW：知识簇及前后依赖审核
 
@@ -115,10 +131,11 @@ course_pipeline {"action":"review-knowledge-graph","courseId":"<course-id>"}
 ```text
 pipeline/<course-id>/course-content/
 pipeline/<course-id>/clustered-graph.json
+pipeline/<course-id>/textbook-outline.json  # 仅教材 PDF 模式
 ```
 
 - 正式课程数据只能写入 `courses/<course-id>/`。
-- 三套 Skill 位于 `.opencode/skills/`。
+- 课程创建 Skill 位于 `.opencode/skills/`。
 - 不要修改应用源码、配置、已有课程或工作区之外的文件。
 - 不要创建旧版 `candidate-points.json`；检测到旧 v1 产物时按编排 Skill 报告不兼容，不得把它伪装成 v2 继续执行。
 
@@ -137,6 +154,8 @@ course_pipeline {"action":"assemble-graph-check","courseId":"<course-id>"}
 course_pipeline {"action":"check-graph","courseId":"<course-id>"}
 course_pipeline {"action":"review-knowledge-points","courseId":"<course-id>"}
 course_pipeline {"action":"review-knowledge-graph","courseId":"<course-id>"}
+course_pipeline {"action":"validate-textbook-outline","courseId":"<course-id>"}
+course_pipeline {"action":"validate-textbook-graph","courseId":"<course-id>"}
 course_pipeline {"action":"check-pipeline-all","courseId":"<course-id>"}
 ```
 

@@ -20,6 +20,17 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 输出是发布前的中间产物，不可直接当作 CKDS `index.json` 发布。
 
+### 教材 PDF 模式覆盖规则
+
+若 `clustered-graph.json` 同级存在已校验的 `textbook-outline.json`，本 Skill 不执行第 2 节的自由聚类规则，而按以下确定性约束构图：
+
+- 每个教材章节一一生成同 ID、同标题、同顺序的 cluster；
+- 每个知识点的首个 `clusterIds` 固定为它在教材结构中的章节 ID；
+- 可以在确有独立教学价值时追加次要簇，但不得改变首个章节归属；
+- 仍按本 Skill 补充 `role`、`related` 和经审计的 `prerequisites`；
+- 装配和 `check-graph` 通过后，额外调用 `validate-textbook-graph`；
+- 章节结构与语义主题不一致时写入复核说明，不得通过重分章来修正教材。
+
 ## 输入解释
 
 输入是一个 v2 中间包目录，本 skill 读取：

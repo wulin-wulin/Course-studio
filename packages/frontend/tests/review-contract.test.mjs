@@ -112,6 +112,53 @@ test("knowledge graph parser preserves multi-cluster, prerequisites, and related
   assert.equal(review.clusters.length, 2);
 });
 
+test("knowledge point parser preserves a textbook chapter tree and structure hash", () => {
+  const review = contracts.parseReviewResource({
+    ...pointer(),
+    textbook_structure_sha256: "b".repeat(64),
+    textbook_outline: {
+      schema_version: "textbook-outline/1.0",
+      document_id: "doc-123",
+      title: "教材课程",
+      chapters: [
+        {
+          id: "chapter-one",
+          title: "第一章",
+          order: 0,
+          points: [
+            { id: "point-one", title: "第一个知识点", origin: "textbook", order: 0 },
+            { id: "point-two", title: "扩展点", origin: "llm-extension", order: 1 },
+          ],
+        },
+      ],
+    },
+    points: [
+      {
+        id: "point-one",
+        title: "第一个知识点",
+        key_terms: [],
+        issues: [],
+        cluster_ids: [],
+        prerequisites: [],
+        related: [],
+      },
+      {
+        id: "point-two",
+        title: "扩展点",
+        key_terms: [],
+        issues: [],
+        cluster_ids: [],
+        prerequisites: [],
+        related: [],
+      },
+    ],
+    review_queue: [],
+  });
+  assert.equal(review.textbookOutline?.chapters[0].title, "第一章");
+  assert.equal(review.textbookOutline?.chapters[0].points[1].origin, "llm-extension");
+  assert.equal(review.textbookStructureSha256, "b".repeat(64));
+});
+
 test("knowledge graph rejects unknown clusters and invalid edges", () => {
   assert.throws(
     () =>
@@ -301,6 +348,22 @@ test("course creation starts with the confirmed topic in the first message", () 
   assert.match(request.message, /课程或领域名称：软件工程/);
   assert.doesNotMatch(request.message, /如果我还没有提供/);
   assert.equal(request.displayContent, "创建课程：软件工程");
+});
+
+test("PDF course creation preserves the document identity and structure-first instruction", () => {
+  assert.equal(
+    contracts.preparePdfCourseCreationRequest({ id: "", filename: "教材.pdf" }),
+    null,
+  );
+  const request = contracts.preparePdfCourseCreationRequest({
+    id: "document-1",
+    filename: "数据结构教材.pdf",
+  });
+  assert.equal(request.documentId, "document-1");
+  assert.equal(request.filename, "数据结构教材.pdf");
+  assert.equal(request.displayContent, "根据教材创建课程：数据结构教材.pdf");
+  assert.match(request.message, /章节 → 知识点/);
+  assert.match(request.message, /不得重新聚类或改变已确认的章节归属/);
 });
 
 test("stale conversation reconciliation prefers the next pending review", () => {

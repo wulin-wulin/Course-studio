@@ -66,6 +66,22 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     generated_dir: Path = Path("generated")
 
+    # Uploaded source documents are kept outside the canonical course package
+    # tree.  This makes an import independently retryable and prevents a
+    # partially parsed PDF from being mistaken for published course data.
+    document_library_dir: Path | None = None
+    document_max_upload_bytes: int = 100 * 1024 * 1024
+    document_toc_scan_pages: int = 40
+    document_parse_timeout_seconds: float = 180.0
+    document_pdftotext_executable: str = "pdftotext"
+
+    # Optional remote parser configuration.  The first vertical slice uses the
+    # local parser; keeping these values in backend-only settings establishes a
+    # safe integration boundary without exposing the token through any API.
+    mineru_api_base: str = ""
+    mineru_api_token: str = ""
+    mineru_timeout_seconds: float = 300.0
+
     model_config = {
         "env_file": str(ENV_FILE),
         "extra": "ignore",
@@ -99,5 +115,12 @@ elif not settings.course_agent_workspace_dir.is_absolute():
     settings.course_agent_workspace_dir = settings.course_agent_workspace_dir.resolve()
 else:
     settings.course_agent_workspace_dir = settings.course_agent_workspace_dir.resolve()
+if settings.document_library_dir is None:
+    settings.document_library_dir = (settings.generated_dir / "document_library").resolve()
+elif not settings.document_library_dir.is_absolute():
+    settings.document_library_dir = settings.document_library_dir.resolve()
+else:
+    settings.document_library_dir = settings.document_library_dir.resolve()
 settings.course_data_dir.mkdir(parents=True, exist_ok=True)
 settings.course_agent_workspace_dir.mkdir(parents=True, exist_ok=True)
+settings.document_library_dir.mkdir(parents=True, exist_ok=True)
