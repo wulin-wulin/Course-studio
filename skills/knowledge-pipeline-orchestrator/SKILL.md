@@ -65,6 +65,7 @@ pipeline/<course-id>/
 - 不生成详情、动画实现、知识簇、关系或布局字段。
 - 调用 `validate-index`，失败则修复后重跑。
 - 教材模式必须先用 `textbook-outline.json` 决定完整点集，调用 `validate-textbook-outline` 后才可调用 `validate-index`；不得从内容反向聚类出教材结构。
+- 教材模式在 G1 只确定 PDF 提供的章节包含关系和教材点顺序；不得在这一阶段生成或使用 `prerequisites`、`related` 或 cluster 关系来重构教材树。
 
 ### G2_IDENTITY_REVIEW
 
@@ -83,6 +84,8 @@ pipeline/<course-id>/
   1. `validate-points`
   2. `sync-index`
   3. `validate-points`
+
+- 教材模式中，G3 生成的 `prerequisites` 只能作为基于内容的候选语义关系；它们不改变 G1 冻结的章节、顺序、教材点身份或章节归属。
 
 ### G4_ANIMATIONS
 
@@ -104,6 +107,7 @@ pipeline/<course-id>/
 - 新增 `clusters / clusterIds / role / related`，不生成布局。
 - 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
 - 教材模式不执行自由聚类：章节一一成为 cluster，点的首个 `clusterIds` 固定为所属章节。完成上述装配检查后再调用 `validate-textbook-graph`。
+- G6 的关系工作是对内容完成后的 `prerequisites`、`related`、`role` 和次要簇做补充、审计和去环；它不能把语义关系反向当作教材树，也不能用聚类结果覆盖 PDF 章节结构。
 
 ### G6_GRAPH_REVIEW
 
