@@ -13,6 +13,7 @@ from typing import Any, Callable, TypeVar
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
 
+from ..config import settings
 from ..services.documents import (
     DocumentConflictError,
     DocumentError,
@@ -26,6 +27,7 @@ from ..services.documents import (
     get_document_store,
 )
 from ..services.documents.local_parser import parse_pdf_outline
+from ..services.documents.mineru_parser import parse_mineru_pdf
 
 
 router = APIRouter()
@@ -78,13 +80,18 @@ async def get_document(document_id: str):
 
 @router.post("/{document_id}/parse")
 async def parse_document(document_id: str):
-    # The parser function is injected at the API boundary so the store stays
-    # independent of Poppler and can later select a MinerU adapter without
-    # changing its lifecycle or validation contract.
-    return await _run(
-        get_document_store().parse,
-        document_id,
-        parser=parse_pdf_outline,
+    return await _run(_parse_selected_document, document_id)
+
+
+def _parse_selected_document(document_id: str):
+    mode = settings.document_parser
+    use_mineru = mode == "mineru" or (
+        mode == "auto" and bool(settings.mineru_api_token.strip())
+    )
+    parser = parse_mineru_pdf if use_mineru else parse_pdf_outline
+    parser_name = f"mineru-{settings.mineru_model_version}" if use_mineru else "local-pdftotext"
+    return get_document_store().parse(
+        document_id, parser=parser, parser_name=parser_name,
     )
 
 

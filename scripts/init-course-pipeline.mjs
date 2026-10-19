@@ -163,7 +163,18 @@ function assertSafeDirectoryChain(root, targetDirectory) {
 }
 
 function assertSafeRegularFile(root, filePath, label) {
-  assertSafeDirectoryChain(root, path.dirname(filePath));
+  // A backend-owned binding lives directly in the workspace root. Check the
+  // file remains strictly inside the root, but allow its parent to be root.
+  ensureInside(root, filePath);
+  const directory = path.dirname(filePath);
+  if (path.relative(root, directory) === "") {
+    const rootStat = fs.lstatSync(root);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+      fail(`流水线路径包含符号链接或非目录项：${root}`);
+    }
+  } else {
+    assertSafeDirectoryChain(root, directory);
+  }
   const stat = fs.lstatSync(filePath);
   if (stat.isSymbolicLink() || !stat.isFile()) {
     fail(`${label}必须是普通文件，且路径中不能包含符号链接`);

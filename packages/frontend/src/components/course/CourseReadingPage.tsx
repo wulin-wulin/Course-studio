@@ -788,6 +788,7 @@ function CourseAnimationFrame({
       })
       .catch((reason: unknown) => {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
+        if (import.meta.env.DEV) console.warn("课程动画清单加载失败", reason);
         setStatus("error");
         onAvailabilityChange("unavailable");
       });
@@ -803,6 +804,7 @@ function CourseAnimationFrame({
         setStatus("ready");
         onAvailabilityChange("available");
       } else if (event.data.kind === "error") {
+        if (import.meta.env.DEV) console.warn("课程动画运行失败", event.data.message);
         setStatus("error");
         onAvailabilityChange("unavailable");
       }
@@ -814,6 +816,7 @@ function CourseAnimationFrame({
   useEffect(() => {
     if (status !== "loading") return;
     const timer = window.setTimeout(() => {
+      if (import.meta.env.DEV) console.warn("课程动画启动超时", animationType);
       setStatus("error");
       onAvailabilityChange("unavailable");
     }, 10_000);

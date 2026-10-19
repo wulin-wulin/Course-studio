@@ -112,6 +112,30 @@ class DocumentServiceTest(unittest.TestCase):
             ],
         )
 
+    def test_toc_parser_ignores_running_footer_and_stops_before_body(self):
+        chapters = parse_toc_text("\f".join([
+            "封面\n原创微型教材 · 2026 年 10 月                 1\n",
+            "目录\n1 数组基础 ........ 3\n1.1 数组与下标 ........ 3\n"
+            "2 查找方法 ........ 4\n2.1 二分查找 ........ 4\n"
+            "原创微型教材 · 2026 年 10 月                 2\n",
+            "1 数组基础\n1.1 数组与下标\n正文说明。\n"
+            "原创微型教材 · 2026 年 10 月                 3\n",
+            "2 查找方法\n2.1 二分查找\n这不是目录项 ........ 7\n"
+            "原创微型教材 · 2026 年 10 月                 4\n",
+        ]))
+        self.assertEqual([chapter["id"] for chapter in chapters], ["chapter-1", "chapter-2"])
+        self.assertEqual([p["title"] for ch in chapters for p in ch["points"]],
+                         ["数组与下标", "二分查找"])
+
+    def test_toc_parser_preserves_repeated_real_unnumbered_destinations(self):
+        chapters = parse_toc_text("\f".join([
+            "目录\n前言                       1\n1 入门 ........ 3\n1.1 基础 ........ 3\n",
+            "前言                       1\n2 应用 ........ 4\n2.1 方法 ........ 4\n",
+            "正文\n",
+        ]))
+        self.assertEqual(chapters[0]["id"], "chapter-0")
+        self.assertEqual([p["title"] for p in chapters[0]["points"]], ["前言"])
+
     def test_toc_parser_repairs_right_aligned_wrapped_page_number(self):
         first = " 2.4.3 梯度 . . . . . . . . . . . . . . . . . . . . . 68"
         wrapped = " 2.4.4 链式法则 . . . . . . . . . . . . . . . . . . . 6"
@@ -488,7 +512,11 @@ class DocumentServiceTest(unittest.TestCase):
                 expected_holder["value"] = _outline(document_id, filename, sha256)
                 return expected_holder["value"]
 
-            with patch("src.api.documents.parse_pdf_outline", fake_parser), TestClient(app) as client:
+            with (
+                patch("src.api.documents.parse_pdf_outline", fake_parser),
+                patch("src.api.documents.settings.document_parser", "local"),
+                TestClient(app) as client,
+            ):
                 uploaded = client.post(
                     "/api/documents",
                     files={"file": ("教材.pdf", b"%PDF-1.7\nsource", "application/pdf")},

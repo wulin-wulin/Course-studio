@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 
@@ -74,13 +75,14 @@ class Settings(BaseSettings):
     document_toc_scan_pages: int = 40
     document_parse_timeout_seconds: float = 180.0
     document_pdftotext_executable: str = "pdftotext"
+    document_parser: Literal["local", "mineru", "auto"] = "local"
 
-    # Optional remote parser configuration.  The first vertical slice uses the
-    # local parser; keeping these values in backend-only settings establishes a
-    # safe integration boundary without exposing the token through any API.
+    # Remote parser settings stay backend-only; the document API returns safe
+    # status/errors and normalized outlines, never credentials or signed URLs.
     mineru_api_base: str = ""
     mineru_api_token: str = ""
     mineru_timeout_seconds: float = 300.0
+    mineru_model_version: Literal["vlm", "pipeline"] = "vlm"
 
     model_config = {
         "env_file": str(ENV_FILE),

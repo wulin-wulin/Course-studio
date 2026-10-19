@@ -428,7 +428,9 @@ class DocumentStore:
     # Parse lifecycle
     # ------------------------------------------------------------------
 
-    def parse(self, document_id: str, *, parser: OutlineParser) -> dict[str, Any]:
+    def parse(
+        self, document_id: str, *, parser: OutlineParser, parser_name: str | None = None
+    ) -> dict[str, Any]:
         with self._lock:
             directory = self._document_dir(document_id)
             metadata = self._read_json(directory / "metadata.json")
@@ -442,7 +444,9 @@ class DocumentStore:
                 # the integrity problem instead of a stale ready state.
                 self._record_failure(directory, metadata, exc)
                 raise
-            if metadata["status"] == "ready":
+            if metadata["status"] == "ready" and (
+                parser_name is None or metadata.get("parser") == parser_name
+            ):
                 try:
                     outline = self._read_json(directory / "outline.json")
                     self._validate_outline(outline, metadata)
@@ -460,7 +464,7 @@ class DocumentStore:
                 **metadata,
                 "status": "parsing",
                 "updated_at": _now(),
-                "parser": LOCAL_PARSER_NAME,
+                "parser": parser_name or LOCAL_PARSER_NAME,
                 "error": None,
                 "outline_summary": None,
             }

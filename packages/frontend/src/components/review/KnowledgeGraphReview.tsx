@@ -49,6 +49,14 @@ export function KnowledgeGraphReview({
     () => new Map(review.points.map((point) => [point.id, point])),
     [review.points],
   );
+  const textbookPrimaryClusters = useMemo(
+    () => new Map(
+      review.textbookOutline?.chapters.flatMap((chapter) =>
+        chapter.points.map((point) => [point.id, chapter.id] as const),
+      ) ?? [],
+    ),
+    [review.textbookOutline],
+  );
   const originalEdges = useMemo(
     () =>
       review.points.flatMap((point) =>
@@ -123,7 +131,7 @@ export function KnowledgeGraphReview({
   );
 
   const toggleCluster = (targetPointId: string, clusterId: string) => {
-    if (disabled) return;
+    if (disabled || textbookPrimaryClusters.get(targetPointId) === clusterId) return;
     const point = pointsById.get(targetPointId);
     if (!point) return;
     setClusterChanges((current) => {
@@ -212,7 +220,9 @@ export function KnowledgeGraphReview({
           <Layers3 className="h-4 w-4 text-primary" />
           <h2 className="text-lg font-semibold text-text-primary">知识簇</h2>
           <span className="text-xs text-text-secondary">
-            支持一个知识点归属多个知识簇
+            {review.textbookOutline
+              ? "教材主章节固定，可补充次要知识簇"
+              : "支持一个知识点归属多个知识簇"}
           </span>
         </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -301,6 +311,7 @@ export function KnowledgeGraphReview({
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {review.clusters.map((cluster) => {
                       const checked = selectedClusters.includes(cluster.id);
+                      const isTextbookPrimary = textbookPrimaryClusters.get(point.id) === cluster.id;
                       return (
                         <label
                           key={cluster.id}
@@ -313,11 +324,12 @@ export function KnowledgeGraphReview({
                           <input
                             type="checkbox"
                             checked={checked}
-                            disabled={disabled || readOnly}
+                            disabled={disabled || readOnly || isTextbookPrimary}
                             onChange={() => toggleCluster(point.id, cluster.id)}
                             className="h-3 w-3 accent-primary"
                           />
                           {cluster.title}
+                          {isTextbookPrimary && <span className="text-[10px] opacity-70">主章节</span>}
                         </label>
                       );
                     })}

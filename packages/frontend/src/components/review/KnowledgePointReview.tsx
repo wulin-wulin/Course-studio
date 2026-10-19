@@ -229,7 +229,7 @@ export function KnowledgePointReview({
                 教材结构 · 章节 → 知识点
               </h3>
               <p className="mt-1 text-xs text-text-secondary">
-                当前审核按教材目录展示，章节和教材知识点身份已锁定；扩展内容将在后续阶段生成。
+                当前审核按教材目录展示，原教材章节和知识点身份已锁定；确认清单后继续生成详情。
               </p>
             </div>
             {review.textbookStructureSha256 && (

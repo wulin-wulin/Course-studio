@@ -88,11 +88,12 @@ DOCUMENT_PARSE_TIMEOUT_SECONDS=180
 # Windows 可填写 pdftotext.exe 的绝对路径；Linux/macOS 通常只需填 pdftotext。
 DOCUMENT_PDFTOTEXT_EXECUTABLE=pdftotext
 
-# MinerU 云端解析的预留配置。当前版本的 /api/documents/{id}/parse
-# 固定使用本地 Poppler；配置这些变量不会自动切换解析器。
-MINERU_API_BASE=
+# local 使用 Poppler；mineru 使用云端；auto 在已配置 Token 时使用云端。
+DOCUMENT_PARSER=local
+MINERU_API_BASE=https://mineru.net/api/v4
 MINERU_API_TOKEN=
 MINERU_TIMEOUT_SECONDS=300
+MINERU_MODEL_VERSION=vlm
 ```
 
 在根目录创建 `models.json`，每个模型都需要完整的 `id`、`base_url` 和
@@ -185,7 +186,7 @@ curl.exe -sS `
 
 ### Poppler、本地解析和 MinerU
 
-默认解析器调用 Poppler 的 `pdftotext -layout`，只扫描前
+默认 `DOCUMENT_PARSER=local` 调用 Poppler 的 `pdftotext -layout`，只扫描前
 `DOCUMENT_TOC_SCAN_PAGES` 页（默认 40 页），先查找“目录”标题，再识别编号目录项，
 例如 `1`、`1.1`、`1.2`。目录中没有编号的条目（如“前言”“安装”“符号”或
 “Bibliography”）会保留在保留章节 `chapter-0`（`number: "0"`）中，按
@@ -216,14 +217,26 @@ pdftotext -v
 `DOCUMENT_PARSE_TIMEOUT_SECONDS`。单个上传默认上限为 100 MiB，可通过
 `DOCUMENT_MAX_UPLOAD_BYTES` 调整。
 
-配置中的 `MINERU_API_BASE`、`MINERU_API_TOKEN` 和 `MINERU_TIMEOUT_SECONDS` 是
-为后续 MinerU 适配器保留的后端设置。当前版本没有在上传接口中调用 MinerU，因而
-没有 Token 也可以使用本地流程；接入云端适配器后，Token 仍只应放在 `.env`，不应
-写进课程数据、Skill 或前端代码。
+使用在线 MinerU 时，在 `.env` 设置 `DOCUMENT_PARSER=mineru`、
+`MINERU_API_TOKEN`，随后重启后端。默认地址是 `https://mineru.net/api/v4`，
+默认模型是 `vlm`，也可使用 `MINERU_MODEL_VERSION=pipeline`。
+`DOCUMENT_PARSER=auto` 在存在 Token 时选择 MinerU，否则使用本地解析。
+显式选择 MinerU 后的鉴权、网络或解析错误会返回明确失败，方便重试。
+
+后端先申请签名上传链接、上传 PDF、轮询结果，再下载 Markdown 与结构化 JSON。
+使用 JSON 的原 PDF 页码恢复目录，仍输出相同的 `textbook-outline/1.0`，
+G2–G7 继续复用原流水线。原始结果保存在文档资料库的 `mineru-vlm/` 或
+`mineru-pipeline/` 下，包括 `full.md`、`content-list.json`、`result.zip` 和任务摘要；
+不会进入正式课程包。更换解析器时会重新解析，之后的同解析器请求复用缓存。
+Token 仅保存在后端 `.env`；签名上传和下载请求不会携带 API 的鉴权头。
+
+按照 [MinerU 当前在线文档](https://mineru.net/apiManage/docs)，精准接口单文件最多
+200 页，200 MB。当前应用上传上限仍默认 100 MiB；超过 200 页的教材会提示先分段，
+自动分段及跨段合并尚未实现。`MINERU_TIMEOUT_SECONDS` 控制云端调用总时限。
 
 本地 `pdftotext` 对扫描件、图片目录、复杂多栏排版、目录页码跨行方式特殊的 PDF 仍可能无法
-恢复完整结构。此时接口会返回解析失败或漏项，应该先进行 OCR/版面转换，或在后续
-MinerU 适配器可用后切换解析器，再进入课程创建；不要把不完整的纲要直接当成正式
+恢复完整结构。此时接口会返回解析失败或漏项，可以先进行 OCR/版面转换，或切换
+MinerU 再进入课程创建；不要把不完整的纲要直接当成正式
 课程结构。
 
 ## 本地运行

@@ -172,6 +172,28 @@ function run(script, args, cwd) {
   return spawnSync(process.execPath, [script, ...args], { cwd, encoding: 'utf8' });
 }
 
+test('绑定教材在 G2 审核通过后可以初始化详情任务', (t) => {
+  const { root, contentRoot, courseRoot } = makeWorkspace(t);
+  const outline = validOutline();
+  writeJson(path.join(courseRoot, 'textbook-outline.json'), outline);
+  writeJson(path.join(root, 'textbook-input', outline.document_id, 'outline.json'), outline);
+  writeJson(path.join(root, 'textbook-binding.json'), {
+    document_id: outline.document_id,
+    course_id: COURSE_ID,
+    output_outline_path: `pipeline/${COURSE_ID}/textbook-outline.json`,
+    structure_sha256: textbookStructureSha256(outline, { courseId: COURSE_ID }),
+  });
+  const index = readJson(path.join(contentRoot, 'src', 'data', 'index.json'));
+  writeApproval(root, 'knowledge-points', outline, index.points);
+  const initialized = run(INIT_SCRIPT, [COURSE_ID, '--stage', 'points'], root);
+  assert.equal(initialized.status, 0, initialized.stderr);
+  assert.equal(JSON.parse(initialized.stdout).created.length, index.points.length * 2);
+  for (const point of index.points) {
+    assert.deepEqual(readJson(path.join(contentRoot, 'src/data/points', `${point.id}.json`)), {});
+    assert.deepEqual(readJson(path.join(contentRoot, 'generation/animation-requests', `${point.id}.json`)), {});
+  }
+});
+
 test('教材章节归属变化会让 prepare、init 和最终 checker 拒绝旧回执', (t) => {
   const { root, contentRoot, courseRoot } = makeWorkspace(t, { full: true });
   const outline = validOutline();

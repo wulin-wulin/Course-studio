@@ -231,6 +231,37 @@ def _page_entries(page_text: str) -> list[tuple[str | None, str, int]]:
     return entries
 
 
+def _strip_repeated_page_labels(pages: list[str]) -> list[str]:
+    """Remove running margin labels whose page numbers track physical pages.
+
+    A footer such as ``Book title        12`` otherwise looks exactly like an
+    unnumbered TOC row. Require the same title at a page margin on at least two
+    pages, with advancing page numbers and a consistent physical-page offset.
+    Repeated real TOC entries keep the same destination page, so are preserved.
+    Only inspect unnumbered rows; numbered chapter/section rows remain intact.
+    """
+    rows_by_title: dict[str, list[tuple[int, int, int]]] = {}
+    page_lines = [page.splitlines() for page in pages]
+    for page_index, lines in enumerate(page_lines):
+        nonempty = [index for index, line in enumerate(lines) if line.strip()]
+        margins = set(nonempty[:2] + nonempty[-2:])
+        for line_index in sorted(margins):
+            entry = _parse_unnumbered_entry(lines[line_index])
+            if entry is not None:
+                rows_by_title.setdefault(entry[1], []).append(
+                    (page_index, line_index, entry[2])
+                )
+    for rows in rows_by_title.values():
+        if len({page for page, _, _ in rows}) < 2:
+            continue
+        offsets = {printed - physical for physical, _, printed in rows}
+        if len(offsets) != 1:
+            continue
+        for page_index, line_index, _ in rows:
+            page_lines[page_index][line_index] = ""
+    return ["\n".join(lines) for lines in page_lines]
+
+
 def parse_toc_text(text: str) -> list[dict[str, Any]]:
     """Parse TOC entries and flatten all descendants into chapter points.
 
@@ -243,7 +274,9 @@ def parse_toc_text(text: str) -> list[dict[str, Any]]:
     within it.
     """
 
-    pages = text.replace("\r\n", "\n").replace("\r", "\n").split("\f")
+    pages = _strip_repeated_page_labels(
+        text.replace("\r\n", "\n").replace("\r", "\n").split("\f")
+    )
     toc_page_index: int | None = None
     for page_index, page_text in enumerate(pages):
         if any(_TOC_HEADING_RE.fullmatch(line) for line in page_text.splitlines()):
