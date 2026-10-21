@@ -1049,7 +1049,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   ) => {
     const request = preparePdfCourseCreationRequest(document);
     if (!request) {
-      setCourseCreationSetupError("教材信息不完整，请重新上传 PDF。");
+      setCourseCreationSetupError("教材信息不完整，请重新上传教材文件。");
       return;
     }
     launchCourseCreation({
@@ -1530,7 +1530,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" />
-                上传教材 PDF
+                上传教材文件
               </button>
             </div>
             {courseCreationSource === "topic" ? (

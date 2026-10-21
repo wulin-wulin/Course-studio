@@ -101,6 +101,23 @@ function sentence(value, fallback) {
   return /[。！？.!?]$/.test(text) ? text : `${text}。`;
 }
 
+function normalizedSequences(graph) {
+  const value = graph.sequences ?? { cluster: [], point: [] };
+  if (
+    !value
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || !Array.isArray(value.cluster)
+    || !Array.isArray(value.point)
+  ) {
+    fail("clustered-graph.json 的 sequences 必须包含 cluster/point 数组");
+  }
+  return {
+    cluster: value.cluster.map((edge) => ({ fromId: edge.fromId, toId: edge.toId })),
+    point: value.point.map((edge) => ({ fromId: edge.fromId, toId: edge.toId })),
+  };
+}
+
 function buildCourseData(courseId, sourceCourse, manifest, graph) {
   const courseTitle = sourceCourse.title.trim();
   const colorByCluster = new Map(
@@ -109,6 +126,9 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
   const clusterById = new Map(graph.clusters.map((cluster) => [cluster.id, cluster]));
   const kindById = new Map(
     (manifest.pointEvidence ?? []).map((evidence) => [evidence.pointId, evidence.kind]),
+  );
+  const evidenceById = new Map(
+    (manifest.pointEvidence ?? []).map((evidence) => [evidence.pointId, evidence]),
   );
   const rolesById = Object.fromEntries(graph.points.map((point) => [point.id, point.role]));
 
@@ -137,6 +157,7 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
     difficulty: point.difficulty,
     importance: point.importance,
     keyTerms: [...point.keyTerms],
+    ...(point.origin ? { origin: point.origin } : {}),
   }));
   const baseIndex = {
     schema_version: "1.0",
@@ -144,6 +165,7 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
     generatedAt: graph.generation.generatedAt,
     clusters,
     points,
+    sequences: normalizedSequences(graph),
   };
   const layout = createCourseMapLayout({
     courseId,
@@ -157,6 +179,7 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
   const details = graph.points.map((point) => {
     const indexPoint = indexPointById.get(point.id);
     const primaryCluster = clusterById.get(point.clusterIds[0]);
+    const evidence = evidenceById.get(point.id);
     return {
       ...point,
       subtitle: primaryCluster.title,
@@ -164,6 +187,15 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
       clusterIds: [...point.clusterIds],
       related: [...point.related],
       kind: kindById.get(point.id),
+      ...(point.origin || evidence?.origin
+        ? { origin: point.origin ?? evidence.origin }
+        : {}),
+      ...(point.sourceSpans || evidence?.sourceSpans
+        ? { sourceSpans: point.sourceSpans ?? evidence.sourceSpans }
+        : {}),
+      ...(typeof (point.modelEnriched ?? evidence?.modelEnriched) === "boolean"
+        ? { modelEnriched: point.modelEnriched ?? evidence.modelEnriched }
+        : {}),
       pos: indexPoint.pos,
       scale: indexPoint.scale,
     };

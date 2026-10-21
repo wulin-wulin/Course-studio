@@ -14,6 +14,7 @@ before(async () => {
         'export * from "./src/features/reviews/types.ts";',
         'export * from "./src/features/reviews/resumeDelivery.ts";',
         'export * from "./src/features/courseCreation/setup.ts";',
+        'export { normalizeForestIndex } from "./src/course/forest/forestAdapter.ts";',
         'export * from "./src/utils/latestRequest.ts";',
         'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldPauseGenerationAfterAgentDone, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
       ].join("\n"),
@@ -110,6 +111,59 @@ test("knowledge graph parser preserves multi-cluster, prerequisites, and related
   assert.deepEqual(review.points[1].prerequisites, ["a"]);
   assert.deepEqual(review.points[0].related, ["c"]);
   assert.equal(review.clusters.length, 2);
+});
+
+test("course index parser preserves canonical cluster and point sequence edges", () => {
+  const index = contracts.normalizeForestIndex({
+    clusters: [
+      { id: "cluster-a", title: "A" },
+      { id: "cluster-b", title: "B" },
+    ],
+    points: [
+      { id: "point-a", title: "A1", clusterId: "cluster-a" },
+      { id: "point-b", title: "B1", clusterId: "cluster-b" },
+    ],
+    sequences: {
+      cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
+      point: [{ fromId: "point-a", toId: "point-b" }],
+    },
+  });
+
+  assert.deepEqual(index.sequences, {
+    cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
+    point: [{ fromId: "point-a", toId: "point-b" }],
+  });
+});
+
+test("course index parser keeps old courses readable and filters malformed sequence edges", () => {
+  const legacy = contracts.normalizeForestIndex({
+    clusters: [{ id: "cluster-a", title: "A" }],
+    points: [{ id: "point-a", title: "A1", clusterId: "cluster-a" }],
+  });
+  assert.equal(legacy.sequences, undefined);
+
+  const compatible = contracts.normalizeForestIndex({
+    clusters: [
+      { id: "cluster-a", title: "A" },
+      { id: "cluster-b", title: "B" },
+    ],
+    points: [
+      { id: "point-a", title: "A1", clusterId: "cluster-a" },
+      { id: "point-b", title: "B1", clusterId: "cluster-b" },
+    ],
+    sequence: {
+      cluster_ids: ["cluster-a", "cluster-b"],
+      point_edges: [
+        { from_id: "point-a", to_id: "point-b" },
+        { from_id: "point-a", to_id: "missing" },
+        { from_id: "point-a", to_id: "point-a" },
+      ],
+    },
+  });
+  assert.deepEqual(compatible.sequences, {
+    cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
+    point: [{ fromId: "point-a", toId: "point-b" }],
+  });
 });
 
 test("knowledge point parser preserves a textbook chapter tree and structure hash", () => {
@@ -350,7 +404,7 @@ test("course creation starts with the confirmed topic in the first message", () 
   assert.equal(request.displayContent, "创建课程：软件工程");
 });
 
-test("PDF course creation preserves the document identity and structure-first instruction", () => {
+test("textbook course creation preserves identity and requires grounded content", () => {
   assert.equal(
     contracts.preparePdfCourseCreationRequest({ id: "", filename: "教材.pdf" }),
     null,
@@ -363,7 +417,50 @@ test("PDF course creation preserves the document identity and structure-first in
   assert.equal(request.filename, "数据结构教材.pdf");
   assert.equal(request.displayContent, "根据教材创建课程：数据结构教材.pdf");
   assert.match(request.message, /章节 → 知识点/);
+  assert.match(request.message, /material\.json/);
+  assert.match(request.message, /full\.md/);
+  assert.match(request.message, /不得只根据标题编写内容/);
+  assert.match(request.message, /origin、sourceSpans、modelEnriched/);
+  assert.doesNotMatch(request.message, /不要求逐段还原教材正文/);
   assert.match(request.message, /不得重新聚类或改变已确认的章节归属/);
+});
+
+test("textbook upload accepts compatible PDF and Markdown file descriptors", () => {
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.PDF", type: "application/pdf" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.pdf", type: "" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.pdf", type: "application/x-pdf" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.MD", type: "text/plain" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.markdown", type: "text/markdown" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.md", type: "binary/octet-stream" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.md", type: "application/pdf" }),
+    false,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.txt", type: "text/plain" }),
+    false,
+  );
+  assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /application\/pdf/);
+  assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /text\/markdown/);
+  assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /\.md/);
 });
 
 test("stale conversation reconciliation prefers the next pending review", () => {

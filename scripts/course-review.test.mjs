@@ -82,6 +82,13 @@ function makeGraph(contentRoot) {
         order: 1,
       },
     ],
+    sequences: {
+      cluster: [{ fromId: "state-process", toId: "state-outcomes" }],
+      point: points.slice(1).map((point, index) => ({
+        fromId: points[index].id,
+        toId: point.id,
+      })),
+    },
     points: points.map((point, index) => ({
       ...point,
       clusterIds: [index === points.length - 1 ? "state-outcomes" : "state-process"],
@@ -204,7 +211,7 @@ test("G6 图谱审核请求和最终 checker 只接受当前双回执", (t) => {
   assert.equal(JSON.parse(checked.stdout).counts.reviewApprovals, 2);
 });
 
-test("图谱审核哈希覆盖簇、clusterIds、role、related、先修和审核审计", (t) => {
+test("图谱审核哈希覆盖簇、clusterIds、role、related、顺序、先修和审核审计", (t) => {
   const { graph } = workspace(t, { full: true });
   const baseline = reviewHashes("knowledge-graph", graph.points, graph);
   const cases = [
@@ -212,6 +219,7 @@ test("图谱审核哈希覆盖簇、clusterIds、role、related、先修和审�
     (next) => { next.points[1].clusterIds.push("state-outcomes"); },
     (next) => { next.points[1].role = "trunk"; },
     (next) => { next.points[0].related = [next.points.at(-1).id]; },
+    (next) => { next.sequences.point = [next.sequences.point[0]]; },
     (next) => { next.points[1].prerequisites = []; },
     (next) => {
       next.generation.refinedPrerequisiteEdges = [{
@@ -235,6 +243,31 @@ test("图谱审核哈希覆盖簇、clusterIds、role、related、先修和审�
     const changed = reviewHashes("knowledge-graph", next.points, next);
     assert.notDeepEqual(changed, baseline);
   }
+});
+
+test("学习顺序在审核后变化会让最终 checker 拒绝旧回执", (t) => {
+  const { root, contentRoot, graph } = workspace(t, { full: true });
+  const index = readJson(path.join(contentRoot, "src", "data", "index.json"));
+  writeApproval(root, "knowledge-points", index.points);
+  writeApproval(root, "knowledge-graph", graph.points, graph);
+  graph.sequences.point = [{
+    fromId: graph.points[0].id,
+    toId: graph.points.at(-1).id,
+  }];
+  const graphPath = path.join(root, "pipeline", COURSE_ID, "clustered-graph.json");
+  writeJson(graphPath, graph);
+
+  const checked = run(
+    CHECKER_SCRIPT,
+    [contentRoot, graphPath, "--phase", "all", "--json"],
+    root,
+  );
+  assert.notEqual(checked.status, 0);
+  assert.ok(
+    JSON.parse(checked.stdout).findings.some(
+      (finding) => finding.code === "invalid-knowledge-graph-approval",
+    ),
+  );
 });
 
 test("簇定义在审核后变化会让最终 checker 拒绝回执", (t) => {

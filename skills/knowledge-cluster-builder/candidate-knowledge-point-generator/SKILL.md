@@ -86,6 +86,12 @@ generated/<course-id>-course-content/
 
 无法检索时将 `evidenceMode` 设为 `model-only`，来源保持为空，知识点置信度不得高于 `0.6`，边界项进入复核队列。
 
+当编排 Skill 提供绑定的教材 `material.json/full.md` 时，使用
+`evidenceMode: "textbook-grounded"`，不再执行普通主题的外部检索流程。按 material chunks
+分批读取，为每个点使用其 source spans 构造证据包。详情必须先覆盖教材中的定义、机制、
+公式、表格或例题，再进行模型补充，并保留 `origin/sourceSpans/modelEnriched`；不得只根据
+标题生成全部内容，也不得把模型补充伪装成教材原文。
+
 ### 3. 生成课程元数据与规划索引
 
 先写 `src/data/course.json`、`generation/manifest.json` 和 `src/data/index.json`。

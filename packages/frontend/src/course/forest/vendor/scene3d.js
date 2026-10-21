@@ -95,6 +95,10 @@ export class Scene3D {
         this._learningPathIdSet = new Set();
         this._pathLabelEls = [];
 
+        // 课程顺序关系与临时“学习路径”是两套数据。顺序层只负责展示后端
+        // 保存的簇间/点间有向边，因此切换它不会改变标签或相机状态。
+        this.sequenceGroup = new THREE.Group(); this.scene.add(this.sequenceGroup);
+
         this._needsVisRefresh = true;
         this._hoverId = null;
         this._batchLabelIds = new Set();
@@ -834,6 +838,141 @@ export class Scene3D {
         this._learningPathIdSet = new Set();
         this._needsVisRefresh = true;
         this._updateCamera();
+    }
+
+    setSequenceEdges(sequences) {
+        this.clearSequenceEdges();
+        const clusterEdges = sequences && Array.isArray(sequences.cluster) ? sequences.cluster : [];
+        const pointEdges = sequences && Array.isArray(sequences.point) ? sequences.point : [];
+
+        const pointById = new Map(this.treeMeta.map(meta => [meta.id, meta]));
+        const clusterById = new Map();
+        for (const cluster of this.layout.domains || []) {
+            const members = this.treeMeta.filter(meta => meta.catId === cluster.id);
+            if (members.length > 0) {
+                const center = members.reduce(
+                    (sum, member) => ({ x: sum.x + member.pos[0], y: sum.y + member.pos[1] }),
+                    { x: 0, y: 0 },
+                );
+                clusterById.set(cluster.id, {
+                    x: center.x / members.length,
+                    y: center.y / members.length,
+                });
+            } else if (Array.isArray(cluster.label_pos)) {
+                clusterById.set(cluster.id, { x: cluster.label_pos[0], y: cluster.label_pos[1] });
+            }
+        }
+
+        clusterEdges.forEach((edge, index) => {
+            const from = clusterById.get(edge.fromId);
+            const to = clusterById.get(edge.toId);
+            if (!from || !to) return;
+            this._addSequenceEdge(from, to, {
+                color: 0xb7791f,
+                dashSize: 112,
+                gapSize: 68,
+                z: 22,
+                trim: 118,
+                curve: 0.09,
+                arrowRadius: 19,
+                arrowLength: 54,
+                renderOrder: 20,
+                bendSeed: `${edge.fromId}:${edge.toId}:${index}`,
+            });
+        });
+
+        pointEdges.forEach((edge, index) => {
+            const from = pointById.get(edge.fromId);
+            const to = pointById.get(edge.toId);
+            if (!from || !to) return;
+            this._addSequenceEdge(
+                { x: from.pos[0], y: from.pos[1] },
+                { x: to.pos[0], y: to.pos[1] },
+                {
+                    color: 0x1f7a68,
+                    dashSize: 58,
+                    gapSize: 34,
+                    z: 30,
+                    trim: 46,
+                    curve: 0.055,
+                    arrowRadius: 11,
+                    arrowLength: 34,
+                    renderOrder: 21,
+                    bendSeed: `${edge.fromId}:${edge.toId}:${index}`,
+                },
+            );
+        });
+    }
+
+    clearSequenceEdges() {
+        if (this.sequenceGroup) this._clearGroup(this.sequenceGroup);
+    }
+
+    _addSequenceEdge(from, to, options) {
+        const start = new THREE.Vector3(from.x, from.y, options.z);
+        const finish = new THREE.Vector3(to.x, to.y, options.z);
+        const delta = finish.clone().sub(start);
+        const distance = delta.length();
+        if (!Number.isFinite(distance) || distance < 2) return;
+
+        const direction = delta.clone().normalize();
+        const maximumTrim = Math.max(0, distance * 0.32);
+        const trim = Math.min(options.trim, maximumTrim);
+        start.addScaledVector(direction, trim);
+        finish.addScaledVector(direction, -trim);
+
+        const span = finish.clone().sub(start);
+        const spanLength = span.length();
+        if (spanLength < 2) return;
+        const normal = new THREE.Vector3(-direction.y, direction.x, 0);
+        const bendDirection = this._sequenceHash(options.bendSeed) % 2 === 0 ? 1 : -1;
+        const bend = Math.min(150, spanLength * options.curve) * bendDirection;
+        const midpoint = start.clone().add(finish).multiplyScalar(0.5).addScaledVector(normal, bend);
+        const curve = new THREE.QuadraticBezierCurve3(start, midpoint, finish);
+        const points = curve.getPoints(Math.max(20, Math.min(72, Math.ceil(spanLength / 42))));
+
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineDashedMaterial({
+            color: options.color,
+            dashSize: options.dashSize,
+            gapSize: options.gapSize,
+            transparent: true,
+            opacity: 0.86,
+            depthWrite: false,
+            depthTest: false,
+        });
+        const line = new THREE.Line(geometry, material);
+        line.computeLineDistances();
+        line.renderOrder = options.renderOrder;
+        this.sequenceGroup.add(line);
+
+        const arrowDirection = finish.clone().sub(points[points.length - 2]).normalize();
+        const arrowGeometry = new THREE.ConeGeometry(
+            options.arrowRadius,
+            options.arrowLength,
+            16,
+        );
+        const arrowMaterial = new THREE.MeshBasicMaterial({
+            color: options.color,
+            transparent: true,
+            opacity: 0.92,
+            depthWrite: false,
+            depthTest: false,
+        });
+        const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+        arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDirection);
+        arrow.position.copy(finish).addScaledVector(arrowDirection, -options.arrowLength / 2);
+        arrow.renderOrder = options.renderOrder + 1;
+        this.sequenceGroup.add(arrow);
+    }
+
+    _sequenceHash(value) {
+        let hash = 2166136261;
+        for (let index = 0; index < value.length; index += 1) {
+            hash ^= value.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
     }
 
     focusLearningPath() {

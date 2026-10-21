@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
-import { ArrowLeft, BookOpen, Loader2, RotateCcw, Search } from "lucide-react";
-import { buildSceneInputs } from "@/course/forest/forestAdapter";
+import {
+  ArrowLeft,
+  BookOpen,
+  ListOrdered,
+  Loader2,
+  RotateCcw,
+  Search,
+} from "lucide-react";
+import { buildSceneInputs, normalizeForestIndex } from "@/course/forest/forestAdapter";
 import type {
   CourseDataChangedDetail,
   CourseMeta,
   ForestIndex,
   ForestPoint,
+  ForestSequences,
 } from "@/course/forest/types";
 // The renderer is a deliberately isolated copy of the original course forest.
 // It is plain Three.js, not a React Three Fiber canvas.
@@ -22,6 +30,8 @@ type SceneHandle = {
   flyToCluster: (id: string) => void;
   resetView: () => void;
   setHover: (id: string | null) => void;
+  setSequenceEdges: (sequences: ForestSequences) => void;
+  clearSequenceEdges: () => void;
   dispose: () => void;
 };
 
@@ -43,6 +53,7 @@ export function CourseForestViewport({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [query, setQuery] = useState("");
   const [legendHidden, setLegendHidden] = useState(false);
+  const [showSequences, setShowSequences] = useState(false);
   const mountedRef = useRef(true);
   const requestRef = useRef(0);
   const sceneRef = useRef<SceneHandle | null>(null);
@@ -66,7 +77,7 @@ export function CourseForestViewport({
       const response = await fetch(`${courseApi}/index`, { cache: "no-store" });
       if (!response.ok) throw new Error(`课程索引请求失败（${response.status}）`);
       const payload: unknown = await response.json();
-      const nextIndex = unwrapForestIndex(payload);
+      const nextIndex = normalizeForestIndex(payload);
       if (!nextIndex) throw new Error("课程索引格式无效");
       if (!mountedRef.current || requestId !== requestRef.current) return;
       setIndex(nextIndex);
@@ -85,6 +96,7 @@ export function CourseForestViewport({
     setIndex(null);
     setIsLoading(true);
     setLegendHidden(false);
+    setShowSequences(false);
     void loadIndex();
   }, [loadIndex]);
 
@@ -123,6 +135,16 @@ export function CourseForestViewport({
       })
       .slice(0, 12);
   }, [index, query]);
+
+  const sequenceCounts = useMemo(() => ({
+    cluster: index?.sequences?.cluster.length ?? 0,
+    point: index?.sequences?.point.length ?? 0,
+  }), [index]);
+  const sequenceCount = sequenceCounts.cluster + sequenceCounts.point;
+
+  useEffect(() => {
+    if (sequenceCount === 0) setShowSequences(false);
+  }, [sequenceCount]);
 
   const openPoint = useCallback(
     (pointId: string) => {
@@ -199,6 +221,20 @@ export function CourseForestViewport({
 
         <button
           type="button"
+          className={`course-forest__sequence-toggle${showSequences ? " is-active" : ""}`}
+          onClick={() => setShowSequences((visible) => !visible)}
+          disabled={sequenceCount === 0}
+          aria-pressed={showSequences}
+          title={sequenceCount > 0
+            ? `${showSequences ? "隐藏" : "显示"}学习顺序（${sequenceCount} 条）`
+            : "当前课程暂无学习顺序"}
+        >
+          <ListOrdered aria-hidden="true" size={16} />
+          <span>学习顺序</span>
+        </button>
+
+        <button
+          type="button"
           className="course-forest__icon-button"
           onClick={() => sceneRef.current?.resetView()}
           title="重置视图"
@@ -208,7 +244,14 @@ export function CourseForestViewport({
         </button>
       </div>
 
-      {index && <ForestScene index={index} sceneRef={sceneRef} onPointClick={openPoint} />}
+      {index && (
+        <ForestScene
+          index={index}
+          sceneRef={sceneRef}
+          showSequences={showSequences}
+          onPointClick={openPoint}
+        />
+      )}
 
       {isLoading && !index && <ForestLoading />}
       {loadError && !index && <ForestError message={loadError} onRetry={() => void loadIndex()} />}
@@ -248,6 +291,24 @@ export function CourseForestViewport({
           显示知识簇
         </button>
       )}
+
+      {index && showSequences && sequenceCount > 0 && (
+        <aside className="course-forest__sequence-legend" aria-label="学习顺序图例">
+          <strong>学习顺序</strong>
+          {sequenceCounts.cluster > 0 && (
+            <span>
+              <i className="is-cluster" aria-hidden="true" />
+              知识簇 {sequenceCounts.cluster}
+            </span>
+          )}
+          {sequenceCounts.point > 0 && (
+            <span>
+              <i className="is-point" aria-hidden="true" />
+              知识点 {sequenceCounts.point}
+            </span>
+          )}
+        </aside>
+      )}
     </section>
   );
 }
@@ -255,10 +316,12 @@ export function CourseForestViewport({
 function ForestScene({
   index,
   sceneRef,
+  showSequences,
   onPointClick,
 }: {
   index: ForestIndex;
   sceneRef: MutableRefObject<SceneHandle | null>;
+  showSequences: boolean;
   onPointClick: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -331,6 +394,16 @@ function ForestScene({
     };
   }, [index, sceneRef]);
 
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (showSequences && index.sequences) {
+      scene.setSequenceEdges(index.sequences);
+    } else {
+      scene.clearSequenceEdges();
+    }
+  }, [index.sequences, sceneRef, showSequences]);
+
   return <div ref={containerRef} className="course-forest__canvas" aria-label="可交互的知识森林地图" />;
 }
 
@@ -353,14 +426,4 @@ function ForestError({ message, onRetry }: { message: string; onRetry: () => voi
       </button>
     </div>
   );
-}
-
-function unwrapForestIndex(payload: unknown): ForestIndex | null {
-  const candidate = isRecord(payload) && "index" in payload ? payload.index : payload;
-  if (!isRecord(candidate) || !Array.isArray(candidate.clusters) || !Array.isArray(candidate.points)) return null;
-  return candidate as unknown as ForestIndex;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

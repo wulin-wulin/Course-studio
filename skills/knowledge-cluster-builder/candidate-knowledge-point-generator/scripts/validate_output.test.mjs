@@ -596,3 +596,176 @@ test('后续生成目标为目录时事务失败且所有 point 保持不变', (
     );
   }
 });
+
+function textbookSourceSpan(overrides = {}) {
+  return {
+    materialId: 'material-state-machines',
+    blockIds: ['block-state-transition'],
+    headingPath: ['状态机基础', '状态转移'],
+    lineStart: 12,
+    lineEnd: 18,
+    page: 3,
+    assetRefs: [],
+    excerptSha256: 'a'.repeat(64),
+    ...overrides,
+  };
+}
+
+function configureTextbookGroundedManifest(root) {
+  const manifest = readJson(root, 'generation/manifest.json');
+  manifest.generation.evidenceMode = 'textbook-grounded';
+  manifest.sources = [{
+    id: 'src-textbook',
+    type: 'textbook',
+    title: '状态机基础教材',
+    locator: 'textbook-input/material-state-machines/material.json',
+    accessedAt: '2026-07-16',
+  }];
+  manifest.pointEvidence.forEach((evidence, index) => {
+    evidence.sourceRefs = ['src-textbook'];
+    evidence.origin = 'textbook';
+    evidence.sourceSpans = [textbookSourceSpan({
+      blockIds: [`block-${index + 1}`],
+      lineStart: 12 + index * 10,
+      lineEnd: 18 + index * 10,
+    })];
+    evidence.modelEnriched = index === 1;
+    evidence.confidence = 0.8;
+  });
+  writeJson(root, 'generation/manifest.json', manifest);
+  return manifest;
+}
+
+test('textbook-grounded 接受教材点证据和 sourceSpans 为空的模型扩展点', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  const extension = manifest.pointEvidence[1];
+  extension.origin = 'llm-extension';
+  extension.sourceRefs = [];
+  extension.sourceSpans = [];
+  extension.modelEnriched = true;
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  assert.deepEqual(
+    validateProject(root, { phase: 'index' }).errors,
+    [],
+  );
+});
+
+test('textbook-grounded 拒绝没有 sourceSpans 的教材点', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  delete manifest.pointEvidence[0].sourceSpans;
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+  assert.ok(result.errors.some((error) => (
+    error.includes('input-state')
+    && error.includes('必须声明 sourceSpans')
+  )));
+});
+
+test('textbook-grounded 拒绝 sourceSpan 结束行早于起始行', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  manifest.pointEvidence[0].sourceSpans[0].lineStart = 20;
+  manifest.pointEvidence[0].sourceSpans[0].lineEnd = 19;
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+  assert.ok(result.errors.some((error) => (
+    error.includes('sourceSpans[0].lineEnd')
+    && error.includes('不小于 lineStart')
+  )));
+});
+
+test('textbook-grounded 拒绝非小写 64 位 SHA-256 摘要', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  manifest.pointEvidence[0].sourceSpans[0].excerptSha256 = 'ABC123';
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+  assert.ok(result.errors.some((error) => (
+    error.includes('sourceSpans[0].excerptSha256')
+    && error.includes('小写 SHA-256')
+  )));
+});
+
+test('textbook-grounded 拒绝非布尔 modelEnriched', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  manifest.pointEvidence[0].modelEnriched = 'yes';
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+  assert.ok(result.errors.some((error) => (
+    error.includes('pointEvidence[0].modelEnriched')
+    && error.includes('布尔值')
+  )));
+});
+
+test('textbook-grounded 教材点必须引用 type=textbook 的来源', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  manifest.sources.push({
+    id: 'src-standard',
+    type: 'official-standard',
+    title: '状态机课程标准',
+    locator: 'https://example.com/standard/state-machines',
+    accessedAt: '2026-07-16',
+  });
+  manifest.pointEvidence[0].sourceRefs = ['src-standard'];
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+  assert.ok(result.errors.some((error) => (
+    error.includes('input-state')
+    && error.includes('textbook sourceRef')
+  )));
+});
+
+test('model-only 与 researched 继续兼容不含 provenance 字段的旧产物', (t) => {
+  const modelOnly = createCourseFixture(t, { includeDetails: false });
+  assert.deepEqual(
+    validateProject(modelOnly.root, { phase: 'index' }).errors,
+    [],
+  );
+
+  const researched = createCourseFixture(t, { includeDetails: false });
+  const manifest = readJson(researched.root, 'generation/manifest.json');
+  manifest.generation.evidenceMode = 'researched';
+  manifest.sources = [
+    {
+      id: 'src-standard',
+      type: 'official-standard',
+      title: '状态机课程标准',
+      locator: 'https://example.com/standard/state-machines',
+      accessedAt: '2026-07-16',
+    },
+    {
+      id: 'src-textbook',
+      type: 'textbook',
+      title: '状态机教材',
+      locator: 'https://example.com/textbook/state-machines',
+      accessedAt: '2026-07-16',
+    },
+    {
+      id: 'src-course',
+      type: 'university-course',
+      title: '大学状态机课程',
+      locator: 'https://example.edu/course/state-machines',
+      accessedAt: '2026-07-16',
+    },
+  ];
+  manifest.pointEvidence.forEach((evidence, index) => {
+    evidence.sourceRefs = [manifest.sources[index].id];
+    evidence.confidence = 0.8;
+  });
+  writeJson(researched.root, 'generation/manifest.json', manifest);
+
+  assert.deepEqual(
+    validateProject(researched.root, { phase: 'index' }).errors,
+    [],
+  );
+});

@@ -14,6 +14,7 @@ import {
   uploadTextbookDocument,
   type TextbookDocumentMetadata,
 } from "./api";
+import { isSupportedTextbookFile, TEXTBOOK_FILE_ACCEPT } from "./setup";
 
 type ProcessingPhase = "idle" | "uploading" | "parsing" | "ready" | "error";
 
@@ -79,21 +80,18 @@ export function PdfCourseCreationForm({
     const nextFile = event.target.files?.[0];
     event.target.value = "";
     if (!nextFile) return;
-    const isPdf =
-      nextFile.type === "application/pdf" ||
-      nextFile.name.toLocaleLowerCase().endsWith(".pdf");
-    if (!isPdf) {
+    if (!isSupportedTextbookFile(nextFile)) {
       setFile(nextFile);
       setDocument(null);
       setPhase("error");
-      setError("请选择 PDF 格式的教材文件");
+      setError("请选择 PDF 或 Markdown 格式的教材文件（.pdf、.md）");
       return;
     }
     if (nextFile.size <= 0) {
       setFile(nextFile);
       setDocument(null);
       setPhase("error");
-      setError("教材文件为空，请选择有效的 PDF");
+      setError("教材文件为空，请选择有效的 PDF 或 Markdown 文件");
       return;
     }
     void processFile(nextFile);
@@ -123,9 +121,9 @@ export function PdfCourseCreationForm({
           <FileText className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-semibold text-primary">上传教材 PDF</div>
+          <div className="text-xs font-semibold text-primary">上传教材文件</div>
           <div className="mt-0.5 text-[11px] leading-relaxed text-text-secondary">
-            系统将先提取章节与知识点，再按教材结构扩充课程。
+            支持 PDF 与 Markdown，系统将读取教材结构和正文内容来创建课程。
           </div>
         </div>
       </div>
@@ -141,7 +139,7 @@ export function PdfCourseCreationForm({
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-light text-primary">
               <Upload className="h-5 w-5" />
             </span>
-            <strong className="text-xs text-text-primary">选择一本 PDF 教材</strong>
+            <strong className="text-xs text-text-primary">选择 PDF 或 Markdown 教材</strong>
             <span className="text-[11px] text-text-secondary">选择后会自动上传并解析</span>
           </button>
         ) : (
@@ -255,7 +253,7 @@ export function PdfCourseCreationForm({
         <input
           ref={inputRef}
           type="file"
-          accept="application/pdf,.pdf"
+          accept={TEXTBOOK_FILE_ACCEPT}
           onChange={chooseFile}
           className="hidden"
         />
@@ -269,7 +267,7 @@ function phaseLabel(phase: ProcessingPhase) {
     case "uploading":
       return "正在上传教材";
     case "parsing":
-      return "正在提取章节与知识点";
+      return "正在整理教材结构与正文材料";
     case "ready":
       return "解析完成，请确认后开始课程创建";
     case "error":

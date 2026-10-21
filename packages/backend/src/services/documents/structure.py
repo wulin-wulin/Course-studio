@@ -194,7 +194,7 @@ def assert_textbook_source_unchanged(
                 _assert_optional_source_fields(
                     expected_source,
                     point,
-                    ("number", "page"),
+                    ("number", "page", "source_refs"),
                     f"知识点 {point_id}",
                 )
                 source_cursor += 1

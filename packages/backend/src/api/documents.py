@@ -1,9 +1,10 @@
-"""HTTP API for textbook PDF uploads and deterministic outline extraction.
+"""HTTP API for textbook PDF/Markdown uploads and outline extraction.
 
 The upload is intentionally separate from the course creation WebSocket.  A
-PDF is persisted and parsed first, then the resulting immutable outline can be
-bound to one course-creation conversation by document id.  This keeps retries
-safe and prevents a partially parsed document from entering the course store.
+source document is persisted and parsed first, then its immutable outline can
+be bound to one course-creation conversation by document id.  This keeps
+retries safe and prevents a partially parsed document from entering the course
+store.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import asyncio
 from typing import Any, Callable, TypeVar
 
 from fastapi import APIRouter, HTTPException, UploadFile, status
+from fastapi.responses import PlainTextResponse
 
 from ..config import settings
 from ..services.documents import (
@@ -27,6 +29,7 @@ from ..services.documents import (
     get_document_store,
 )
 from ..services.documents.local_parser import parse_pdf_outline
+from ..services.documents.markdown_parser import parse_markdown_document
 from ..services.documents.mineru_parser import parse_mineru_pdf
 
 
@@ -61,10 +64,20 @@ async def _run(operation: Callable[..., T], *args: Any, **kwargs: Any) -> T:
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def upload_document(file: UploadFile):
     if not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 PDF 文件名")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少教材文件名")
+    media_type = str(file.content_type or "").split(";", 1)[0].strip().lower()
+    is_markdown = (
+        file.filename.lower().endswith((".md", ".markdown"))
+        or media_type in {"text/markdown", "application/markdown"}
+    )
+    operation = (
+        get_document_store().create_markdown_upload
+        if is_markdown
+        else get_document_store().create_upload
+    )
     try:
         return await _run(
-            get_document_store().create_upload,
+            operation,
             file.file,
             filename=file.filename,
             content_type=file.content_type,
@@ -84,6 +97,13 @@ async def parse_document(document_id: str):
 
 
 def _parse_selected_document(document_id: str):
+    document = get_document_store().get(document_id)
+    if document.get("content_type") == "text/markdown":
+        return get_document_store().parse(
+            document_id,
+            parser=parse_markdown_document,
+            parser_name="markdown-import",
+        )
     mode = settings.document_parser
     use_mineru = mode == "mineru" or (
         mode == "auto" and bool(settings.mineru_api_token.strip())
@@ -98,3 +118,14 @@ def _parse_selected_document(document_id: str):
 @router.get("/{document_id}/outline")
 async def get_document_outline(document_id: str):
     return await _run(get_document_store().get_outline, document_id)
+
+
+@router.get("/{document_id}/material")
+async def get_document_material(document_id: str):
+    return await _run(get_document_store().get_material, document_id)
+
+
+@router.get("/{document_id}/markdown")
+async def get_document_markdown(document_id: str):
+    content = await _run(get_document_store().get_markdown, document_id)
+    return PlainTextResponse(content, media_type="text/markdown")

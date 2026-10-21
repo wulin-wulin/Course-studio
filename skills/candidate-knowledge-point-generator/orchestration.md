@@ -107,6 +107,17 @@ src/animations/<Component>.css
 8. 本任务可写文件的绝对或相对路径；
 9. 禁止修改的共享文件列表。
 
+教材 Markdown 模式还必须为每个任务提供点级证据包，而不是只给标题：
+
+- `origin` 与教材锚点；
+- 该点的 `sourceSpans`；
+- span 对应的正文 section，以及必要的前后相邻 section；
+- section 的 heading path、行号、页码、资源引用和摘要哈希；
+- 哪些说明来自教材，哪些部分允许模型补充。
+
+长教材按 `material.json.chunks` 分批读取。详情任务不得自行扫描整本 Markdown，也不得把
+其他知识点的大段正文复制进当前上下文。
+
 不要把其他数百个知识点的完整正文塞入任务；全量注册表只提供 ID、标题、摘要和难度。
 
 ## 详情任务提示模板
@@ -126,6 +137,9 @@ src/animations/<Component>.css
 可核对来源：
 [来源记录]
 
+教材点级证据（仅教材 Markdown 模式）：
+[origin/sourceSpans/对应正文与相邻上下文]
+
 只允许写：
 [points 文件路径]
 [animation request 文件路径]
@@ -141,6 +155,8 @@ src/animations/<Component>.css
 5. point 初稿写 animationType: "none"。
 6. 为每个 point 生成一个动画请求；只有真实动态机制才写 needed: true。
 7. 自检 JSON、文件名、字段、引用和事实后再结束。
+8. 教材模式下保留 origin/sourceSpans，并准确设置 modelEnriched；先覆盖证据中的教材内容，
+   再补充解释和例子，不得把模型补充伪装成教材原文。
 
 禁止修改 index、manifest、动画清单、注册文件和任何未授权路径。
 

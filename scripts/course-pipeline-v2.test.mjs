@@ -115,6 +115,13 @@ function makeGraph(contentRoot) {
       description: "描述状态按规则变化并在明确条件下停止。",
       order: 0,
     }],
+    sequences: {
+      cluster: [],
+      point: points.slice(1).map((point, indexValue) => ({
+        fromId: points[indexValue].id,
+        toId: point.id,
+      })),
+    },
     points: points.map((point, indexValue) => ({
       ...point,
       clusterIds: ["state-process"],
@@ -170,6 +177,28 @@ function preparePublishFixture(t, { withAnimation }) {
   const courseId = "state-machines";
   const contentRoot = path.join(workspace, "pipeline", courseId, "course-content");
   copyDirectory(fixture.root, contentRoot);
+  const manifestPath = path.join(contentRoot, "generation", "manifest.json");
+  const manifest = readJson(manifestPath);
+  Object.assign(manifest.pointEvidence[0], {
+    origin: "user",
+    sourceSpans: [],
+    modelEnriched: true,
+  });
+  writeJson(manifestPath, manifest);
+  const firstPointPath = path.join(
+    contentRoot,
+    "src",
+    "data",
+    "points",
+    `${manifest.pointEvidence[0].pointId}.json`,
+  );
+  const firstPoint = readJson(firstPointPath);
+  Object.assign(firstPoint, {
+    origin: "user",
+    sourceSpans: [],
+    modelEnriched: true,
+  });
+  writeJson(firstPointPath, firstPoint);
   const graph = makeGraph(contentRoot);
   writeJson(path.join(workspace, "pipeline", courseId, "clustered-graph.json"), graph);
   const index = readJson(path.join(contentRoot, "src", "data", "index.json"));
@@ -238,9 +267,14 @@ test("v2 无动画内容包可发布并完整保留正文、关系与主簇适�
   assert.deepEqual(detail.clusterIds, ["state-process"]);
   assert.equal(detail.clusterId, "state-process");
   assert.equal(detail.kind, "concept");
+  assert.equal(detail.origin, "user");
+  assert.deepEqual(detail.sourceSpans, []);
+  assert.equal(detail.modelEnriched, true);
   assert.ok(Array.isArray(detail.pos));
   assert.ok(detail.scale > 0);
   assert.equal(index.points[0].clusterId, "state-process");
+  assert.equal(index.points[0].origin, "user");
+  assert.deepEqual(index.sequences, graph.sequences);
   assert.ok(index.clusters[0].polygon.length >= 5);
 });
 

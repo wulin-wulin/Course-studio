@@ -429,6 +429,25 @@ class CourseStore:
 
         point_ids = set(points)
         indexed_ids = set(index_by_id)
+        sequences = index.get("sequences")
+        if sequences is not None:
+            if not isinstance(sequences, dict) or set(sequences) != {"cluster", "point"}:
+                result.errors.append(
+                    f"{prefix}: index.json.sequences 必须严格包含 cluster 和 point"
+                )
+            else:
+                self._validate_sequence_edges(
+                    sequences.get("cluster"),
+                    cluster_ids,
+                    f"{prefix}: 知识簇顺序",
+                    result,
+                )
+                self._validate_sequence_edges(
+                    sequences.get("point"),
+                    indexed_ids,
+                    f"{prefix}: 知识点顺序",
+                    result,
+                )
         for missing in sorted(indexed_ids - point_ids):
             result.errors.append(f"{prefix}: index 中的知识点缺少详情文件：{missing}")
         for extra in sorted(point_ids - indexed_ids):
@@ -475,6 +494,61 @@ class CourseStore:
                         result.errors.append(f"{prefix}: 知识点 {pid}.{content_field} 必须是非空字符串数组")
 
         return result
+
+    @staticmethod
+    def _validate_sequence_edges(
+        value: Any,
+        known_ids: set[str],
+        label: str,
+        result: ValidationResult,
+    ) -> None:
+        """Validate optional directed reading-order edges independently of prerequisites."""
+
+        if not isinstance(value, list):
+            result.errors.append(f"{label}必须是数组")
+            return
+        edges: set[tuple[str, str]] = set()
+        adjacency: dict[str, list[str]] = {item: [] for item in known_ids}
+        for index, edge in enumerate(value):
+            if not isinstance(edge, dict) or set(edge) != {"fromId", "toId"}:
+                result.errors.append(
+                    f"{label}[{index}] 必须严格包含 fromId/toId"
+                )
+                continue
+            source = edge.get("fromId")
+            target = edge.get("toId")
+            if not isinstance(source, str) or not isinstance(target, str):
+                result.errors.append(
+                    f"{label}[{index}] 的 fromId/toId 必须是字符串"
+                )
+                continue
+            if source not in known_ids or target not in known_ids:
+                result.errors.append(f"{label}[{index}] 包含悬空引用")
+                continue
+            if source == target:
+                result.errors.append(f"{label}[{index}] 不允许自环")
+                continue
+            pair = (source, target)
+            if pair in edges:
+                result.errors.append(f"{label}[{index}] 与已有顺序边重复")
+                continue
+            edges.add(pair)
+            adjacency[source].append(target)
+
+        state: dict[str, int] = {item: 0 for item in known_ids}
+
+        def visit(node: str) -> bool:
+            state[node] = 1
+            for target in adjacency[node]:
+                if state[target] == 1:
+                    return True
+                if state[target] == 0 and visit(target):
+                    return True
+            state[node] = 2
+            return False
+
+        if any(state[node] == 0 and visit(node) for node in sorted(known_ids)):
+            result.errors.append(f"{label}不能形成环")
 
     def _load_course_objects(self, root: Path, course_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
         directory = self._course_dir(course_id, root=root)

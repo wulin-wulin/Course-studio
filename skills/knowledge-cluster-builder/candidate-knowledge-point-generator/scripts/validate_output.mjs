@@ -26,6 +26,7 @@ import {
   COMPONENT_PATTERN,
   ID_PATTERN,
   INDEX_POINT_KEYS,
+  POINT_ORIGINS,
   SOURCE_ID_PATTERN,
   checkAnimationManifest,
   checkAnimationRequest,
@@ -35,6 +36,7 @@ import {
   checkNonEmptyString,
   checkObjectShape,
   checkPoint,
+  checkSourceSpans,
   checkStringArray,
   collectForbiddenFields,
 } from './lib/contracts.mjs';
@@ -73,7 +75,7 @@ const REVIEW_ISSUES = new Set([
   'naming',
   'insufficient-evidence',
 ]);
-const EVIDENCE_MODES = new Set(['researched', 'model-only']);
+const EVIDENCE_MODES = new Set(['researched', 'textbook-grounded', 'model-only']);
 const INPUT_TYPES = new Set(['course', 'domain']);
 const SEMVER_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
@@ -436,7 +438,7 @@ function validateGeneration(generation, errors) {
     return;
   }
   if (!EVIDENCE_MODES.has(generation.evidenceMode)) {
-    errors.push(`${label}.evidenceMode 只能是 researched/model-only`);
+    errors.push(`${label}.evidenceMode 只能是 researched/textbook-grounded/model-only`);
   }
   checkDateString(generation.generatedAt, `${label}.generatedAt`, errors);
   if (!Number.isInteger(generation.pointCount) || generation.pointCount < 1) {
@@ -514,9 +516,14 @@ function validatePointEvidence(pointEvidence, sourceById, errors) {
 
   pointEvidence.forEach((evidence, index) => {
     const label = `generation/manifest.json.pointEvidence[${index}]`;
-    if (!checkExactKeys(
+    const requiredKeys = [
+      'pointId', 'title', 'kind', 'sourceRefs', 'confidence', 'scopeStatus',
+    ];
+    const optionalKeys = ['origin', 'sourceSpans', 'modelEnriched'];
+    if (!checkObjectShape(
       evidence,
-      ['pointId', 'title', 'kind', 'sourceRefs', 'confidence', 'scopeStatus'],
+      requiredKeys,
+      [...requiredKeys, ...optionalKeys],
       label,
       errors,
     )) {
@@ -562,6 +569,15 @@ function validatePointEvidence(pointEvidence, sourceById, errors) {
     }
     if (!SCOPE_STATUSES.has(evidence.scopeStatus)) {
       errors.push(`${label}.scopeStatus 不是允许的范围状态`);
+    }
+    if ('origin' in evidence && !POINT_ORIGINS.has(evidence.origin)) {
+      errors.push(`${label}.origin 必须是 textbook/llm-extension/user`);
+    }
+    if ('sourceSpans' in evidence) {
+      checkSourceSpans(evidence.sourceSpans, `${label}.sourceSpans`, errors);
+    }
+    if ('modelEnriched' in evidence && typeof evidence.modelEnriched !== 'boolean') {
+      errors.push(`${label}.modelEnriched 必须是布尔值`);
     }
   });
   return evidenceByPointId;
@@ -744,6 +760,37 @@ function validateGenerationManifest(
         || evidence.sourceRefs.length < 1
       ) {
         errors.push(`researched 模式下 ${pointId} 至少需要 1 个 sourceRefs`);
+      }
+    }
+  } else if (mode === 'textbook-grounded') {
+    const textbookSources = [...result.sourceById.values()].filter(
+      (source) => source.type === 'textbook',
+    );
+    if (textbookSources.length < 1) {
+      errors.push('textbook-grounded 模式至少需要 1 个 type=textbook 的来源');
+    }
+    for (const [pointId, evidence] of result.evidenceByPointId) {
+      if (!POINT_ORIGINS.has(evidence.origin)) {
+        errors.push(`textbook-grounded 模式下 ${pointId} 必须声明 origin`);
+      }
+      if (!Array.isArray(evidence.sourceSpans)) {
+        errors.push(`textbook-grounded 模式下 ${pointId} 必须声明 sourceSpans`);
+      } else if (evidence.origin === 'textbook' && evidence.sourceSpans.length < 1) {
+        errors.push(`教材知识点 ${pointId} 至少需要 1 个 sourceSpan`);
+      }
+      if (typeof evidence.modelEnriched !== 'boolean') {
+        errors.push(`textbook-grounded 模式下 ${pointId} 必须声明 modelEnriched`);
+      }
+      if (
+        evidence.origin === 'textbook'
+        && (
+          !Array.isArray(evidence.sourceRefs)
+          || !evidence.sourceRefs.some((sourceId) => (
+            result.sourceById.get(sourceId)?.type === 'textbook'
+          ))
+        )
+      ) {
+        errors.push(`教材知识点 ${pointId} 至少需要 1 个 textbook sourceRef`);
       }
     }
   } else if (mode === 'model-only') {

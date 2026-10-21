@@ -242,6 +242,23 @@ prerequisites
 
 `researched` 模式至少 3 个 locator 不重复的独立来源并覆盖至少 2 种来源类型，每个点至少 1 个 `sourceRefs`。`model-only` 模式来源和 `sourceRefs` 为空，`confidence` 不高于 `0.6`。
 
+教材 Markdown 模式使用 `evidenceMode: "textbook-grounded"`。`sources` 至少包含一个
+`type: "textbook"` 的来源，locator 指向会话内绑定的 material/full.md 相对路径。
+`pointEvidence` 可增加以下三个字段，教材模式中三者必填：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `origin` | string | `textbook`、`llm-extension` 或 `user` |
+| `sourceSpans` | object[] | 教材点至少一项；扩展点可为空 |
+| `modelEnriched` | boolean | 正文是否包含模型补充内容 |
+
+每个 source span 严格包含 `materialId`、`blockIds`、`headingPath`、`lineStart`、
+`lineEnd`、`assetRefs`、`excerptSha256`，有页码时可增加 `page`。行号与哈希定位原始
+Markdown 证据；不要把整段教材正文复制进 manifest。
+
+教材模式的 point 详情也可保留同名 `origin/sourceSpans/modelEnriched` 字段。它们必须与
+对应 pointEvidence 一致，并由图装配与发布阶段原样透传。
+
 ## `generation/animation-requests/<id>.json`
 
 每个知识点必须有一个同名请求文件。

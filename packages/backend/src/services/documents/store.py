@@ -1,4 +1,4 @@
-"""Durable storage and lifecycle management for uploaded textbook PDFs."""
+"""Durable storage and lifecycle management for uploaded textbook documents."""
 
 from __future__ import annotations
 
@@ -47,6 +47,16 @@ _PERMITTED_UPLOAD_MEDIA_TYPES = frozenset(
         "application/x-pdf",
     }
 )
+_PERMITTED_MARKDOWN_MEDIA_TYPES = frozenset(
+    {
+        "text/markdown",
+        "text/x-markdown",
+        "text/plain",
+        "application/markdown",
+        "application/octet-stream",
+        "binary/octet-stream",
+    }
+)
 
 
 class DocumentError(RuntimeError):
@@ -66,7 +76,7 @@ class DocumentNotReadyError(DocumentConflictError):
 
 
 class DocumentUnsupportedMediaTypeError(DocumentError):
-    """An upload declares an unsupported media type or lacks a PDF signature."""
+    """An upload's declared type, extension, encoding, or signature is invalid."""
 
 
 class DocumentTooLargeError(DocumentError):
@@ -116,7 +126,7 @@ def _safe_filename(value: str | None) -> str:
 
 
 class DocumentStore:
-    """Store immutable source PDFs and their retryable outline parse results."""
+    """Store immutable source documents and their retryable parse results."""
 
     def __init__(
         self,
@@ -281,6 +291,31 @@ class DocumentStore:
             except OSError:
                 pass
 
+    def _write_bytes_atomic(self, path: Path, value: bytes) -> None:
+        safe_path = self._within_root(path)
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        self._assert_path_chain(safe_path, allow_missing=True)
+        if safe_path.exists() and safe_path.is_symlink():
+            raise DocumentValidationError("文档数据目标不能是符号链接")
+        temporary = safe_path.with_name(f".{safe_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(value)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, safe_path)
+        except OSError as exc:
+            raise DocumentStorageError("无法保存文档数据") from exc
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _source_path(self, directory: Path, metadata: dict[str, Any]) -> Path:
+        filename = "source.md" if metadata.get("content_type") == "text/markdown" else "source.pdf"
+        return self._within_root(directory / filename)
+
     # ------------------------------------------------------------------
     # Upload and read API
     # ------------------------------------------------------------------
@@ -359,6 +394,8 @@ class DocumentStore:
                 if destination_dir.exists():
                     existing = self._matching_existing(destination_dir, sha256)
                     if existing is not None:
+                        if existing.get("content_type") != "application/pdf":
+                            raise DocumentConflictError("相同摘要已被另一种文档格式占用")
                         return existing
                     while True:
                         document_id = f"{base_id}-{uuid.uuid4().hex[:8]}"
@@ -380,6 +417,110 @@ class DocumentStore:
             if temporary_dir.exists():
                 shutil.rmtree(temporary_dir, ignore_errors=True)
 
+    def create_markdown_upload(
+        self,
+        stream: BinaryIO,
+        *,
+        filename: str | None,
+        content_type: str | None,
+    ) -> dict[str, Any]:
+        """Persist one UTF-8 Markdown textbook under the document lifecycle.
+
+        Markdown uses the same content-addressed ``document_id`` and parse
+        endpoint as PDF so the rest of course creation does not need a second
+        binding protocol.
+        """
+
+        media_type = str(content_type or "").split(";", 1)[0].strip().lower()
+        if media_type and media_type not in _PERMITTED_MARKDOWN_MEDIA_TYPES:
+            raise DocumentUnsupportedMediaTypeError(
+                "上传声明的媒体类型不受支持；请上传 Markdown 文件"
+            )
+        safe_filename = _safe_filename(filename or "textbook.md")
+        if Path(safe_filename).suffix.lower() not in {".md", ".markdown"}:
+            raise DocumentUnsupportedMediaTypeError("Markdown 文件名必须以 .md 或 .markdown 结尾")
+
+        temporary_dir = self._within_root(self.root / f".upload-{uuid.uuid4().hex}")
+        source_path = temporary_dir / "source.md"
+        digest = hashlib.sha256()
+        size = 0
+        content = bytearray()
+        try:
+            temporary_dir.mkdir(parents=False, exist_ok=False)
+            with source_path.open("xb") as destination:
+                while True:
+                    chunk = stream.read(_READ_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    if not isinstance(chunk, (bytes, bytearray)):
+                        raise DocumentValidationError("上传流返回了无效数据")
+                    size += len(chunk)
+                    if size > self.max_upload_bytes:
+                        raise DocumentTooLargeError(
+                            f"Markdown 超过大小限制（最大 {self.max_upload_bytes} 字节）"
+                        )
+                    digest.update(chunk)
+                    content.extend(chunk)
+                    destination.write(chunk)
+                destination.flush()
+                os.fsync(destination.fileno())
+
+            if size == 0:
+                raise DocumentUnsupportedMediaTypeError("Markdown 文件不能为空")
+            try:
+                decoded = bytes(content).decode("utf-8-sig")
+            except UnicodeDecodeError as exc:
+                raise DocumentUnsupportedMediaTypeError("Markdown 文件必须使用 UTF-8 编码") from exc
+            if "\x00" in decoded:
+                raise DocumentUnsupportedMediaTypeError("Markdown 文件包含无效的 NUL 字符")
+
+            sha256 = digest.hexdigest()
+            base_id = f"doc-{sha256[:24]}"
+            timestamp = _now()
+            metadata: dict[str, Any] = {
+                "schema_version": DOCUMENT_SCHEMA,
+                "id": base_id,
+                "filename": safe_filename,
+                "content_type": "text/markdown",
+                "size_bytes": size,
+                "sha256": sha256,
+                "status": "uploaded",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "parser": None,
+                "page_count": None,
+                "error": None,
+                "outline_summary": None,
+            }
+            with self._lock:
+                document_id = base_id
+                destination_dir = self._document_dir(document_id, required=False)
+                if destination_dir.exists():
+                    existing = self._matching_existing(destination_dir, sha256)
+                    if existing is not None:
+                        if existing.get("content_type") != "text/markdown":
+                            raise DocumentConflictError("相同摘要已被另一种文档格式占用")
+                        return existing
+                    while True:
+                        document_id = f"{base_id}-{uuid.uuid4().hex[:8]}"
+                        destination_dir = self._document_dir(document_id, required=False)
+                        if not destination_dir.exists():
+                            break
+                metadata["id"] = document_id
+                self._write_json_atomic(temporary_dir / "metadata.json", metadata)
+                try:
+                    os.replace(temporary_dir, destination_dir)
+                except OSError as exc:
+                    raise DocumentStorageError("无法保存上传的 Markdown") from exc
+                return deepcopy(metadata)
+        except DocumentError:
+            raise
+        except OSError as exc:
+            raise DocumentStorageError("无法接收上传的 Markdown") from exc
+        finally:
+            if temporary_dir.exists():
+                shutil.rmtree(temporary_dir, ignore_errors=True)
+
     def _matching_existing(
         self,
         directory: Path,
@@ -394,7 +535,7 @@ class DocumentStore:
             return None
         if metadata.get("sha256") != sha256:
             return None
-        source = directory / "source.pdf"
+        source = self._source_path(directory, metadata)
         if not source.is_file() or source.is_symlink():
             return None
         try:
@@ -419,10 +560,52 @@ class DocumentStore:
                 raise DocumentNotReadyError(
                     f"文档纲要尚未就绪，当前状态：{metadata['status']}"
                 )
-            self._verify_source_integrity(directory / "source.pdf", metadata)
+            self._verify_source_integrity(self._source_path(directory, metadata), metadata)
             outline = self._read_json(directory / "outline.json")
             self._validate_outline(outline, metadata)
             return deepcopy(outline)
+
+    def get_material(self, document_id: str) -> dict[str, Any]:
+        """Return the normalized Markdown evidence map for a ready document."""
+
+        with self._lock:
+            directory = self._document_dir(document_id)
+            metadata = self._read_json(directory / "metadata.json")
+            self._validate_metadata(metadata, expected_id=document_id)
+            if metadata["status"] != "ready":
+                raise DocumentNotReadyError(
+                    f"文档正文材料尚未就绪，当前状态：{metadata['status']}"
+                )
+            self._verify_source_integrity(self._source_path(directory, metadata), metadata)
+            material = self._read_json(directory / "material.json")
+            self._validate_material(material, metadata)
+            return deepcopy(material)
+
+    def get_markdown(self, document_id: str) -> str:
+        """Return the canonical Markdown text referenced by material.json."""
+
+        with self._lock:
+            directory = self._document_dir(document_id)
+            metadata = self._read_json(directory / "metadata.json")
+            self._validate_metadata(metadata, expected_id=document_id)
+            if metadata["status"] != "ready":
+                raise DocumentNotReadyError(
+                    f"文档 Markdown 尚未就绪，当前状态：{metadata['status']}"
+                )
+            self._verify_source_integrity(self._source_path(directory, metadata), metadata)
+            material = self._read_json(directory / "material.json")
+            self._validate_material(material, metadata)
+            markdown_path = self._within_root(directory / "full.md")
+            if not markdown_path.is_file() or markdown_path.is_symlink():
+                raise DocumentNotFoundError("文档 Markdown 不存在")
+            try:
+                content = markdown_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise DocumentValidationError("文档 Markdown 无法读取") from exc
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            if digest != material["markdown"]["sha256"]:
+                raise DocumentValidationError("文档 Markdown 摘要与材料索引不一致")
+            return content
 
     # ------------------------------------------------------------------
     # Parse lifecycle
@@ -435,7 +618,7 @@ class DocumentStore:
             directory = self._document_dir(document_id)
             metadata = self._read_json(directory / "metadata.json")
             self._validate_metadata(metadata, expected_id=document_id)
-            source_path = self._within_root(directory / "source.pdf")
+            source_path = self._source_path(directory, metadata)
             try:
                 self._verify_source_integrity(source_path, metadata)
             except DocumentError as exc:
@@ -478,7 +661,7 @@ class DocumentStore:
 
         try:
             self._verify_source_integrity(source_path, metadata)
-            outline = parser(
+            parsed = parser(
                 source_path,
                 document_id=document_id,
                 filename=str(metadata["filename"]),
@@ -487,7 +670,48 @@ class DocumentStore:
                 executable=self.pdftotext_executable,
                 timeout_seconds=self.parse_timeout_seconds,
             )
+            material: dict[str, Any] | None = None
+            markdown: str | None = None
+            if (
+                isinstance(parsed, dict)
+                and isinstance(parsed.get("outline"), dict)
+                and isinstance(parsed.get("material"), dict)
+            ):
+                outline = parsed["outline"]
+                material = parsed["material"]
+                markdown_value = parsed.get("markdown")
+                if not isinstance(markdown_value, str):
+                    raise DocumentValidationError("Markdown 解析器没有返回规范化正文")
+                markdown = markdown_value
+            else:
+                outline = parsed
+
+            # MinerU already persists full.md beside its raw result. Promote a
+            # normalized evidence map into the document root so later stages
+            # use the same contract as direct Markdown imports.
+            if material is None and str(outline.get("source", {}).get("parser", "")).startswith("mineru-"):
+                from .markdown_parser import build_markdown_artifacts
+
+                parser_directory = directory / str(outline["source"]["parser"])
+                raw_markdown_path = self._within_root(parser_directory / "full.md")
+                if raw_markdown_path.is_file() and not raw_markdown_path.is_symlink():
+                    try:
+                        markdown = raw_markdown_path.read_text(encoding="utf-8-sig")
+                    except (OSError, UnicodeError) as exc:
+                        raise DocumentValidationError("MinerU Markdown 无法读取") from exc
+                    markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
+                    _derived_outline, material = build_markdown_artifacts(
+                        markdown,
+                        document_id=document_id,
+                        filename=str(metadata["filename"]),
+                        sha256=str(metadata["sha256"]),
+                        parser_name=str(outline["source"]["parser"]),
+                    )
             self._validate_outline(outline, metadata)
+            if material is not None:
+                self._validate_material(material, metadata)
+                if markdown is None:
+                    raise DocumentValidationError("教材材料缺少 Markdown 正文")
             point_count = sum(len(chapter["points"]) for chapter in outline["chapters"])
             ready_metadata = {
                 **metadata,
@@ -504,6 +728,9 @@ class DocumentStore:
             }
             with self._lock:
                 self._write_json_atomic(directory / "outline.json", outline)
+                if material is not None and markdown is not None:
+                    self._write_bytes_atomic(directory / "full.md", markdown.encode("utf-8"))
+                    self._write_json_atomic(directory / "material.json", material)
                 self._write_json_atomic(directory / "metadata.json", ready_metadata)
             return {
                 "document": deepcopy(ready_metadata),
@@ -527,13 +754,18 @@ class DocumentStore:
     def _verify_source_integrity(path: Path, metadata: dict[str, Any]) -> None:
         """Verify that the immutable source still matches its upload record."""
 
+        source_label = (
+            "原始 PDF"
+            if metadata.get("content_type") == "application/pdf"
+            else "原始 Markdown"
+        )
         if path.is_symlink() or not path.is_file():
-            raise DocumentValidationError("原始 PDF 不存在或不可读取")
+            raise DocumentValidationError(f"{source_label} 不存在或不可读取")
         expected_size = metadata.get("size_bytes")
         expected_sha256 = metadata.get("sha256")
         try:
             if path.stat().st_size != expected_size:
-                raise DocumentValidationError("原始 PDF 大小与上传记录不一致")
+                raise DocumentValidationError(f"{source_label} 大小与上传记录不一致")
             digest = hashlib.sha256()
             with path.open("rb") as source:
                 while True:
@@ -544,9 +776,9 @@ class DocumentStore:
         except DocumentError:
             raise
         except OSError as exc:
-            raise DocumentValidationError("原始 PDF 不存在或不可读取") from exc
+            raise DocumentValidationError(f"{source_label} 不存在或不可读取") from exc
         if digest.hexdigest() != expected_sha256:
-            raise DocumentValidationError("原始 PDF 摘要与上传记录不一致")
+            raise DocumentValidationError(f"{source_label} 摘要与上传记录不一致")
 
     def _record_failure(
         self,
@@ -603,7 +835,7 @@ class DocumentStore:
             raise DocumentValidationError("文档 ID 与存储记录不一致")
         if value.get("schema_version") != DOCUMENT_SCHEMA:
             raise DocumentValidationError("文档元数据版本不受支持")
-        if value.get("content_type") != "application/pdf":
+        if value.get("content_type") not in {"application/pdf", "text/markdown"}:
             raise DocumentValidationError("文档媒体类型无效")
         if not isinstance(value.get("filename"), str) or not value["filename"].strip():
             raise DocumentValidationError("文档文件名无效")
@@ -678,10 +910,14 @@ class DocumentStore:
             raise DocumentValidationError("教材纲要摘要与文档不一致")
         if not isinstance(source.get("parser"), str) or not source["parser"].strip():
             raise DocumentValidationError("教材纲要解析器标识无效")
-        if not _is_int(source.get("page_count")) or source["page_count"] <= 0:
-            raise DocumentValidationError("教材页数无效")
-        if not _is_int(source.get("toc_pages")) or source["toc_pages"] <= 0:
-            raise DocumentValidationError("教材目录扫描页数无效")
+        if metadata.get("content_type") == "text/markdown":
+            if source.get("page_count") is not None or source.get("toc_pages") is not None:
+                raise DocumentValidationError("Markdown 教材不应伪造 PDF 页数")
+        else:
+            if not _is_int(source.get("page_count")) or source["page_count"] <= 0:
+                raise DocumentValidationError("教材页数无效")
+            if not _is_int(source.get("toc_pages")) or source["toc_pages"] <= 0:
+                raise DocumentValidationError("教材目录扫描页数无效")
 
         chapters = value.get("chapters")
         if not isinstance(chapters, list) or not chapters:
@@ -723,14 +959,20 @@ class DocumentStore:
             if not isinstance(points, list):
                 raise DocumentValidationError("教材知识点列表无效")
             for point_index, point in enumerate(points):
-                if not isinstance(point, dict) or set(point) != {
+                required_point_fields = {
                     "id",
                     "number",
                     "title",
                     "page",
                     "order",
                     "origin",
-                }:
+                }
+                allowed_point_fields = required_point_fields | {"source_refs"}
+                if (
+                    not isinstance(point, dict)
+                    or not required_point_fields.issubset(point)
+                    or not set(point).issubset(allowed_point_fields)
+                ):
                     raise DocumentValidationError("教材知识点结构无效")
                 point_number = point.get("number")
                 if (
@@ -755,12 +997,176 @@ class DocumentStore:
                     raise DocumentValidationError("教材知识点顺序无效")
                 if point.get("origin") != "textbook":
                     raise DocumentValidationError("教材知识点来源必须为 textbook")
+                source_refs = point.get("source_refs")
+                if source_refs is not None and (
+                    not isinstance(source_refs, list)
+                    or not source_refs
+                    or len(set(source_refs)) != len(source_refs)
+                    or any(
+                        not isinstance(item, str)
+                        or not re.fullmatch(r"block-[0-9]{6}", item)
+                        for item in source_refs
+                    )
+                ):
+                    raise DocumentValidationError("教材知识点 source_refs 无效")
                 self._validate_page(point.get("page"))
                 point_count += 1
                 if point_count > 10000:
                     raise DocumentValidationError("教材知识点数量超过限制")
         if point_count == 0:
             raise DocumentValidationError("教材纲要至少需要一个知识点")
+
+    def _validate_material(self, value: Any, metadata: dict[str, Any]) -> None:
+        from .markdown_parser import MATERIAL_SCHEMA
+
+        required = {
+            "schema_version",
+            "document_id",
+            "source",
+            "markdown",
+            "sections",
+            "chunks",
+            "point_sources",
+        }
+        if not isinstance(value, dict) or set(value) != required:
+            raise DocumentValidationError("教材正文材料根结构无效")
+        if value.get("schema_version") != MATERIAL_SCHEMA:
+            raise DocumentValidationError("教材正文材料版本不受支持")
+        if value.get("document_id") != metadata.get("id"):
+            raise DocumentValidationError("教材正文材料与文档 ID 不一致")
+        source = value.get("source")
+        if not isinstance(source, dict) or set(source) != {
+            "format", "filename", "sha256", "parser",
+        }:
+            raise DocumentValidationError("教材正文材料来源无效")
+        if (
+            source.get("format") != "markdown"
+            or source.get("filename") != metadata.get("filename")
+            or source.get("sha256") != metadata.get("sha256")
+            or not isinstance(source.get("parser"), str)
+            or not source["parser"].strip()
+        ):
+            raise DocumentValidationError("教材正文材料来源与文档不一致")
+
+        markdown = value.get("markdown")
+        if not isinstance(markdown, dict) or set(markdown) != {
+            "path", "sha256", "line_count", "character_count",
+        }:
+            raise DocumentValidationError("教材 Markdown 描述无效")
+        if markdown.get("path") != "full.md" or not _SHA256_RE.fullmatch(
+            str(markdown.get("sha256") or "")
+        ):
+            raise DocumentValidationError("教材 Markdown 路径或摘要无效")
+        line_count = markdown.get("line_count")
+        character_count = markdown.get("character_count")
+        if not _is_int(line_count) or line_count <= 0:
+            raise DocumentValidationError("教材 Markdown 行数无效")
+        if not _is_int(character_count) or character_count <= 0:
+            raise DocumentValidationError("教材 Markdown 字符数无效")
+
+        sections = value.get("sections")
+        chunks = value.get("chunks")
+        point_sources = value.get("point_sources")
+        if not isinstance(sections, list) or not sections:
+            raise DocumentValidationError("教材正文材料至少需要一个 section")
+        if not isinstance(chunks, list) or not chunks:
+            raise DocumentValidationError("教材正文材料至少需要一个 chunk")
+        if not isinstance(point_sources, list) or not point_sources:
+            raise DocumentValidationError("教材正文材料至少需要一个 point_sources 项")
+
+        section_ids: set[str] = set()
+        for index, section in enumerate(sections):
+            if not isinstance(section, dict) or set(section) != {
+                "id", "order", "type", "title", "heading_level",
+                "heading_path", "line_start", "line_end", "page",
+                "asset_refs", "sha256",
+            }:
+                raise DocumentValidationError("教材 section 结构无效")
+            section_id = section.get("id")
+            if (
+                not isinstance(section_id, str)
+                or not re.fullmatch(r"block-[0-9]{6}", section_id)
+                or section_id in section_ids
+                or section.get("order") != index
+                or section.get("type") != "section"
+            ):
+                raise DocumentValidationError("教材 section 标识或顺序无效")
+            section_ids.add(section_id)
+            self._validate_material_locator(section, line_count, "section")
+
+        chunk_ids: set[str] = set()
+        for index, chunk in enumerate(chunks):
+            if not isinstance(chunk, dict) or set(chunk) != {
+                "id", "order", "section_ids", "heading_path", "line_start",
+                "line_end", "page", "asset_refs", "sha256",
+            }:
+                raise DocumentValidationError("教材 chunk 结构无效")
+            chunk_id = chunk.get("id")
+            refs = chunk.get("section_ids")
+            if (
+                not isinstance(chunk_id, str)
+                or not re.fullmatch(r"chunk-[0-9]{6}", chunk_id)
+                or chunk_id in chunk_ids
+                or chunk.get("order") != index
+                or not isinstance(refs, list)
+                or not refs
+                or len(set(refs)) != len(refs)
+                or any(ref not in section_ids for ref in refs)
+            ):
+                raise DocumentValidationError("教材 chunk 标识、顺序或 section 引用无效")
+            chunk_ids.add(chunk_id)
+            self._validate_material_locator(chunk, line_count, "chunk")
+
+        seen_points: set[str] = set()
+        for item in point_sources:
+            if not isinstance(item, dict) or set(item) != {
+                "point_id", "section_ids", "chunk_ids",
+            }:
+                raise DocumentValidationError("教材 point_sources 结构无效")
+            point_id = item.get("point_id")
+            section_refs = item.get("section_ids")
+            chunk_refs = item.get("chunk_ids")
+            if (
+                not isinstance(point_id, str)
+                or not re.fullmatch(r"point-[0-9]+(?:-[0-9]+)*", point_id)
+                or point_id in seen_points
+                or not isinstance(section_refs, list)
+                or not section_refs
+                or len(set(section_refs)) != len(section_refs)
+                or any(ref not in section_ids for ref in section_refs)
+                or not isinstance(chunk_refs, list)
+                or not chunk_refs
+                or len(set(chunk_refs)) != len(chunk_refs)
+                or any(ref not in chunk_ids for ref in chunk_refs)
+            ):
+                raise DocumentValidationError("教材 point_sources 引用无效")
+            seen_points.add(point_id)
+
+    @staticmethod
+    def _validate_material_locator(value: dict[str, Any], line_count: int, label: str) -> None:
+        heading_path = value.get("heading_path")
+        assets = value.get("asset_refs")
+        if (
+            not isinstance(heading_path, list)
+            or not heading_path
+            or any(not isinstance(item, str) or not item.strip() for item in heading_path)
+            or not isinstance(assets, list)
+            or len(set(assets)) != len(assets)
+            or any(not isinstance(item, str) or not item.strip() for item in assets)
+            or not _is_int(value.get("line_start"))
+            or not _is_int(value.get("line_end"))
+            or not 1 <= value["line_start"] <= value["line_end"] <= line_count
+            or not _SHA256_RE.fullmatch(str(value.get("sha256") or ""))
+        ):
+            raise DocumentValidationError(f"教材 {label} 正文定位无效")
+        page = value.get("page")
+        if page is not None and (not _is_int(page) or page <= 0):
+            raise DocumentValidationError(f"教材 {label} 页码无效")
+        if label == "section":
+            if not isinstance(value.get("title"), str) or not value["title"].strip():
+                raise DocumentValidationError("教材 section 标题无效")
+            if not _is_int(value.get("heading_level")) or not 1 <= value["heading_level"] <= 6:
+                raise DocumentValidationError("教材 section 标题层级无效")
 
     @staticmethod
     def _validate_page(value: Any) -> None:

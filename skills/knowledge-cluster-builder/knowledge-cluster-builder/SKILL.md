@@ -20,7 +20,7 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 
 输出是发布前的中间产物，不可直接当作 CKDS `index.json` 发布。
 
-### 教材 PDF 模式覆盖规则
+### 教材模式覆盖规则
 
 若 `clustered-graph.json` 同级存在已校验的 `textbook-outline.json`，本 Skill 不执行第 2 节的自由聚类规则，而按以下确定性约束构图：
 
@@ -31,7 +31,7 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 - 装配和 `check-graph` 通过后，额外调用 `validate-textbook-graph`；
 - 章节结构与语义主题不一致时写入复核说明，不得通过重分章来修正教材。
 
-教材模式的时序边界是：章节到知识点的包含关系已经在上游 G1 从 PDF 目录恢复并冻结；本 Skill 只处理内容完成后的语义图谱关系。`prerequisites`、`related`、`role` 和次要簇可以帮助表达学习路径和横向联系，但不能新增、删除、移动或合并教材点，也不能把章节重新分配给其他主簇。章节顺序不自动推导为先修关系。
+教材模式的时序边界是：章节到知识点的包含关系已经在上游 G1 从解析结果恢复并冻结；本 Skill 只处理内容完成后的语义图谱关系。`prerequisites`、`related`、`role` 和次要簇可以帮助表达学习路径和横向联系，但不能新增、删除、移动或合并教材点，也不能把章节重新分配给其他主簇。章节顺序不自动推导为先修关系。
 
 ## 输入解释
 
@@ -150,3 +150,23 @@ description: 接收上游 v2 课程内容中间包（course.json + index.json + 
 - [ ] 已运行 `assemble-graph-points.mjs`，其 `--check` 模式退出码为 0；没有手工复制或精简 point 正文。
 - [ ] `pointCount` 等于 `points` 长度，`clusterCount` 等于 `clusters` 长度。
 - [ ] 主智能体已调用 `review-knowledge-graph`；无有效 `knowledge-graph/G6_GRAPH_REVIEW` 回执时不得进入 G7。
+
+## 阅读顺序关系
+
+图可以在顶层增加独立的 `sequences`：
+
+```json
+{
+  "sequences": {
+    "cluster": [{ "fromId": "foundations", "toId": "applications" }],
+    "point": [{ "fromId": "definition", "toId": "worked-example" }]
+  }
+}
+```
+
+- `cluster` 两端必须是 `clusters[].id`，`point` 两端必须是 `points[].id`。
+- 每条边严格包含 `fromId/toId`，不得重复、自环、悬空或形成有向环。
+- sequence 只表达教材或推荐阅读顺序，不参加 prerequisite DAG 推断，也不替代 related。
+- 教材模式按章节顺序生成簇边，按同一章节内的知识点顺序生成点边；普通课程没有明确顺序时
+  可写空数组。
+- 校验和汇报中分别统计 cluster sequence 与 point sequence 的边数。

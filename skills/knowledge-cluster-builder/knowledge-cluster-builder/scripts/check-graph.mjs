@@ -23,6 +23,7 @@
 // 默认打印人类可读报告；加 --json 输出机器可读的 { ok, counts, findings } 供程序解析。
 
 import { readFileSync } from 'node:fs';
+import { sequenceCounts, validateSequences } from './sequence-contract.mjs';
 
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ROLES = ['trunk', 'branch', 'leaf'];
@@ -35,6 +36,7 @@ const REQUIRED_POINT_FIELDS = [
 const OPTIONAL_POINT_FIELDS = [
   'formula', 'comparisons', 'history', 'yearIntroduced', 'prosCons',
   'visualType', 'visualSuggestion', 'animationSuggestion',
+  'origin', 'sourceSpans', 'modelEnriched',
 ];
 
 const args = process.argv.slice(2);
@@ -140,6 +142,10 @@ points.forEach((p, i) => {
   }
   pointIds.add(p.id);
 });
+
+for (const finding of validateSequences(data.sequences, { clusterIds, pointIds })) {
+  add(finding);
+}
 
 // —— A3. 簇归属 clusterIds、role、悬空引用、自环 ——
 points.forEach((p, i) => {
@@ -260,6 +266,7 @@ while (queue.length) {
 }
 
 const edgeCount = [...graph.values()].reduce((a, b) => a + b.length, 0);
+const sequenceStats = sequenceCounts(data.sequences);
 
 // 每簇按主簇 clusterIds[0] 归组；多簇点只计入主簇，另行报告其数量。
 const byCluster = new Map();
@@ -285,6 +292,7 @@ if (asJson) {
       points: points.length,
       clusters: clusters.length,
       prerequisiteEdges: edgeCount,
+      ...sequenceStats,
       multiClusterPoints,
     },
     learningOrder: order,

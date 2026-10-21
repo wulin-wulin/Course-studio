@@ -20,6 +20,7 @@ import {
   assertTextbookSourceUnchanged,
   textbookStructureSha256,
 } from './textbook-structure.mjs';
+import { validateSequences } from '../../knowledge-cluster-builder/knowledge-cluster-builder/scripts/sequence-contract.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GRAPH_CHECKER = path.resolve(
@@ -162,7 +163,18 @@ function clusterReviewPayload(graph) {
       related: [...point.related],
     };
   });
-  return { clusters, assignments };
+  const payload = { clusters, assignments };
+  if (Object.prototype.hasOwnProperty.call(graph, 'sequences')) {
+    const sequenceFindings = validateSequences(graph.sequences, {
+      clusterIds,
+      pointIds,
+    });
+    if (sequenceFindings.length > 0) {
+      throw new Error(`graph.sequences 审核载荷非法：${sequenceFindings[0].message}`);
+    }
+    payload.sequences = structuredClone(graph.sequences);
+  }
+  return payload;
 }
 
 function graphReviewAuditPayload(graph) {
@@ -567,7 +579,7 @@ function validateGraphShape(graph, findings) {
   if (!checkShape(
     graph,
     ['schema_version', 'subject', 'generation', 'clusters', 'points'],
-    [],
+    ['sequences'],
     findings,
     'graph',
     'bad-top-level-shape',
@@ -946,6 +958,12 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
     graphPoints: graph.points.length,
     clusters: graph.clusters.length,
     prerequisiteEdges: targetEdges.size,
+    clusterSequenceEdges: Array.isArray(graph.sequences?.cluster)
+      ? graph.sequences.cluster.length
+      : 0,
+    pointSequenceEdges: Array.isArray(graph.sequences?.point)
+      ? graph.sequences.point.length
+      : 0,
     multiClusterPoints: graph.points.filter((point) => point?.clusterIds?.length > 1).length,
     refinedEdges: Array.isArray(graph.generation.refinedPrerequisiteEdges)
       ? graph.generation.refinedPrerequisiteEdges.length

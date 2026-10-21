@@ -15,7 +15,7 @@ description: 端到端编排 v2 课程知识流水线：生成完整课程内容
 pipeline/<course-id>/
 ├── course-content/
 ├── clustered-graph.json
-└── textbook-outline.json  # 仅教材 PDF 模式
+└── textbook-outline.json  # 仅教材模式（PDF 或 Markdown）
 ```
 
 确定一种模式：
@@ -65,7 +65,7 @@ pipeline/<course-id>/
 - 不生成详情、动画实现、知识簇、关系或布局字段。
 - 调用 `validate-index`，失败则修复后重跑。
 - 教材模式必须先用 `textbook-outline.json` 决定完整点集，调用 `validate-textbook-outline` 后才可调用 `validate-index`；不得从内容反向聚类出教材结构。
-- 教材模式在 G1 只确定 PDF 提供的章节包含关系和教材点顺序；不得在这一阶段生成或使用 `prerequisites`、`related` 或 cluster 关系来重构教材树。
+- 教材模式在 G1 只确定解析结果提供的章节包含关系和教材点顺序；不得在这一阶段生成或使用 `prerequisites`、`related` 或 cluster 关系来重构教材树。
 
 ### G2_IDENTITY_REVIEW
 
@@ -86,6 +86,9 @@ pipeline/<course-id>/
   3. `validate-points`
 
 - 教材模式中，G3 生成的 `prerequisites` 只能作为基于内容的候选语义关系；它们不改变 G1 冻结的章节、顺序、教材点身份或章节归属。
+- 教材 Markdown 模式中，每个详情任务必须读取 `material.json` 中该点对应的 source spans，
+  传入点级正文证据包，并在 point 与 manifest 中保留 `origin/sourceSpans/modelEnriched`。
+  不得只根据目录标题自行编写全部正文。
 
 ### G4_ANIMATIONS
 
@@ -107,7 +110,10 @@ pipeline/<course-id>/
 - 新增 `clusters / clusterIds / role / related`，不生成布局。
 - 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
 - 教材模式不执行自由聚类：章节一一成为 cluster，点的首个 `clusterIds` 固定为所属章节。完成上述装配检查后再调用 `validate-textbook-graph`。
-- G6 的关系工作是对内容完成后的 `prerequisites`、`related`、`role` 和次要簇做补充、审计和去环；它不能把语义关系反向当作教材树，也不能用聚类结果覆盖 PDF 章节结构。
+- G6 的关系工作是对内容完成后的 `prerequisites`、`related`、`role` 和次要簇做补充、审计和去环；它不能把语义关系反向当作教材树，也不能用聚类结果覆盖已冻结的教材章节结构。
+- 图顶层使用 `sequences.cluster/point[{fromId,toId}]` 保存显式阅读顺序。章节相邻顺序写入
+  cluster edges，同一章节内的点顺序写入 point edges；该关系独立于 prerequisites/related，
+  必须无悬空引用、重复、自环和有向环。
 
 ### G6_GRAPH_REVIEW
 

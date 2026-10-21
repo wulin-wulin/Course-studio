@@ -2,6 +2,8 @@ export type ForestPoint = {
   id: string;
   title: string;
   clusterId: string;
+  /** Where this point entered a textbook-grounded course. */
+  origin?: "textbook" | "llm-extension" | "user";
   shortSummary?: string;
   difficulty?: string;
   importance?: number;
@@ -22,9 +24,35 @@ export type ForestCluster = {
   labelPos?: [number, number];
 };
 
+/** A directed reading-order edge. It is intentionally separate from prerequisite relations. */
+export type ForestSequenceEdge = {
+  fromId: string;
+  toId: string;
+};
+
+export type ForestSequences = {
+  /** Recommended order between knowledge clusters. */
+  cluster: ForestSequenceEdge[];
+  /** Recommended order between knowledge points. */
+  point: ForestSequenceEdge[];
+};
+
+export type ForestSourceSpan = {
+  materialId: string;
+  blockIds: string[];
+  headingPath: string[];
+  lineStart: number;
+  lineEnd: number;
+  page?: number;
+  assetRefs: string[];
+  excerptSha256: string;
+};
+
 export type ForestIndex = {
   clusters: ForestCluster[];
   points: ForestPoint[];
+  /** Optional for backward compatibility with courses published before sequence support. */
+  sequences?: ForestSequences;
 };
 
 /** Metadata exposed by the course catalog API and shared by all course views. */
@@ -58,6 +86,10 @@ export type CoursePointDetail = ForestPoint & {
   animationType?: string;
   visualSuggestion?: string;
   animationSuggestion?: string;
+  /** Verifiable textbook excerpts used to ground this point's content. */
+  sourceSpans?: ForestSourceSpan[];
+  /** True when the point includes model-authored enrichment beyond its source excerpts. */
+  modelEnriched?: boolean;
   yearIntroduced?: number;
   visual?: {
     type?: string;

@@ -33,6 +33,7 @@ export const REPLAY_MODES = new Set([
   'both',
   'loop',
 ]);
+export const POINT_ORIGINS = new Set(['textbook', 'llm-extension', 'user']);
 
 export const INDEX_POINT_KEYS = [
   'id',
@@ -70,6 +71,9 @@ export const POINT_OPTIONAL_KEYS = [
   'visualType',
   'visualSuggestion',
   'animationSuggestion',
+  'origin',
+  'sourceSpans',
+  'modelEnriched',
 ];
 
 export const POINT_ALLOWED_KEYS = [
@@ -235,6 +239,46 @@ function checkProsCons(value, label, errors) {
   });
 }
 
+export function checkSourceSpans(value, label, errors) {
+  if (!Array.isArray(value)) {
+    errors.push(`${label} 必须是数组`);
+    return;
+  }
+  value.forEach((span, index) => {
+    const spanLabel = `${label}[${index}]`;
+    const required = [
+      'materialId', 'blockIds', 'headingPath', 'lineStart', 'lineEnd',
+      'assetRefs', 'excerptSha256',
+    ];
+    const allowed = [...required, 'page'];
+    if (!checkObjectShape(span, required, allowed, spanLabel, errors)) return;
+    checkNonEmptyString(span.materialId, `${spanLabel}.materialId`, errors);
+    checkStringArray(span.blockIds, `${spanLabel}.blockIds`, errors, {
+      min: 1,
+      unique: true,
+    });
+    checkStringArray(span.headingPath, `${spanLabel}.headingPath`, errors);
+    checkStringArray(span.assetRefs, `${spanLabel}.assetRefs`, errors, {
+      unique: true,
+    });
+    if (!Number.isInteger(span.lineStart) || span.lineStart < 1) {
+      errors.push(`${spanLabel}.lineStart 必须是正整数`);
+    }
+    if (!Number.isInteger(span.lineEnd) || span.lineEnd < span.lineStart) {
+      errors.push(`${spanLabel}.lineEnd 必须是不小于 lineStart 的正整数`);
+    }
+    if ('page' in span && (!Number.isInteger(span.page) || span.page < 1)) {
+      errors.push(`${spanLabel}.page 必须是正整数`);
+    }
+    if (
+      typeof span.excerptSha256 !== 'string'
+      || !/^[0-9a-f]{64}$/.test(span.excerptSha256)
+    ) {
+      errors.push(`${spanLabel}.excerptSha256 必须是小写 SHA-256`);
+    }
+  });
+}
+
 export function checkPoint(point, label, errors) {
   if (!checkObjectShape(
     point,
@@ -311,6 +355,15 @@ export function checkPoint(point, label, errors) {
   }
   if ('prosCons' in point) {
     checkProsCons(point.prosCons, `${label}.prosCons`, errors);
+  }
+  if ('origin' in point && !POINT_ORIGINS.has(point.origin)) {
+    errors.push(`${label}.origin 必须是 textbook/llm-extension/user`);
+  }
+  if ('sourceSpans' in point) {
+    checkSourceSpans(point.sourceSpans, `${label}.sourceSpans`, errors);
+  }
+  if ('modelEnriched' in point && typeof point.modelEnriched !== 'boolean') {
+    errors.push(`${label}.modelEnriched 必须是布尔值`);
   }
 
   if ('visualType' in point && !VISUAL_TYPES.has(point.visualType)) {

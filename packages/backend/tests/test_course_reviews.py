@@ -265,6 +265,13 @@ class ReviewFixture:
                     "refinedPrerequisiteEdges": [],
                 },
                 "clusters": clusters,
+                "sequences": {
+                    "cluster": [{"fromId": "core", "toId": "practice"}],
+                    "point": [
+                        {"fromId": "alpha", "toId": "beta"},
+                        {"fromId": "beta", "toId": "gamma"},
+                    ],
+                },
                 "points": graph_points,
             },
         )
@@ -403,6 +410,13 @@ class CourseReviewStoreTest(unittest.TestCase):
                 "order": 1,
             },
         ]
+        graph["sequences"] = {
+            "cluster": [{"fromId": "chapter-one", "toId": "chapter-two"}],
+            "point": [
+                {"fromId": "alpha", "toId": "beta"},
+                {"fromId": "beta", "toId": "gamma"},
+            ],
+        }
         expected_cluster = {
             "alpha": "chapter-one",
             "beta": "chapter-one",
@@ -609,6 +623,10 @@ class CourseReviewStoreTest(unittest.TestCase):
         self.assertEqual(alpha["clusterIds"], ["core"])
         self.assertIn("prerequisites", alpha)
         self.assertIn("related", alpha)
+        self.assertEqual(
+            resource["sequences"]["cluster"],
+            [{"fromId": "core", "toId": "practice"}],
+        )
         operations = [
             {
                 "op": "set-clusters",
@@ -664,6 +682,23 @@ class CourseReviewStoreTest(unittest.TestCase):
             self.assertRegex(approval[key], r"^[a-f0-9]{64}$")
             self.assertEqual(approval[key], result["review"][key])
         self.assertEqual(approval["submitted_operations"], operations)
+
+    def test_sequence_change_invalidates_resolved_graph_approval(self):
+        resource = self.pending_graph(prerequisites={"beta": ["alpha"]})
+        result = self.submit(resource, [])
+        approved_hash = result["review"]["clusters_sha256"]
+
+        graph_path = self.fixture.course_root / "clustered-graph.json"
+        graph = _read_json(graph_path)
+        graph["sequences"]["point"] = [
+            {"fromId": "alpha", "toId": "gamma"},
+        ]
+        _write_json(graph_path, graph)
+
+        refreshed = self.store.pending_for_conversation(CONVERSATION_ID)
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(refreshed[0]["status"], "pending")
+        self.assertNotEqual(refreshed[0]["clusters_sha256"], approved_hash)
 
     def test_related_is_read_only_and_mutually_exclusive_with_prerequisite(self):
         resource = self.pending_graph(
