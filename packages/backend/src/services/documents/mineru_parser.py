@@ -1,23 +1,29 @@
 """MinerU cloud precision API adapter returning the existing outline contract."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import time
 from typing import Any
+import unicodedata
 import uuid
 from zipfile import BadZipFile, ZipFile
 
 import httpx
+from pypdf import PdfReader, PdfWriter
 
 from ...config import settings
-from .local_parser import _pdf_page_count, _title_from_filename, parse_toc_text
+from .local_parser import _pdf_page_count, _title_from_filename, _TOC_HEADING_RE, parse_toc_text
 from .store import OUTLINE_SCHEMA, DocumentParseError, DocumentParserUnavailableError
 
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
+MAX_PART_PAGES = 100
+MAX_PARALLEL_PARTS = 5
 
 
 def content_list_to_pages(content: Any, page_count: int) -> list[str]:
@@ -59,7 +65,7 @@ def _api_data(response: httpx.Response) -> dict[str, Any]:
     return value["data"]
 
 
-def _read_artifacts(archive_bytes: bytes) -> tuple[bytes, bytes]:
+def _read_artifacts(archive_bytes: bytes, directory: Path) -> tuple[bytes, bytes]:
     try:
         with ZipFile(BytesIO(archive_bytes)) as archive:
             files = archive.infolist()
@@ -69,6 +75,13 @@ def _read_artifacts(archive_bytes: bytes) -> tuple[bytes, bytes]:
             content = [item for item in files if item.filename.endswith("_content_list.json")]
             if len(markdown) != 1 or len(content) != 1:
                 raise DocumentParseError("MinerU 结果缺少唯一的 full.md 或 content_list.json")
+            image_directory = Path(markdown[0].filename).parent / "images"
+            for item in files:
+                image = Path(item.filename)
+                if not item.is_dir() and image.parent == image_directory and image.suffix.lower() in {
+                    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg",
+                }:
+                    _save_artifact(directory / "images", image.name, archive.read(item))
             # Read known members into fixed filenames; never extract archive paths.
             return archive.read(markdown[0]), archive.read(content[0])
     except DocumentParseError:
@@ -94,16 +107,13 @@ def _save_artifact(directory: Path, name: str, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def parse_mineru_pdf(
+def _parse_mineru_part(
     path: Path, *, document_id: str, filename: str, sha256: str,
-    scan_pages: int, executable: str, timeout_seconds: float,
-) -> dict[str, Any]:
+    page_count: int, directory: Path,
+) -> tuple[bytes, list[Any], dict[str, Any]]:
     token = settings.mineru_api_token.strip()
     if not token:
         raise DocumentParserUnavailableError("MinerU 未配置，请设置 MINERU_API_TOKEN")
-    page_count = _pdf_page_count(path)
-    if page_count > 200:
-        raise DocumentParseError("MinerU 在线精准接口当前单文件最多 200 页，请先分段上传教材")
     base = (settings.mineru_api_base or "https://mineru.net/api/v4").rstrip("/")
     model = settings.mineru_model_version
     parser_name = f"mineru-{model}"
@@ -167,32 +177,111 @@ def parse_mineru_pdf(
                 if state not in {"waiting-file", "pending", "running", "converting"}:
                     raise DocumentParseError("MinerU 返回未知的任务状态")
                 time.sleep(min(2.0, remaining()))
-        markdown, content_bytes = _read_artifacts(archive_bytes)
+        markdown, content_bytes = _read_artifacts(archive_bytes, directory)
         try:
             content = json.loads(content_bytes)
         except (ValueError, UnicodeError) as exc:
             raise DocumentParseError("MinerU 内容列表不是有效 JSON") from exc
-        raw = path.parent / parser_name
-        _save_artifact(raw, "result.zip", archive_bytes)
-        _save_artifact(raw, "full.md", markdown)
-        _save_artifact(raw, "content-list.json", content_bytes)
-        _save_artifact(raw, "task.json", json.dumps({
+        content_list_to_pages(content, page_count)
+        _save_artifact(directory, "result.zip", archive_bytes)
+        _save_artifact(directory, "full.md", markdown)
+        _save_artifact(directory, "content-list.json", content_bytes)
+        task = {
             "batch_id": batch_id, "parser": parser_name, "sha256": sha256,
             "page_count": page_count, "elapsed_seconds": round(time.monotonic()-started, 2),
-        }, ensure_ascii=False, indent=2).encode("utf-8"))
-        pages = content_list_to_pages(content, page_count)
-        pages_to_scan = min(max(1, int(scan_pages)), page_count)
-        chapters = parse_toc_text("\f".join(pages[:pages_to_scan]))
-        return {
-            "schema_version": OUTLINE_SCHEMA, "document_id": document_id,
-            "title": _title_from_filename(filename),
-            "source": {"filename": filename, "sha256": sha256, "page_count": page_count,
-                       "parser": parser_name, "toc_pages": pages_to_scan},
-            "chapters": chapters,
         }
+        _save_artifact(directory, "task.json", json.dumps(task, ensure_ascii=False, indent=2).encode("utf-8"))
+        return markdown, content, task
     except httpx.TimeoutException as exc:
         raise DocumentParseError("MinerU 网络请求超时，请重试") from exc
     except httpx.HTTPStatusError as exc:
         raise DocumentParseError(f"MinerU HTTP 请求失败（{exc.response.status_code}），请检查服务和额度") from exc
     except httpx.HTTPError as exc:
         raise DocumentParserUnavailableError("无法连接 MinerU，请检查网络和 MINERU_API_BASE") from exc
+
+
+def parse_mineru_pdf(
+    path: Path, *, document_id: str, filename: str, sha256: str,
+    scan_pages: int, executable: str, timeout_seconds: float,
+) -> dict[str, Any]:
+    """Split long PDFs into at most 100-page parts and merge in source order."""
+    if not settings.mineru_api_token.strip():
+        raise DocumentParserUnavailableError("MinerU 未配置，请设置 MINERU_API_TOKEN")
+    page_count = _pdf_page_count(path)
+    parser_name = f"mineru-{settings.mineru_model_version}"
+    raw = path.parent / parser_name
+    started = time.monotonic()
+    if page_count <= MAX_PART_PAGES:
+        _, content, _ = _parse_mineru_part(
+            path, document_id=document_id, filename=filename, sha256=sha256,
+            page_count=page_count, directory=raw,
+        )
+    else:
+        with TemporaryDirectory(prefix="mineru-") as temporary:
+            reader = PdfReader(path)
+            if reader.is_encrypted:
+                reader.decrypt("")
+            parts = []
+            for start in range(0, page_count, MAX_PART_PAGES):
+                end = min(start + MAX_PART_PAGES, page_count)
+                part = Path(temporary) / f"part-{len(parts) + 1:04d}.pdf"
+                with PdfWriter() as writer:
+                    for page in reader.pages[start:end]:
+                        writer.add_page(page)
+                    writer.write(part)
+                parts.append((part, start, end))
+
+            def parse_part(part):
+                source, start, end = part
+                return _parse_mineru_part(
+                    source, document_id=f"{document_id}-{source.stem}",
+                    filename=source.name, sha256=sha256, page_count=end - start,
+                    directory=raw / "parts" / source.stem,
+                )
+
+            markdown_parts = []
+            content = []
+            tasks = []
+            with ThreadPoolExecutor(max_workers=MAX_PARALLEL_PARTS) as pool:
+                # map yields in input order even when later parts finish first.
+                for (part, start, end), (markdown, blocks, task) in zip(parts, pool.map(parse_part, parts)):
+                    prefix = f"parts/{part.stem}/"
+                    for marker in (b"](", b'src="', b"src='"):
+                        for image_path in (b"images/", b"./images/"):
+                            markdown = markdown.replace(marker + image_path, marker + prefix.encode() + b"images/")
+                    markdown_parts.append(markdown.rstrip())
+                    for block in blocks:
+                        if isinstance(block, dict):
+                            block = {**block, "page_idx": block["page_idx"] + start}
+                            image_path = block.get("img_path")
+                            if isinstance(image_path, str) and image_path.startswith(("images/", "./images/")):
+                                block["img_path"] = prefix + image_path.removeprefix("./")
+                        content.append(block)
+                    tasks.append({"name": part.stem, "page_start": start + 1, "page_end": end,
+                                  "batch_id": task["batch_id"]})
+        # A failed part raises before any combined output is published.
+        _save_artifact(raw, "full.md", b"\n\n".join(markdown_parts) + b"\n")
+        _save_artifact(raw, "content-list.json", json.dumps(content, ensure_ascii=False).encode("utf-8"))
+        _save_artifact(raw, "task.json", json.dumps({
+            "parser": parser_name, "sha256": sha256, "page_count": page_count,
+            "parts": tasks, "elapsed_seconds": round(time.monotonic() - started, 2),
+        }, ensure_ascii=False, indent=2).encode("utf-8"))
+    pages = content_list_to_pages(content, page_count)
+    pages_to_scan = min(max(1, int(scan_pages)), page_count)
+    reader = PdfReader(path)
+    if reader.is_encrypted:
+        reader.decrypt("")
+    # Native text keeps TOC leaders and chapter numbers that OCR can omit.
+    toc_text = unicodedata.normalize("NFKC", "\f".join(
+        page.extract_text(extraction_mode="layout") for page in reader.pages[:pages_to_scan]
+    ))
+    if not any(_TOC_HEADING_RE.fullmatch(line) for line in toc_text.splitlines()):
+        toc_text = unicodedata.normalize("NFKC", "\f".join(pages[:pages_to_scan]))
+    chapters = parse_toc_text(toc_text)
+    return {
+        "schema_version": OUTLINE_SCHEMA, "document_id": document_id,
+        "title": _title_from_filename(filename),
+        "source": {"filename": filename, "sha256": sha256, "page_count": page_count,
+                   "parser": parser_name, "toc_pages": pages_to_scan},
+        "chapters": chapters,
+    }
