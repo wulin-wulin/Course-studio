@@ -14,13 +14,19 @@ import {
   uploadTextbookDocument,
   type TextbookDocumentMetadata,
 } from "./api";
-import { isSupportedTextbookFile, TEXTBOOK_FILE_ACCEPT } from "./setup";
+import {
+  isSupportedMarkdownTextbookFile,
+  isSupportedTextbookFile,
+  MARKDOWN_TEXTBOOK_FILE_ACCEPT,
+  TEXTBOOK_FILE_ACCEPT,
+} from "./setup";
 
 type ProcessingPhase = "idle" | "uploading" | "parsing" | "ready" | "error";
 
 type PdfCourseCreationFormProps = {
   disabled?: boolean;
   externalError?: string;
+  acceptedFormat?: "all" | "markdown";
   onReady: (document: TextbookDocumentMetadata) => void;
   onCancel: () => void;
 };
@@ -28,6 +34,7 @@ type PdfCourseCreationFormProps = {
 export function PdfCourseCreationForm({
   disabled = false,
   externalError = "",
+  acceptedFormat = "all",
   onReady,
   onCancel,
 }: PdfCourseCreationFormProps) {
@@ -80,18 +87,29 @@ export function PdfCourseCreationForm({
     const nextFile = event.target.files?.[0];
     event.target.value = "";
     if (!nextFile) return;
-    if (!isSupportedTextbookFile(nextFile)) {
+    const supported = acceptedFormat === "markdown"
+      ? isSupportedMarkdownTextbookFile(nextFile)
+      : isSupportedTextbookFile(nextFile);
+    if (!supported) {
       setFile(nextFile);
       setDocument(null);
       setPhase("error");
-      setError("请选择 PDF 或 Markdown 格式的教材文件（.pdf、.md）");
+      setError(
+        acceptedFormat === "markdown"
+          ? "请选择 Markdown 格式的教材文件（.md、.markdown）"
+          : "请选择 PDF 或 Markdown 格式的教材文件（.pdf、.md）",
+      );
       return;
     }
     if (nextFile.size <= 0) {
       setFile(nextFile);
       setDocument(null);
       setPhase("error");
-      setError("教材文件为空，请选择有效的 PDF 或 Markdown 文件");
+      setError(
+        acceptedFormat === "markdown"
+          ? "教材文件为空，请选择有效的 Markdown 文件"
+          : "教材文件为空，请选择有效的 PDF 或 Markdown 文件",
+      );
       return;
     }
     void processFile(nextFile);
@@ -110,6 +128,7 @@ export function PdfCourseCreationForm({
   const progress = phase === "uploading" ? 38 : phase === "parsing" ? 76 : phase === "ready" ? 100 : 0;
   const visibleError = error || externalError;
   const summary = document?.outlineSummary;
+  const markdownOnly = acceptedFormat === "markdown";
 
   return (
     <section
@@ -121,9 +140,13 @@ export function PdfCourseCreationForm({
           <FileText className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-semibold text-primary">上传教材文件</div>
+          <div className="text-xs font-semibold text-primary">
+            {markdownOnly ? "从 Markdown 生成知识图谱" : "上传教材文件"}
+          </div>
           <div className="mt-0.5 text-[11px] leading-relaxed text-text-secondary">
-            支持 PDF 与 Markdown，系统将读取教材结构和正文内容来创建课程。
+            {markdownOnly
+              ? "上传 MinerU 输出的 full.md 或结构化 Markdown，系统将读取章节、知识点和正文内容。"
+              : "支持 PDF 与 Markdown，系统将读取教材结构和正文内容来创建课程。"}
           </div>
         </div>
       </div>
@@ -139,7 +162,9 @@ export function PdfCourseCreationForm({
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-light text-primary">
               <Upload className="h-5 w-5" />
             </span>
-            <strong className="text-xs text-text-primary">选择 PDF 或 Markdown 教材</strong>
+            <strong className="text-xs text-text-primary">
+              {markdownOnly ? "选择 Markdown 教材" : "选择 PDF 或 Markdown 教材"}
+            </strong>
             <span className="text-[11px] text-text-secondary">选择后会自动上传并解析</span>
           </button>
         ) : (
@@ -179,7 +204,7 @@ export function PdfCourseCreationForm({
                     ) : (
                       <CheckCircle2 className="h-3.5 w-3.5" />
                     )}
-                    {phaseLabel(phase)}
+                    {phaseLabel(phase, markdownOnly)}
                   </span>
                   <span className="text-text-secondary">{progress}%</span>
                 </div>
@@ -199,7 +224,9 @@ export function PdfCourseCreationForm({
             <div className="flex items-start gap-2">
               <BookOpenCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
               <div className="min-w-0">
-                <strong className="block text-xs text-text-primary">教材结构解析完成</strong>
+                <strong className="block text-xs text-text-primary">
+                  {markdownOnly ? "Markdown 教材解析完成" : "教材结构解析完成"}
+                </strong>
                 <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">
                   {formatOutlineSummary(summary)}
                 </p>
@@ -244,7 +271,7 @@ export function PdfCourseCreationForm({
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-white shadow-sm hover:bg-primary-hover disabled:opacity-50"
               >
                 <BookOpenCheck className="h-3.5 w-3.5" />
-                使用此教材创建
+                {markdownOnly ? "开始生成知识图谱" : "使用此教材创建"}
               </button>
             )}
           </div>
@@ -253,7 +280,7 @@ export function PdfCourseCreationForm({
         <input
           ref={inputRef}
           type="file"
-          accept={TEXTBOOK_FILE_ACCEPT}
+          accept={markdownOnly ? MARKDOWN_TEXTBOOK_FILE_ACCEPT : TEXTBOOK_FILE_ACCEPT}
           onChange={chooseFile}
           className="hidden"
         />
@@ -262,14 +289,16 @@ export function PdfCourseCreationForm({
   );
 }
 
-function phaseLabel(phase: ProcessingPhase) {
+function phaseLabel(phase: ProcessingPhase, markdownOnly = false) {
   switch (phase) {
     case "uploading":
       return "正在上传教材";
     case "parsing":
       return "正在整理教材结构与正文材料";
     case "ready":
-      return "解析完成，请确认后开始课程创建";
+      return markdownOnly
+        ? "解析完成，请确认后生成知识图谱"
+        : "解析完成，请确认后开始课程创建";
     case "error":
       return "处理失败";
     default:

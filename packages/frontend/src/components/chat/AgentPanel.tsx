@@ -56,6 +56,7 @@ import {
 import {
   COURSE_CREATION_SETUP_QUESTION,
   prepareCourseCreationRequest,
+  prepareMarkdownCourseCreationRequest,
   preparePdfCourseCreationRequest,
 } from "@/features/courseCreation/setup";
 import { PdfCourseCreationForm } from "@/features/courseCreation/PdfCourseCreationForm";
@@ -86,6 +87,7 @@ type AgentRunStatus = {
 type ConnectionState = "connecting" | "connected" | "disconnected";
 type AgentWorkflow = "default" | "course-create";
 type CourseCreationSource = "topic" | "pdf";
+type TextbookUploadFormat = "all" | "markdown";
 
 type AgentQuestionOption = {
   label: string;
@@ -238,6 +240,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const [courseCreationSetupError, setCourseCreationSetupError] = useState("");
   const [courseCreationSource, setCourseCreationSource] =
     useState<CourseCreationSource>("topic");
+  const [textbookUploadFormat, setTextbookUploadFormat] =
+    useState<TextbookUploadFormat>("all");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
   const [courseDeleteOpen, setCourseDeleteOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -459,6 +463,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
     setWorkflow("default");
     workflowRef.current = "default";
     streamingIdRef.current = null;
@@ -502,6 +507,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
     setHistoryLoading(false);
     setWorkflow("default");
     workflowRef.current = "default";
@@ -562,6 +568,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       setCourseCreationSetupOpen(false);
       setCourseCreationSetupError("");
       setCourseCreationSource("topic");
+      setTextbookUploadFormat("all");
       lastActiveConversationIdRef.current = conversation.id;
       setActiveConversation(conversation.id);
       setMode(restoredMode);
@@ -982,6 +989,19 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setCourseDeleteOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
+    setCourseCreationSetupOpen(true);
+    stickToBottomRef.current = true;
+  }, [isRunning, mode, workflow]);
+
+  const startMarkdownCourseCreation = useCallback(() => {
+    if (mode !== "agent" || isRunning || workflow === "course-create") return;
+    setHistoryOpen(false);
+    setModeInfoOpen(false);
+    setCourseDeleteOpen(false);
+    setCourseCreationSetupError("");
+    setCourseCreationSource("pdf");
+    setTextbookUploadFormat("markdown");
     setCourseCreationSetupOpen(true);
     stickToBottomRef.current = true;
   }, [isRunning, mode, workflow]);
@@ -1047,7 +1067,9 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const confirmPdfCourseCreation = useCallback((
     document: TextbookDocumentMetadata,
   ) => {
-    const request = preparePdfCourseCreationRequest(document);
+    const request = textbookUploadFormat === "markdown"
+      ? prepareMarkdownCourseCreationRequest(document)
+      : preparePdfCourseCreationRequest(document);
     if (!request) {
       setCourseCreationSetupError("教材信息不完整，请重新上传教材文件。");
       return;
@@ -1057,12 +1079,13 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       displayContent: request.displayContent,
       textbookDocumentId: request.documentId,
     });
-  }, [launchCourseCreation]);
+  }, [launchCourseCreation, textbookUploadFormat]);
 
   const cancelCourseCreationSetup = useCallback(() => {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
   }, []);
 
   const startGenerationDemo = useCallback(() => {
@@ -1504,6 +1527,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 aria-selected={courseCreationSource === "topic"}
                 onClick={() => {
                   setCourseCreationSource("topic");
+                  setTextbookUploadFormat("all");
                   setCourseCreationSetupError("");
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -1521,6 +1545,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 aria-selected={courseCreationSource === "pdf"}
                 onClick={() => {
                   setCourseCreationSource("pdf");
+                  setTextbookUploadFormat("all");
                   setCourseCreationSetupError("");
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -1545,6 +1570,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               <PdfCourseCreationForm
                 disabled={isRunning}
                 externalError={courseCreationSetupError}
+                acceptedFormat={textbookUploadFormat}
                 onReady={confirmPdfCourseCreation}
                 onCancel={cancelCourseCreationSetup}
               />
@@ -1611,8 +1637,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
-          <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
-            <div className="flex min-w-0 items-center gap-2">
+          <div className="flex items-end justify-between gap-2 px-3 pb-2.5">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               {mode === "agent" && (
                 <>
                   <button
@@ -1630,6 +1656,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                   >
                     <BookPlus className="h-3.5 w-3.5" />
                     创建课程
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startMarkdownCourseCreation}
+                    disabled={isRunning || workflow === "course-create" || courseCreationSetupOpen}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      workflow === "course-create"
+                        ? "当前对话正在创建课程"
+                        : "上传 MinerU Markdown 并生成知识森林图谱"
+                    }
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Markdown 生成图谱
                   </button>
                   <button
                     type="button"

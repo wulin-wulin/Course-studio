@@ -463,6 +463,43 @@ test("textbook upload accepts compatible PDF and Markdown file descriptors", () 
   assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /\.md/);
 });
 
+test("dedicated Markdown import rejects PDFs and accepts MinerU full.md", () => {
+  assert.equal(
+    contracts.isSupportedMarkdownTextbookFile({
+      name: "full.md",
+      type: "text/markdown; charset=utf-8",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedMarkdownTextbookFile({
+      name: "教材.markdown",
+      type: "application/octet-stream",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedMarkdownTextbookFile({
+      name: "教材.pdf",
+      type: "application/pdf",
+    }),
+    false,
+  );
+  assert.match(contracts.MARKDOWN_TEXTBOOK_FILE_ACCEPT, /text\/markdown/);
+  assert.match(contracts.MARKDOWN_TEXTBOOK_FILE_ACCEPT, /\.markdown/);
+});
+
+test("dedicated Markdown creation describes the graph generation action", () => {
+  const request = contracts.prepareMarkdownCourseCreationRequest({
+    id: "document-markdown-1",
+    filename: "full.md",
+  });
+  assert.equal(request.documentId, "document-markdown-1");
+  assert.equal(request.displayContent, "根据 Markdown 生成知识图谱：full.md");
+  assert.match(request.message, /material\.json/);
+  assert.match(request.message, /full\.md/);
+});
+
 test("stale conversation reconciliation prefers the next pending review", () => {
   const decision = contracts.reconcileReviewResume("review-1", {
     pending_review: pointer({

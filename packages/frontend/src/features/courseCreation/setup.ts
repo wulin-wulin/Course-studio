@@ -50,6 +50,15 @@ export const TEXTBOOK_FILE_ACCEPT = [
   ".markdown",
 ].join(",");
 
+export const MARKDOWN_TEXTBOOK_FILE_ACCEPT = [
+  "text/markdown",
+  "application/markdown",
+  "text/x-markdown",
+  "text/plain",
+  ".md",
+  ".markdown",
+].join(",");
+
 type TextbookFileDescriptor = {
   name: string;
   type?: string;
@@ -76,10 +85,20 @@ export function isSupportedTextbookFile(file: TextbookFileDescriptor): boolean {
   if (filename.endsWith(".pdf")) {
     return PDF_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType);
   }
-  if (filename.endsWith(".md") || filename.endsWith(".markdown")) {
-    return MARKDOWN_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType);
-  }
-  return false;
+  return isSupportedMarkdownTextbookFile(file);
+}
+
+export function isSupportedMarkdownTextbookFile(
+  file: TextbookFileDescriptor,
+): boolean {
+  const filename = file.name.trim().toLowerCase();
+  const mediaType = ((file.type ?? "").split(";", 1)[0] ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    (filename.endsWith(".md") || filename.endsWith(".markdown")) &&
+    (MARKDOWN_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType))
+  );
 }
 
 export function prepareCourseCreationRequest(
@@ -118,5 +137,17 @@ export function preparePdfCourseCreationRequest(document: {
     filename,
     message: buildPdfCourseCreationMessage(filename),
     displayContent: `根据教材创建课程：${filename}`,
+  };
+}
+
+export function prepareMarkdownCourseCreationRequest(document: {
+  id: string;
+  filename: string;
+}): PreparedPdfCourseCreationRequest | null {
+  const request = preparePdfCourseCreationRequest(document);
+  if (!request) return null;
+  return {
+    ...request,
+    displayContent: `根据 Markdown 生成知识图谱：${request.filename}`,
   };
 }
