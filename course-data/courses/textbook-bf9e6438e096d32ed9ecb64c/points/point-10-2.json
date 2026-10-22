@@ -1,0 +1,529 @@
+{
+  "id": "point-10-2",
+  "title": "迟滞、去抖与持续时间条件",
+  "shortSummary": "用迟滞、去抖和持续时间条件抑制抖动告警，并评估这些措施引入的检测延迟。",
+  "keyTerms": [
+    "迟滞",
+    "去抖",
+    "持续时间",
+    "抖动",
+    "检测延迟",
+    "告警抑制"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-10-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三种抑制机制、参数取值与判定规则，按“信号形态 → 机制规则 → 延迟代价”重排讲解顺序，补充参数算例、参数实验与上线检查表。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-suppression-rules",
+          "text": "说明迟滞、去抖与持续时间条件各自作用于哪种信号形态，并写出三者的状态转移规则。"
+        },
+        {
+          "id": "size-delay-and-params",
+          "text": "为给定采样周期与业务时延预算选定参数，并估算该配置的最坏检测延迟。"
+        }
+      ],
+      "misconceptions": [
+        "用 sequence_no 的差值统计连续异常，会把 MISSING 跳号误判为段断裂或漏掉真实异常段。",
+        "用 ingest_time 计算持续时间，会在边缘网络拥塞时虚增或虚减异常时长。",
+        "把持续时间设得小于两个采样周期，等价于单点触发，实际等于没有持续时间条件。",
+        "认为迟滞会改写原始 value，或认为迟滞同时抬高了触发阈值。"
+      ],
+      "modules": [
+        {
+          "id": "jitter-shape",
+          "title": "三种抖动与三种抑制手段",
+          "role": "problem-framing",
+          "description": "先按信号形态区分问题，再引入各自匹配的机制。",
+          "outcomeRefs": [
+            "explain-suppression-rules"
+          ],
+          "order": 0
+        },
+        {
+          "id": "hysteresis-deadband",
+          "title": "迟滞：双阈值与死区",
+          "role": "mechanism",
+          "description": "上下行阈值、死区宽度与状态转移，附延迟估算。",
+          "outcomeRefs": [
+            "explain-suppression-rules",
+            "size-delay-and-params"
+          ],
+          "order": 1
+        },
+        {
+          "id": "debounce-pending",
+          "title": "去抖：待确认状态与最小有效窗",
+          "role": "mechanism",
+          "description": "离散状态的待确认计时与脉冲丢弃，附观测分辨率约束。",
+          "outcomeRefs": [
+            "explain-suppression-rules",
+            "size-delay-and-params"
+          ],
+          "order": 2
+        },
+        {
+          "id": "duration-island",
+          "title": "持续时间：岛判定与点数核算",
+          "role": "mechanism",
+          "description": "基于时间间隙的连续异常段识别与延迟预算。",
+          "outcomeRefs": [
+            "explain-suppression-rules",
+            "size-delay-and-params"
+          ],
+          "order": 3
+        },
+        {
+          "id": "composite-diagnosis",
+          "title": "复合配置、误区与参数实验",
+          "role": "parameter-experiment",
+          "description": "两个点位的复合参数表、四个误区与参数区间实验。",
+          "outcomeRefs": [
+            "explain-suppression-rules",
+            "size-delay-and-params"
+          ],
+          "order": 4
+        },
+        {
+          "id": "implementation-checklist",
+          "title": "工程实现与上线检查表",
+          "role": "procedure",
+          "description": "SQL 岛标识、状态机可达性与逐条检查表。",
+          "outcomeRefs": [
+            "explain-suppression-rules",
+            "size-delay-and-params"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-suppression-rules",
+          "size-delay-and-params"
+        ],
+        "method": "完成一次参数配置与最坏延迟估算，并回答形成性检查题中的两个场景。",
+        "successCriteria": [
+          "能为每种信号形态选出匹配的抑制手段并说明理由",
+          "能算出所选参数下的最坏检测延迟，并判断是否落在业务预算内"
+        ],
+        "exerciseBlockId": "model-composite-worksheet",
+        "summaryBlockId": "model-engineering-checklist",
+        "nextPointId": "point-10-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-scope",
+        "moduleId": "jitter-shape",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节讨论的三类判定层手段",
+        "markdown": "本节讨论三种在阈值之上叠加的告警抑制手段：**迟滞**处理模拟量在阈值附近的往复穿越，**去抖**处理离散状态的窄脉冲，**持续时间条件**区分瞬时越限与持续异常。\n\n它们的共同点是不改变原始观测事实，只改变告警状态与事件何时产生。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000348"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "迟滞、去抖与持续时间条件"
+              ],
+              "lineStart": 6387,
+              "lineEnd": 6388,
+              "assetRefs": [],
+              "excerptSha256": "76c295584fae4231231457c1649540a187f623b2d4ba04199e1fd3bc2af2947a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-signal-shapes",
+        "moduleId": "jitter-shape",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "先认信号形态，再选抑制手段",
+        "markdown": "三种手段不能互换，因为要抑制的形态不同：\n\n| 信号形态 | 典型来源 | 匹配手段 | 选错的后果 |\n|---|---|---|---|\n| 连续小幅往复穿越阈值 | 传感器噪声、库温微小波动 | 迟滞 | 用持续时间条件会把真实越限的确认时间拉长，且窄幅噪声仍会切碎异常段 |\n| 窄脉冲式状态跳变 | 门磁机械振动、电磁干扰 | 去抖 | 离散状态没有死区可设，迟滞无从生效 |\n| 短时间内真实越限后自行恢复 | 除霜、开门散热 | 持续时间条件 | 用去抖会把真实短事件当噪声丢弃 |\n\n判断顺序是：先看量是模拟量还是离散状态，再看异常是“反复穿越”还是“一次性短促”，最后才决定参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-scope"
+          ]
+        }
+      },
+      {
+        "id": "tb-hysteresis",
+        "moduleId": "hysteresis-deadband",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "迟滞：双阈值、死区与单向切换",
+        "markdown": "工业传感器在临界值附近会因测量噪声或微小物理波动反复穿越阈值。若告警状态随之高频翻转，会淹没有效信息并耗尽运维注意力。迟滞（Hysteresis）在上升与下降路径上设置不同阈值，形成具有记忆特性的死区，使状态切换具备单向性。\n\n设上行阈值 $T_{\\text{up}}$、下行恢复阈值 $T_{\\text{down}}$，须满足 $T_{\\text{down}} < T_{\\text{up}}$，死区宽度 $\\Delta = T_{\\text{up}} - T_{\\text{down}}$。转移规则为：\n\n- 当前正常时，仅当 $T \\ge T_{\\text{up}}$ 才转入告警；\n- 当前告警时，仅当 $T \\le T_{\\text{down}}$ 才恢复。\n\n澄湾冷链 Z2 温区高温告警取 $T_{\\text{up}} = -14.0\\ \\text{°C}$、$T_{\\text{down}} = -16.0\\ \\text{°C}$，即 $\\Delta = 2.0\\ \\text{K}$。若卸货使库温在 $-15.5\\ \\text{°C}$ 附近振荡，无迟滞系统会产生数十条告警与恢复事件；引入迟滞后状态保持稳定，直到温度明确脱离死区。\n\n死区宽度需权衡灵敏度与稳定性：过窄则噪声容易穿透，过宽则延迟发现真实漂移。工程上常以传感器短期标准差的 3~5 倍为初值，再结合现场调参。迟滞只作用于状态切换判定，不影响原始数据持久化，派生告警记录不得回写 `value` 字段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "迟滞、去抖与持续时间条件",
+                "迟滞：避免阈值边界的乒乓切换"
+              ],
+              "lineStart": 6389,
+              "lineEnd": 6401,
+              "assetRefs": [],
+              "excerptSha256": "7212278cbe855904e79a03098a937b6e6c884e9999468f200409e34d3c999e9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hysteresis-delay",
+        "moduleId": "hysteresis-deadband",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "迟滞的时间代价落在恢复方向",
+        "markdown": "用迟滞参数估算它带来的时间代价。设温度以斜率 $r$（K/min）单调变化，状态跨越死区 $\\Delta$ 需要 $\\Delta / r$ 的时间。\n\n- **触发方向**：正常态要求 $T \\ge T_{\\text{up}}$，与单阈值判定相同，因此不增加首次触发的延迟；\n- **恢复方向**：告警态要求 $T \\le T_{\\text{down}}$，比单阈值多走一段死区，恢复确认被推迟 $\\Delta / r$。\n\n算例：$\\Delta = 2.0\\ \\text{K}$、升温斜率 $r = 0.5\\ \\text{K/min}$，则恢复延迟约 $4\\ \\text{min}$。对冷链高温告警，恢复更慢意味着告警停留更久，偏差落在安全侧；但对“已恢复”的下游通知，必须把这段延迟计入 SLA。\n\n反过来，若业务要求降温后 1 分钟内解除通知，则 $\\Delta \\le r \\times 1\\ \\text{min} = 0.5\\ \\text{K}$，噪声抑制能力随之下降。这就是本节所有抑制手段共同的结构：**抑制力度与检测延迟成正比**。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hysteresis"
+          ]
+        }
+      },
+      {
+        "id": "tb-debounce",
+        "moduleId": "debounce-pending",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "去抖：待确认状态与最小有效窗",
+        "markdown": "门磁开关 `door_state` 在机械振动或电磁干扰下可能输出窄脉冲（例如单次 200 ms 的开启信号），而门体实际未开启。去抖（Debounce）过滤持续时间低于最小有效窗 $D_{\\text{bounce}}$ 的状态跳变。\n\n对状态变量 $s(t) \\in \\{0,1\\}$，带去抖的状态机维护待确认状态 $s_{\\text{pending}}$ 与进入时刻 $t_{\\text{enter}}$：\n\n| 条件 | 动作 |\n|---|---|\n| $s(t) \\ne s_{\\text{stable}}$ 且 $s_{\\text{pending}}$ 未设置 | 记录 $s_{\\text{pending}} \\leftarrow s(t)$、$t_{\\text{enter}} \\leftarrow t$ |\n| $s(t) = s_{\\text{pending}}$ 且 $t - t_{\\text{enter}} \\ge D_{\\text{bounce}}$ | 提交转移 $s_{\\text{stable}} \\leftarrow s_{\\text{pending}}$，输出状态变更事件 |\n| $s(t) \\ne s_{\\text{pending}}$ 且 $t - t_{\\text{enter}} < D_{\\text{bounce}}$ | 清除 $s_{\\text{pending}}$，该脉冲被丢弃 |\n\nZ3-DOOR-01 取 $D_{\\text{bounce}} = 3\\ \\text{s}$。门磁心跳周期为 60 s，状态变化走事件驱动上报，因此去抖计时以 `event_time` 为准，而非接收时刻。振动产生连续多个间隔 100 ms 的翻转时，只要任一间隙回到稳定值且未满 3 s，整串脉冲都被抑制。\n\n去抖与迟滞的分工不同：迟滞作用于模拟量的双向阈值，去抖作用于离散状态的时间持续性。二者可叠加，但须分层——先用去抖确认物理状态，再用迟滞判定告警级别。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000350"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "迟滞、去抖与持续时间条件",
+                "去抖：消除脉冲型伪异常"
+              ],
+              "lineStart": 6402,
+              "lineEnd": 6417,
+              "assetRefs": [],
+              "excerptSha256": "b9b38644cd69938d8022bb0c197c747fb262753c8bfaf7677d108c26315a195a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-debounce-timing",
+        "moduleId": "debounce-pending",
+        "depth": "core",
+        "kind": "example",
+        "title": "去抖窗能不能生效，取决于观测分辨率",
+        "markdown": "去抖窗的取值不是孤立的，它要和状态变化的观测方式一起看。\n\n- 若状态变化为事件驱动上报，观测间隔远小于 $D_{\\text{bounce}}$，去抖延迟上界就是 $D_{\\text{bounce}}$ 本身（本例 3 s）；\n- 若只有 60 s 心跳、没有变化事件，任何小于 60 s 的 $D_{\\text{bounce}}$ 都会被量化到心跳网格上。此时 3 s 的窗实际等于“等下一拍”：既滤不掉 200 ms 脉冲，又引入最多 60 s 延迟。\n\n由此得到两个可检验条件：$D_{\\text{bounce}}$ 必须大于要抑制的脉冲宽度（否则脉冲被提交），同时必须小于业务可容忍的状态确认延迟（否则真实开门迟迟不报）。Z3 的 3 s 窗落在 200 ms 脉冲与秒级确认之间，正是这两个约束的交集。\n\n检查方式：统计一次真实开门从发生到事件落库的时间分布，若上界明显超过 $D_{\\text{bounce}}$，说明瓶颈在观测分辨率而不是去抖参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-debounce"
+          ]
+        }
+      },
+      {
+        "id": "tb-duration",
+        "moduleId": "duration-island",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "持续时间：连续异常岛与点数核算",
+        "markdown": "冷链场景要区分“压缩机除霜导致的 60 s 温度回升”与“制冷系统失效导致的持续升温”。持续时间条件（Duration Condition）规定：仅当异常连续存在不少于 $D_{\\text{min}}$ 时才触发告警。\n\n判定持续时间的关键是识别连续异常段（岛）。贯穿案例契约规定 `sequence_no` 只用于识别重复与缺口，不保证连续无跳跃，因此不能用 `sequence_no - ROW_NUMBER()` 的差值法；正确做法基于 `event_time` 与采样周期 $P$ 的间隙检测。\n\n对 Z2-TEMP-01 的 30 s 温度序列，取阈值 $T_{\\text{thr}} = -18.0\\ \\text{°C}$，异常标志 $a_i = \\mathbb{1}[T_i \\ge T_{\\text{thr}}]$。对相邻两条 `quality_code = 'GOOD'` 记录，若 $t_{i+1} - t_i > 1.5 \\times P$（本例 $P = 30\\ \\text{s}$，间隙阈值取 45 s），则视为段断裂，前后异常点属于不同岛。\n\n流式判定按三步进行：遇到正常点先结算待确认岛（时间跨度达到 $D_{\\text{min}}$ 才输出告警岛）；遇到异常点时，若当前没有岛或与上一点间隔超过间隙阈值则开新岛；流结束时再结算一次未闭合的岛。\n\n左闭右开语义下的点数核算：$D_{\\text{min}} = 120\\ \\text{s}$、$P = 30\\ \\text{s}$，期望覆盖 $[t_{\\text{start}}, t_{\\text{start}} + D_{\\text{min}})$，即 $\\lfloor D_{\\text{min}} / P \\rfloor = 4$ 个完整间隔，需要 5 个采样点构成边界，严格满足 $[t_1, t_6)$ 才覆盖 120 s。实现以时间跨度为判据、不强制点数，因而天然兼容偶发 `MISSING` 造成的 `sequence_no` 跳跃：只要相邻 GOOD 点间隔不超过 45 s，就视为连续监测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000351"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "迟滞、去抖与持续时间条件",
+                "持续时间条件：区分瞬时越限与持续异常"
+              ],
+              "lineStart": 6418,
+              "lineEnd": 6454,
+              "assetRefs": [],
+              "excerptSha256": "1486c0833f47e508129e6e00652a7c37ecdd476488eef9abdaf3f6ddc9c6b661"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-duration-delay",
+        "moduleId": "duration-island",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "把持续时间条件折算成延迟预算",
+        "markdown": "确认条件是岛末点与岛首点的时间跨度达到 $D_{\\text{min}}$，因此在连续正常采样的最坏情况下：\n\n$$L_{\\text{worst}} \\approx D_{\\text{min}} + P$$\n\n算例：$D_{\\text{min}} = 120\\ \\text{s}$、$P = 30\\ \\text{s}$，检测延迟落在 120 s（越限点恰好落在采样边界）到 150 s（越限后一拍才发现）之间。若允许一个间隙仍判为同一岛，最坏确认还会增加至多一个间隙阈值 45 s。\n\n三条约束同时成立，持续时间条件才有意义：\n\n1. $D_{\\text{min}} \\ge 2P$，否则单个点即可满足，条件退化为单点触发（3 s 的窗配 5 s 采样就是反例）；\n2. 间隙阈值取相邻 GOOD 点间隔的 95 分位数加裕量，过宽会把两分钟通信中断前后的异常并成一岛；\n3. 计时必须基于 `event_time`，用 `ingest_time` 会在边缘拥塞时虚增或虚减异常时长。\n\n三项抑制手段的延迟量级可以并列比较：迟滞的恢复延迟约 $\\Delta / r$，去抖约 $D_{\\text{bounce}}$，持续时间约 $D_{\\text{min}} + P$。它们共享同一套取舍：**抑制强度越大，确认越慢**。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-duration"
+          ]
+        }
+      },
+      {
+        "id": "tb-composite",
+        "moduleId": "composite-diagnosis",
+        "depth": "core",
+        "kind": "table",
+        "title": "同一点位的复合参数与四类误区",
+        "markdown": "实际部署中三项机制常组合使用。Z2-TEMP-01 的复合策略：\n\n| 机制 | 参数 | 作用层级 |\n|---|---|---|\n| 迟滞 | $T_{\\text{up}} = -14.0\\ \\text{°C}$，$T_{\\text{down}} = -16.0\\ \\text{°C}$ | 模拟量告警状态切换 |\n| 持续时间 | $D_{\\text{min}} = 120\\ \\text{s}$ | 确认异常持续性 |\n| 去抖 | 不适用（温度非离散状态） | — |\n\nZ3-DOOR-01 门磁则采用：\n\n| 机制 | 参数 | 作用层级 |\n|---|---|---|\n| 去抖 | $D_{\\text{bounce}} = 3\\ \\text{s}$ | 确认物理状态有效 |\n| 持续时间 | $D_{\\text{min}} = 300\\ \\text{s}$ | “门开启超 5 分钟”业务告警 |\n\n常见误区与验证方法：\n\n- **以 `ingest_time` 替代 `event_time` 计算持续时间**：边缘拥塞时两者可差分钟级，会虚增或虚减异常时长。验证方式是抽取 `CLOCK_SUSPECT` 记录，对比双时间戳分布。\n- **忽略 `quality_code` 过滤**：异常量程数据可能恒为上限值，伪造成持续越限。验证方式是前置过滤 `WHERE quality_code = 'GOOD'`，并审计非 GOOD 码占比。\n- **间隙阈值过宽**：取 $5 \\times P = 150\\ \\text{s}$ 时，2 分钟通信中断前后的异常点会被误判为同一段。验证方式是统计相邻 GOOD 点间隔分布，取 95 分位数加裕量。\n- **持续时间与采样周期失配**：5 s 采样的压缩机电流配 $D_{\\text{min}} = 3\\ \\text{s}$，单点即触发。验证 $D_{\\text{min}} \\ge 2P$ 是否成立。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000352"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "迟滞、去抖与持续时间条件",
+                "复合条件与故障情形"
+              ],
+              "lineStart": 6455,
+              "lineEnd": 6478,
+              "assetRefs": [],
+              "excerptSha256": "675f08af58760cc1d2429eed0dbca346b8da5373c392d9c7f390c50292ceb1bd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-composite-worksheet",
+        "moduleId": "composite-diagnosis",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "参数区间实验：让延迟预算与稳定性同时成立",
+        "markdown": "把参数代回业务时延预算，检验配置是否可行。设压缩机高温告警的业务要求是“失效后 3 分钟内通知”，采样周期 $P = 30\\ \\text{s}$：\n\n$$D_{\\text{min}} \\le 180\\ \\text{s} - P = 150\\ \\text{s}$$\n\n结合约束 $D_{\\text{min}} \\ge 2P = 60\\ \\text{s}$，可行区间是 $[60, 150]\\ \\text{s}$。取 $D_{\\text{min}} = 120\\ \\text{s}$ 时最坏确认约 150 s，刚好落在要求内但余量为零，因此还要把间隙阈值计入预算。\n\n参数实验：保持 $D_{\\text{min}} = 120\\ \\text{s}$，把间隙阈值从 45 s 改为 150 s。结果是 2 分钟以内的通信中断不再切断岛，中断前后的异常点被合并，一次真实恢复可能被整段吞掉；改成 15 s 则频繁断岛，长异常被切碎成多个不足 120 s 的碎片而漏报。这解释了为什么间隙阈值要由相邻 GOOD 点间隔分布决定，而不是凭经验取整。\n\n请自行选一组参数，写出三件事：$D_{\\text{min}}$、间隙阈值，以及在该配置下最坏确认延迟是否仍在 180 s 以内。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-composite"
+          ]
+        }
+      },
+      {
+        "id": "tb-engineering",
+        "moduleId": "implementation-checklist",
+        "depth": "core",
+        "kind": "code",
+        "title": "工程实现与状态机边界",
+        "markdown": "TimescaleDB 中基于时间间隙的岛标识不依赖 `sequence_no` 连续性：先用 `LAG(event_time)` 得到相邻间隔，再用累积和按超阈间隙切分岛，最后按岛聚合时间跨度。\n\n```sql\nWITH ordered AS (\n    SELECT event_time, value,\n           event_time - LAG(event_time) OVER (ORDER BY event_time) AS gap\n    FROM cold_chain.raw_telemetry\n    WHERE device_id = 'Z2-TEMP-01' AND metric = 'temperature'\n      AND quality_code = 'GOOD'\n      AND event_time >= '2024-01-15T08:00:00Z'\n      AND event_time <  '2024-01-15T09:00:00Z'\n), island_marked AS (\n    SELECT event_time, value,\n           SUM(CASE WHEN gap > INTERVAL '45 seconds' THEN 1 ELSE 0 END)\n               OVER (ORDER BY event_time) AS island_id\n    FROM ordered\n)\nSELECT MIN(event_time) AS island_start,\n       MAX(event_time) AS island_end,\n       MAX(event_time) - MIN(event_time) AS duration,\n       COUNT(*) AS point_count\nFROM island_marked\nGROUP BY island_id\nHAVING BOOL_AND(value >= -18.0)\n   AND MAX(event_time) - MIN(event_time) >= INTERVAL '120 seconds';\n```\n\n关键约束复核：窗口 `event_time >= ... AND event_time < ...` 为左闭右开；`gap` 基于 `event_time` 计算而非 `sequence_no`；`COUNT(*)` 只统计 GOOD 点，与契约一致。若需输出告警生命周期事件，必须另建派生表，不得覆盖 `raw_telemetry`。\n\n状态机须保证可达性：正常 → 待确认（计时中）→ 告警（持续时间满足）→ 待恢复（计时中）→ 正常。禁止从正常直接跳到告警绕过持续时间，也禁止在告警中重新触发自身；运维人员手动屏蔽时应注入外部事件强制转移，而不是删除内部状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000353"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "迟滞、去抖与持续时间条件",
+                "工程实现与边界约定"
+              ],
+              "lineStart": 6479,
+              "lineEnd": 6527,
+              "assetRefs": [],
+              "excerptSha256": "dc1739a0355e4c596fca9b75235a1450630303cec64755ae33def2e71e7120e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-engineering-checklist",
+        "moduleId": "implementation-checklist",
+        "depth": "core",
+        "kind": "summary",
+        "title": "上线前的抑制参数检查表",
+        "markdown": "把本节内容压缩成一份可以逐条打勾的检查表：\n\n- 抑制手段是否与信号形态匹配：模拟量往复穿越用迟滞，离散窄脉冲用去抖，瞬时越限用持续时间条件；\n- 迟滞是否满足 $T_{\\text{down}} < T_{\\text{up}}$，死区宽度是否以短期标准差 3~5 倍起步；\n- 去抖窗是否大于目标脉冲宽度、小于业务可容忍的状态确认延迟，状态变化是否事件驱动上报；\n- 持续时间是否满足 $D_{\\text{min}} \\ge 2P$，间隙阈值是否来自相邻 GOOD 点间隔分布；\n- 计时是否使用 `event_time`，异常段是否只统计 `quality_code = 'GOOD'` 的点；\n- 三种机制的组合顺序是否为“先去抖确认物理状态，再经迟滞与持续时间判定告警”，各自的延迟是否已计入业务 SLA。\n\n这些机制仍然只是单点条件。当判定需要同时依赖温度、压缩机负载与门磁等多个测点时，就要把它们组合成规则并交给状态机管理，这是下一个知识点要处理的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-engineering"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "delay-budget-check",
+        "type": "formative-check",
+        "title": "参数与延迟自检",
+        "anchorBlockId": "model-duration-delay",
+        "moduleId": "duration-island",
+        "depth": "core",
+        "outcomeRefs": [
+          "size-delay-and-params"
+        ],
+        "learningPurpose": "检查学习者能否把教材给出的阈值、采样周期与持续时间参数代入，算出检测延迟并判断配置是否自洽。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-hysteresis",
+            "tb-duration"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "prompt": "Z2-TEMP-01 取 P = 30 s、D_min = 120 s、间隙阈值 45 s。连续正常采样时，最坏确认延迟约为多少？",
+              "expected": "约 150 s（D_min + P），若期间允许一个 45 s 间隙还可再增加",
+              "feedback": "确认条件是跨度达到 D_min，最坏情况下越限后一拍才发现，因此再加一个采样周期。"
+            },
+            {
+              "prompt": "同一序列若把 D_min 改为 20 s，会退化成什么行为？为什么？",
+              "expected": "退化为单点触发，因为 D_min < 2P",
+              "feedback": "20 s 小于两个采样周期 60 s，单个异常点即可满足跨度条件。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出本点所用采样周期 $P$ 与持续时间阈值 $D_{\\text{min}}$，算出 $D_{\\text{min}} + P$，并说明该值是否超出了业务的告警时延预算。"
+        }
+      }
+    ]
+  },
+  "subtitle": "阈值告警与状态机",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000348"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "迟滞、去抖与持续时间条件"
+      ],
+      "lineStart": 6387,
+      "lineEnd": 6388,
+      "assetRefs": [],
+      "excerptSha256": "76c295584fae4231231457c1649540a187f623b2d4ba04199e1fd3bc2af2947a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000349"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "迟滞、去抖与持续时间条件",
+        "迟滞：避免阈值边界的乒乓切换"
+      ],
+      "lineStart": 6389,
+      "lineEnd": 6401,
+      "assetRefs": [],
+      "excerptSha256": "7212278cbe855904e79a03098a937b6e6c884e9999468f200409e34d3c999e9e"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000350"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "迟滞、去抖与持续时间条件",
+        "去抖：消除脉冲型伪异常"
+      ],
+      "lineStart": 6402,
+      "lineEnd": 6417,
+      "assetRefs": [],
+      "excerptSha256": "b9b38644cd69938d8022bb0c197c747fb262753c8bfaf7677d108c26315a195a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000351"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "迟滞、去抖与持续时间条件",
+        "持续时间条件：区分瞬时越限与持续异常"
+      ],
+      "lineStart": 6418,
+      "lineEnd": 6454,
+      "assetRefs": [],
+      "excerptSha256": "1486c0833f47e508129e6e00652a7c37ecdd476488eef9abdaf3f6ddc9c6b661"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000352"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "迟滞、去抖与持续时间条件",
+        "复合条件与故障情形"
+      ],
+      "lineStart": 6455,
+      "lineEnd": 6478,
+      "assetRefs": [],
+      "excerptSha256": "675f08af58760cc1d2429eed0dbca346b8da5373c392d9c7f390c50292ceb1bd"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000353"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "迟滞、去抖与持续时间条件",
+        "工程实现与边界约定"
+      ],
+      "lineStart": 6479,
+      "lineEnd": 6527,
+      "assetRefs": [],
+      "excerptSha256": "dc1739a0355e4c596fca9b75235a1450630303cec64755ae33def2e71e7120e6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1750,
+    1195
+  ],
+  "scale": 1.22
+}

@@ -180,6 +180,9 @@ Schema 快速核对（不能替代读取原文件）：
 - 普通课程 v1 的 `keyTerms`、`principles`、`applications`、`misconceptions` 都是非空字符串数组，
   `qa` 是至少两项的 `{ "q": string, "a": string }[]`；
 - 教材 v2 不写旧正文栏目，改用 `content.schema_version="textbook-content/2.0"` 和有序 blocks；
+- 教材 v2 先写 outcome-first 的 `learningDesign`，默认 `adaptationLevel: "balanced"`；每个 block
+  用 `moduleId/depth` 接入教学模块，有明确学习目的的交互内容写入带 grounding 和 fallback 的
+  `learningAssets`；
 - 教材块必须带 `quote|paraphrase` 与非空 spans，模型块必须用 `basedOnBlockIds` 向前引用并
   追溯到教材块；
 - 模型块按依据就近插入：单锚点补充紧跟锚点，多锚点补充放在最后一个被引用块之后；不得把所有
@@ -206,6 +209,16 @@ Schema 快速核对（不能替代读取原文件）：
    `manifest.pointEvidence.sourceSpans`；模型块不得引入清单外 span。不要把未读正文交给模型块
    补齐引用。不要在 point 顶层重复写 sourceSpans/modelEnriched；校验器会派生并与 pointEvidence
    的证据计划核对。不得把模型补充伪装成教材原文。
+9. 教材模式先按学习目标设计 outcomes、misconceptions、modules 与 completion，再组织 blocks。
+   默认 balanced，允许重排教学顺序、压缩重复、增加类比/案例/练习/动画/桥接；faithful 保留教材
+   术语和主要顺序，只做去重、澄清与必要检查；teaching-first 可围绕任务重建叙事、合并或拆分讲解。
+   三档都不能改变教材事实、定义、公式、数值、边界和完整覆盖。不要使用固定 token 百分比。学习资产必须声明
+   `anchorBlockId/outcomeRefs/learningPurpose/grounding/fallback`，引用不得悬空。
+   modules 按通用学习骨架和知识类型动态选择，通常为 4–7 个；概念型突出边界与正反例，定量型突出
+   变量/单位/假设/推导/参数实验，流程型突出条件/分支/错误恢复，比较型突出统一维度与取舍，诊断型
+   突出症状到修复的证据链，案例型突出决策、结果、反思与迁移。不要在正文重复顶部 outcomes。
+   estimatedMinutes 必须包含阅读、公式/表格、互动和练习的总用时。若填写
+   `completion.nextPointId`，只能使用冻结 index 中的直接下一点；末点省略。
 
 禁止修改 index、manifest、动画清单、注册文件和任何未授权路径。
 

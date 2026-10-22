@@ -41,6 +41,8 @@ type CourseForestViewportProps = {
   onBackToCatalog: () => void;
 };
 
+type SequenceLayer = "cluster" | "point";
+
 /** The map view for one selected course. Point selection opens a dedicated reader. */
 export function CourseForestViewport({
   course,
@@ -54,6 +56,8 @@ export function CourseForestViewport({
   const [query, setQuery] = useState("");
   const [legendHidden, setLegendHidden] = useState(false);
   const [showSequences, setShowSequences] = useState(false);
+  const [sequenceLayer, setSequenceLayer] = useState<SequenceLayer>("cluster");
+  const [focusedClusterId, setFocusedClusterId] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const requestRef = useRef(0);
   const sceneRef = useRef<SceneHandle | null>(null);
@@ -97,6 +101,8 @@ export function CourseForestViewport({
     setIsLoading(true);
     setLegendHidden(false);
     setShowSequences(false);
+    setSequenceLayer("cluster");
+    setFocusedClusterId(null);
     void loadIndex();
   }, [loadIndex]);
 
@@ -151,11 +157,93 @@ export function CourseForestViewport({
     point: index?.sequences?.point.length ?? 0,
   }), [index]);
   const sequenceCount = sequenceCounts.cluster + sequenceCounts.point;
+  const pointClusterById = useMemo(() => (
+    new Map((index?.points ?? []).map((point) => [point.id, point.clusterId]))
+  ), [index]);
+  const focusedPointSequences = useMemo(() => {
+    if (!focusedClusterId || !index?.sequences) return [];
+    return index.sequences.point.filter((edge) => (
+      pointClusterById.get(edge.fromId) === focusedClusterId
+      && pointClusterById.get(edge.toId) === focusedClusterId
+    ));
+  }, [focusedClusterId, index, pointClusterById]);
+  const firstClusterWithPointSequence = useMemo(() => {
+    for (const edge of index?.sequences?.point ?? []) {
+      const fromClusterId = pointClusterById.get(edge.fromId);
+      if (fromClusterId && fromClusterId === pointClusterById.get(edge.toId)) {
+        return fromClusterId;
+      }
+    }
+    return null;
+  }, [index, pointClusterById]);
+  const displayedSequences = useMemo<ForestSequences | null>(() => {
+    if (!showSequences || !index?.sequences) return null;
+    if (sequenceLayer === "cluster") {
+      return { cluster: index.sequences.cluster, point: [] };
+    }
+    return { cluster: [], point: focusedPointSequences };
+  }, [focusedPointSequences, index, sequenceLayer, showSequences]);
+  const displayedSequenceCount = sequenceLayer === "cluster"
+    ? sequenceCounts.cluster
+    : focusedPointSequences.length;
+  const focusedClusterTitle = focusedClusterId
+    ? clusterById.get(focusedClusterId) ?? null
+    : null;
   const hasForestData = Boolean(index && index.clusters.length > 0 && index.points.length > 0);
 
   useEffect(() => {
-    if (sequenceCount === 0) setShowSequences(false);
+    if (sequenceCount > 0) return;
+    setShowSequences(false);
+    setSequenceLayer("cluster");
   }, [sequenceCount]);
+
+  useEffect(() => {
+    if (!focusedClusterId || clusterById.has(focusedClusterId)) return;
+    setFocusedClusterId(null);
+    setSequenceLayer("cluster");
+  }, [clusterById, focusedClusterId]);
+
+  useEffect(() => {
+    if (!showSequences) return;
+    if (sequenceLayer === "cluster") {
+      if (sequenceCounts.cluster === 0) setShowSequences(false);
+      return;
+    }
+    if (focusedPointSequences.length > 0) return;
+    if (sequenceCounts.cluster > 0) setSequenceLayer("cluster");
+    else setShowSequences(false);
+  }, [focusedPointSequences.length, sequenceCounts.cluster, sequenceLayer, showSequences]);
+
+  const focusCluster = useCallback((clusterId: string) => {
+    setFocusedClusterId(clusterId);
+    sceneRef.current?.flyToCluster(clusterId);
+    if (showSequences) {
+      const hasPointSequence = index?.sequences?.point.some((edge) => (
+        pointClusterById.get(edge.fromId) === clusterId
+        && pointClusterById.get(edge.toId) === clusterId
+      ));
+      if (hasPointSequence) setSequenceLayer("point");
+      else if (sequenceCounts.cluster > 0) setSequenceLayer("cluster");
+      else setShowSequences(false);
+    }
+  }, [index, pointClusterById, sequenceCounts.cluster, showSequences]);
+
+  const toggleSequences = useCallback(() => {
+    if (showSequences) {
+      setShowSequences(false);
+      return;
+    }
+    setShowSequences(true);
+    if (sequenceCounts.cluster > 0) {
+      setSequenceLayer("cluster");
+    } else if (focusedPointSequences.length > 0) {
+      setSequenceLayer("point");
+    } else if (firstClusterWithPointSequence) {
+      setFocusedClusterId(firstClusterWithPointSequence);
+      setSequenceLayer("point");
+      sceneRef.current?.flyToCluster(firstClusterWithPointSequence);
+    }
+  }, [firstClusterWithPointSequence, focusedPointSequences.length, sequenceCounts.cluster, showSequences]);
 
   const openPoint = useCallback(
     (pointId: string) => {
@@ -218,7 +306,7 @@ export function CourseForestViewport({
           defaultValue=""
           onChange={(event) => {
             const clusterId = event.target.value;
-            if (clusterId) sceneRef.current?.flyToCluster(clusterId);
+            if (clusterId) focusCluster(clusterId);
             event.currentTarget.value = "";
           }}
         >
@@ -233,21 +321,32 @@ export function CourseForestViewport({
         <button
           type="button"
           className={`course-forest__sequence-toggle${showSequences ? " is-active" : ""}`}
-          onClick={() => setShowSequences((visible) => !visible)}
-          disabled={sequenceCount === 0}
+          onClick={toggleSequences}
+          disabled={sequenceCount === 0 || !hasForestData}
           aria-pressed={showSequences}
           title={sequenceCount > 0
-            ? `${showSequences ? "隐藏" : "显示"}学习顺序（${sequenceCount} 条）`
+            ? showSequences
+              ? `隐藏当前顺序（${displayedSequenceCount} 条）`
+              : `显示学习顺序（${sequenceCount} 条可用）`
             : "当前课程暂无学习顺序"}
         >
           <ListOrdered aria-hidden="true" size={16} />
-          <span>学习顺序</span>
+          <span>
+            {showSequences
+              ? sequenceLayer === "cluster" ? "簇顺序" : "本簇顺序"
+              : "学习顺序"}
+          </span>
         </button>
 
         <button
           type="button"
           className="course-forest__icon-button"
-          onClick={() => sceneRef.current?.resetView()}
+          onClick={() => {
+            setFocusedClusterId(null);
+            if (sequenceCounts.cluster > 0) setSequenceLayer("cluster");
+            else setShowSequences(false);
+            sceneRef.current?.resetView();
+          }}
           title="重置视图"
           aria-label="重置视图"
         >
@@ -259,7 +358,7 @@ export function CourseForestViewport({
         <ForestScene
           index={index}
           sceneRef={sceneRef}
-          showSequences={showSequences}
+          sequences={displayedSequences}
           onPointClick={openPoint}
         />
       )}
@@ -287,7 +386,9 @@ export function CourseForestViewport({
               <button
                 key={cluster.id}
                 type="button"
-                onClick={() => sceneRef.current?.flyToCluster(cluster.id)}
+                className={focusedClusterId === cluster.id ? "is-focused" : undefined}
+                aria-pressed={focusedClusterId === cluster.id}
+                onClick={() => focusCluster(cluster.id)}
               >
                 <i style={{ backgroundColor: cluster.accent }} aria-hidden="true" />
                 <span>{cluster.title}</span>
@@ -324,18 +425,42 @@ export function CourseForestViewport({
       {index && hasForestData && showSequences && sequenceCount > 0 && (
         <aside className="course-forest__sequence-legend" aria-label="学习顺序图例">
           <strong>学习顺序</strong>
-          {sequenceCounts.cluster > 0 && (
-            <span>
-              <i className="is-cluster" aria-hidden="true" />
-              知识簇 {sequenceCounts.cluster}
-            </span>
-          )}
-          {sequenceCounts.point > 0 && (
-            <span>
-              <i className="is-point" aria-hidden="true" />
-              知识点 {sequenceCounts.point}
-            </span>
-          )}
+          <div className="course-forest__sequence-scope" role="group" aria-label="顺序显示层级">
+            <button
+              type="button"
+              className={sequenceLayer === "cluster" ? "is-active" : undefined}
+              disabled={sequenceCounts.cluster === 0}
+              aria-pressed={sequenceLayer === "cluster"}
+              onClick={() => setSequenceLayer("cluster")}
+            >
+              知识簇
+            </button>
+            <button
+              type="button"
+              className={sequenceLayer === "point" ? "is-active" : undefined}
+              disabled={!focusedClusterId || focusedPointSequences.length === 0}
+              aria-pressed={sequenceLayer === "point"}
+              onClick={() => setSequenceLayer("point")}
+              title={!focusedClusterId
+                ? "请先定位一个知识簇"
+                : focusedPointSequences.length === 0
+                  ? "当前知识簇没有知识点顺序"
+                  : `显示${focusedClusterTitle ?? "当前知识簇"}的知识点顺序`}
+            >
+              本簇知识点
+            </button>
+          </div>
+          <p>
+            {sequenceLayer === "cluster"
+              ? "总览只显示知识簇之间的先后关系"
+              : focusedClusterTitle
+                ? `当前：${focusedClusterTitle}`
+                : "请先定位一个知识簇"}
+          </p>
+          <span>
+            <i className={sequenceLayer === "cluster" ? "is-cluster" : "is-point"} aria-hidden="true" />
+            {sequenceLayer === "cluster" ? "知识簇" : "知识点"} {displayedSequenceCount}
+          </span>
         </aside>
       )}
     </section>
@@ -345,12 +470,12 @@ export function CourseForestViewport({
 function ForestScene({
   index,
   sceneRef,
-  showSequences,
+  sequences,
   onPointClick,
 }: {
   index: ForestIndex;
   sceneRef: MutableRefObject<SceneHandle | null>;
-  showSequences: boolean;
+  sequences: ForestSequences | null;
   onPointClick: (id: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -426,12 +551,12 @@ function ForestScene({
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
-    if (showSequences && index.sequences) {
-      scene.setSequenceEdges(index.sequences);
+    if (sequences && (sequences.cluster.length > 0 || sequences.point.length > 0)) {
+      scene.setSequenceEdges(sequences);
     } else {
       scene.clearSequenceEdges();
     }
-  }, [index.sequences, sceneRef, showSequences]);
+  }, [sceneRef, sequences]);
 
   return <div ref={containerRef} className="course-forest__canvas" aria-label="可交互的知识森林地图" />;
 }

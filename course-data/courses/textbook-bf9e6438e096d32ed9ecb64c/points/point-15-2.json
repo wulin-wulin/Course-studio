@@ -1,0 +1,585 @@
+{
+  "id": "point-15-2",
+  "title": "数据模拟器与数据契约实现",
+  "shortSummary": "用数据模拟器复现工况并落实数据契约，为链路、质量和算法提供可控可复现的测试输入。",
+  "keyTerms": [
+    "数据模拟器",
+    "数据契约",
+    "测试输入",
+    "工况复现",
+    "可复现",
+    "契约校验"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-1-3",
+    "point-15-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-branches-and-checklist",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对模拟器职责、边界、采样时钟、质量码和输出契约的事实约束，按实施顺序重组为前置条件、建模步骤、分支注入、循环恢复与验收检查，并补充可复现实验设计与失败定位练习。",
+      "estimatedMinutes": 19,
+      "outcomes": [
+        {
+          "id": "plan-simulator-run",
+          "text": "给定工况与故障覆盖要求，说明模拟器可复现的边界，并设计采样、数值生成与故障注入步骤。"
+        },
+        {
+          "id": "check-output-contract",
+          "text": "依据输出契约清单校验模拟器记录，识别越权字段、序号回退和单位不一致等违约项。"
+        }
+      ],
+      "misconceptions": [
+        "把数据模拟器当成随机数生成器，忽略采样时钟、持久化序号和故障注入。",
+        "让模拟器生成 ingest_time，或把缺失伪造成 MISSING 质量码直接输出。",
+        "认为模拟器应当复现传感器响应动力学、ADC 量化噪声或协议握手细节。"
+      ],
+      "modules": [
+        {
+          "id": "scope-and-preconditions",
+          "title": "职责边界与开工前置条件",
+          "role": "procedure-setup",
+          "description": "先明确模拟器负责什么、不负责什么，再固定设备、周期和字段契约。",
+          "outcomeRefs": [
+            "plan-simulator-run"
+          ],
+          "order": 0
+        },
+        {
+          "id": "device-clock-steps",
+          "title": "设备行为建模与采样时钟",
+          "role": "procedure-steps",
+          "description": "按设备类型选择周期采样或事件驱动，并落实事件时间与序号规则。",
+          "outcomeRefs": [
+            "plan-simulator-run"
+          ],
+          "order": 1
+        },
+        {
+          "id": "value-generation",
+          "title": "物理量生成与可复现随机源",
+          "role": "worked-example",
+          "description": "把温度、湿度、电流与门磁的生成规则写成可重跑的步骤。",
+          "outcomeRefs": [
+            "plan-simulator-run"
+          ],
+          "order": 2
+        },
+        {
+          "id": "fault-injection-branches",
+          "title": "质量码注入与故障分支",
+          "role": "procedure-branches",
+          "description": "为每种质量码安排唯一注入路径，避免故障互相覆盖。",
+          "outcomeRefs": [
+            "plan-simulator-run"
+          ],
+          "order": 3
+        },
+        {
+          "id": "simulation-loop-and-recovery",
+          "title": "主循环、持久化与错误恢复",
+          "role": "procedure-loop",
+          "description": "按运行顺序实现生成循环，并规定崩溃后的恢复动作。",
+          "outcomeRefs": [
+            "plan-simulator-run",
+            "check-output-contract"
+          ],
+          "order": 4
+        },
+        {
+          "id": "contract-check-and-handoff",
+          "title": "输出契约校验与交接检查表",
+          "role": "procedure-checklist",
+          "description": "用静态检查表和失败定位表确认输出可交给下游链路。",
+          "outcomeRefs": [
+            "check-output-contract"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "plan-simulator-run",
+          "check-output-contract"
+        ],
+        "method": "完成一次模拟器设计走查，并用输出契约清单判定给定记录。",
+        "successCriteria": [
+          "能按设备类型写出采样与事件规则",
+          "能说明各质量码的产生路径及边界",
+          "能指出 ingest_time 越权、序号回退和单位不一致等违约项"
+        ],
+        "summaryBlockId": "model-failure-triage",
+        "nextPointId": "point-15-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-intro",
+        "moduleId": "scope-and-preconditions",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节要完成什么",
+        "markdown": "本节把两件事合并成一个可验收步骤：先用数据模拟器把典型工况与故障模式变成可控输入，再用数据契约规定这些输入进入链路前必须具备的字段、时间语义与质量边界。模拟器不是演示玩具，它的产出要能直接支撑后续链路、质量和算法测试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000531"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现"
+              ],
+              "lineStart": 9851,
+              "lineEnd": 9852,
+              "assetRefs": [],
+              "excerptSha256": "caeb420d79f59009eb4deb025fada33ea81e5567033254cb36bec6a4caed1833"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-scope-boundary",
+        "moduleId": "scope-and-preconditions",
+        "depth": "core",
+        "kind": "definition",
+        "title": "模拟器的职责与适用边界",
+        "markdown": "模拟器承担三类职责：为采集传输链路提供可重复的输入源；在离线环境预演质量规则与清洗逻辑；生成带标注的异常样本，用于校准告警阈值。\n\n它的边界同样明确：只复现已经完成 ADC 换算的物理量及其元数据，不模拟传感器响应动力学、ADC 量化噪声或通信协议握手细节。输出直接符合原始事实表契约，而不是原始电信号。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000532"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现",
+                "数据模拟器的设计目标与边界"
+              ],
+              "lineStart": 9853,
+              "lineEnd": 9858,
+              "assetRefs": [],
+              "excerptSha256": "d020f2bcc4ca4b30eec03f67d8532f82a8fac927cf9278f940e6114db7b9371c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-preconditions",
+        "moduleId": "scope-and-preconditions",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "开工前固定五项条件",
+        "markdown": "把模拟器当成一次受控实验，开工前先固定以下条件：\n\n1. 锁定设备清单与逻辑设备数量，避免每次运行设备集合漂移；\n2. 为每类设备写明采样周期和事件驱动规则；\n3. 约定原始事实字段与单位枚举，先定契约再写生成逻辑；\n4. 准备持久化的序号计数器，明确重启不归零；\n5. 列出不模拟的内容，防止把传感器动力学问题误塞进模拟器。\n\n这份清单也是审阅模拟器代码时的第一层检查：任何一项缺失，后续输出都无法被复现或验收。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-section-intro",
+            "textbook-scope-boundary"
+          ]
+        }
+      },
+      {
+        "id": "textbook-device-clock",
+        "moduleId": "device-clock-steps",
+        "depth": "core",
+        "kind": "table",
+        "title": "设备集合与采样时钟",
+        "markdown": "澄湾案例固定 16 个逻辑设备，按设备类型选择采样方式：\n\n| 设备类型 | 示例 ID | 采样/上报规则 | 周期 |\n|:---|:---|:---|:---|\n| 温度 | Z1-TEMP-01 | 固定周期采样 | 30 s |\n| 湿度 | Z1-HUM-01 | 固定周期采样 | 30 s |\n| 门磁 | Z1-DOOR-01 | 状态变化即时上报 + 心跳 | 60 s |\n| 压缩机电流 | Z1-COMP-01 | 固定周期采样 | 5 s |\n\n固定周期设备的 `event_time` 取采样时刻的整秒对齐值；门磁状态变化取检测边沿的实际时刻，心跳取 60 s 整秒对齐值，全部按 UTC 存储。序号按 `(device_id, metric)` 维护持久化计数器：\n\n$$s_0 = 0, \\quad s_{k+1} = s_k + 1$$\n\n设备重启后计数器不归零。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000533"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现",
+                "设备行为模型与采样时钟"
+              ],
+              "lineStart": 9859,
+              "lineEnd": 9877,
+              "assetRefs": [],
+              "excerptSha256": "e90363da808a6530eaa4f3197f88bbe9a2d8722941dc04bf3e00ec11ef533f35"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-clock-steps",
+        "moduleId": "device-clock-steps",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把时钟规则翻译成代码分支",
+        "markdown": "实现时先判断当前时刻属于哪种触发，再决定是否产出记录：\n\n- 周期设备对周期取模归零才采样，其余时刻直接返回空，不生成占位值；\n- 门磁先看状态是否发生边沿变化，没有变化时只有心跳时刻才产出；\n- 无论哪条分支，产出记录时都要写入对齐后的 UTC `event_time`；\n- 序号只在真正产出一条记录时递增，跳过采样不消耗序号。\n\n这一层把“设备行为模型”与“时间对齐”分开：行为决定要不要生成，时钟决定记录落在哪个整秒。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-device-clock"
+          ]
+        }
+      },
+      {
+        "id": "textbook-value-generation",
+        "moduleId": "value-generation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "物理量换算与数值生成规则",
+        "markdown": "`value` 必须是完成单位换算后的物理量。温度用“带漂移的随机游走 + 日周期分量”生成：\n\n$$T(t) = T_{\\text{set}} + A_{\\text{diurnal}} \\sin\\left(\\frac{2\\pi t}{86400}\\right) + \\sum_{i=1}^{n} \\Delta T_i$$\n\n案例配置中 $T_{\\text{set}}$ 为 Z1/Z2 的 4 °C、Z3 的 −18 °C、Z4 的 −25 °C，$A_{\\text{diurnal}} = 1.5$ °C，$\\Delta T_i \\sim \\mathcal{N}(0, \\sigma_T^2)$ 且 $\\sigma_T = 0.08$ °C。\n\n湿度按与温度反相关的模型生成；压缩机电流由温度偏差的比例控制决定，并叠加最小运行时间约束；门磁为离散状态，单次开启时长服从均值 45 秒的指数分布。每次采样在上一次温度上累加噪声，再叠加日周期分量，因此序列连续而非独立。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000534"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现",
+                "物理量换算与数值生成"
+              ],
+              "lineStart": 9878,
+              "lineEnd": 9889,
+              "assetRefs": [],
+              "excerptSha256": "4510c64ac83fe87184e00e607f960a46498ecf3158d89014b21cf7848f421613"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-seeded-walk",
+        "moduleId": "value-generation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "固定种子走一遍温度采样",
+        "markdown": "用一个固定种子验证可复现性：\n\n1. 设随机种子 `seed=42`，初始化 $T_0 = T_{\\text{set}} = 4$ °C；\n2. 第 $k$ 步先取一个高斯噪声 $\\Delta T_k$，例如 $-0.03$ °C；\n3. 再按 $t = 21600$ s 计算日周期项 $1.5\\sin(\\pi/2) = 1.5$ °C；\n4. 得到 $T_k = 4 + 1.5 - 0.03 = 5.47$ °C。\n\n把种子、初始温度、采样时刻与噪声序列一起写入运行记录，重跑才能得到逐点相同的曲线；如果只固定“大致温度范围”，就无法判断算法差异来自模型还是输入漂移。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-value-generation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-quality-injection",
+        "moduleId": "fault-injection-branches",
+        "depth": "core",
+        "kind": "table",
+        "title": "质量码注入条件",
+        "markdown": "模拟器要能复现七种 `quality_code` 的生成条件，才能覆盖下游质量流水线：\n\n| 质量码 | 注入条件 | 检查方法 |\n|:---|:---|:---|\n| GOOD | 默认输出，所有校验通过 | 直接计数验证 |\n| OUT_OF_RANGE | 温度超出 [−30, 10] °C 或湿度超出 [0, 100] %RH | 边界值断言 |\n| CLOCK_SUSPECT | `event_time` 相对前次倒退或跳变超过 5 min | 序列单调性检查 |\n| DUPLICATE | 相同 `(device_id, metric, sequence_no)` 重复投递 | 去重窗口验证 |\n| LATE | `event_time` 落后下游水位线超过允许迟到范围（案例配置 5 min） | 水位线对比 |\n| MANUAL_REVIEW | 多字段矛盾组合，如门开启时压缩机电流为零且温度持续上升 | 规则引擎触发记录 |\n\nMISSING 不由模拟器直接注入，它只出现在对齐后的派生序列中；模拟器通过跳过指定采样时刻来制造原始记录缺口。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000535"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现",
+                "质量码注入与故障模式"
+              ],
+              "lineStart": 9890,
+              "lineEnd": 9904,
+              "assetRefs": [],
+              "excerptSha256": "fd3941f7d8bd22ea6572832b882d40fafb8f7b755d40985dd372cebb260a9d28"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fault-branches",
+        "moduleId": "fault-injection-branches",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "故障注入的有序分支",
+        "markdown": "把故障注入写成有序分支，避免一次运行里互相覆盖：\n\n1. 先判断当前时刻是否应当采样，不该采样就直接返回空；\n2. 生成正常值与默认 `GOOD`；\n3. 先检查范围，命中则改为 `OUT_OF_RANGE`；\n4. 再注入时钟故障，命中则改为 `CLOCK_SUSPECT`；\n5. `DUPLICATE` 与 `LATE` 属于投递层故障，应在发送侧或测试夹具中制造，而不是篡改正常生成循环；\n6. 需要覆盖原始缺失时，跳过整条记录，不要伪造成 `MISSING`。\n\n这样每个质量码都有唯一、可解释的产生路径，出现异常时才能判断是模拟器缺陷还是下游处理错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-quality-injection"
+          ]
+        }
+      },
+      {
+        "id": "textbook-simulator-pseudocode",
+        "moduleId": "simulation-loop-and-recovery",
+        "depth": "core",
+        "kind": "code",
+        "title": "模拟器核心循环",
+        "markdown": "核心循环可以压缩成下面的伪代码；关键点是用持久化计数器保证序号单调，并让返回结构严格对齐原始事实字段：\n\n```python\nclass DeviceSimulator:\n    def __init__(self, device_id, metric, unit, period_sec):\n        self.sequence_no = load_from_sqlite(device_id, metric)  # [PERSIST]\n        self.last_event_time = load_last_event_time(device_id, metric)\n\n    def generate(self, target_time):\n        if not self.is_sampling_time(target_time):\n            return None\n        value, quality = self.next_value_and_quality(target_time)\n        self.sequence_no += 1  # [PERSIST]\n        self.last_event_time = target_time  # [PERSIST]\n        return {\n            'event_time': utc(target_time),\n            'device_id': self.device_id,\n            'metric': self.metric,\n            'value': round(value, 3),\n            'unit': self.unit,\n            'quality_code': quality,\n            'sequence_no': self.sequence_no,\n            # ingest_time 由云平台接入服务写入\n        }\n```\n\n门磁走事件驱动分支：状态变化立即生成，心跳按 60 s 对齐生成，二者共用同一个序号计数器。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000536"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现",
+                "模拟器核心伪代码"
+              ],
+              "lineStart": 9905,
+              "lineEnd": 9967,
+              "assetRefs": [],
+              "excerptSha256": "973b1139855600dee6faa59b601cf84f436b220bea3431c5db2e4c531abd4440"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loop-recovery",
+        "moduleId": "simulation-loop-and-recovery",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "运行步骤与崩溃恢复",
+        "markdown": "按运行顺序把循环落成可执行步骤，并规定崩溃后的恢复动作：\n\n1. 启动时读取 `(device_id, metric)` 的持久序号与上次事件时间；\n2. 推进模拟时钟，判断当前时刻属于周期采样、门磁边沿还是心跳；\n3. 生成数值并决定质量码，写入内存记录；\n4. 先持久化递增后的序号，再发送记录；若先发送后持久化，进程崩溃后会重发同序号记录；\n5. 发送失败时保留内存副本并按测试夹具的投递策略重试，不得回退序号；\n6. 运行结束核对每个设备的序号连续性与事件时间对齐情况。\n\n第 4 步是模拟器与真实设备共享的契约：序号一旦对外可见，就不能被回收或重排。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-simulator-pseudocode",
+            "textbook-quality-injection"
+          ]
+        }
+      },
+      {
+        "id": "textbook-output-checklist",
+        "moduleId": "contract-check-and-handoff",
+        "depth": "core",
+        "kind": "table",
+        "title": "输出契约验证清单",
+        "markdown": "模拟器输出写入消息队列或文件前，必须通过以下静态校验；任何失败都视为模拟器缺陷，而不是下游问题：\n\n1. `event_time` 为 UTC 整秒时间戳，无毫秒分量；\n2. `sequence_no` 在 `(device_id, metric)` 维度严格单调递增，步长为 1；\n3. `value` 为数值型：门磁是整数 0/1，其余是浮点数；\n4. `unit` 严格匹配固定枚举（Cel、%RH、1、A），禁止空值或大小写变异；\n5. 不存在 `ingest_time` 字段，防止边缘网关误用。\n\n常见错误是把输出直接灌入原始表并手工填 `ingest_time`：该字段必须是云平台接入服务首次持久接收的真实时刻，人工赋值会污染时延分析基准。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000537"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "数据模拟器与数据契约实现",
+                "输出契约验证清单"
+              ],
+              "lineStart": 9968,
+              "lineEnd": 9979,
+              "assetRefs": [],
+              "excerptSha256": "3da34e38f926c62a2e094914c479c71afc672356c24d88907971e3fe92d8dd81"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-triage",
+        "moduleId": "contract-check-and-handoff",
+        "depth": "core",
+        "kind": "summary",
+        "title": "失败定位与交给下一环节",
+        "markdown": "验收时把每条失败映射到明确的修复动作：\n\n| 症状 | 首先检查 | 处理 |\n|:---|:---|:---|\n| 同设备序号重复或回退 | 计数器是否随记录持久化 | 修复持久化点，必要时按业务键去重 |\n| 记录带毫秒或非整秒 | 采样时刻是否先对齐再格式化 | 统一按周期取模归零后转 UTC |\n| 单位大小写不一致 | 设备类型到单位的映射表 | 用固定枚举校验，拒绝自由文本 |\n| 下游时延基准异常偏小 | 输出中是否混入 `ingest_time` | 删除该字段，交由接入服务写入 |\n\n这张表同时是交给 15.3 节链路实现的输入边界：模拟器只对“原始事实字段正确”负责，不替下游补齐接入时间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-output-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "contract-record-triage",
+        "type": "formative-check",
+        "anchorBlockId": "model-failure-triage",
+        "moduleId": "contract-check-and-handoff",
+        "depth": "core",
+        "title": "四条记录的入队判定",
+        "outcomeRefs": [
+          "check-output-contract"
+        ],
+        "learningPurpose": "检查学习者能否把输出契约清单用于真实记录，并区分字段越权、序号回退与单位错误。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-output-checklist"
+          ]
+        },
+        "config": {
+          "prompt": "下面四条模拟器输出中，哪些记录必须在入队前被拒绝？",
+          "items": [
+            {
+              "id": "rec-a",
+              "record": "temperature: event_time=2026-03-01T00:00:00Z, value=4.2, unit=Cel, sequence_no=17, ingest_time=2026-03-01T00:00:03Z",
+              "reject": true,
+              "reason": "包含本不该由模拟器生成的 ingest_time"
+            },
+            {
+              "id": "rec-b",
+              "record": "door_state: event_time=2026-03-01T00:01:00Z, value=1, unit=1, sequence_no=42",
+              "reject": false,
+              "reason": "门磁取值为整数 0/1，单位枚举为 1，字段符合契约"
+            },
+            {
+              "id": "rec-c",
+              "record": "temperature: event_time=2026-03-01T00:05:00Z, value=3.8, unit=Cel, sequence_no=16（前一条为 17）",
+              "reject": true,
+              "reason": "序号回退，违反严格单调递增"
+            },
+            {
+              "id": "rec-d",
+              "record": "temperature: event_time=2026-03-01T00:05:30Z, value=3.8, unit=cel, sequence_no=18",
+              "reject": true,
+              "reason": "单位大小写变异，违反固定枚举"
+            }
+          ],
+          "passRule": "四项判定与理由全部正确"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "离线完成：逐条对照输出契约清单，标记每条记录应接受还是拒绝，并写出依据。\n\n- rec-a（带 ingest_time）应拒绝；\n- rec-b（门磁 value=1、unit=1）应接受；\n- rec-c（序号 16 出现在 17 之后）应拒绝；\n- rec-d（unit=cel）应拒绝。"
+        }
+      }
+    ]
+  },
+  "subtitle": "综合项目：冷链仓储智能监测",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000531"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现"
+      ],
+      "lineStart": 9851,
+      "lineEnd": 9852,
+      "assetRefs": [],
+      "excerptSha256": "caeb420d79f59009eb4deb025fada33ea81e5567033254cb36bec6a4caed1833"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000532"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现",
+        "数据模拟器的设计目标与边界"
+      ],
+      "lineStart": 9853,
+      "lineEnd": 9858,
+      "assetRefs": [],
+      "excerptSha256": "d020f2bcc4ca4b30eec03f67d8532f82a8fac927cf9278f940e6114db7b9371c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000533"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现",
+        "设备行为模型与采样时钟"
+      ],
+      "lineStart": 9859,
+      "lineEnd": 9877,
+      "assetRefs": [],
+      "excerptSha256": "e90363da808a6530eaa4f3197f88bbe9a2d8722941dc04bf3e00ec11ef533f35"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000534"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现",
+        "物理量换算与数值生成"
+      ],
+      "lineStart": 9878,
+      "lineEnd": 9889,
+      "assetRefs": [],
+      "excerptSha256": "4510c64ac83fe87184e00e607f960a46498ecf3158d89014b21cf7848f421613"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000535"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现",
+        "质量码注入与故障模式"
+      ],
+      "lineStart": 9890,
+      "lineEnd": 9904,
+      "assetRefs": [],
+      "excerptSha256": "fd3941f7d8bd22ea6572832b882d40fafb8f7b755d40985dd372cebb260a9d28"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000536"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现",
+        "模拟器核心伪代码"
+      ],
+      "lineStart": 9905,
+      "lineEnd": 9967,
+      "assetRefs": [],
+      "excerptSha256": "973b1139855600dee6faa59b601cf84f436b220bea3431c5db2e4c531abd4440"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000537"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "数据模拟器与数据契约实现",
+        "输出契约验证清单"
+      ],
+      "lineStart": 9968,
+      "lineEnd": 9979,
+      "assetRefs": [],
+      "excerptSha256": "3da34e38f926c62a2e094914c479c71afc672356c24d88907971e3fe92d8dd81"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1300,
+    464
+  ],
+  "scale": 1.21
+}

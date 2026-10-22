@@ -91,10 +91,62 @@ export type TextbookContentBlockKind =
   | 'application' | 'code' | 'table' | 'figure' | 'warning'
   | 'misconception' | 'exercise' | 'summary' | 'note' | 'other';
 
+export type TextbookLearningDepth = 'core' | 'support' | 'advanced';
+
+export type TextbookLearningDesign = {
+  primaryPattern: string;
+  adaptationLevel?: 'faithful' | 'balanced' | 'teaching-first';
+  editorialPolicy?: string;
+  estimatedMinutes: number;
+  outcomes: Array<{ id: string; text: string }>;
+  misconceptions: string[];
+  modules: Array<{
+    id: string;
+    title: string;
+    role?: string;
+    description?: string;
+    outcomeRefs: string[];
+    order: number;
+  }>;
+  completion: {
+    outcomeRefs?: string[];
+    method?: string;
+    successCriteria?: string[];
+    exerciseBlockId?: string;
+    summaryBlockId?: string;
+    nextPointId?: string;
+  };
+};
+
+export type TextbookLearningAsset = {
+  id: string;
+  type: string;
+  anchorBlockId: string;
+  title?: string;
+  moduleId?: string;
+  depth?: TextbookLearningDepth;
+  animationType?: string;
+  caption?: string;
+  outcomeRefs: string[];
+  learningPurpose: string;
+  grounding: { basedOnBlockIds: string[] };
+  config?: Record<string, unknown>;
+  fallback: {
+    type?: string;
+    mode?: string;
+    blockId?: string;
+    markdown?: string;
+    caption?: string;
+    content?: string;
+  };
+};
+
 export type TextbookContentBlock = {
   id: string;
   kind: TextbookContentBlockKind;
   title?: string;
+  moduleId?: string;
+  depth?: TextbookLearningDepth;
   markdown: string;
   provenance:
     | {
@@ -145,7 +197,9 @@ export type TextbookKnowledgePoint = KnowledgePointBase & {
   origin: 'textbook' | 'llm-extension' | 'user';
   content: {
     schema_version: 'textbook-content/2.0';
+    learningDesign?: TextbookLearningDesign;
     blocks: TextbookContentBlock[];
+    learningAssets?: TextbookLearningAsset[];
   };
 };
 

@@ -1,0 +1,493 @@
+{
+  "id": "point-5-4",
+  "title": "压缩、降采样与保留策略",
+  "shortSummary": "说明时序压缩、降采样与分层保留的取舍，在存储成本与可查询精度之间建立明确规则。",
+  "keyTerms": [
+    "压缩",
+    "降采样",
+    "分层保留",
+    "存储成本",
+    "查询精度",
+    "聚合"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-5-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的压缩目标、聚合公式、三级保留结构与四类误区，按“成本-精度-可追溯性”统一维度重排为选型决策，并补充可复核的检查清单与练习。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "compare-storage-controls",
+          "text": "在给定查询精度与存储成本约束下，比较压缩、降采样与保留策略的组合，说明为什么三者必须联合决策。"
+        },
+        {
+          "id": "design-downsample-retention",
+          "text": "为一路具体信号写出降采样聚合口径与 L0→L1→L2 保留规则，并给出删除前置校验与失败动作。"
+        }
+      ],
+      "misconceptions": [
+        "把缺失记录填成 value=0 后再聚合，导致均值系统性偏低。",
+        "认为降采样就是把窗口内数值做算术平均，忽略量纲、质量码与时间权重。",
+        "只追求最高压缩比，结果把解压开销转嫁给最近 24 小时的异常追溯查询。",
+        "把保留策略等同于到期删除，跳过 L0→L1 的覆盖率校验。"
+      ],
+      "modules": [
+        {
+          "id": "section-frame",
+          "title": "问题导入：三项控制手段为何必须联合设计",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "compare-storage-controls",
+            "design-downsample-retention"
+          ],
+          "order": 0
+        },
+        {
+          "id": "compression-choice",
+          "title": "压缩：从数据形态到可复核的选型",
+          "role": "comparison",
+          "outcomeRefs": [
+            "compare-storage-controls"
+          ],
+          "order": 1
+        },
+        {
+          "id": "downsample-semantics",
+          "title": "降采样：先定聚合语义，再谈频率",
+          "role": "quantitative",
+          "outcomeRefs": [
+            "design-downsample-retention"
+          ],
+          "order": 2
+        },
+        {
+          "id": "retention-lifecycle",
+          "title": "保留策略：分层状态与删除闸门",
+          "role": "procedure",
+          "outcomeRefs": [
+            "design-downsample-retention"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pitfalls-and-checks",
+          "title": "误区与可验证检查方法",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "compare-storage-controls",
+            "design-downsample-retention"
+          ],
+          "order": 4
+        },
+        {
+          "id": "decision-apply",
+          "title": "综合决策与练习",
+          "role": "application",
+          "outcomeRefs": [
+            "compare-storage-controls",
+            "design-downsample-retention"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "compare-storage-controls",
+          "design-downsample-retention"
+        ],
+        "method": "完成新信号的保留方案练习，并用三条自评规则检查方案。",
+        "successCriteria": [
+          "聚合口径与量纲匹配，且只纳入 GOOD 记录",
+          "每一层都写明数据形态、保留期限与触发方式",
+          "删除动作前有可执行的覆盖率校验与失败动作"
+        ],
+        "exerciseBlockId": "model-exercise-design",
+        "nextPointId": "point-5-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-frame",
+        "moduleId": "section-frame",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节定位",
+        "markdown": "教材第 5.4 节讨论时序存储的三项控制手段：压缩降低单个点位的字节成本，降采样降低单位时间内的记录数，保留策略决定各层数据保存多久。三者共同决定“存多少、存多久、还能查多准”，因此必须联合设计，而不是分别调参。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000174"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "压缩、降采样与保留策略"
+              ],
+              "lineStart": 3101,
+              "lineEnd": 3102,
+              "assetRefs": [],
+              "excerptSha256": "f7288fce1ff74ad17b39aace02d109a5cf627fe2682e4ca10b5c3d99ec3f187f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-compression-basis",
+        "moduleId": "compression-choice",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "压缩：利用值域局部性与时间有序性",
+        "markdown": "教材指出，时序压缩不是通用无损压缩的简单套用，而是利用两种结构：**值域局部性**——相邻采样值之差远小于绝对值的动态范围；**时间有序性**——采样点按时间推进，时间戳可表示为起始时间加周期偏移。\n\n教材要求区分三类压缩目标：降低磁盘占用、减少网络传输带宽、降低查询时的 I/O 解压开销。三者在同一套参数下往往不可兼得。\n\n不同信号形态对应不同策略，教材归纳如下：\n\n| 信号类型 | 典型特征 | 适用压缩策略 | 案例设备 |\n|:---|:---|:---|:---|\n| 缓变连续量 | 差分分布集中、周期固定 | Delta-of-delta + 可变长编码 | Z1-TEMP-01、Z1-HUM-01 |\n| 快变连续量 | 高频采样、幅值波动大 | 分段线性拟合 | Z1-COMP-01 |\n| 稀疏事件量 | 状态持久、变化突跳 | 游程长度编码或位图 | Z1-DOOR-01 |\n| 对齐聚合量 | 规则时间网格、预计算统计 | 列式字典编码 + 时间戳去重 | 小时级温度均值派生表 |\n\n时间戳周期化只在采样周期严格固定时成立。教材的案例配置规定：原始事实表的 `event_time` 不可被压缩改写，只有派生聚合表可以采用周期化时间戳。压缩选型还要服从查询模式，教材给出的工程做法是分层压缩：热数据用快速算法保持查询友好，冷数据用高压缩比编码并配合降采样进一步削减体积。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000175"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "压缩、降采样与保留策略",
+                "数据压缩的物理基础与选型边界"
+              ],
+              "lineStart": 3103,
+              "lineEnd": 3119,
+              "assetRefs": [],
+              "excerptSha256": "ee29428d6e80532f10865f4e77b47573b6f3aa31fbc4c45d2d497cad832343c0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compression-rubric",
+        "moduleId": "compression-choice",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：把压缩选型变成可复核的比较",
+        "markdown": "教材给出信号类型与压缩策略的对应关系，但没有直接给出决策顺序。可以按四个统一维度比较候选方案：\n\n| 维度 | 要回答的问题 |\n|:---|:---|\n| 可逆性 | 解码后能否逐点还原原始值？原始事实表要求可逆或干脆不压缩 |\n| 查询代价 | 目标查询是点查、范围扫描还是整块聚合？解压开销落在哪一侧 |\n| 数据形态 | 缓变、快变还是稀疏事件？决定 delta 与游程编码的收益 |\n| 生命周期位置 | 位于 L0 热层还是 L2 冷层？热层优先查询友好，冷层优先体积 |\n\n操作上先按可逆性筛选：原始事实表的 `event_time` 与原始值不允许改写，只能在块级无损编码中选择；派生聚合表才允许周期化时间戳与更高压缩比。再按访问频率决定分层：最近 7 天承担异常追溯，压缩算法不能把解压开销推高到影响点查；更久的数据主要服务审计，可用高压缩比编码换取体积。这样选型结论可以写成“维度 + 约束 + 选择”，而不是“经验上一般用某种算法”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-compression-basis"
+          ]
+        }
+      },
+      {
+        "id": "tb-downsampling-semantics",
+        "moduleId": "downsample-semantics",
+        "depth": "core",
+        "kind": "formula",
+        "title": "降采样的定义与时间加权聚合",
+        "markdown": "教材把降采样定义为把高频原始序列转换为低频聚合序列，并强调**聚合函数必须匹配物理量的量纲与业务语义**。设原始序列为 $\\{(t_i, v_i, q_i)\\}_{i=1}^{n}$，降采样窗口为左闭右开区间 $[T_k, T_{k+1})$，窗口内有效记录集合只包含质量为 `GOOD` 的点：\n\n$$S_k = \\{\\, i \\mid t_i \\in [T_k, T_{k+1}) \\ \\land\\ q_i = \\text{'GOOD'} \\,\\}$$\n\n对温度这类**强度量**，时间加权平均具有物理意义：\n\n$$\\bar{v}_k = \\frac{\\sum_{i \\in S_k} v_i \\cdot \\Delta t_i}{\\sum_{i \\in S_k} \\Delta t_i}, \\quad \\Delta t_i = \\min(t_{i+1}, T_{k+1}) - \\max(t_i, T_k)$$\n\n若采样周期严格恒定且无缺数，时间加权平均退化为算术平均；一旦存在被过滤的 `CLOCK_SUSPECT`、`OUT_OF_RANGE` 记录，或混入门磁等非周期信号，就必须保留时间加权语义。\n\n对压缩机电流这类**累积代理指标**，教材用积分近似估算时段负荷：\n\n$$E_k \\propto \\sum_{i \\in S_k} I_i \\cdot \\Delta t_i$$\n\n该值量纲为 A·s，只能作为负载趋势代理，不能直接标称为电能。极值统计同样必须显式过滤质量码，否则饱和或溢出后的伪值会扭曲真实工况边界；教材的 SQL 示例用 `FILTER (WHERE quality_code = 'GOOD')` 同时输出 `good_count` 与超量程计数。1 小时温湿度数据期望 120 点，若 `good_count` 显著低于此值，应先检查设备离线或质量码异常模式，而不是直接信任聚合结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "压缩、降采样与保留策略",
+                "降采样的数学定义与聚合语义"
+              ],
+              "lineStart": 3120,
+              "lineEnd": 3156,
+              "assetRefs": [],
+              "excerptSha256": "b490d346abad59cc2b4ca49bb747d3f8a144056ab80fba9d8a8dfacc8c3427bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aggregation-checklist",
+        "moduleId": "downsample-semantics",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：选择聚合口径的三步检查",
+        "markdown": "1. **量纲检查**：该量能否在时间上求平均？温度、湿度等强度量可以；电流若作为负荷代理，需要按时间积分而非简单平均，且结论只能表述为趋势。\n2. **窗口与权重检查**：窗口是否左闭右开、相邻窗口不重不漏？采样间隔是否恒定？不恒定时必须用 $\\Delta t_i$ 加权，否则长间隔段会被系统性低估。\n3. **质量与完整性检查**：聚合是否只纳入 `GOOD` 记录？输出是否同时给出 `good_count` 与期望点数，供下游判断该聚合值是否可信？\n\n三步都通过后再决定存储粒度。任何一步省略，降采样表都会把原始层的缺陷固化成难以追溯的“精确数字”，而这正是后续审计最难纠正的一类错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-downsampling-semantics"
+          ]
+        }
+      },
+      {
+        "id": "tb-retention-layers",
+        "moduleId": "retention-lifecycle",
+        "depth": "core",
+        "kind": "table",
+        "title": "保留策略：三级状态与删除前置校验",
+        "markdown": "教材把保留策略描述为数据生命周期管理的工程实现，并强调避免“删除即丢失”的粗暴语义。案例采用三级存储状态：\n\n| 层级 | 数据形态 | 保留期限 | 介质 | 访问特征 |\n|:---|:---|:---|:---|:---|\n| L0 原始热数据 | 完整原始事实表 | 7 日 | SSD 上的时序超表块 | 点查、最近值、异常追溯 |\n| L1 降采样温数据 | 小时级聚合 + 5 分钟级降采样 | 90 日 | SSD 上的聚合表 | 趋势分析、报表生成 |\n| L2 归档冷数据 | 日级聚合 + 压缩原始片段 | 3 年 | 对象存储 | 合规审计、年度能效评估 |\n\n状态转换由自动化策略触发，而非人工定时清理。关键设计点是 **L0→L1 的降采样必须在原始数据删除前完成且校验通过**，否则形成不可恢复的数据缺口。教材用覆盖率校验实现这道闸门：按 24 × 120 计算当日期望点数，`GOOD` 记录的实际点数达到期望的 95% 才判 `PASS`；低于阈值时暂停该设备的 L0 数据淘汰，写入 `MANUAL_REVIEW` 标记并通知运维介入。\n\n门磁这类事件驱动序列需要特殊处理。教材给出的口径是保留状态变化边界的精确时间戳（`door_state` 的 0→1 与 1→0 转换点），只对心跳做去重压缩；5 分钟计数会丢失“开启持续时长”这一关键合规指标，派生层不得覆盖原始边界记录。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000177"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "压缩、降采样与保留策略",
+                "保留策略的状态机与存储分层"
+              ],
+              "lineStart": 3157,
+              "lineEnd": 3196,
+              "assetRefs": [],
+              "excerptSha256": "083cfe1a697a64d79cd376f56a3c6684b2cfa29ac4297fc8125764b9ae01db41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-retention-checklist",
+        "moduleId": "retention-lifecycle",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：保留层的最小设计清单",
+        "markdown": "每一层都应明确四个字段，缺一不可：\n\n| 字段 | 作用 | 反例 |\n|:---|:---|:---|\n| 数据形态与聚合口径 | 说明这层存的是原始点、5 分钟降采样还是日聚合 | 只写“聚合表”，下游不知道该层精度 |\n| 保留期限与触发方式 | 由策略自动触发还是人工执行 | 依赖人工清理，删除时间不可预期 |\n| 进入下一层前的校验 | 覆盖率阈值、质量码检查、边界记录完整性 | 未校验就删除 L0，缺口不可恢复 |\n| 校验失败动作 | 暂停淘汰、标记、通知谁 | 失败后继续删除，等于没有闸门 |\n\n把教材的 95% 覆盖率闸门推广到其他设备时，期望点数必须由该设备的采样周期与质量码规则共同决定：门磁不能按固定 60 秒算点数，事件型序列的验收对象是状态变化边界是否完整，而不是条数是否接近理论值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retention-layers"
+          ]
+        }
+      },
+      {
+        "id": "tb-pitfalls-checks",
+        "moduleId": "pitfalls-and-checks",
+        "depth": "core",
+        "kind": "warning",
+        "title": "常见误区与可验证检查方法",
+        "markdown": "教材列出四类与本节直接相关的错误及其检查方法：\n\n1. **缺失等同零值**：原始事实表契约规定缺失时无数据行，填充 `value = 0` 会让均值系统性偏低。检查方法是比较 `COUNT(*)` 与 `floor((end-start)/采样周期)`，并结合是否存在 `MISSING` 占位行判断。\n2. **跨设备聚合忽略 `sequence_no` 缺口**：`sequence_no` 只在同一 `(device_id, metric)` 组合内单调递增，跨设备比较会造出虚假的“同步缺失”。按组合分组计算 `MAX - MIN + 1 - COUNT(*)` 即得缺口数。\n3. **压缩后未保留质量码分布摘要**：只存均值的聚合表会湮没质量构成。检查方法是在 L1 表强制包含各 `quality_code` 计数列，或至少保留 `good_ratio`。\n4. **对象存储归档缺乏自描述格式**：归档文件必须嵌入 schema 与单位元数据，`unit` 以 `Cel`、`%RH` 等符号化字符串存储，不能依赖外部文档解释。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000178"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "压缩、降采样与保留策略",
+                "常见误区与可验证检查方法"
+              ],
+              "lineStart": 3197,
+              "lineEnd": 3206,
+              "assetRefs": [],
+              "excerptSha256": "39a38c55fcfc6a81d882bdfd7b154a54cb502431d26b78df17134d5eb9ae9abe"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decision-config",
+        "moduleId": "decision-apply",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "综合决策：同一份数据的三层配置",
+        "markdown": "把教材的压缩、聚合与保留规则落到三类典型信号上，可以得到一张可复核的配置表：\n\n| 数据对象 | 压缩 | 降采样 | 保留与闸门 | 主要风险 |\n|:---|:---|:---|:---|:---|\n| 温湿度（30 s，缓变） | 块级 delta-of-delta，L0 保持可逆 | L1 小时级时间加权均值与极值（仅 `GOOD`） | L0 7 日，覆盖率 ≥ 95% 才淘汰 | 缺失被当零值，均值偏低 |\n| 压缩机电流（5 s，快变） | 热层快速压缩，冷层高压缩比 | 5 分钟积分代理 $E_k$，并保留峰值 | L1 90 日，峰值列不可省略 | 把 A·s 代理标称为 kWh |\n| 门磁（事件驱动） | 心跳去重，边界时间戳不压缩 | 不按固定频率计数，派生开启次数与最长时长 | L0 保留精确转换点，L2 归档自描述 | 5 分钟计数丢失持续时长 |\n\n三条共同验收规则：质量码分布随聚合值一起落库；任何删除动作前先跑覆盖率校验；L2 归档必须自带 schema 与单位。三项都不满足时，压缩比再高也只是把问题推迟到三年后的审计现场。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-downsampling-semantics",
+            "tb-retention-layers",
+            "tb-pitfalls-checks"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-design",
+        "moduleId": "decision-apply",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：为一路新信号写保留方案",
+        "markdown": "新增一路 Z1-COMP-02 压缩机电流，采样周期 5 秒，质量码包含 `GOOD`、`OUT_OF_RANGE`、`CLOCK_SUSPECT`。请写出：\n\n1. L0 层允许和禁止的压缩操作，并说明依据；\n2. L1 层的聚合窗口、聚合函数（为什么不是算术平均）、质量码过滤与输出列；\n3. L0→L1 的覆盖率校验阈值与失败动作；\n4. L2 归档必须自带的元数据字段。\n\n完成后用三条检查自评：聚合值能否追溯到具体窗口与质量构成；删除前是否有可执行的校验；三年后仅凭归档文件能否正确解释单位与口径。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-downsampling-semantics",
+            "tb-retention-layers",
+            "tb-pitfalls-checks"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "storage-controls-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise-design",
+        "moduleId": "decision-apply",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-storage-controls",
+          "design-downsample-retention"
+        ],
+        "title": "压缩、降采样与保留策略自检",
+        "learningPurpose": "检查学习者能否把教材的聚合口径与分层保留规则迁移到新信号，并识别常见的错误默认值。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-downsampling-semantics",
+            "tb-retention-layers",
+            "model-decision-config"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "id": "q-aggregation",
+              "prompt": "压缩机电流在 L1 层应采用哪种口径？",
+              "options": [
+                "窗口内算术平均",
+                "按时间加权的均值",
+                "按时间积分求和，作为负荷趋势代理",
+                "取窗口最后一个值"
+              ],
+              "answerIndex": 2
+            },
+            {
+              "id": "q-delete-gate",
+              "prompt": "删除 L0 原始数据前必须满足什么条件？",
+              "options": [
+                "L1 聚合表已建好，无需检查",
+                "L1 覆盖率校验通过，未通过则暂停淘汰并标记",
+                "对象存储归档完成即可",
+                "只要保留期限到了就可以删除"
+              ],
+              "answerIndex": 1
+            },
+            {
+              "id": "q-quality",
+              "prompt": "L1 聚合表至少要额外保留哪类信息，才能避免质量构成被湮没？",
+              "options": [
+                "每条原始记录的完整副本",
+                "各 quality_code 的计数或 good_ratio",
+                "设备的物理安装位置",
+                "压缩算法的版本号"
+              ],
+              "answerIndex": 1
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "离线作答：为 5 秒采样的压缩机电流写出 L1 聚合口径、质量码过滤方式、覆盖率校验阈值与失败动作，并说明为什么该口径不能标称为电能。完成后对照教材的 95% 覆盖率闸门与 `good_ratio` 要求自评。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时序数据模型与存储",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000174"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "压缩、降采样与保留策略"
+      ],
+      "lineStart": 3101,
+      "lineEnd": 3102,
+      "assetRefs": [],
+      "excerptSha256": "f7288fce1ff74ad17b39aace02d109a5cf627fe2682e4ca10b5c3d99ec3f187f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000175"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "压缩、降采样与保留策略",
+        "数据压缩的物理基础与选型边界"
+      ],
+      "lineStart": 3103,
+      "lineEnd": 3119,
+      "assetRefs": [],
+      "excerptSha256": "ee29428d6e80532f10865f4e77b47573b6f3aa31fbc4c45d2d497cad832343c0"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000176"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "压缩、降采样与保留策略",
+        "降采样的数学定义与聚合语义"
+      ],
+      "lineStart": 3120,
+      "lineEnd": 3156,
+      "assetRefs": [],
+      "excerptSha256": "b490d346abad59cc2b4ca49bb747d3f8a144056ab80fba9d8a8dfacc8c3427bf"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000177"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "压缩、降采样与保留策略",
+        "保留策略的状态机与存储分层"
+      ],
+      "lineStart": 3157,
+      "lineEnd": 3196,
+      "assetRefs": [],
+      "excerptSha256": "083cfe1a697a64d79cd376f56a3c6684b2cfa29ac4297fc8125764b9ae01db41"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000178"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "压缩、降采样与保留策略",
+        "常见误区与可验证检查方法"
+      ],
+      "lineStart": 3197,
+      "lineEnd": 3206,
+      "assetRefs": [],
+      "excerptSha256": "39a38c55fcfc6a81d882bdfd7b154a54cb502431d26b78df17134d5eb9ae9abe"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3371,
+    1659
+  ],
+  "scale": 0.91
+}

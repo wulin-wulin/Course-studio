@@ -87,6 +87,7 @@ export type GenerationRunStatus =
   | "requested"
   | "loading"
   | "running"
+  | "awaiting-input"
   | "paused"
   | "completed"
   | "error";

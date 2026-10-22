@@ -281,6 +281,9 @@ export function buildCourseData(
       : {};
     return {
       ...canonical,
+      ...(isRecord(canonical.content)
+        ? { content: structuredClone(canonical.content) }
+        : {}),
       subtitle: primaryCluster.title,
       clusterId: point.clusterIds[0],
       clusterIds: [...point.clusterIds],

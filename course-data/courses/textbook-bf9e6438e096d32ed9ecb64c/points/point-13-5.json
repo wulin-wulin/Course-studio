@@ -1,0 +1,532 @@
+{
+  "id": "point-13-5",
+  "title": "有状态计算、检查点与故障恢复",
+  "shortSummary": "说明有状态算子、检查点与恢复流程，评估故障时的状态一致性和重放成本。",
+  "keyTerms": [
+    "有状态计算",
+    "检查点",
+    "故障恢复",
+    "状态一致性",
+    "重放",
+    "背压"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-13-1",
+    "point-13-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于状态、屏障检查点、重放与状态后端的定义和数值边界，按“症状—假设—证据—定位—修复”的诊断顺序重组正文，并补充恢复成本估算与可执行的核对清单。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-state-and-recovery",
+          "text": "解释有状态算子、键控状态、屏障检查点和从检查点恢复的机制，并说明状态一致性保障成立的前提。"
+        },
+        {
+          "id": "assess-replay-and-consistency",
+          "text": "针对一次作业故障，估算重放窗口与恢复成本，并判断应优先修复状态一致性缺口还是检查点配置。"
+        }
+      ],
+      "misconceptions": [
+        "把检查点当作业务提交点，忽略外部存储写入可能部分成功。",
+        "认为恢复后所有迟到记录都应重新计入已完成的窗口结果。",
+        "认为状态保留得越多越安全，忽略 TTL 与清理策略对重放判断的影响。"
+      ],
+      "modules": [
+        {
+          "id": "m1-symptom-state",
+          "title": "症状：状态丢失与结果漂移从哪里来",
+          "role": "symptom-framing",
+          "description": "先建立有状态算子与键控状态的对象模型，明确哪些异常属于状态问题。",
+          "outcomeRefs": [
+            "explain-state-and-recovery"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m2-checkpoint-hypothesis",
+          "title": "假设：检查点屏障是否真正切出一致边界",
+          "role": "hypothesis-evidence",
+          "description": "用屏障对齐与非对齐检查点的代价判断检查点是否可靠。",
+          "outcomeRefs": [
+            "explain-state-and-recovery"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m3-recovery-evidence",
+          "title": "证据：恢复路径与重放窗口",
+          "role": "evidence-localization",
+          "description": "沿重启后加载状态、回拨偏移、重放数据的路径定位一致性问题。",
+          "outcomeRefs": [
+            "explain-state-and-recovery",
+            "assess-replay-and-consistency"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m4-backend-localization",
+          "title": "定位：状态后端与快照策略",
+          "role": "comparison",
+          "description": "按状态规模、延迟和恢复速度定位检查点开销的来源。",
+          "outcomeRefs": [
+            "assess-replay-and-consistency"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m5-verify-repair",
+          "title": "修复：一致性验证与回归清单",
+          "role": "repair-checklist",
+          "description": "用可自动执行的三类检查确认恢复结果，并完成修复决策。",
+          "outcomeRefs": [
+            "explain-state-and-recovery",
+            "assess-replay-and-consistency"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-state-and-recovery",
+          "assess-replay-and-consistency"
+        ],
+        "method": "完成恢复场景的诊断练习：指出一致性缺口、给出重放量级估算并选择修复顺序。",
+        "successCriteria": [
+          "能说明检查点只保证引擎内部状态一致，不自动保证外部写入一致",
+          "能写出重放窗口与检查点间隔的关系并给出量级",
+          "能按序列号、窗口点数、状态机可达性三类检查判断恢复是否可信"
+        ],
+        "exerciseBlockId": "b-model-diagnosis-checklist",
+        "summaryBlockId": "b-model-summary",
+        "nextPointId": "point-13-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "b-tb-section",
+        "moduleId": "m1-symptom-state",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节的问题边界",
+        "markdown": "本节回答两个互相牵连的问题：有状态计算为什么必须依赖检查点，以及作业失败后如何恢复并核对状态一致性。教材把证据拆成五段：键控状态、检查点与一致性屏障、故障恢复与重放、增量检查点与状态后端、状态一致性的验证方法。\n\n诊断视角下，这五段分别对应“症状对象”“假设条件”“证据路径”“定位依据”和“修复检查”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000477"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "有状态计算、检查点与故障恢复"
+              ],
+              "lineStart": 8899,
+              "lineEnd": 8900,
+              "assetRefs": [],
+              "excerptSha256": "a73d4a2e10fb2c925814041ec4e0070cc151278c2cd938795b173409fbe14a7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-tb-state",
+        "moduleId": "m1-symptom-state",
+        "depth": "core",
+        "kind": "definition",
+        "title": "有状态算子与键控状态（教材）",
+        "markdown": "流式计算中的状态，指算子在处理事件之间必须持久保留的数据。无状态算子只依赖当前输入就能输出结果，例如把温度从摄氏度换算为开尔文；有状态算子需要累积历史信息，例如计算过去 5 分钟温区 Z1 的平均温度，或检测门磁状态的变化序列。\n\n分布式引擎通常把状态按键分区存储。以 `device_id` 键控后，`Z1-TEMP-01` 与 `Z2-TEMP-01` 的温度序列分别驻留在不同状态分区；键控状态的访问具有本地性——同一键的事件由同一并行子任务处理，避免跨节点同步开销。常见原语包括值状态、列表状态与映射状态。\n\n状态规模会随数据流增长，必须设定清理策略。若某设备连续 3 次采样超阈值即告警，只需保留最近两次判定结果；更长的历史可配置 TTL 自动淘汰。教材案例中温度状态 TTL 为 15 分钟，门磁状态因需长期追踪开关模式而不设 TTL。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "有状态计算、检查点与故障恢复",
+                "有状态算子与键控状态"
+              ],
+              "lineStart": 8901,
+              "lineEnd": 8908,
+              "assetRefs": [],
+              "excerptSha256": "e93c602494cfb5898a4a6544d803be7da5334c30de3c7d3d691dccdd5f2d5d3b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-state-intuition",
+        "moduleId": "m1-symptom-state",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把键控状态想成每个键的私人账本",
+        "markdown": "可以把键控状态理解成每个 `device_id` 各自持有一本账本：同一台设备的事件总由同一个子任务记账，因此账本不需要跨节点加锁。这个直觉能直接解释两类症状：某台设备恢复后计数突然归零，通常是它的状态分区没有被正确恢复；不同设备之间统计口径漂移，则往往不是状态丢失，而是键控或窗口定义本身有问题。\n\n区分“计算所需的最小历史”与“审计所需的原始历史”很关键。告警计数只需要最近两次结果，但若下游需要重算修正均值，就必须保留原始样本或其可重算依据；TTL 是按计算需求裁剪状态的工具，不是清理审计证据的工具。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-state"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-checkpoint",
+        "moduleId": "m2-checkpoint-hypothesis",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "检查点机制与一致性屏障（教材）",
+        "markdown": "检查点是把算子状态异步快照到持久存储的过程，使故障后能从一致时间点恢复。引擎周期性注入一致性屏障，把数据流逻辑切分为前检查点周期与后检查点周期。屏障对齐要求：算子收到某输入分区的屏障后，先缓存该分区后续数据，直到所有输入分区的屏障都到达，才快照当前状态并向下游转发屏障。\n\n对齐引入的延迟与输入分区数、网络抖动正相关。非对齐检查点允许屏障超越数据事件，把仍在传输中的数据连同状态一并快照，可降低反压场景下的检查点超时风险，但会增大状态体积。教材案例的压缩机电流采样周期为 5 秒、检查点间隔 30 秒，单个并行子任务最多需缓冲 6 个采样点的窗口中间结果；非对齐模式还要计入链路中在途的未处理事件。\n\n检查点间隔 $T_c$、超时阈值 $T_{to}$ 与最大并发检查点数 $N_c$ 构成可调三角。取 $T_c = 60\\,\\text{s}$、$T_{to} = 300\\,\\text{s}$、$N_c = 1$ 时，故障最多丢失 60 秒内未确认的处理进度；要缩小丢失窗口就得缩短 $T_c$，代价是更大的存储 I/O 与快照开销。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000479"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "有状态计算、检查点与故障恢复",
+                "检查点机制与一致性屏障"
+              ],
+              "lineStart": 8909,
+              "lineEnd": 8916,
+              "assetRefs": [],
+              "excerptSha256": "5e9ccf226c67b68d5d259408b975e6eeb65d52d43cfb5e396f1de7760ff17e76"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-barrier-walkthrough",
+        "moduleId": "m2-checkpoint-hypothesis",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "走一遍两个分区的屏障对齐",
+        "markdown": "假设某算子有两个输入分区 A、B。屏障到达 A 时 A 被缓存，B 的数据仍可继续处理；屏障到达 B 后，算子快照包含“A 的屏障前状态 + B 的屏障前状态”，然后向下游转发屏障。若 B 所在链路抖动，A 的缓存就会持续增长，这正是对齐延迟随分区数和网络质量上升的原因。\n\n诊断时可用一个简单判据：**缓冲量突然抬升且检查点耗时逼近超时阈值**，说明瓶颈在对齐而不是状态本身。此时先看输入分区是否有慢链路，再考虑非对齐检查点或缩短在途数据；直接缩短检查点间隔只会让快照更频繁，未必缓解对齐等待。\n\n重放窗口的粗估同样直观：$N_{\\text{replay}} \\approx R \\times T_c$，其中 $R$ 是单分区吞吐、$T_c$ 是检查点间隔。例如 $R = 1500\\,\\text{records/s}$、$T_c = 30\\,\\text{s}$ 时，最坏需重放约 45000 条记录。估算值用于判断幂等写入与去重状态是否撑得住，而不是精确预测每次故障。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-checkpoint"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-recovery",
+        "moduleId": "m3-recovery-evidence",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "故障恢复与状态重放（教材）",
+        "markdown": "作业失败重启后，引擎从最近一次成功检查点加载状态，并把数据源回拨到该检查点对应的偏移量重新消费。这个过程保证精确一次处理语义，但有两个前提：数据源支持偏移量回溯，外部接收端具备幂等写入或事务提交能力。\n\n恢复还要处理事件时间下的迟到数据。假设检查点 $C_k$ 在 event_time $t = 10{:}00{:}00$ 生成，恢复后继续处理；若一条 event_time 为 $09{:}59{:}55$ 的温度记录在故障期间滞留网络，恢复后到达时已超出当前水位线允许范围，则按案例的 quality_code 语义标记为 LATE，不更新已完成的窗口结果，只写入旁路审计流供人工复核。\n\n常见误区是把检查点当成业务提交点。检查点只保证引擎内部状态一致，向外部数据库的写入可能因网络失败而部分成功。若按“先写外部再确认检查点”的逆序操作，故障后可能出现重复写入；正确顺序是先完成外部事务提交，再向协调器确认检查点，或采用两阶段提交把外部存储作为事务参与者。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000480"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "有状态计算、检查点与故障恢复",
+                "故障恢复与状态重放"
+              ],
+              "lineStart": 8917,
+              "lineEnd": 8924,
+              "assetRefs": [],
+              "excerptSha256": "ef625860fef0838064f4243d921a1ea90516f179c3882e1697639e53b34f818f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-replay-cost",
+        "moduleId": "m3-recovery-evidence",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "估算一次恢复的总成本",
+        "markdown": "恢复成本可拆成三段相加：**加载状态**、**重放未确认数据**、**下游去重或补偿**。加载状态与快照大小和状态后端有关；重放量由检查点间隔与吞吐决定，即 $N_{\\text{replay}} \\approx R \\times T_c$；去重成本取决于幂等键的保留时长是否覆盖最坏重放窗口。\n\n用教材案例代入：采样周期 5 秒、检查点间隔 30 秒，则单个窗口最多缓冲 6 个采样点，恢复时重放的消息量也以约 30 秒为界。若同一时刻有多个子任务失败，重放会瞬时放大下游写入压力，因此恢复后要先确认消费速率是否触发下游限流，再判断状态是否真正一致。\n\n诊断结论的写法应包含三个量：重放窗口（秒）、重放记录量级（条）和幂等保留期（是否覆盖该窗口）。只写“已从检查点恢复”不足以证明一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-recovery"
+          ]
+        }
+      },
+      {
+        "id": "b-model-commit-order",
+        "moduleId": "m3-recovery-evidence",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "纠正：检查点不等于业务提交",
+        "markdown": "把检查点当提交点会制造两种相反的错误。第一种是**外部写成功但检查点未确认**：恢复后回拨偏移并重放，外部可能出现重复记录，若没有幂等键就会重复计数。第二种是**先确认检查点再写外部**：恢复后引擎认为该段已处理，但外部实际缺数据，形成静默丢失。\n\n因此修复顺序应当是：先核对外部写入与偏移量的对应关系，再检查检查点确认顺序，最后才调整 $T_c$。若业务无法接受重复，采用幂等写入或两阶段提交；若只能做到至少一次，就明确把重复视为可接受成本并配置去重窗口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-recovery"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-backend",
+        "moduleId": "m4-backend-localization",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "增量检查点与状态后端选型（教材）",
+        "markdown": "全量检查点每次复制完整状态，适合状态较小或变更剧烈的场景；增量检查点只持久化自上次检查点以来的变更，依赖底层存储的引用计数或快照隔离机制。以 RocksDB 为例，基于 LSM-Tree 的 SST 文件天然支持增量：新的 memtable flush 与 compaction 结果作为增量上传，旧 SST 文件通过硬链接共享。\n\n| 维度 | 内存状态后端 | 嵌入式 RocksDB |\n|:---|:---|:---|\n| 状态存储位置 | JVM 堆内存 | 本地磁盘，可选增量上传至远程 |\n| 单键值访问延迟 | 亚微秒级 | 微秒至毫秒级，受缓存命中率影响 |\n| 状态容量上限 | 受堆内存与 GC 开销约束 | 受本地磁盘容量约束，通常更大 |\n| 增量检查点支持 | 否，全量序列化 | 是，基于 SST 文件级增量 |\n| 适用场景 | 小状态、低延迟、短窗口聚合 | 大状态、长窗口、复杂键值结构 |\n\n案例中 4 温区 × 4 设备 × 多指标的状态规模有限，内存后端即可满足；若扩展到数百温区并启用 24 小时会话窗口，就应切换到 RocksDB 并启用增量检查点，避免分钟级全量快照阻塞处理流水线。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000481"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "有状态计算、检查点与故障恢复",
+                "增量检查点与状态后端选型"
+              ],
+              "lineStart": 8925,
+              "lineEnd": 8940,
+              "assetRefs": [],
+              "excerptSha256": "92e0960c0455438cf540a7e255d4f0994d0396d965523be5b907cc68ae27297c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-tb-verify",
+        "moduleId": "m5-verify-repair",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "状态一致性的验证方法（教材）",
+        "markdown": "生产环境需要可自动执行的状态健康检查。教材给出的验证逻辑包含三类断言：\n\n1. **序列号单调性**：把每个设备各指标的已处理序列号排序，若相邻值不等于前值加一，就返回 `GAP_DETECTED` 并从源偏移量重放。\n2. **窗口点数匹配**：5 分钟滚动窗口、30 秒采样周期时，期望点数为 $\\lfloor 300 / 30 \\rfloor = 10$；`count > 10` 判为 `EXCESS_POINTS`，`count < 10` 允许，因为窗口可能未闭合或存在 MISSING。\n3. **门磁状态机可达性**：状态值只能是 0 或 1，由 `door_state` 定义保证，恢复后逐设备断言取值合法。\n\n```python\n# 伪代码要点\ndef verify_state_consistency(restored_state, source_offsets):\n    for device_id, metric_seq in restored_state.sequence_nos.items():\n        seq_list = sorted(metric_seq.values())\n        for i in range(1, len(seq_list)):\n            if seq_list[i] != seq_list[i - 1] + 1:\n                return (\"GAP_DETECTED\", device_id, seq_list[i - 1], seq_list[i])\n    return (\"CONSISTENT\",)\n```\n\n教材还给出两类反例。其一是为“优化”检查点性能，把温度窗口状态中的原始样本列表替换为仅保留累加和与计数；恢复后缺少个体样本，无法重算剔除 OUT_OF_RANGE 后的修正均值，与历史报表不一致。其二是网络分区导致两个并行子任务同时接管同一键状态，产生 divergent checkpoint；引擎依靠协调器单点决策避免脑裂，若协调器采用无持久化日志的嵌入式模式，重启后可能丢失“哪个检查点已全局提交”的元信息，因此检查点元数据应写入 ZooKeeper 或 etcd 等共识存储。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000482"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "有状态计算、检查点与故障恢复",
+                "状态一致性的验证方法"
+              ],
+              "lineStart": 8941,
+              "lineEnd": 8978,
+              "assetRefs": [],
+              "excerptSha256": "125e64a441efca0c6d01286d65362868fc5d388912b0864c47ab35d1b59dacac"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-diagnosis-checklist",
+        "moduleId": "m5-verify-repair",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：给定症状，选择修复顺序",
+        "markdown": "**场景**：某作业在 10:00 失败，最近成功检查点为 09:59:30。恢复后温区 Z1 的 5 分钟窗口出现 `EXCESS_POINTS`，同时下游报表比历史值多出约 30 秒的记录。检查点间隔为 30 秒，外部数据库未配置幂等键，检查点确认发生在外部写入之前。\n\n请按诊断顺序作答：\n\n1. 症状属于哪一类：状态恢复错误、检查点边界不一致，还是外部写入顺序错误？\n2. 用 $N_{\\text{replay}} \\approx R \\times T_c$ 估算最坏重放窗口，并说明该窗口与 `EXCESS_POINTS` 的关系。\n3. 给出修复顺序：外部幂等或事务、检查点确认顺序、$T_c$ 调整、状态内容调整，哪一项必须先做？\n\n**核对清单**：序列号无缺口；窗口点数不超过期望值；键控状态未被跨键合并；外部写入与偏移量对应；检查点元数据已持久化到共识存储。\n\n参考答案要点：本题主要矛盾是“先确认检查点、后写外部”导致恢复后重复写入，且缺少幂等键使重复直接进入报表；`EXCESS_POINTS` 说明窗口状态与重放数据叠加。应先把外部写入改为幂等或两阶段提交，再修正确认顺序，最后才考虑缩短 $T_c$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-verify"
+          ]
+        }
+      },
+      {
+        "id": "b-model-summary",
+        "moduleId": "m5-verify-repair",
+        "depth": "support",
+        "kind": "summary",
+        "title": "诊断闭环与下一点衔接",
+        "markdown": "把本节压缩成一条诊断链：**状态按键分区 → 检查点用屏障切出一致边界 → 恢复时回拨偏移并重放 → 用序列号、窗口点数和状态机可达性验证 → 按外部写入顺序与幂等能力决定修复动作**。任何一环缺失，都会表现为“看起来恢复了，但结果对不上”。\n\n检查点间隔、状态后端和重放成本是一组联动参数：缩短 $T_c$ 能减小重放窗口，却增加快照开销；换用 RocksDB 增量检查点能支撑更大状态，却提高单键访问延迟。下一节将从输入速率与状态容量出发，估算管道在峰值负载下的吞吐、背压与负载测试方案。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-verify",
+            "b-model-diagnosis-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "state-consistency-formative-check",
+        "type": "formative-check",
+        "title": "恢复后一致性判断",
+        "anchorBlockId": "b-model-diagnosis-checklist",
+        "moduleId": "m5-verify-repair",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-state-and-recovery",
+          "assess-replay-and-consistency"
+        ],
+        "learningPurpose": "检查学习者能否把检查点、重放与外部写入顺序组合成一次可执行的故障诊断，而不是只复述术语。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "b-tb-verify",
+            "b-tb-recovery"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "检查点 30 秒，恢复后窗口点数超出期望，外部库无幂等键，且检查点确认先于外部写入。",
+          "questions": [
+            {
+              "prompt": "最应该优先修复哪一项？",
+              "options": [
+                "缩短检查点间隔",
+                "为外部写入增加幂等键或改为事务提交",
+                "增大状态后端内存",
+                "关闭窗口聚合"
+              ],
+              "answerIndex": 1
+            },
+            {
+              "prompt": "恢复后序列号检查发现缺口，正确处理是什么？",
+              "options": [
+                "忽略缺口，等待下一窗口",
+                "从源偏移量重放该区间",
+                "清空状态重新开始",
+                "直接改写 quality_code"
+              ],
+              "answerIndex": 1
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出恢复后你会执行的三项一致性检查（序列号、窗口点数、状态机可达性），并说明为什么“先确认检查点、后写外部”会造成重复写入或静默丢失。"
+        }
+      }
+    ]
+  },
+  "subtitle": "流式计算与实时管道",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [
+    "point-13-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000477"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "有状态计算、检查点与故障恢复"
+      ],
+      "lineStart": 8899,
+      "lineEnd": 8900,
+      "assetRefs": [],
+      "excerptSha256": "a73d4a2e10fb2c925814041ec4e0070cc151278c2cd938795b173409fbe14a7c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000478"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "有状态计算、检查点与故障恢复",
+        "有状态算子与键控状态"
+      ],
+      "lineStart": 8901,
+      "lineEnd": 8908,
+      "assetRefs": [],
+      "excerptSha256": "e93c602494cfb5898a4a6544d803be7da5334c30de3c7d3d691dccdd5f2d5d3b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000479"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "有状态计算、检查点与故障恢复",
+        "检查点机制与一致性屏障"
+      ],
+      "lineStart": 8909,
+      "lineEnd": 8916,
+      "assetRefs": [],
+      "excerptSha256": "5e9ccf226c67b68d5d259408b975e6eeb65d52d43cfb5e396f1de7760ff17e76"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000480"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "有状态计算、检查点与故障恢复",
+        "故障恢复与状态重放"
+      ],
+      "lineStart": 8917,
+      "lineEnd": 8924,
+      "assetRefs": [],
+      "excerptSha256": "ef625860fef0838064f4243d921a1ea90516f179c3882e1697639e53b34f818f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000481"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "有状态计算、检查点与故障恢复",
+        "增量检查点与状态后端选型"
+      ],
+      "lineStart": 8925,
+      "lineEnd": 8940,
+      "assetRefs": [],
+      "excerptSha256": "92e0960c0455438cf540a7e255d4f0994d0396d965523be5b907cc68ae27297c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000482"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "有状态计算、检查点与故障恢复",
+        "状态一致性的验证方法"
+      ],
+      "lineStart": 8941,
+      "lineEnd": 8978,
+      "assetRefs": [],
+      "excerptSha256": "125e64a441efca0c6d01286d65362868fc5d388912b0864c47ab35d1b59dacac"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3053,
+    351
+  ],
+  "scale": 0.95
+}

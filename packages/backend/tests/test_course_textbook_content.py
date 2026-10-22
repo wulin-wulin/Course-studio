@@ -68,6 +68,77 @@ def _textbook_point() -> dict:
     }
 
 
+def _with_learning_design(point: dict) -> dict:
+    designed = deepcopy(point)
+    content = designed["content"]
+    for block in content["blocks"]:
+        block["moduleId"] = "concept-and-practice"
+        block["depth"] = "core"
+    content["learningDesign"] = {
+        "primaryPattern": "concept-example-check",
+        "adaptationLevel": "balanced",
+        "editorialPolicy": (
+            "保持教材事实、定义与边界，允许围绕学习目标重排并补充例题。"
+        ),
+        "estimatedMinutes": 12,
+        "outcomes": [
+            {"id": "explain-concept", "text": "解释核心概念及其适用范围。"},
+            {"id": "apply-concept", "text": "在新情境中正确应用该概念。"},
+        ],
+        "misconceptions": ["把适用范围之外的情形也视为该概念。"],
+        "modules": [
+            {
+                "id": "concept-and-practice",
+                "title": "概念与练习",
+                "role": "worked-example",
+                "outcomeRefs": ["explain-concept", "apply-concept"],
+                "order": 0,
+            }
+        ],
+        "completion": {
+            "outcomeRefs": ["explain-concept", "apply-concept"],
+            "method": "完成迁移练习并说明判断依据。",
+            "successCriteria": ["结论正确", "能指出教材依据"],
+            "exerciseBlockId": "model-example",
+        },
+    }
+    content["learningAssets"] = [
+        {
+            "id": "concept-check",
+            "type": "formative-check",
+            "anchorBlockId": "model-example",
+            "moduleId": "concept-and-practice",
+            "depth": "core",
+            "outcomeRefs": ["apply-concept"],
+            "learningPurpose": "检查学习者能否把教材定义迁移到新情境。",
+            "grounding": {"basedOnBlockIds": ["textbook-definition"]},
+            "config": {"attempts": 2, "showHint": True},
+            "fallback": {
+                "type": "markdown",
+                "markdown": "请说明示例是否满足教材定义，并写出依据。",
+            },
+        }
+    ]
+    return designed
+
+
+def _index_meta(point: dict) -> dict:
+    return {
+        key: deepcopy(point[key])
+        for key in (
+            "id",
+            "title",
+            "clusterId",
+            "shortSummary",
+            "difficulty",
+            "importance",
+            "keyTerms",
+            "pos",
+            "scale",
+        )
+    }
+
+
 class CourseTextbookContentTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -107,6 +178,27 @@ class CourseTextbookContentTest(unittest.TestCase):
             strict_details=True,
         )
 
+    def sequence_course(self):
+        points: dict[str, dict] = {}
+        for suffix, title in (("a", "第一点"), ("b", "第二点"), ("c", "第三点")):
+            point = _with_learning_design(self.point)
+            point["id"] = f"point-{suffix}"
+            point["title"] = title
+            points[point["id"]] = point
+        index = {
+            "courseId": "demo-course",
+            "clusters": [{"id": "cluster-a", "title": "第一章"}],
+            "points": [_index_meta(point) for point in points.values()],
+            "sequences": {
+                "cluster": [],
+                "point": [
+                    {"fromId": "point-a", "toId": "point-b"},
+                    {"fromId": "point-b", "toId": "point-c"},
+                ],
+            },
+        }
+        return index, points
+
     def persist_point(self, point: dict | None = None) -> None:
         self.store.create_course(
             self.course,
@@ -134,6 +226,213 @@ class CourseTextbookContentTest(unittest.TestCase):
     def test_complete_v2_point_passes_strict_storage_validation(self):
         result = self.validate()
         self.assertTrue(result.ok, result.errors)
+
+    def test_v2_learning_design_and_assets_pass_and_survive_normalisation(self):
+        designed = _with_learning_design(self.point)
+
+        result = self.validate(designed)
+        normalised = self.store._normalise_point(designed)
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(normalised["content"], designed["content"])
+        self.assertEqual(
+            normalised["content"]["learningDesign"]["adaptationLevel"],
+            "balanced",
+        )
+        self.assertEqual(
+            normalised["content"]["learningAssets"][0]["anchorBlockId"],
+            "model-example",
+        )
+
+    def test_v2_learning_design_defaults_adaptation_to_balanced(self):
+        designed = _with_learning_design(self.point)
+        del designed["content"]["learningDesign"]["adaptationLevel"]
+
+        result = self.validate(designed)
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_v2_completion_next_point_matches_canonical_course_sequence(self):
+        index, points = self.sequence_course()
+        points["point-a"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "point-b"
+        points["point-b"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "point-c"
+
+        result = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_v2_completion_uses_linearized_cluster_and_point_sequences(self):
+        index, points = self.sequence_course()
+        points["point-c"]["clusterId"] = "cluster-b"
+        index["clusters"] = [
+            {"id": "cluster-a", "title": "第一章"},
+            {"id": "cluster-b", "title": "第二章"},
+        ]
+        # Source order is intentionally different. The canonical order is
+        # cluster-a then cluster-b, with point-a then point-b inside cluster-a.
+        index["points"] = [
+            _index_meta(points["point-c"]),
+            _index_meta(points["point-b"]),
+            _index_meta(points["point-a"]),
+        ]
+        index["sequences"] = {
+            "cluster": [{"fromId": "cluster-a", "toId": "cluster-b"}],
+            "point": [{"fromId": "point-a", "toId": "point-b"}],
+        }
+        points["point-b"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "point-c"
+
+        result = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_v2_completion_next_point_must_exist_in_current_course(self):
+        index, points = self.sequence_course()
+        points["point-a"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "missing-point"
+
+        result = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "nextPointId 引用了本课程不存在的知识点：missing-point",
+            "\n".join(result.errors),
+        )
+
+    def test_v2_completion_next_point_must_be_direct_canonical_successor(self):
+        index, points = self.sequence_course()
+        points["point-a"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "point-c"
+
+        result = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn(
+            "nextPointId 必须指向规范学习顺序中的直接下一点 point-b，实际为 point-c",
+            "\n".join(result.errors),
+        )
+
+    def test_v2_completion_last_point_may_omit_next_point(self):
+        index, points = self.sequence_course()
+
+        result = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+
+        self.assertTrue(result.ok, result.errors)
+
+        points["point-c"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "point-a"
+        invalid = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+        self.assertIn(
+            "位于规范学习顺序末尾",
+            "\n".join(invalid.errors),
+        )
+
+    def test_v2_completion_next_point_keeps_legacy_course_without_sequences_compatible(self):
+        index, points = self.sequence_course()
+        index.pop("sequences")
+        points["point-a"]["content"]["learningDesign"]["completion"][
+            "nextPointId"
+        ] = "point-c"
+
+        result = self.store._validate_course_objects(
+            "demo-course",
+            self.course,
+            index,
+            points,
+            strict_details=True,
+        )
+
+        self.assertTrue(result.ok, result.errors)
+
+    def test_v2_learning_design_rejects_dangling_references_and_invalid_depth(self):
+        invalid = _with_learning_design(self.point)
+        invalid["content"]["blocks"][0]["moduleId"] = "missing-module"
+        invalid["content"]["blocks"][1]["depth"] = "deep"
+        invalid["content"]["learningDesign"]["modules"][0]["outcomeRefs"] = [
+            "missing-outcome"
+        ]
+        invalid["content"]["learningAssets"][0]["anchorBlockId"] = "missing-block"
+
+        result = self.validate(invalid)
+
+        self.assertFalse(result.ok)
+        joined = "\n".join(result.errors)
+        self.assertIn("引用了不存在的教学模块：missing-module", joined)
+        self.assertIn("depth 必须是 core/support/advanced", joined)
+        self.assertIn("引用了不存在的学习目标：missing-outcome", joined)
+        self.assertIn("引用了不存在的内容块：missing-block", joined)
+
+    def test_v2_learning_assets_require_grounding_purpose_and_usable_fallback(self):
+        invalid = _with_learning_design(self.point)
+        asset = invalid["content"]["learningAssets"][0]
+        asset["learningPurpose"] = ""
+        asset["grounding"]["basedOnBlockIds"] = ["missing-block"]
+        asset["fallback"] = {"type": "markdown"}
+
+        result = self.validate(invalid)
+
+        self.assertFalse(result.ok)
+        joined = "\n".join(result.errors)
+        self.assertIn("learningPurpose 必须是非空字符串", joined)
+        self.assertIn("grounding 引用了不存在的内容块：missing-block", joined)
+        self.assertIn("fallback 必须提供可用的降级内容", joined)
+
+    def test_v2_learning_design_rejects_duplicate_ids_and_unknown_fields(self):
+        invalid = _with_learning_design(self.point)
+        duplicate = deepcopy(invalid["content"]["learningDesign"]["outcomes"][0])
+        invalid["content"]["learningDesign"]["outcomes"].append(duplicate)
+        invalid["content"]["learningAssets"][0]["unreviewedPayload"] = True
+
+        result = self.validate(invalid)
+
+        self.assertFalse(result.ok)
+        joined = "\n".join(result.errors)
+        self.assertIn("outcomes[2].id 重复：explain-concept", joined)
+        self.assertIn("包含未知字段：unreviewedPayload", joined)
 
     def test_default_course_validation_enforces_versioned_content_contract(self):
         self.persist_point()
@@ -399,6 +698,24 @@ class CourseTextbookContentTest(unittest.TestCase):
         )
         self.assertEqual(updated["title"], "更新后的教材知识点")
         self.assertEqual(updated["content"], self.point["content"])
+
+    def test_update_revalidates_learning_design_and_asset_references(self):
+        designed = _with_learning_design(self.point)
+        self.persist_point(designed)
+        invalid_content = deepcopy(designed["content"])
+        invalid_content["learningAssets"][0]["outcomeRefs"] = ["missing-outcome"]
+
+        with self.assertRaises(CourseValidationError) as rejected:
+            self.store.update_point(
+                "demo-course",
+                "point-a",
+                {"content": invalid_content},
+            )
+
+        self.assertIn(
+            "引用了不存在的学习目标：missing-outcome",
+            "\n".join(rejected.exception.errors),
+        )
 
     def test_workspace_change_revalidates_existing_v2_derived_fields(self):
         self.persist_point()

@@ -77,7 +77,9 @@ BACKEND_PORT=8000
 # Comma-separated local frontend origins permitted to call the API.
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 VITE_API_URL=http://127.0.0.1:8000
-VITE_WS_URL=ws://127.0.0.1:8000
+# Optional: only set this when the browser must bypass the frontend /api proxy.
+# The URL must be reachable by the browser, including browsers on other devices.
+# VITE_WS_URL=wss://course.example.com
 
 # 教材 PDF 导入（可选；下面是默认值）
 # 上传的原始 PDF 和解析纲要保存在 generated/document_library，

@@ -16,7 +16,7 @@ before(async () => {
         'export * from "./src/features/courseCreation/setup.ts";',
         'export { buildCourseDirectory, buildCourseReadingOrder, buildSceneInputs, normalizeForestIndex } from "./src/course/forest/forestAdapter.ts";',
         'export * from "./src/utils/latestRequest.ts";',
-        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldPauseGenerationAfterAgentDone, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
+        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldCompleteCourseCreationAfterAgentDone, shouldPauseGenerationAfterAgentDone, shouldRestoreCourseCreationWorkflow, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
       ].join("\n"),
       resolveDir: frontendRoot,
       sourcefile: "review-contract-entry.ts",
@@ -393,6 +393,16 @@ test("resume outbox survives remount and removes only acknowledged work", () => 
   );
   assert.equal(
     contracts.reviewResumeDeliveryOutcome(item, {
+      type: "agent_question",
+      payload: {
+        conversation_id: "conversation-1",
+        request_id: "question-g7",
+      },
+    }),
+    "consumed",
+  );
+  assert.equal(
+    contracts.reviewResumeDeliveryOutcome(item, {
       type: "agent_review_resolved",
       payload: {
         conversation_id: "conversation-1",
@@ -522,6 +532,14 @@ test("textbook course creation preserves identity and requires grounded content"
   assert.match(request.message, /教材块记录 sourceSpans/);
   assert.match(request.message, /模型补充块通过 basedOnBlockIds/);
   assert.match(request.message, /顶层 sourceSpans\/modelEnriched 只在发布时由 blocks 派生/);
+  assert.match(request.message, /平衡重编/);
+  assert.match(request.message, /教材约束事实、定义、公式、适用条件和知识覆盖/);
+  assert.match(request.message, /重新安排讲解顺序/);
+  assert.match(request.message, /adaptationLevel 默认使用 balanced/);
+  assert.match(request.message, /learningDesign\.editorialPolicy 用于记录本知识点的教学重编原则/);
+  assert.match(request.message, /通常为 4 至 7 个/);
+  assert.match(request.message, /不要在正文重复顶部已经展示的完整学习目标列表/);
+  assert.match(request.message, /estimatedMinutes 需要计入正文、公式表格、互动和练习的总学习时间/);
   assert.doesNotMatch(request.message, /不要求逐段还原教材正文/);
   assert.match(request.message, /不得重新聚类或改变已确认的章节归属/);
 });
@@ -612,6 +630,56 @@ test("stale conversation reconciliation prefers the next pending review", () => 
   });
   assert.equal(decision.kind, "pending-review");
   assert.equal(decision.review.id, "review-2");
+});
+
+test("a downstream native question consumes the stale review resume", () => {
+  const decision = contracts.reconcileReviewResume("review-1", {
+    pending_question: {
+      request_id: "question-g7",
+      conversation_id: "conversation-1",
+      questions: [
+        {
+          header: "G7_RELEASE_READY",
+          question: "确认发布？",
+          options: [{ label: "确认发布", description: "生成正式课程" }],
+        },
+      ],
+    },
+    pending_review: null,
+    pending_review_resume: pointer({
+      status: "resolved",
+      resume_pending: true,
+      resume_message: "continue pipeline",
+      display_content: "已确认知识图谱",
+    }),
+  });
+
+  assert.deepEqual(decision, { kind: "consumed" });
+});
+
+test("a restored G7 question clears a failed generation and waits for input", () => {
+  const conversationId = "generation-waiting-for-g7";
+  const store = contracts.useCourseGenerationStore;
+
+  store.getState().startLive(conversationId);
+  store.getState().markLiveError(conversationId, "stale duplicate resume error");
+  store.getState().markAwaitingInput(conversationId, {
+    gate: "G7_RELEASE_READY",
+    label: "等待发布确认",
+    detail: "请在右侧选择是否发布。",
+  });
+
+  const run = store.getState().liveRuns[conversationId];
+  assert.equal(run.status, "awaiting-input");
+  assert.equal(run.error, null);
+  assert.equal(run.gate, "G7_RELEASE_READY");
+  assert.equal(run.phaseLabel, "等待发布确认");
+  assert.equal(
+    contracts.normalizePersistedRun(run).status,
+    "awaiting-input",
+  );
+
+  store.getState().removeLive(conversationId);
 });
 
 test("stale resume reconciliation adopts the server canonical review", () => {
@@ -720,6 +788,77 @@ test("agent done preserves a live generation that is waiting for review", () => 
   );
   assert.equal(
     contracts.shouldPauseGenerationAfterAgentDone({}, undefined),
+    false,
+  );
+});
+
+test("course creation unlocks only after a successful published agent turn", () => {
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 0 },
+      { published: true, status: "completed" },
+    ),
+    true,
+  );
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 0, awaiting_review: true },
+      { published: false, status: "awaiting-input" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 1 },
+      { published: true, status: "completed" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 0 },
+      undefined,
+    ),
+    false,
+  );
+});
+
+test("reopening history keeps only unfinished course creation workflows locked", () => {
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: true, status: "completed" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: false, status: "completed" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: false, status: "awaiting-input" },
+    ),
+    true,
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: true, status: "completed" },
+      true,
+    ),
+    true,
+    "a pending review or native question takes precedence over persisted completion",
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "default",
+      { published: false, status: "running" },
+    ),
     false,
   );
 });

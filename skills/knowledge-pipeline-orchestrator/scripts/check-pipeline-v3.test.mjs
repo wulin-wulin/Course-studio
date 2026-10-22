@@ -55,9 +55,30 @@ function configureTextbookV2(root) {
     point.origin = 'textbook';
     point.content = {
       schema_version: 'textbook-content/2.0',
+      learningDesign: {
+        primaryPattern: 'concept-example-check',
+        adaptationLevel: 'balanced',
+        editorialPolicy: '保持教材事实与边界，围绕迁移目标补充例题。',
+        estimatedMinutes: 10,
+        outcomes: [{ id: 'explain-concept', text: '解释概念及其适用边界。' }],
+        misconceptions: [],
+        modules: [{
+          id: 'concept-and-example',
+          title: '概念与示例',
+          outcomeRefs: ['explain-concept'],
+          order: 0,
+        }],
+        completion: {
+          outcomeRefs: ['explain-concept'],
+          method: '说明定义，并判断新情境是否满足适用条件。',
+          successCriteria: ['定义准确', '判断依据清楚'],
+        },
+      },
       blocks: [
         {
           id: 'textbook-explanation',
+          moduleId: 'concept-and-example',
+          depth: 'core',
           kind: 'explanation',
           title: '教材说明',
           markdown: `教材解释了${point.title}的定义、边界和适用条件。`,
@@ -69,6 +90,8 @@ function configureTextbookV2(root) {
         },
         {
           id: 'model-example',
+          moduleId: 'concept-and-example',
+          depth: 'core',
           kind: 'example',
           title: '补充示例',
           markdown: `使用一个新情境演示${point.title}，并说明容易混淆的边界。`,

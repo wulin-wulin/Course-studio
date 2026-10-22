@@ -904,48 +904,71 @@ export class Scene3D {
                 clusterById.set(cluster.id, {
                     x: center.x / members.length,
                     y: center.y / members.length,
+                    polygon: Array.isArray(cluster.polygon) ? cluster.polygon : [],
+                    members,
                 });
             } else if (Array.isArray(cluster.label_pos)) {
-                clusterById.set(cluster.id, { x: cluster.label_pos[0], y: cluster.label_pos[1] });
+                clusterById.set(cluster.id, {
+                    x: cluster.label_pos[0],
+                    y: cluster.label_pos[1],
+                    polygon: Array.isArray(cluster.polygon) ? cluster.polygon : [],
+                    members: [],
+                });
             }
         }
 
-        clusterEdges.forEach((edge, index) => {
+        clusterEdges.forEach((edge) => {
             const from = clusterById.get(edge.fromId);
             const to = clusterById.get(edge.toId);
             if (!from || !to) return;
-            this._addSequenceEdge(from, to, {
-                color: 0xb7791f,
-                dashSize: 112,
-                gapSize: 68,
-                z: 22,
-                trim: 118,
-                curve: 0.09,
-                arrowRadius: 19,
-                arrowLength: 54,
-                renderOrder: 20,
-                bendSeed: `${edge.fromId}:${edge.toId}:${index}`,
+            // The visible island uses a Catmull-Rom-smoothed version of the
+            // stored polygon. A little extra clearance keeps the route and
+            // arrow outside that rounded contour as well.
+            const start = this._sequenceClusterAnchor(from, to, 46);
+            const finish = this._sequenceClusterAnchor(to, from, 46);
+            this._addSequenceEdge(start, finish, {
+                color: 0x5b5bd6,
+                dashSize: 76,
+                gapSize: 52,
+                lineWidth: 1.5,
+                opacity: 0.68,
+                arrowOpacity: 0.78,
+                z: 7,
+                startTrim: 0,
+                endTrim: 0,
+                curve: 0.045,
+                maxBend: 82,
+                arrowRadius: 9,
+                arrowLength: 27,
+                renderOrder: 6,
+                bendCenter: { x: CANVAS_W / 2, y: CANVAS_H / 2 },
             });
         });
 
-        pointEdges.forEach((edge, index) => {
+        pointEdges.forEach((edge) => {
             const from = pointById.get(edge.fromId);
             const to = pointById.get(edge.toId);
             if (!from || !to) return;
+            const clusterCenter = from.catId === to.catId ? clusterById.get(from.catId) : null;
             this._addSequenceEdge(
                 { x: from.pos[0], y: from.pos[1] },
                 { x: to.pos[0], y: to.pos[1] },
                 {
-                    color: 0x1f7a68,
-                    dashSize: 58,
-                    gapSize: 34,
-                    z: 30,
-                    trim: 46,
-                    curve: 0.055,
-                    arrowRadius: 11,
-                    arrowLength: 34,
-                    renderOrder: 21,
-                    bendSeed: `${edge.fromId}:${edge.toId}:${index}`,
+                    color: 0x2f73b7,
+                    dashSize: 34,
+                    gapSize: 29,
+                    lineWidth: 1,
+                    opacity: 0.46,
+                    arrowOpacity: 0.62,
+                    z: 10,
+                    startTrim: this._sequencePointClearance(from),
+                    endTrim: this._sequencePointClearance(to),
+                    curve: 0.026,
+                    maxBend: 28,
+                    arrowRadius: 5,
+                    arrowLength: 16,
+                    renderOrder: 7,
+                    bendCenter: clusterCenter || { x: CANVAS_W / 2, y: CANVAS_H / 2 },
                 },
             );
         });
@@ -953,6 +976,64 @@ export class Scene3D {
 
     clearSequenceEdges() {
         if (this.sequenceGroup) this._clearGroup(this.sequenceGroup);
+    }
+
+    _sequencePointClearance(meta) {
+        const scale = Math.max(0.72, Math.min(1.35, meta && meta.scale ? meta.scale : 1));
+        return 58 * scale + 12;
+    }
+
+    _sequenceClusterAnchor(cluster, toward, padding) {
+        const dx = toward.x - cluster.x;
+        const dy = toward.y - cluster.y;
+        const distance = Math.hypot(dx, dy);
+        if (!Number.isFinite(distance) || distance < 1) return { x: cluster.x, y: cluster.y };
+        const direction = { x: dx / distance, y: dy / distance };
+        let clearance = this._sequencePolygonRayDistance(cluster, direction);
+
+        // Legacy courses may not carry a polygon. Derive a conservative edge
+        // from their trees so the route still starts outside the cluster.
+        if (!Number.isFinite(clearance)) {
+            clearance = 0;
+            for (const member of cluster.members || []) {
+                const offsetX = member.pos[0] - cluster.x;
+                const offsetY = member.pos[1] - cluster.y;
+                const projection = offsetX * direction.x + offsetY * direction.y;
+                clearance = Math.max(clearance, projection + this._sequencePointClearance(member));
+            }
+            clearance = Math.max(clearance, 96);
+        }
+
+        return {
+            x: cluster.x + direction.x * (clearance + padding),
+            y: cluster.y + direction.y * (clearance + padding),
+        };
+    }
+
+    _sequencePolygonRayDistance(cluster, direction) {
+        const polygon = cluster.polygon;
+        if (!Array.isArray(polygon) || polygon.length < 3) return NaN;
+        let nearest = Infinity;
+
+        for (let index = 0; index < polygon.length; index += 1) {
+            const first = polygon[index];
+            const second = polygon[(index + 1) % polygon.length];
+            if (!Array.isArray(first) || !Array.isArray(second)) continue;
+            const edgeX = second[0] - first[0];
+            const edgeY = second[1] - first[1];
+            const denominator = direction.x * edgeY - direction.y * edgeX;
+            if (Math.abs(denominator) < 1e-7) continue;
+
+            const relativeX = first[0] - cluster.x;
+            const relativeY = first[1] - cluster.y;
+            const rayDistance = (relativeX * edgeY - relativeY * edgeX) / denominator;
+            const edgePosition = (relativeX * direction.y - relativeY * direction.x) / denominator;
+            if (rayDistance >= 0 && edgePosition >= 0 && edgePosition <= 1) {
+                nearest = Math.min(nearest, rayDistance);
+            }
+        }
+
+        return Number.isFinite(nearest) ? nearest : NaN;
     }
 
     _addSequenceEdge(from, to, options) {
@@ -964,16 +1045,28 @@ export class Scene3D {
 
         const direction = delta.clone().normalize();
         const maximumTrim = Math.max(0, distance * 0.32);
-        const trim = Math.min(options.trim, maximumTrim);
-        start.addScaledVector(direction, trim);
-        finish.addScaledVector(direction, -trim);
+        const startTrim = Math.min(options.startTrim || 0, maximumTrim);
+        const endTrim = Math.min(options.endTrim || 0, maximumTrim);
+        start.addScaledVector(direction, startTrim);
+        finish.addScaledVector(direction, -endTrim);
 
         const span = finish.clone().sub(start);
         const spanLength = span.length();
         if (spanLength < 2) return;
         const normal = new THREE.Vector3(-direction.y, direction.x, 0);
-        const bendDirection = this._sequenceHash(options.bendSeed) % 2 === 0 ? 1 : -1;
-        const bend = Math.min(150, spanLength * options.curve) * bendDirection;
+        const center = options.bendCenter || { x: CANVAS_W / 2, y: CANVAS_H / 2 };
+        const rawMidpoint = start.clone().add(finish).multiplyScalar(0.5);
+        const outwardX = rawMidpoint.x - center.x;
+        const outwardY = rawMidpoint.y - center.y;
+        const side = normal.x * outwardX + normal.y * outwardY;
+        // Bend away from the local layout center. The dominant-axis fallback
+        // keeps perfectly centred edges deterministic without a hash.
+        const bendDirection = Math.abs(side) > 1e-4
+            ? Math.sign(side)
+            : (Math.abs(direction.x) >= Math.abs(direction.y)
+                ? (direction.x >= 0 ? 1 : -1)
+                : (direction.y >= 0 ? -1 : 1));
+        const bend = Math.min(options.maxBend, spanLength * options.curve) * bendDirection;
         const midpoint = start.clone().add(finish).multiplyScalar(0.5).addScaledVector(normal, bend);
         const curve = new THREE.QuadraticBezierCurve3(start, midpoint, finish);
         const points = curve.getPoints(Math.max(20, Math.min(72, Math.ceil(spanLength / 42))));
@@ -983,10 +1076,11 @@ export class Scene3D {
             color: options.color,
             dashSize: options.dashSize,
             gapSize: options.gapSize,
+            linewidth: options.lineWidth,
             transparent: true,
-            opacity: 0.86,
+            opacity: options.opacity,
             depthWrite: false,
-            depthTest: false,
+            depthTest: true,
         });
         const line = new THREE.Line(geometry, material);
         line.computeLineDistances();
@@ -994,32 +1088,26 @@ export class Scene3D {
         this.sequenceGroup.add(line);
 
         const arrowDirection = finish.clone().sub(points[points.length - 2]).normalize();
-        const arrowGeometry = new THREE.ConeGeometry(
-            options.arrowRadius,
-            options.arrowLength,
-            16,
-        );
+        const arrowLength = Math.min(options.arrowLength, Math.max(8, spanLength * 0.16));
+        const arrowRadius = Math.min(options.arrowRadius, arrowLength * 0.34);
+        const arrowNormal = new THREE.Vector3(-arrowDirection.y, arrowDirection.x, 0);
+        const arrowBase = finish.clone().addScaledVector(arrowDirection, -arrowLength);
+        const arrowGeometry = new THREE.BufferGeometry().setFromPoints([
+            finish,
+            arrowBase.clone().addScaledVector(arrowNormal, arrowRadius),
+            arrowBase.clone().addScaledVector(arrowNormal, -arrowRadius),
+        ]);
         const arrowMaterial = new THREE.MeshBasicMaterial({
             color: options.color,
             transparent: true,
-            opacity: 0.92,
+            opacity: options.arrowOpacity,
+            side: THREE.DoubleSide,
             depthWrite: false,
-            depthTest: false,
+            depthTest: true,
         });
         const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
-        arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDirection);
-        arrow.position.copy(finish).addScaledVector(arrowDirection, -options.arrowLength / 2);
         arrow.renderOrder = options.renderOrder + 1;
         this.sequenceGroup.add(arrow);
-    }
-
-    _sequenceHash(value) {
-        let hash = 2166136261;
-        for (let index = 0; index < value.length; index += 1) {
-            hash ^= value.charCodeAt(index);
-            hash = Math.imul(hash, 16777619);
-        }
-        return hash >>> 0;
     }
 
     focusLearningPath() {
@@ -1068,10 +1156,29 @@ export class Scene3D {
         this.renderer.render(this.scene, this.camera);
     }
     resize(w, h) {
+        const previousBest = this._best;
+        const wasOverview = previousBest && this._state
+            && Math.abs(this._state.r - previousBest.r) < 1
+            && Math.abs(this._state.target.x - previousBest.target.x) < 1
+            && Math.abs(this._state.target.y - previousBest.target.y) < 1
+            && Math.abs(this._state.theta - previousBest.theta) < 1e-5
+            && Math.abs(this._state.phi - previousBest.phi) < 1e-5;
         this.renderer.setSize(w, h);
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
-        this._updateLabelPositions();
+        this._computeBestView();
+        if (wasOverview) {
+            const best = this._best;
+            this._state.theta = best.theta;
+            this._state.phi = best.phi;
+            this._state.r = best.r;
+            this._state.target.x = best.target.x;
+            this._state.target.y = best.target.y;
+            this._needsVisRefresh = true;
+            this._updateCamera();
+        } else {
+            this._updateLabelPositions();
+        }
     }
 
     raycast(sx, sy) {

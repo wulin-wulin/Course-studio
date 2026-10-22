@@ -15,6 +15,8 @@ import re
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .store import _validate_textbook_content_point
+
 
 _ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _COMPONENT_RE = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -232,11 +234,11 @@ def _valid_point(value: dict[str, Any] | None, expected: dict[str, Any]) -> bool
 
 
 def _valid_textbook_point(value: dict[str, Any], expected: dict[str, Any]) -> bool:
-    """Recognize a complete v2 draft without duplicating the final validator.
+    """Recognize a complete v2 draft using the publication content contract.
 
-    The observer only decides whether a worker has produced a usable draft for
-    progress reporting. The pipeline validators remain responsible for the
-    exhaustive schema, source-span, and coverage checks.
+    The observer also applies a few progress-specific checks against the staged
+    index. The canonical validator remains the authority for the v2 content
+    envelope so a rejected teaching design cannot be reported as complete.
     """
 
     if not _TEXTBOOK_POINT_REQUIRED.issubset(value):
@@ -258,6 +260,19 @@ def _valid_textbook_point(value: dict[str, Any], expected: dict[str, Any]) -> bo
         return False
 
     content = value["content"]
+    if (
+        not isinstance(content, dict)
+        or content.get("schema_version") != _TEXTBOOK_CONTENT_SCHEMA
+    ):
+        return False
+    learning_design = content.get("learningDesign")
+    if (
+        not isinstance(learning_design, dict)
+        or learning_design.get("adaptationLevel")
+        not in {"faithful", "balanced", "teaching-first"}
+        or not _text(learning_design.get("editorialPolicy"))
+    ):
+        return False
     blocks = content.get("blocks")
     if not isinstance(blocks, list) or len(blocks) < 2:
         return False
@@ -311,7 +326,16 @@ def _valid_textbook_point(value: dict[str, Any], expected: dict[str, Any]) -> bo
                 return False
         else:
             return False
-    return textbook_blocks > 0 and model_blocks > 0
+    if textbook_blocks < 1 or model_blocks < 1:
+        return False
+
+    # Completion must never get ahead of the canonical writer. Reusing the
+    # store's v2 validator here keeps the complete generated teaching plan and
+    # its module/asset references under the same contract as publication.
+    return not _validate_textbook_content_point(
+        value,
+        f"generation observer point {expected['id']}",
+    )
 
 
 def _valid_animation_manifest(value: dict[str, Any] | None) -> list[str] | None:

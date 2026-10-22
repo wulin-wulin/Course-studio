@@ -1,0 +1,574 @@
+{
+  "id": "point-5-3",
+  "title": "分区、索引与时间范围查询",
+  "shortSummary": "按时间与设备设计分区和索引，使时间范围查询、保留策略与写入吞吐保持合理平衡。",
+  "keyTerms": [
+    "分区",
+    "索引",
+    "时间范围查询",
+    "写入吞吐",
+    "保留策略",
+    "数据块"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-5-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于分区剪枝、索引取舍、窗口语义与完整性校验的结论，按“变量—定量推导—索引决策—查询核算—反例约束”重排讲解，并补充可复算的检查步骤与练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "design-partition-index",
+          "text": "给定采样周期、设备数与保留期，估算单 chunk 行数，并为点查与大范围聚合选择互补的时间分区与索引组合。"
+        },
+        {
+          "id": "validate-range-query",
+          "text": "使用事件时间、左闭右开区间与序列号缺口，定位时间范围查询结果缺失的原因并说明证据。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要建了时间索引，任何时间范围查询都会自动剪枝。",
+        "把 ingest_time 当成业务时间轴做趋势分析。",
+        "对事件驱动的门磁按固定频率计算期望点数。",
+        "聚合时不做质量码过滤，用插值点掩盖采集缺口。"
+      ],
+      "modules": [
+        {
+          "id": "query-goal-and-variables",
+          "title": "问题与变量",
+          "role": "framing",
+          "description": "把设计问题拆成可计算的时间跨度、采样周期与行数变量。",
+          "outcomeRefs": [
+            "design-partition-index"
+          ],
+          "order": 0
+        },
+        {
+          "id": "partition-cost-model",
+          "title": "分区容量推导",
+          "role": "quantitative-model",
+          "description": "从 chunk 跨度推导单分区行数，并比较不同粒度的代价。",
+          "outcomeRefs": [
+            "design-partition-index"
+          ],
+          "order": 1
+        },
+        {
+          "id": "index-cost-tradeoff",
+          "title": "索引取舍",
+          "role": "comparison",
+          "description": "按查询形状在复合 B-tree 与 BRIN 之间做有依据的选择。",
+          "outcomeRefs": [
+            "design-partition-index"
+          ],
+          "order": 2
+        },
+        {
+          "id": "query-semantics",
+          "title": "查询语义与点数核算",
+          "role": "worked-example",
+          "description": "用事件时间、左闭右开区间与期望点数核算一次范围查询。",
+          "outcomeRefs": [
+            "validate-range-query"
+          ],
+          "order": 3
+        },
+        {
+          "id": "verification-and-pitfalls",
+          "title": "完整性校验与反例",
+          "role": "procedure",
+          "description": "按证据顺序检查缺口、时钟回退与常见误区。",
+          "outcomeRefs": [
+            "validate-range-query",
+            "design-partition-index"
+          ],
+          "order": 4
+        },
+        {
+          "id": "transfer",
+          "title": "迁移与小结",
+          "role": "summary",
+          "description": "把分区、索引与查询校验收束为一条可执行的设计闭环。",
+          "outcomeRefs": [
+            "design-partition-index",
+            "validate-range-query"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "design-partition-index",
+          "validate-range-query"
+        ],
+        "method": "独立完成一次 chunk 容量估算、选择索引组合，并对一个少点的时间范围查询给出证据链。",
+        "successCriteria": [
+          "行数估算的单位与公式正确",
+          "索引选择能对应具体查询形状",
+          "少点原因能落到边界、缺口或质量过滤之一"
+        ],
+        "summaryBlockId": "model-transfer-summary",
+        "nextPointId": "point-5-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-scope",
+        "moduleId": "query-goal-and-variables",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节要解决的问题",
+        "markdown": "本节要解决的是：在按时间追加写入的工业时序表上，让常见的时间范围查询只扫描必要的数据，同时不牺牲写入吞吐。围绕这个问题，教材依次讨论时间分区与查询剪枝、B-tree 与 BRIN 两类索引、时间范围查询的语义边界、时钟异常与序列完整性校验，最后给出四个常见误区。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000168"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "分区、索引与时间范围查询"
+              ],
+              "lineStart": 3002,
+              "lineEnd": 3003,
+              "assetRefs": [],
+              "excerptSha256": "a4c4c553939505dcd1bab6e0a1a66d9e753c88501db445d11d75d32c129e676b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-variable-map",
+        "moduleId": "query-goal-and-variables",
+        "depth": "core",
+        "kind": "table",
+        "title": "先固定变量与单位",
+        "markdown": "后续推导统一使用以下符号，避免把“一周”“30 秒”“行数”混在同一个量纲里：\n\n| 符号 | 含义 | 单位 |\n|---|---|---|\n| $T_{\\text{chunk}}$ | 单个分区（chunk）覆盖的时间跨度 | s |\n| $\\tau_{\\text{th}}$ | 温湿度采样周期 | s/行 |\n| $\\tau_{\\text{comp}}$ | 压缩机电流采样周期 | s/行 |\n| $N_{\\text{th}}$ | 单台温湿度设备在单 chunk 内的期望行数 | 行 |\n| $N_{\\text{expect}}$ | 固定频率下时间窗口的期望点数 | 点 |\n\n先做两个假设：采样周期在观察期内稳定，且写入基本按 `event_time` 顺序追加。若设备长时间离线或采样率被动态调整，下面的估算要按实际在线时长修正，而不是直接套公式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-section-scope"
+          ]
+        }
+      },
+      {
+        "id": "textbook-time-partitioning",
+        "moduleId": "partition-cost-model",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "时间分区与查询剪枝",
+        "markdown": "时序表按时间分区，是缩小扫描范围的第一手段。分区键要同时满足两点：写入时数据按时间顺序追加，减少随机 I/O；查询时时间范围谓词能命中分区边界，优化器就能把无关分区整体剪掉，即分区剪枝。\n\n在教材案例中，原始事实表以 `event_time` 为逻辑时间轴，按一周建立一个 chunk，chunk 的时间范围左闭右开。单 chunk 时间跨度为\n\n$$T_{\\text{chunk}} = 7 \\times 24 \\times 3600\\,\\text{s} = 604\\,800\\,\\text{s}$$\n\n温湿度采样周期 $\\tau_{\\text{th}} = 30\\,\\text{s}$，于是单台设备在单 chunk 内的期望行数为\n\n$$N_{\\text{th}} = \\frac{T_{\\text{chunk}}}{\\tau_{\\text{th}}} = \\frac{604\\,800}{30} = 20\\,160\\ \\text{行/设备}$$\n\n四个温区共 8 台温湿度设备，单 chunk 温湿度数据约 $8 \\times 20\\,160 = 161\\,280$ 行；4 台压缩机以 $\\tau_{\\text{comp}} = 5\\,\\text{s}$ 采样，单 chunk 约 $4 \\times 604\\,800 / 5 = 483\\,840$ 行。门磁是事件驱动，没有固定频率，不计入期望点数。\n\n分区粒度需要权衡：过粗则单 chunk 过大，压缩和迁移效率下降；过细则元数据膨胀，查询计划开销增加。7 天周期在半年保留期内约产生 26 个活跃 chunk，是常见的工程折中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000169"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "分区、索引与时间范围查询",
+                "时间分区：从物理布局到查询剪枝"
+              ],
+              "lineStart": 3004,
+              "lineEnd": 3015,
+              "assetRefs": [],
+              "excerptSha256": "1f7c98298adb3384fd6f8d5a59466657a54e71744f59b60a8f6066131d36a82b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-chunk-sizing-example",
+        "moduleId": "partition-cost-model",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "把粒度选择变成一次可复算的估算",
+        "markdown": "把上面的关系改写成可复算的检查步骤：\n\n1. 选定候选 chunk 跨度 $T_{\\text{chunk}}$；\n2. 对每个固定频率点位计算 $N = T_{\\text{chunk}} / \\tau$；\n3. 乘设备数得到单 chunk 行数，再乘活跃 chunk 数得到总体规模；\n4. 检查单 chunk 行数是否落在压缩、备份和迁移可接受的范围内。\n\n以 7 天为例，温湿度单 chunk 约 16.1 万行、压缩机约 48.4 万行。若改成 1 天，单 chunk 行数降为约原来的 $1/7$，但半年内活跃 chunk 数会从约 26 个升到约 180 个，计划与元数据开销随之上升。教材给出的 7 天不是唯一正确答案，而是“单 chunk 不太大、分区数量不失控”的工程折中。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-time-partitioning"
+          ]
+        }
+      },
+      {
+        "id": "textbook-index-options",
+        "moduleId": "index-cost-tradeoff",
+        "depth": "core",
+        "kind": "table",
+        "title": "B-tree 与 BRIN 的互补场景",
+        "markdown": "典型时序谓词是 `device_id = ? AND metric = ? AND event_time BETWEEN ? AND ?`。教材用一张表对比两种索引策略：\n\n| 索引类型 | 适用场景 | 存储开销 | 维护代价 |\n|---|---|---|---|\n| B-tree 复合索引 `(device_id, metric, event_time)` | 高基数设备标识、精确点查、小范围扫描 | 较高，随数据量线性增长 | 每次写入都要更新索引页 |\n| BRIN `(event_time)` | 时间强相关、大批量顺序写入、大范围聚合 | 极低，只记录每个数据块的极值 | 几乎无随机 I/O，自动维护 |\n\nBRIN 成立的前提是物理存储顺序与索引键的逻辑顺序高度相关。chunk 按 `event_time` 聚簇存放，正好满足这个前提；因此像“某温区过去 30 天温度均值”这类聚合，可以先靠 BRIN 定位磁盘块范围，再顺序扫描过滤设备与指标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000170"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "分区、索引与时间范围查询",
+                "索引结构：B-tree 与 BRIN 的互补场景"
+              ],
+              "lineStart": 3016,
+              "lineEnd": 3028,
+              "assetRefs": [],
+              "excerptSha256": "f185be8cf517761022463875446e4bfcba83c181096d18101522b552c54782b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-index-decision-rule",
+        "moduleId": "index-cost-tradeoff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "按查询形状选索引",
+        "markdown": "选索引时先看查询的“形状”，而不是先看索引名字：\n\n- 设备级点查或最新值查询：谓词已经把设备与指标定得很窄，需要精确导航，优先 `(device_id, metric, event_time)` 复合 B-tree；BRIN 的块级粒度会产生大量 false positive。\n- 大范围聚合或跨设备扫描：时间范围宽、选择性主要由时间决定，BRIN 的极低存储与顺序扫描更划算。\n- 两类查询都长期存在：让两套索引并存，由优化器按谓词选择性选择路径，但要接受 B-tree 带来的写入放大和存储成本。\n\n写一条索引决策前先问：这个查询能剪掉多少数据块？如果答案是“几乎全部”，BRIN 值得；如果只命中少数设备，精确索引更值得。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-index-options"
+          ]
+        }
+      },
+      {
+        "id": "textbook-range-query-semantics",
+        "moduleId": "query-semantics",
+        "depth": "core",
+        "kind": "formula",
+        "title": "时间范围查询的语义边界与窗口对齐",
+        "markdown": "查询必须区分两种时间：`event_time` 是设备赋时，是业务时间轴；`ingest_time` 是云平台首次持久接收时刻，只用于排查传输延迟和完整性问题。用 `ingest_time` 做趋势分析，会把缓存后批量上报的观测挪到错误的窗口。\n\n窗口区间一律左闭右开 $[t_{\\text{start}}, t_{\\text{end}})$。固定频率下期望点数为\n\n$$N_{\\text{expect}} = \\left\\lfloor \\frac{t_{\\text{end}} - t_{\\text{start}}}{\\tau} \\right\\rfloor$$\n\n例如查询 $[08{:}00, 09{:}00)$、$\\tau = 30\\,\\text{s}$，期望 120 点。若只返回 119 点，要检查设备重启造成的 `sequence_no` 缺口，或 `quality_code` 为 `CLOCK_SUSPECT` 的记录被过滤。\n\n窗口对齐有两种：日历对齐把边界锚定到自然时间单位，事件对齐以首条记录为起点滑动。监测场景通常要求日历对齐，保证跨日可比。教材的聚合 SQL 用 `time_bucket('1 hour', event_time)` 分桶、只统计 `quality_code = 'GOOD'`，并用 `MAX(sequence_no) - MIN(sequence_no) + 1 - COUNT(*)` 得到缺口估计；`sequence_no` 只能在同设备同指标内比较。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000171"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "分区、索引与时间范围查询",
+                "时间范围查询的语义边界与窗口对齐"
+              ],
+              "lineStart": 3029,
+              "lineEnd": 3061,
+              "assetRefs": [],
+              "excerptSha256": "b547b4c3727cd60fb49cc196cceffdf30ad6c120a39c2dd8b8d1a836a9d87b7b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-range-query-worked-example",
+        "moduleId": "query-semantics",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "119 点怎么定位原因",
+        "markdown": "把“少了一个点”拆成三种可验证原因，按成本从低到高排查：\n\n1. **时间边界写错**：确认用的是左闭右开，且边界按 UTC 解释；把边界写成闭区间或换成本地时间，都会造成首尾点错位。\n2. **序列缺口**：计算 `MAX(sequence_no) - MIN(sequence_no) + 1 - COUNT(*)`。大于 0 说明设备侧确实少发或漏收，而不是查询过滤。\n3. **质量过滤**：把 `quality_code` 分组统计，确认少的那个点是否被 `CLOCK_SUSPECT` 或 `OUT_OF_RANGE` 过滤掉。\n\n若缺口估计为 1、且该时段有设备重启记录，可以判定为采集中断；若缺口为 0 但点数仍少，优先怀疑边界或质量过滤。不要先用“补一个插值点”掩盖原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-range-query-semantics"
+          ]
+        }
+      },
+      {
+        "id": "textbook-clock-rollback-check",
+        "moduleId": "verification-and-pitfalls",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "时钟异常检测与序列完整性",
+        "markdown": "`CLOCK_SUSPECT` 不能只凭网络延迟判定。教材给出的独立证据包括：设备 RTC 未同步标志位、与 NTP 偏差超过阈值、或 `event_time` 相对前序记录出现回退。\n\n检测回退时，窗口函数不能直接写在 `WHERE` 里。正确做法是先用 CTE 按 `device_id, metric` 分区、按 `sequence_no` 排序算出 `LAG(event_time)`，再在外层过滤 `event_time < prev_event_time`：\n\n```sql\nWITH ordered AS (\n  SELECT device_id, metric, sequence_no, event_time,\n         LAG(event_time) OVER (\n           PARTITION BY device_id, metric ORDER BY sequence_no\n         ) AS prev_event_time\n  FROM sensor_readings\n  WHERE quality_code != 'CLOCK_SUSPECT'\n)\nSELECT * FROM ordered WHERE event_time < prev_event_time;\n```\n\n另一个完整性维度是 `ingest_time - event_time` 的分布：它反映传输与排队延迟，不含传感器响应与 ADC 转换时间。该差值突然增大，通常说明边缘网关缓存积压或网络路径变化，而不是设备时钟出错。注意门磁心跳与状态变化各自独立赋时、独立递增 `sequence_no`，心跳不能标成 `DUPLICATE`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000172"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "分区、索引与时间范围查询",
+                "时钟异常检测与序列完整性校验"
+              ],
+              "lineStart": 3062,
+              "lineEnd": 3086,
+              "assetRefs": [],
+              "excerptSha256": "c11e6a017159fb12997f06f49f79b60e29c2ec87755e46a8fef6e34e36f2048f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-integrity-check-procedure",
+        "moduleId": "verification-and-pitfalls",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "上线前的完整性检查清单",
+        "markdown": "可按顺序执行下面四项检查，每项都能落到一条查询或一次抽样：\n\n1. 边界：确认窗口为 $[t_{\\text{start}}, t_{\\text{end}})$，时间列使用 `timestamptz` 且以 UTC 解释。\n2. 缺口：按设备与指标计算 `MAX(sequence_no) - MIN(sequence_no) + 1 - COUNT(*)`，与返回点数对照。\n3. 时钟：跑一次 `LAG` 回退查询，统计可疑记录占比；占比异常时先查 RTC 与 NTP 偏差。\n4. 延迟：观察 `ingest_time - event_time` 的分位数变化，区分采集问题与传输积压。\n\n检查顺序刻意把“最便宜、最能排除大范围原因”的项目放在前面；任何一项异常都应先记录证据，再决定是否改写数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-clock-rollback-check"
+          ]
+        }
+      },
+      {
+        "id": "textbook-misconceptions",
+        "moduleId": "verification-and-pitfalls",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "四个常见误区",
+        "markdown": "教材列出四个反例：\n\n1. 用 `ingest_time` 替代 `event_time` 做趋势分析：网关缓存 10 分钟后批量上报，会把 08:00 的观测归入 08:10 的窗口，超温告警因此延迟。\n2. 把门磁心跳当成固定频率数据算期望点数：门磁是状态变化上报加 60 秒心跳，不是等间隔采样，应改用状态持续时间模型。\n3. 聚合时忽略 `quality_code`：一条 `OUT_OF_RANGE` 的 $-999\\,\\text{Cel}$ 会直接拉低均值；应显式过滤 `quality_code = 'GOOD'` 或按质量码分组。\n4. 跨 chunk 大聚合写成函数谓词：`WHERE EXTRACT(EPOCH FROM event_time) > ...` 让优化器无法把函数结果映射到 chunk 边界，退化为全表扫描；应直接写 `event_time` 的范围条件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "分区、索引与时间范围查询",
+                "常见误区与反例"
+              ],
+              "lineStart": 3087,
+              "lineEnd": 3100,
+              "assetRefs": [],
+              "excerptSha256": "30eb8991a759de038bb024b84859fe80b96a4de170d10b7b556d54b3d7fe2806"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pitfall-corrections",
+        "moduleId": "verification-and-pitfalls",
+        "depth": "support",
+        "kind": "warning",
+        "title": "把反例改写成设计约束",
+        "markdown": "四条反例可以各改写为一条可执行约束：\n\n- 业务时间轴只认 `event_time`；`ingest_time` 只进排查视图。\n- 只有固定采样周期的点位才计算 $N_{\\text{expect}}$；事件驱动点位用状态区间与持续时间查询。\n- 所有统计查询在 `WHERE` 中显式写 `quality_code = 'GOOD'`，或把质量码作为分组维度。\n- 时间过滤只写原始列的范围谓词，不在谓词里对时间列套函数。\n\n这四条约束同时保护查询结果的可解释性和分区剪枝的有效性：一旦在谓词里引入函数或错误时间轴，优化器和业务语义会同时失效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-misconceptions"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-summary",
+        "moduleId": "transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "回到设计问题",
+        "markdown": "回到本节开始时的问题：怎样让时间范围查询只扫描必要数据，又不压垮写入？可以把设计归纳成一条闭环：\n\n1. 用 $T_{\\text{chunk}}$ 与各点位 $\\tau$ 估算单 chunk 行数，选一个压缩、迁移和分区数量都可接受的粒度；\n2. 按查询形状选索引：点查用复合 B-tree，大范围聚合用 BRIN，两者可并存；\n3. 查询严格使用 `event_time` 与左闭右开区间，统计前过滤质量码；\n4. 用缺口估计、时钟回退和到达延迟三类证据区分“数据没来”和“查询写错”。\n\n下一节会把分区与索引之上的压缩、降采样和保留策略接上，讨论同一批数据在更长保留期里的成本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-misconceptions",
+            "model-pitfall-corrections"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "chunk-sizing-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-chunk-sizing-example",
+        "moduleId": "partition-cost-model",
+        "depth": "core",
+        "title": "单 chunk 行数估算",
+        "outcomeRefs": [
+          "design-partition-index"
+        ],
+        "learningPurpose": "检查学习者能否把分区容量公式迁移到新的采样周期，而不是只记住 20 160 这个数字。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-time-partitioning",
+            "model-chunk-sizing-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "若把温湿度采样周期改为 15 s，其他条件不变，单台设备在 7 天 chunk 内的期望行数约为多少？",
+          "options": [
+            "10 080",
+            "20 160",
+            "40 320",
+            "80 640"
+          ],
+          "answerIndex": 2,
+          "explanation": "$N = 604\\,800 / 15 = 40\\,320$ 行，是 30 s 采样时的 2 倍。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请自行计算 $604\\,800 / 15$，并说明它与 30 s 采样时 20 160 行的倍数关系。"
+        }
+      },
+      {
+        "id": "range-query-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-range-query-worked-example",
+        "moduleId": "query-semantics",
+        "depth": "core",
+        "title": "少一个点时先查什么",
+        "outcomeRefs": [
+          "validate-range-query"
+        ],
+        "learningPurpose": "检查学习者能否按证据顺序定位时间范围查询的缺失原因，而不是直接插值掩盖。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-range-query-semantics",
+            "model-range-query-worked-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "查询 $[08{:}00, 09{:}00)$、30 s 采样的温度只返回 119 点，且缺口估计为 0。最应先检查什么？",
+          "options": [
+            "给缺失点做线性插值",
+            "窗口边界与质量码过滤",
+            "更换为 BRIN 索引",
+            "提高采样频率"
+          ],
+          "answerIndex": 1,
+          "explanation": "缺口为 0 说明序列号连续，少点更可能来自边界写法或质量码过滤；插值会掩盖原因，索引与采样率不改变点数。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出期望点数的计算式，并列出缺口为 0 时仍需检查的两个原因：窗口边界和质量码过滤。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时序数据模型与存储",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [
+    "point-5-2"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000168"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "分区、索引与时间范围查询"
+      ],
+      "lineStart": 3002,
+      "lineEnd": 3003,
+      "assetRefs": [],
+      "excerptSha256": "a4c4c553939505dcd1bab6e0a1a66d9e753c88501db445d11d75d32c129e676b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000169"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "分区、索引与时间范围查询",
+        "时间分区：从物理布局到查询剪枝"
+      ],
+      "lineStart": 3004,
+      "lineEnd": 3015,
+      "assetRefs": [],
+      "excerptSha256": "1f7c98298adb3384fd6f8d5a59466657a54e71744f59b60a8f6066131d36a82b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000170"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "分区、索引与时间范围查询",
+        "索引结构：B-tree 与 BRIN 的互补场景"
+      ],
+      "lineStart": 3016,
+      "lineEnd": 3028,
+      "assetRefs": [],
+      "excerptSha256": "f185be8cf517761022463875446e4bfcba83c181096d18101522b552c54782b4"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000171"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "分区、索引与时间范围查询",
+        "时间范围查询的语义边界与窗口对齐"
+      ],
+      "lineStart": 3029,
+      "lineEnd": 3061,
+      "assetRefs": [],
+      "excerptSha256": "b547b4c3727cd60fb49cc196cceffdf30ad6c120a39c2dd8b8d1a836a9d87b7b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000172"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "分区、索引与时间范围查询",
+        "时钟异常检测与序列完整性校验"
+      ],
+      "lineStart": 3062,
+      "lineEnd": 3086,
+      "assetRefs": [],
+      "excerptSha256": "c11e6a017159fb12997f06f49f79b60e29c2ec87755e46a8fef6e34e36f2048f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000173"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "分区、索引与时间范围查询",
+        "常见误区与反例"
+      ],
+      "lineStart": 3087,
+      "lineEnd": 3100,
+      "assetRefs": [],
+      "excerptSha256": "30eb8991a759de038bb024b84859fe80b96a4de170d10b7b556d54b3d7fe2806"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3445,
+    1762
+  ],
+  "scale": 0.96
+}

@@ -845,9 +845,69 @@ function configureTextbookContentV2(root, { extensionIndex = null } = {}) {
         },
       ],
     };
+    addTextbookTeachingPlan(point);
     writeJson(root, relativePath, point);
   });
   writeJson(root, 'generation/manifest.json', manifest);
+  return manifest;
+}
+
+function addTextbookTeachingPlan(point) {
+  point.content.blocks.forEach((block) => {
+    block.moduleId = 'concept-and-practice';
+    block.depth = 'core';
+  });
+  point.content.learningDesign = {
+    primaryPattern: 'concept-example-check',
+    adaptationLevel: 'balanced',
+    editorialPolicy: '保持教材事实与边界，围绕迁移目标补充例题。',
+    estimatedMinutes: 12,
+    outcomes: [
+      { id: 'explain-concept', text: '解释概念及其边界。' },
+      { id: 'apply-concept', text: '在新情境中应用概念。' },
+    ],
+    misconceptions: ['把边界之外的情形也视为该概念。'],
+    modules: [{
+      id: 'concept-and-practice',
+      title: '概念与练习',
+      role: 'worked-example',
+      outcomeRefs: ['explain-concept', 'apply-concept'],
+      order: 0,
+    }],
+    completion: {
+      exerciseBlockId: 'model-example',
+      outcomeRefs: ['explain-concept', 'apply-concept'],
+      method: '完成迁移练习。',
+      successCriteria: ['结论正确', '依据清楚'],
+    },
+  };
+  point.content.learningAssets = [{
+    id: 'concept-check',
+    type: 'formative-check',
+    anchorBlockId: 'model-example',
+    moduleId: 'concept-and-practice',
+    depth: 'core',
+    outcomeRefs: ['apply-concept'],
+    learningPurpose: '检查学习者能否迁移教材概念。',
+    grounding: { basedOnBlockIds: ['textbook-context'] },
+    config: { attempts: 2 },
+    fallback: { type: 'markdown', markdown: '请写出判断和教材依据。' },
+  }];
+}
+
+function configureAllTextbookTeachingPlans(root, { withNextPoints = false } = {}) {
+  const manifest = configureTextbookContentV2(root);
+  manifest.pointEvidence.forEach((evidence, index) => {
+    const relativePath = `src/data/points/${evidence.pointId}.json`;
+    const point = readJson(root, relativePath);
+    addTextbookTeachingPlan(point);
+    if (withNextPoints && index + 1 < manifest.pointEvidence.length) {
+      point.content.learningDesign.completion.nextPointId = (
+        manifest.pointEvidence[index + 1].pointId
+      );
+    }
+    writeJson(root, relativePath, point);
+  });
   return manifest;
 }
 
@@ -856,6 +916,126 @@ test('textbook-content/2.0 接受教材块与可追溯模型补充块', (t) => {
   configureTextbookContentV2(root, { extensionIndex: 1 });
 
   assert.deepEqual(validateProject(root, { phase: 'points' }).errors, []);
+});
+
+test('textbook-content/2.0 新生成点必须包含教学重编计划', (t) => {
+  const { root } = createCourseFixture(t);
+  configureTextbookContentV2(root);
+  const point = readJson(root, 'src/data/points/input-state.json');
+  delete point.content.learningDesign;
+  delete point.content.learningAssets;
+  point.content.blocks.forEach((block) => {
+    delete block.moduleId;
+    delete block.depth;
+  });
+  writeJson(root, 'src/data/points/input-state.json', point);
+
+  const { errors } = validateProject(root, { phase: 'points' });
+  assert.ok(errors.some((error) => (
+    error.includes('content') && error.includes('learningDesign')
+  )));
+});
+
+test('textbook-content/2.0 新生成点必须显式记录重编档位和原则', (t) => {
+  const { root } = createCourseFixture(t);
+  configureTextbookContentV2(root);
+  const point = readJson(root, 'src/data/points/input-state.json');
+  delete point.content.learningDesign.adaptationLevel;
+  delete point.content.learningDesign.editorialPolicy;
+  writeJson(root, 'src/data/points/input-state.json', point);
+
+  const { errors } = validateProject(root, { phase: 'points' });
+  assert.ok(errors.some((error) => error.includes('adaptationLevel')));
+  assert.ok(errors.some((error) => error.includes('editorialPolicy')));
+});
+
+test('textbook-content/2.0 接受 outcome-first 教学编排与落地资产', (t) => {
+  const { root } = createCourseFixture(t);
+  const manifest = configureTextbookContentV2(root);
+  for (const evidence of manifest.pointEvidence) {
+    const relativePath = `src/data/points/${evidence.pointId}.json`;
+    const point = readJson(root, relativePath);
+    addTextbookTeachingPlan(point);
+    writeJson(root, relativePath, point);
+  }
+
+  assert.deepEqual(validateProject(root, { phase: 'points' }).errors, []);
+});
+
+test('textbook-content/2.0 接受指向 canonical index 直接下一点的 completion', (t) => {
+  const { root } = createCourseFixture(t);
+  const manifest = configureAllTextbookTeachingPlans(root, { withNextPoints: true });
+
+  assert.deepEqual(validateProject(root, { phase: 'points' }).errors, []);
+  const lastPointId = manifest.pointEvidence.at(-1).pointId;
+  const lastPoint = readJson(root, `src/data/points/${lastPointId}.json`);
+  assert.equal(
+    'nextPointId' in lastPoint.content.learningDesign.completion,
+    false,
+  );
+});
+
+test('textbook-content/2.0 拒绝 completion.nextPointId 的跨课程悬空引用', (t) => {
+  const { root } = createCourseFixture(t);
+  configureAllTextbookTeachingPlans(root, { withNextPoints: true });
+  const point = readJson(root, 'src/data/points/input-state.json');
+  point.content.learningDesign.completion.nextPointId = 'missing-point';
+  writeJson(root, 'src/data/points/input-state.json', point);
+
+  const { errors } = validateProject(root, { phase: 'points' });
+  assert.ok(errors.some((error) => (
+    error.includes('nextPointId')
+    && error.includes('本课程不存在的知识点: missing-point')
+  )));
+});
+
+test('textbook-content/2.0 拒绝跳过 canonical index 直接下一点的 completion', (t) => {
+  const { root } = createCourseFixture(t);
+  const manifest = configureAllTextbookTeachingPlans(root, { withNextPoints: true });
+  const point = readJson(root, 'src/data/points/input-state.json');
+  point.content.learningDesign.completion.nextPointId = manifest.pointEvidence[2].pointId;
+  writeJson(root, 'src/data/points/input-state.json', point);
+
+  const { errors } = validateProject(root, { phase: 'points' });
+  assert.ok(errors.some((error) => (
+    error.includes('必须指向 canonical index 中的直接下一点 state-transition')
+    && error.includes('实际为 terminal-condition')
+  )));
+});
+
+test('textbook-content/2.0 末点可省略 nextPointId 但不能回指课程内其他点', (t) => {
+  const { root } = createCourseFixture(t);
+  const manifest = configureAllTextbookTeachingPlans(root, { withNextPoints: true });
+  const lastPointId = manifest.pointEvidence.at(-1).pointId;
+  const point = readJson(root, `src/data/points/${lastPointId}.json`);
+  point.content.learningDesign.completion.nextPointId = manifest.pointEvidence[0].pointId;
+  writeJson(root, `src/data/points/${lastPointId}.json`, point);
+
+  const { errors } = validateProject(root, { phase: 'points' });
+  assert.ok(errors.some((error) => (
+    error.includes('位于 canonical index 知识点顺序末尾')
+  )));
+});
+
+test('textbook-content/2.0 拒绝教学编排和资产中的悬空引用', (t) => {
+  const { root } = createCourseFixture(t);
+  const manifest = configureTextbookContentV2(root);
+  for (const evidence of manifest.pointEvidence) {
+    const relativePath = `src/data/points/${evidence.pointId}.json`;
+    const point = readJson(root, relativePath);
+    addTextbookTeachingPlan(point);
+    writeJson(root, relativePath, point);
+  }
+  const point = readJson(root, 'src/data/points/input-state.json');
+  point.content.blocks[0].moduleId = 'missing-module';
+  point.content.learningAssets[0].outcomeRefs = ['missing-outcome'];
+  point.content.learningAssets[0].grounding.basedOnBlockIds = ['missing-block'];
+  writeJson(root, 'src/data/points/input-state.json', point);
+
+  const { errors } = validateProject(root, { phase: 'points' });
+  assert.ok(errors.some((error) => error.includes('不存在的教学模块')));
+  assert.ok(errors.some((error) => error.includes('不存在的学习目标')));
+  assert.ok(errors.some((error) => error.includes('不存在的内容块')));
 });
 
 test('textbook-content/2.0 拒绝可见段落转义和数学分隔符外的 LaTeX', (t) => {

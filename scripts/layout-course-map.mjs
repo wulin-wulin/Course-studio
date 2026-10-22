@@ -81,7 +81,82 @@ function pointInPolygon(point, polygon) {
   return inside;
 }
 
-function genericAnchors(clusters, points, style, seed) {
+function sequenceEdges(ids, edges) {
+  if (!Array.isArray(edges)) return [];
+  const idSet = new Set(ids);
+  const seen = new Set();
+  const result = [];
+  for (const edge of edges) {
+    const fromId = edge?.fromId;
+    const toId = edge?.toId;
+    if (
+      typeof fromId !== "string"
+      || typeof toId !== "string"
+      || fromId === toId
+      || !idSet.has(fromId)
+      || !idSet.has(toId)
+    ) continue;
+    const key = `${fromId}\u0000${toId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ fromId, toId });
+  }
+  return result;
+}
+
+function stableTopologicalOrder(ids, edges) {
+  const position = new Map(ids.map((id, index) => [id, index]));
+  const outgoing = new Map(ids.map((id) => [id, []]));
+  const indegree = new Map(ids.map((id) => [id, 0]));
+  for (const edge of sequenceEdges(ids, edges)) {
+    outgoing.get(edge.fromId).push(edge.toId);
+    indegree.set(edge.toId, indegree.get(edge.toId) + 1);
+  }
+
+  const ready = ids.filter((id) => indegree.get(id) === 0);
+  const result = [];
+  while (ready.length > 0) {
+    ready.sort((left, right) => position.get(left) - position.get(right));
+    const current = ready.shift();
+    result.push(current);
+    for (const target of outgoing.get(current)) {
+      const nextIndegree = indegree.get(target) - 1;
+      indegree.set(target, nextIndegree);
+      if (nextIndegree === 0) ready.push(target);
+    }
+  }
+
+  // Publication rejects sequence cycles. Keeping unresolved ids in their
+  // original order makes this standalone helper safe for older course data.
+  const resolved = new Set(result);
+  return [...result, ...ids.filter((id) => !resolved.has(id))];
+}
+
+function sequenceFirstOrder(ids, edges) {
+  const validEdges = sequenceEdges(ids, edges);
+  if (validEdges.length === 0) return [...ids];
+  const sequencedIds = new Set(validEdges.flatMap((edge) => [edge.fromId, edge.toId]));
+  const participating = ids.filter((id) => sequencedIds.has(id));
+  const ordered = stableTopologicalOrder(participating, validEdges);
+  return [...ordered, ...ids.filter((id) => !sequencedIds.has(id))];
+}
+
+function orientation(first, second, third) {
+  return (second[0] - first[0]) * (third[1] - first[1])
+    - (second[1] - first[1]) * (third[0] - first[0]);
+}
+
+function segmentsCross(firstStart, firstEnd, secondStart, secondEnd) {
+  const epsilon = 1e-7;
+  const firstSideStart = orientation(firstStart, firstEnd, secondStart);
+  const firstSideEnd = orientation(firstStart, firstEnd, secondEnd);
+  const secondSideStart = orientation(secondStart, secondEnd, firstStart);
+  const secondSideEnd = orientation(secondStart, secondEnd, firstEnd);
+  return firstSideStart * firstSideEnd < -epsilon
+    && secondSideStart * secondSideEnd < -epsilon;
+}
+
+function genericAnchors(clusters, points, style, seed, sequenceAware = false) {
   if (clusters.length === 0) return {};
   const random = seededRandom(`${seed}:anchors`);
   const memberCountByCluster = new Map(clusters.map((cluster) => [cluster.id, 0]));
@@ -127,9 +202,14 @@ function genericAnchors(clusters, points, style, seed) {
 
   const packedRows = [];
   let entryIndex = 0;
-  for (const rowSize of rowSizes) {
-    const items = entries.slice(entryIndex, entryIndex + rowSize);
+  for (const [rowIndex, rowSize] of rowSizes.entries()) {
+    const logicalItems = entries.slice(entryIndex, entryIndex + rowSize);
     entryIndex += rowSize;
+    // Sequence-aware maps alternate each physical row so reading continues at
+    // the nearest edge instead of drawing a long diagonal across the map.
+    const items = sequenceAware && rowIndex % 2 !== 0
+      ? [...logicalItems].reverse()
+      : logicalItems;
     let cursorX = 0;
     let previousFootprintX = 0;
     for (const [column, item] of items.entries()) {
@@ -170,7 +250,12 @@ function genericAnchors(clusters, points, style, seed) {
       result[item.cluster.id] = {
         center: [
           Math.round(2000 - widestRow / 2 + centeredStart + item.localX + stagger + jitterX),
-          Math.round(1500 - totalHeight / 2 + row.localY + jitterY),
+          // The scene camera projects larger world-y values toward the top of
+          // the default overview. Place the first logical row there so the
+          // reading path starts at the visual upper-left corner.
+          Math.round(sequenceAware
+            ? 1500 + totalHeight / 2 - row.localY + jitterY
+            : 1500 - totalHeight / 2 + row.localY + jitterY),
         ],
         radius: item.radius,
         phase: item.phase,
@@ -229,14 +314,25 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
         pointGap: stylePreset.pointGap * densityScale,
       };
 
+  const clusterIds = index.clusters.map((cluster) => cluster.id);
+  const clusterSequenceEdges = sequenceEdges(clusterIds, index.sequences?.cluster);
+  const clusterOrder = sequenceFirstOrder(clusterIds, clusterSequenceEdges);
+  const clusterById = new Map(index.clusters.map((cluster) => [cluster.id, cluster]));
+  const orderedClusters = clusterOrder.map((id) => clusterById.get(id)).filter(Boolean);
   const configuredAnchors = COURSE_ANCHORS[courseId];
   // A course may be regenerated with a different cluster taxonomy.  A stale
   // hand-tuned map must never make publication fail merely because the course
   // id is unchanged; only use it when it covers the complete current graph.
-  const anchors = configuredAnchors
+  const anchors = clusterSequenceEdges.length === 0 && configuredAnchors
     && index.clusters.every((cluster) => configuredAnchors[cluster.id])
     ? configuredAnchors
-    : genericAnchors(index.clusters, index.points, style, seed);
+    : genericAnchors(
+        orderedClusters,
+        index.points,
+        style,
+        seed,
+        clusterSequenceEdges.length > 0,
+      );
   const clusterLayouts = new Map();
   const clusters = index.clusters.map((cluster) => {
     const anchor = anchors[cluster.id];
@@ -256,16 +352,30 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
   const layouts = new Map();
   for (const cluster of clusters) {
     const bounds = clusterLayouts.get(cluster.id);
-    const members = index.points
+    const fallbackMembers = index.points
       .filter((point) => point.clusterId === cluster.id)
       .sort((left, right) => roleRank[roleOf(left, rolesById)] - roleRank[roleOf(right, rolesById)] || left.id.localeCompare(right.id));
+    const memberIds = fallbackMembers.map((point) => point.id);
+    const memberById = new Map(fallbackMembers.map((point) => [point.id, point]));
+    const pointSequenceEdges = sequenceEdges(memberIds, index.sequences?.point);
+    const members = sequenceFirstOrder(memberIds, pointSequenceEdges)
+      .map((id) => memberById.get(id))
+      .filter(Boolean);
     const random = seededRandom(`${seed}:${cluster.id}:points`);
     const placed = [];
+    const placedById = new Map();
+    const placedSequenceSegments = [];
     for (const point of members) {
       const role = roleOf(point, rolesById);
       const scale = Math.round((style.scale[role] + ((point.importance ?? 0.5) - 0.5) * 0.22 + (random() - 0.5) * 0.08) * 100) / 100;
       let position = null;
-      for (let attempt = 0; attempt < 420; attempt += 1) {
+      let fallbackPosition = null;
+      let bestScore = Infinity;
+      const connectedEdges = pointSequenceEdges.filter((edge) => (
+        edge.fromId === point.id || edge.toId === point.id
+      ));
+      const maximumAttempts = pointSequenceEdges.length > 0 ? 1400 : 420;
+      for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
         const angle = random() * Math.PI * 2;
         const band = attempt < 320
           ? role === "trunk"
@@ -281,12 +391,74 @@ export function createCourseMapLayout({ courseId, index, rolesById = {}, styleNa
         const minimumGap = attempt < 320 ? style.pointGap : style.pointGap * 0.9;
         const hasRoom = placed.every((other) => Math.hypot(candidate[0] - other.pos[0], candidate[1] - other.pos[1]) >= minimumGap * ((scale + other.scale) / 2));
         if (hasRoom && pointInPolygon(candidate, bounds.polygon)) {
-          position = candidate;
-          break;
+          if (pointSequenceEdges.length === 0) {
+            position = candidate;
+            break;
+          }
+
+          fallbackPosition ??= candidate;
+          const candidateSegments = connectedEdges.flatMap((edge) => {
+            const otherId = edge.fromId === point.id ? edge.toId : edge.fromId;
+            const other = placedById.get(otherId);
+            if (!other) return [];
+            return [{
+              fromId: edge.fromId,
+              toId: edge.toId,
+              start: edge.fromId === point.id ? candidate : other.pos,
+              end: edge.toId === point.id ? candidate : other.pos,
+            }];
+          });
+          const crossesExistingPath = candidateSegments.some((candidateSegment) => (
+            placedSequenceSegments.some((existingSegment) => {
+              const sharesEndpoint = candidateSegment.fromId === existingSegment.fromId
+                || candidateSegment.fromId === existingSegment.toId
+                || candidateSegment.toId === existingSegment.fromId
+                || candidateSegment.toId === existingSegment.toId;
+              return !sharesEndpoint && segmentsCross(
+                candidateSegment.start,
+                candidateSegment.end,
+                existingSegment.start,
+                existingSegment.end,
+              );
+            })
+          ));
+          if (crossesExistingPath) continue;
+
+          const connectedDistance = candidateSegments.reduce(
+            (total, segment) => total + Math.hypot(
+              segment.end[0] - segment.start[0],
+              segment.end[1] - segment.start[1],
+            ),
+            0,
+          );
+          const centerDistance = Math.hypot(
+            candidate[0] - bounds.center[0],
+            candidate[1] - bounds.center[1],
+          );
+          // Once crossings are eliminated, prefer short readable links. The
+          // small center term only breaks ties for a source or isolated node.
+          const score = connectedDistance + centerDistance * 0.001;
+          if (score < bestScore) {
+            position = candidate;
+            bestScore = score;
+          }
         }
       }
+      position ??= fallbackPosition;
       if (!position) fail(`无法为知识点 ${point.id} 生成无重叠布局`);
-      placed.push({ pos: position, scale });
+      const placement = { id: point.id, pos: position, scale };
+      placed.push(placement);
+      placedById.set(point.id, placement);
+      for (const edge of connectedEdges) {
+        const from = placedById.get(edge.fromId);
+        const to = placedById.get(edge.toId);
+        if (!from || !to) continue;
+        placedSequenceSegments.push({
+          ...edge,
+          start: from.pos,
+          end: to.pos,
+        });
+      }
       layouts.set(point.id, { pos: position, scale });
     }
   }

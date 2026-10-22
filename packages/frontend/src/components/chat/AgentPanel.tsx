@@ -34,7 +34,9 @@ import { getBackendWsUrl } from "@/utils/backendWs";
 import { LatestRequestGuard } from "@/utils/latestRequest";
 import {
   COURSE_GENERATION_RESUME_EVENT,
+  shouldCompleteCourseCreationAfterAgentDone,
   shouldPauseGenerationAfterAgentDone,
+  shouldRestoreCourseCreationWorkflow,
   useCourseGenerationStore,
 } from "@/course/generation/generationStore";
 import {
@@ -156,6 +158,7 @@ type HandlerCtx = {
   thinkingIdRef: RefObject<string | null>;
   modeRef: RefObject<ChatMode>;
   workflowRef: RefObject<AgentWorkflow>;
+  setWorkflow: Dispatch<SetStateAction<AgentWorkflow>>;
   setPendingQuestion: Dispatch<SetStateAction<AgentQuestionRequest | null>>;
   setPendingReview: Dispatch<SetStateAction<ReviewPointer | null>>;
   onOpenReviewRef: RefObject<AgentPanelProps["onOpenReview"]>;
@@ -368,6 +371,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
             thinkingIdRef,
             modeRef,
             workflowRef,
+            setWorkflow,
             setPendingQuestion,
             setPendingReview,
             onOpenReviewRef,
@@ -551,9 +555,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       const conversation = await response.json() as ConversationDetail;
       if (!conversationRestoreGuardRef.current.isCurrent(request)) return null;
       const restoredMode: ChatMode = conversation.mode === "chat" ? "chat" : "agent";
-      const restoredWorkflow: AgentWorkflow = conversation.workflow === "course-create"
-        ? "course-create"
-        : "default";
       const restoredReview = parseReviewPointer(conversation.pending_review);
       const restoredResumePointer = parseReviewPointer(
         conversation.pending_review_resume,
@@ -564,6 +565,15 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       const restoredQuestion = parseAgentQuestionRequest(
         conversation.pending_question,
       );
+      const storedGeneration =
+        useCourseGenerationStore.getState().liveRuns[conversation.id];
+      const restoredWorkflow: AgentWorkflow = shouldRestoreCourseCreationWorkflow(
+        conversation.workflow,
+        storedGeneration,
+        Boolean(restoredReview || restoredResume || restoredQuestion),
+      )
+        ? "course-create"
+        : "default";
 
       setCourseCreationSetupOpen(false);
       setCourseCreationSetupError("");
@@ -581,6 +591,14 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       setRunStatus(null);
       setPendingQuestion(restoredQuestion);
       setPendingReview(restoredReview);
+      if (restoredQuestion && !restoredReview) {
+        setIsRunning(true);
+        markLiveGenerationAwaitingQuestion(
+          conversation.id,
+          restoredQuestion.questions,
+        );
+        getBrowserReviewResumeOutbox().removeConversation(conversation.id);
+      }
       setQuestionSubmitting(false);
       setQuestionError("");
       setEntries(conversation.messages.map((message) => ({
@@ -601,7 +619,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       setHistoryOpen(false);
       if (restoredReview) {
         onOpenReviewRef.current?.(restoredReview.id, restoredReview.kind);
-      } else if (restoredResume) {
+      } else if (restoredResume && !restoredQuestion) {
         queueReviewResume(restoredResume);
       }
       return conversation;
@@ -1138,6 +1156,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         },
       ]);
       setPendingQuestion(null);
+      useCourseGenerationStore.getState().touchLive(question.conversationId);
       updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
       stickToBottomRef.current = true;
     } catch (error) {
@@ -1173,6 +1192,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         },
       ]);
       setPendingQuestion(null);
+      useCourseGenerationStore.getState().touchLive(question.conversationId);
       stickToBottomRef.current = true;
     } catch (error) {
       setQuestionError(error instanceof Error ? error.message : "取消确认失败");
@@ -2220,6 +2240,7 @@ function handleAgentEvent(
     thinkingIdRef,
     modeRef,
     workflowRef,
+    setWorkflow,
     setPendingQuestion,
     setPendingReview,
     onOpenReviewRef,
@@ -2391,6 +2412,7 @@ function handleAgentEvent(
       finalizeStreaming(streamingIdRef, setEntries);
       finalizeThinking(thinkingIdRef, setEntries);
       setPendingQuestion({ requestId, conversationId, questions });
+      markLiveGenerationAwaitingQuestion(conversationId, questions);
       setIsRunning(true);
       updateRunStatus(setRunStatus, "等待你的确认", "选择一个选项或填写自定义答案");
       return;
@@ -2399,6 +2421,7 @@ function handleAgentEvent(
     case "agent_question_resolved": {
       const requestId = String(payload.request_id ?? "").trim();
       setPendingQuestion((current) => current?.requestId === requestId ? null : current);
+      touchLiveGeneration(payload);
       updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
       return;
     }
@@ -2417,6 +2440,10 @@ function handleAgentEvent(
         const liveRun = conversationId
           ? generation.liveRuns[conversationId]
           : undefined;
+        if (shouldCompleteCourseCreationAfterAgentDone(payload, liveRun)) {
+          setWorkflow("default");
+          workflowRef.current = "default";
+        }
         if (shouldPauseGenerationAfterAgentDone(payload, liveRun)) {
           generation.pauseLive(
             conversationId,
@@ -2508,6 +2535,24 @@ function touchLiveGeneration(payload: Record<string, unknown>) {
   if (conversationId && generation.liveRuns[conversationId]) {
     generation.touchLive(conversationId);
   }
+}
+
+function markLiveGenerationAwaitingQuestion(
+  conversationId: string,
+  questions: AgentQuestionItem[],
+) {
+  const generation = useCourseGenerationStore.getState();
+  if (!conversationId || !generation.liveRuns[conversationId]) return;
+  const releaseReady = questions.some(
+    (question) => question.header === "G7_RELEASE_READY",
+  );
+  generation.markAwaitingInput(conversationId, {
+    ...(releaseReady ? { gate: "G7_RELEASE_READY" as const } : {}),
+    label: releaseReady ? "等待发布确认" : "等待你的确认",
+    detail: releaseReady
+      ? "课程已经通过全部门禁，请在右侧选择是否发布。"
+      : "请在右侧课程助手中完成当前确认。",
+  });
 }
 
 function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {

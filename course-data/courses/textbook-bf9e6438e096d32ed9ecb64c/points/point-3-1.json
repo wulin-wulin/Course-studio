@@ -1,0 +1,614 @@
+{
+  "id": "point-3-1",
+  "title": "UTC、时区与夏令时",
+  "shortSummary": "说明 UTC 与时区、夏令时的转换规则，避免以本地时间存储造成的重复、跳变和歧义。",
+  "keyTerms": [
+    "UTC",
+    "时区",
+    "夏令时",
+    "本地时间",
+    "偏移量",
+    "时间存储"
+  ],
+  "animationType": "none",
+  "difficulty": "基础",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-1-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 UTC 定义、偏移公式、DST 故障表、持久化契约与三条验证路径，按“症状—证据—定位—修复”重排讲解，并补足映射直觉与排查顺序。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-time-standard",
+          "text": "解释为何以 UTC 持久化时刻，并说明时区偏移映射与显示层转换的分工。"
+        },
+        {
+          "id": "diagnose-dst-ambiguity",
+          "text": "诊断本地时间在夏令时切换时的重复或跳变，并给出可复现的存储与验证处置。"
+        }
+      ],
+      "misconceptions": [
+        "把本地时间字符串直接当作事件时间持久化，忽略其时区标识。",
+        "用固定偏移（如 +08:00）代替 IANA 时区规则解释历史时间。",
+        "用墙上时钟的 event_time 差值计算采样间隔，忽略 DST 回拨造成的负间隔或跳变。"
+      ],
+      "modules": [
+        {
+          "id": "symptom-and-baseline",
+          "title": "症状与时间基准",
+          "role": "orient",
+          "description": "从无法排序的记录出发，明确本节要固定的三个表示问题。",
+          "outcomeRefs": [
+            "explain-time-standard"
+          ],
+          "order": 0
+        },
+        {
+          "id": "utc-offset-model",
+          "title": "UTC 与偏移映射模型",
+          "role": "concept",
+          "description": "用唯一坐标加规则偏移解释存储与显示的分层。",
+          "outcomeRefs": [
+            "explain-time-standard"
+          ],
+          "order": 1
+        },
+        {
+          "id": "dst-failure-evidence",
+          "title": "夏令时故障模式与证据",
+          "role": "diagnosis",
+          "description": "按跳跃前进、跳跃后退和规则变更识别时间值的不连续与重复。",
+          "outcomeRefs": [
+            "diagnose-dst-ambiguity",
+            "explain-time-standard"
+          ],
+          "order": 2
+        },
+        {
+          "id": "persistence-contract",
+          "title": "分层持久化契约",
+          "role": "repair",
+          "description": "确定端、边、云各自可写字段，固定 UTC 与 ingest_time 的赋时边界。",
+          "outcomeRefs": [
+            "explain-time-standard",
+            "diagnose-dst-ambiguity"
+          ],
+          "order": 3
+        },
+        {
+          "id": "diagnosis-and-verification",
+          "title": "误区定位与 SQL 验证",
+          "role": "worked-example",
+          "description": "用教材三条误区与对应查询确认类型、规则与间隔三个层次的证据。",
+          "outcomeRefs": [
+            "diagnose-dst-ambiguity"
+          ],
+          "order": 4
+        },
+        {
+          "id": "config-checklist",
+          "title": "配置检查与回归",
+          "role": "check",
+          "description": "把契约固化为可重复核对的检查清单和回归门槛。",
+          "outcomeRefs": [
+            "explain-time-standard",
+            "diagnose-dst-ambiguity"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-time-standard",
+          "diagnose-dst-ambiguity"
+        ],
+        "method": "完成配置检查清单核对，并对一条重复时间戳记录给出定位与修复方案。",
+        "successCriteria": [
+          "能说明 UTC 持久化与时区显示的分工",
+          "能指出 DST 切换造成的重复或跳变并给出验证证据"
+        ],
+        "summaryBlockId": "model-regression-gate",
+        "nextPointId": "point-3-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-chapter-frame",
+        "moduleId": "symptom-and-baseline",
+        "depth": "support",
+        "kind": "note",
+        "title": "本章的验证导向",
+        "markdown": "第 3 章按“概念、设计到验证”的顺序展开时间基准与事件顺序。教材要求把每个方法放回统一的数据链路，并记录假设、单位、时间语义与可复现的验收证据。\n\n本节先解决最基础的一环：一个瞬时时刻以什么形式被写入、传输和读出，才能让不同地点的系统指向同一个瞬间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序"
+              ],
+              "lineStart": 1448,
+              "lineEnd": 1451,
+              "assetRefs": [],
+              "excerptSha256": "5abe521d5a500ce30458742207a3868fd80e092cf1268fc3738a88dcbb9e95d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-three-questions",
+        "moduleId": "symptom-and-baseline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "写下时间戳前先固定三个问题",
+        "markdown": "在写下第一个时间戳之前，先固定三个问题：\n\n- **指的是哪一瞬间**：用全球唯一的绝对坐标，还是用某地墙上时钟的读数？\n- **以什么形式传输**：字符串里是否带时区标识，接收方能否判断它属于哪个偏移？\n- **读出时如何还原**：展示、计算和审计分别使用哪一层的时间表示？\n\n这三个问题分别对应 UTC、偏移量和显示层转换。答错任何一个，后续的排序、窗口和告警都会建立在不同的“同一时刻”上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-chapter-frame"
+          ]
+        }
+      },
+      {
+        "id": "tb-section-scope",
+        "moduleId": "symptom-and-baseline",
+        "depth": "support",
+        "kind": "note",
+        "title": "本节范围",
+        "markdown": "本节的标题把范围收窄为三项：UTC 作为基准、时区作为偏移映射、夏令时作为会改变该映射的制度安排。三者合起来决定同一物理瞬间在端、边、云各层是否保持一致的表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000080"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时"
+              ],
+              "lineStart": 1452,
+              "lineEnd": 1453,
+              "assetRefs": [],
+              "excerptSha256": "6231799cd3439021b34b4e82a91e5da12891f0c597c2e18b26f3f98dc3407c15"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-utc-definition",
+        "moduleId": "utc-offset-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "UTC 与时区偏移",
+        "markdown": "若缺少统一时间标准，跨地域部署的传感器数据无法建立因果顺序。UTC（协调世界时）综合全球原子时与地球自转，是所有时区定义的数学原点；它的关键工程特性是：同一 UTC 时刻在任何地理位置都有唯一数值表示，从而消除了“本地时间”一词固有的歧义。\n\n时区是 UTC 的偏移映射集合，规则由 IANA 时区数据库维护（例如 `Asia/Shanghai`）。偏移量通常记为：\n\n$$\\text{Local Time} = \\text{UTC} + \\Delta_{\\text{offset}}$$\n\n其中 $\\Delta_{\\text{offset}}$ 以分钟或小时为单位，可随日期变化。教材案例中，云端数据库以 UTC 持久保存 `event_time` 与 `ingest_time`，只在用户界面层转换为东八区显示，使后台计算不受夏令时切换干扰。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时",
+                "时间标准的工程必要性"
+              ],
+              "lineStart": 1454,
+              "lineEnd": 1463,
+              "assetRefs": [],
+              "excerptSha256": "9067f5eba3a4da5b4c11aa56579f2b1cde9fc76295cbd245d0f5f7b8ad9f8282"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-offset-mapping",
+        "moduleId": "utc-offset-model",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把公式读成映射，而不是单位换算",
+        "markdown": "把公式理解成一次**映射**，而不是一次单位换算：\n\n- UTC 是唯一坐标，同一瞬间只有一个数值；\n- $\\Delta_{\\text{offset}}$ 是规则产物，取决于时区与日期，不是常量；\n- 本地时间只是某个时区下的显示值，两个不同偏移可以写出相同的墙上读数。\n\n因此“存储用 UTC、显示用本地”不是风格偏好，而是把唯一坐标和可变的展示规则分开：计算层永远面对无歧义的数值，规则变更只影响渲染。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-utc-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-dst-failure-modes",
+        "moduleId": "dst-failure-evidence",
+        "depth": "core",
+        "kind": "table",
+        "title": "夏令时的三种故障模式",
+        "markdown": "夏令时在特定日期区间把本地时钟向前拨快一小时。它的工程危害不是偏移变化本身，而是**时间值的不连续与重复**。\n\n| 故障模式 | 发生场景 | 对时序数据库的影响 |\n|---|---|---|\n| 跳跃前进 | DST 开始日 02:00→03:00 | 02:00–03:00 区间没有本地时间值，计划任务可能漏执行 |\n| 跳跃后退 | DST 结束日 03:00→02:00 | 02:00–03:00 区间本地时间值重复，唯一索引冲突或时序错位 |\n| 偏移规则变更 | 政府调整 DST 起止日期 | 历史数据解释与实时处理规则不一致 |\n\n教材给出一个教学假设场景：某设备位于仍实行 DST 的海外节点，其 RTC 在结束日可能把两条真实间隔一小时的观测标记成相同的本地时间戳。边缘网关若未配置 IANA 规则而直接转发本地时间，云端就会收到 `event_time` 相同、`sequence_no` 递增的记录——此时 `sequence_no` 成为识别真实顺序的唯一依据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000082"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时",
+                "夏令时的隐蔽故障模式"
+              ],
+              "lineStart": 1464,
+              "lineEnd": 1475,
+              "assetRefs": [],
+              "excerptSha256": "51bbf2cf6dfac23dc049f5f5941c3e07661a70838c7b180f1c67566476cef0f9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dst-evidence",
+        "moduleId": "dst-failure-evidence",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "重复时间戳不是重复数据",
+        "markdown": "这是典型的“看起来只差一小时、实际无法排序”的故障：\n\n1. **症状**：两条记录的时间戳完全相同，但业务上相隔一小时。\n2. **假设**：RTC 已按本地规则回拨，而链路没有携带偏移信息。\n3. **证据**：`event_time` 重复，`sequence_no` 连续递增，设备采样周期固定。\n4. **定位**：歧义来自本地时间的多值映射，不是数据库写入错误。\n5. **修复**：以 UTC 保存时刻，让 `sequence_no` 承担真实顺序，展示层再按 IANA 规则转换。\n\n若把本地时间当作主键或排序键，重复值会让唯一索引冲突，或让两条记录在窗口聚合中被错误合并。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dst-failure-modes"
+          ]
+        }
+      },
+      {
+        "id": "tb-persistence-contract",
+        "moduleId": "persistence-contract",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "端、边、云的赋时分工",
+        "markdown": "教材的固定数据契约把赋时职责按层切开：\n\n- **端侧**：Z1-TEMP-01 在 2024-03-15 14:30:00 UTC 完成采样，把换算结果与 UTC 时间戳写入记录首条，`sequence_no = 0`；\n- **边缘层**：校验字段完整性、缓存并转发，**不得改写** `event_time`、`value`、`sequence_no`；\n- **云平台接入服务**：首次持久接收时写入 `ingest_time`，此后记录进入不可变原始事实表。\n\n接入服务的赋时逻辑可写成：\n\n```text\nfunction persist(record):\n    if record.ingest_time is not null:\n        reject(\"ingest_time must not be pre-populated by edge\")\n    record.ingest_time = getCurrentUTC()\n    write_to_hypertable(record)\n```\n\n后续派生处理不得覆盖原始记录的 `event_time` 或 `ingest_time`。`Asia/Shanghai` 当前固定为 UTC+8 且不实行夏令时，但教材仍要求以 IANA 规则驱动转换，而不是硬编码 `+08:00`，以便业务扩展到 DST 区域时同一套代码路径自动适配。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000083"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时",
+                "澄湾示范仓的时间持久化契约"
+              ],
+              "lineStart": 1476,
+              "lineEnd": 1496,
+              "assetRefs": [],
+              "excerptSha256": "3e7297be755a4d94202700fc061a21da26aea88c5195adfb6390cbccfab11659"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-contract-boundary",
+        "moduleId": "persistence-contract",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "契约的核心是谁能写哪个字段",
+        "markdown": "契约的真正内容是**字段所有权**：\n\n- 端侧只对“物理量换算 + 事件时刻”负责，因此它写 `event_time` 与 `sequence_no`；\n- 边缘层是转发者，改写时间戳会破坏可追溯性，也会让两台网关对同一记录给出不同时刻；\n- 云端在首次持久接收时写 `ingest_time`，使“事件何时发生”和“平台何时知道”成为两个独立、不可互相覆盖的事实。\n\n硬编码 `+08:00` 的问题不在于当下算错，而在于把规则冻结进代码：一旦历史数据落在规则变更区间，或业务迁到 DST 区域，同一段代码会静默产生一小时偏差。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-persistence-contract"
+          ]
+        }
+      },
+      {
+        "id": "tb-misconception-storage",
+        "moduleId": "diagnosis-and-verification",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "误区一与误区二：存储与规则",
+        "markdown": "**误区一：把本地时间直接持久化为事件时间。** 反例：为“方便阅读”让 Z2-COMP-01 在端侧写入 `event_time = '2024-03-15 22:30:00'` 且不带时区标识。PostgreSQL 会把它解释为 `timestamp without time zone`，与另一时区设备表面相同的 `22:30:00` 实际相差数小时。\n\n验证方式是检查字段类型，期望返回空集：\n\n```sql\nSELECT device_id, pg_typeof(event_time) AS event_time_type\nFROM cold_chain_raw\nWHERE pg_typeof(event_time) <> 'timestamp with time zone'\nLIMIT 5;\n```\n\n**误区二：用固定偏移替代时区规则处理历史数据。** 反例：某历史记录标记为 UTC+8，查询时硬编码 `+ INTERVAL '8 hours'`。若该记录采集于 1991 年 4 月 14 日（中国大陆最后一次夏令时切换日），真实偏移曾为 UTC+9，硬编码会带来一小时偏差。验证时用 `AT TIME ZONE` 做双向转换：\n\n```sql\nSELECT event_time AT TIME ZONE 'UTC' AS utc_moment,\n       event_time AT TIME ZONE 'Asia/Shanghai' AS sh_display\nFROM cold_chain_raw\nWHERE device_id = 'Z1-TEMP-01'\n  AND event_time BETWEEN '1991-04-01' AND '1991-05-01';\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时",
+                "常见误区与验证方法"
+              ],
+              "lineStart": 1497,
+              "lineEnd": 1554,
+              "assetRefs": [],
+              "excerptSha256": "b7801eefa260a951fa4d980e300cf85fc6b9112cb946197bd743d146abe162d3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-type-check",
+        "moduleId": "diagnosis-and-verification",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "类型检查在验证可判定性",
+        "markdown": "`pg_typeof` 检查看似只是字段类型问题，实际上在验证契约的**可判定性**：只有字段声明为 `timestamp with time zone`，数据库才会保存绝对时刻，并在比较时按 UTC 归一；`timestamp without time zone` 只保存一串墙上读数，比较结果取决于读者假定的偏移。\n\n历史区间的查询则验证**规则驱动**：`AT TIME ZONE` 让数据库按 IANA 规则判定当时的偏移，而不是套用今天的 `+08:00`。一个查询返回空集、另一个能正确还原 UTC，才算两条路径都可审计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-misconception-storage"
+          ]
+        }
+      },
+      {
+        "id": "tb-misconception-wallclock",
+        "moduleId": "diagnosis-and-verification",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "误区三：用墙上时钟计算采样间隔",
+        "markdown": "**误区三：夏令时切换期间依赖墙上时钟计算采样间隔。** 温湿度固定每 30 秒采样；若 DST 结束日 02:00 回拨至 01:00，墙上时钟显示的相邻记录间隔可能变成 -3599 秒（跳回）或 3601 秒（跳前）。工程系统须用单调时钟或 `sequence_no` 计算真实间隔，而不是 `event_time` 差值。\n\n验证查询对固定频率设备比较两者偏离，允许 1 秒容差：\n\n```sql\nWITH ordered AS (\n    SELECT event_time, sequence_no,\n           event_time - LAG(event_time) OVER w AS wall_interval,\n           sequence_no - LAG(sequence_no) OVER w AS seq_delta\n    FROM cold_chain_raw\n    WHERE device_id = 'Z3-TEMP-01' AND metric = 'temperature'\n    WINDOW w AS (ORDER BY sequence_no)\n)\nSELECT * FROM ordered\nWHERE seq_delta = 1\n  AND ABS(EXTRACT(EPOCH FROM wall_interval) - 30.0) > 1.0;\n```\n\n在无 DST 的 `Asia/Shanghai` 运行中该查询应返回空集；切换期间出现记录就会被捕获。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时",
+                "常见误区与验证方法"
+              ],
+              "lineStart": 1497,
+              "lineEnd": 1554,
+              "assetRefs": [],
+              "excerptSha256": "b7801eefa260a951fa4d980e300cf85fc6b9112cb946197bd743d146abe162d3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-diagnosis-order",
+        "moduleId": "diagnosis-and-verification",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "三层排查顺序：语义、规则、间隔",
+        "markdown": "把三种误区合起来看，排查顺序应当是先**判断语义**，再**查规则**，最后**验证间隔**：\n\n1. 时间戳有没有偏移标识或 `Z`？没有就是墙上读数，不能跨时区比较。\n2. 转换是否走了 IANA 规则？硬编码偏移在历史区间和规则变更处会失效。\n3. 间隔是否由单调时钟或 `sequence_no` 得出？用 `event_time` 差分会把制度性跳变误判成设备停机或数据重复。\n\n这三步对应三个不同层次的证据；任何一步缺失，后面的窗口聚合和告警都会继承同一个歧义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-misconception-wallclock",
+            "tb-misconception-storage"
+          ]
+        }
+      },
+      {
+        "id": "tb-config-checklist",
+        "moduleId": "config-checklist",
+        "depth": "core",
+        "kind": "table",
+        "title": "配置检查清单",
+        "markdown": "教材给出的配置检查清单把上述要求落成可执行核对项：\n\n| 检查项 | 目标状态 | 验证手段 |\n|---|---|---|\n| 数据库字段类型 | `timestamp with time zone` | 查看表结构确认字段类型 |\n| 应用层 ORM 映射 | `java.time.OffsetDateTime` 或等价类型 | 代码审查，禁止 `LocalDateTime` 直接映射 |\n| 界面显示转换 | 仅在最终渲染层调用时区转换 | 检查 API 返回为 ISO 8601 带 Z 或显式偏移 |\n| 夏令时规则更新 | IANA 数据库版本 ≥ 2023c | 查询 `pg_timezone_names` 确认 `Asia/Shanghai` 偏移 |\n| 边缘网关行为 | 不写入、不覆盖 `ingest_time` | 注入测试记录，确认平台 `ingest_time` 与网关时钟无关 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000085"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "UTC、时区与夏令时",
+                "配置检查清单"
+              ],
+              "lineStart": 1555,
+              "lineEnd": 1566,
+              "assetRefs": [],
+              "excerptSha256": "188e589d19cce2a57f5fbb7e11ed01c29fa2bc1a1cd2c002ad47578e4515d6c0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-regression-gate",
+        "moduleId": "config-checklist",
+        "depth": "core",
+        "kind": "summary",
+        "title": "把检查表当作回归门槛",
+        "markdown": "检查清单的价值在于它可以成为**回归门槛**：新增设备、切换网关固件或升级数据库时，逐项重跑就能发现契约是否被破坏。\n\n需要记住两点：\n\n- `Asia/Shanghai` 当前无 DST，只降低了本仓的运行复杂度，不能作为省略规则驱动转换的理由；\n- UTC 持久化与单调的 `sequence_no` 一起构成抵御时钟异常的第一道防线——前者消除多值映射，后者保留真实顺序。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-config-checklist",
+            "tb-persistence-contract"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "dst-duplicate-check",
+        "type": "formative-check",
+        "title": "重复时间戳的处置判断",
+        "anchorBlockId": "model-dst-evidence",
+        "moduleId": "dst-failure-evidence",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-dst-ambiguity"
+        ],
+        "learningPurpose": "检查学习者能否把本地时间多值映射的诊断结论迁移到真实记录，而不是按时间戳去重。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-dst-failure-modes",
+            "model-dst-evidence"
+          ]
+        },
+        "config": {
+          "question": "某海外仓设备在夏令时结束日回拨后，云端收到两条 `event_time` 相同、`sequence_no` 连续递增的记录。最合理的处置是？",
+          "options": [
+            {
+              "id": "a",
+              "text": "保留其中一条，按 event_time 去重"
+            },
+            {
+              "id": "b",
+              "text": "保留两条，以 UTC 时刻与 sequence_no 还原真实顺序，并检查链路是否转发了本地时间"
+            },
+            {
+              "id": "c",
+              "text": "把两条 event_time 都加一小时后再写入"
+            }
+          ],
+          "correctOptionId": "b",
+          "explanation": "重复的本地时间是多值映射，不是重复数据。sequence_no 保留真实顺序，修复应落在时区规则与 UTC 持久化上。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若无法交互：某海外仓设备在 DST 结束日回拨后，云端收到两条 `event_time` 相同、`sequence_no` 连续递增的记录。请写出定位步骤与修复方案，并说明为什么不按 `event_time` 去重。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时间基准与事件顺序",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000079"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序"
+      ],
+      "lineStart": 1448,
+      "lineEnd": 1451,
+      "assetRefs": [],
+      "excerptSha256": "5abe521d5a500ce30458742207a3868fd80e092cf1268fc3738a88dcbb9e95d0"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000080"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "UTC、时区与夏令时"
+      ],
+      "lineStart": 1452,
+      "lineEnd": 1453,
+      "assetRefs": [],
+      "excerptSha256": "6231799cd3439021b34b4e82a91e5da12891f0c597c2e18b26f3f98dc3407c15"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000081"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "UTC、时区与夏令时",
+        "时间标准的工程必要性"
+      ],
+      "lineStart": 1454,
+      "lineEnd": 1463,
+      "assetRefs": [],
+      "excerptSha256": "9067f5eba3a4da5b4c11aa56579f2b1cde9fc76295cbd245d0f5f7b8ad9f8282"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000082"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "UTC、时区与夏令时",
+        "夏令时的隐蔽故障模式"
+      ],
+      "lineStart": 1464,
+      "lineEnd": 1475,
+      "assetRefs": [],
+      "excerptSha256": "51bbf2cf6dfac23dc049f5f5941c3e07661a70838c7b180f1c67566476cef0f9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000083"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "UTC、时区与夏令时",
+        "澄湾示范仓的时间持久化契约"
+      ],
+      "lineStart": 1476,
+      "lineEnd": 1496,
+      "assetRefs": [],
+      "excerptSha256": "3e7297be755a4d94202700fc061a21da26aea88c5195adfb6390cbccfab11659"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000084"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "UTC、时区与夏令时",
+        "常见误区与验证方法"
+      ],
+      "lineStart": 1497,
+      "lineEnd": 1554,
+      "assetRefs": [],
+      "excerptSha256": "b7801eefa260a951fa4d980e300cf85fc6b9112cb946197bd743d146abe162d3"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000085"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "UTC、时区与夏令时",
+        "配置检查清单"
+      ],
+      "lineStart": 1555,
+      "lineEnd": 1566,
+      "assetRefs": [],
+      "excerptSha256": "188e589d19cce2a57f5fbb7e11ed01c29fa2bc1a1cd2c002ad47578e4515d6c0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2423,
+    2564
+  ],
+  "scale": 1.26
+}

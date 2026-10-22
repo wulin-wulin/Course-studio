@@ -250,9 +250,35 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
                 "origin": point_evidence["origin"],
                 "content": {
                     "schema_version": "textbook-content/2.0",
+                    "learningDesign": {
+                        "primaryPattern": "concept-example-check",
+                        "adaptationLevel": "balanced",
+                        "editorialPolicy": (
+                            "保持教材事实与边界，围绕迁移目标补充示例。"
+                        ),
+                        "estimatedMinutes": 10,
+                        "outcomes": [{
+                            "id": "explain-concept",
+                            "text": "解释概念、适用条件与边界。",
+                        }],
+                        "misconceptions": [],
+                        "modules": [{
+                            "id": "concept-and-example",
+                            "title": "概念与示例",
+                            "outcomeRefs": ["explain-concept"],
+                            "order": 0,
+                        }],
+                        "completion": {
+                            "outcomeRefs": ["explain-concept"],
+                            "method": "说明定义，并判断新情境是否满足适用条件。",
+                            "successCriteria": ["定义准确", "判断依据清楚"],
+                        },
+                    },
                     "blocks": [
                         {
                             "id": "textbook-source",
+                            "moduleId": "concept-and-example",
+                            "depth": "core",
                             "kind": "explanation",
                             "title": "教材说明",
                             "markdown": (
@@ -266,6 +292,8 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
                         },
                         {
                             "id": "model-enrichment",
+                            "moduleId": "concept-and-example",
+                            "depth": "core",
                             "kind": "worked-example",
                             "title": "补充应用示例",
                             "markdown": (

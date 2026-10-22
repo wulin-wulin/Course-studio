@@ -1,0 +1,514 @@
+{
+  "id": "point-4-5",
+  "title": "本地缓冲、重试、退避与幂等",
+  "shortSummary": "设计本地缓冲、指数退避与幂等写入，使断网恢复后既不丢不重，也不压垮下游服务。",
+  "keyTerms": [
+    "本地缓冲",
+    "重试",
+    "指数退避",
+    "幂等",
+    "断网恢复",
+    "背压"
+  ],
+  "animationType": "retryBackoffBuffer",
+  "animationSuggestion": "按时序展示断网期间写指针推进和占用率上升、每次失败后从抖动区间抽取下一次等待、恢复后按序排空缓冲，并用旁注标出占用率超过 0.8 的告警与第 5 次失败转 DEAD_LETTER 的分支。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-4-1",
+    "point-4-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-failure-recovery",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的缓冲容量、退避参数、幂等键与检查清单等事实边界，把原文章节顺序重排为问题界定、缓冲、退避、幂等、特殊事件与验收的操作流程，并补充容量算例和故障分支。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "design-recovery-path",
+          "text": "为断网场景组合本地缓冲、指数退避与幂等写入，并说明三者各自解决哪一类失败。"
+        },
+        {
+          "id": "verify-delivery",
+          "text": "用占用率、重试分布、重复审计与缺口探针判断恢复链路是否做到不丢序、不重复、不压垮下游。"
+        }
+      ],
+      "misconceptions": [
+        "认为使用 MQTT QoS 1 就不会重复处理，忽略消费者侧仍需幂等去重。",
+        "把基准等待 $T_n$ 直接当作固定间隔，省略全抖动，导致恢复瞬间形成重试风暴。",
+        "认为断网期间可以无限缓存且不影响采样，忽略环形缓冲必然要覆盖最旧记录。"
+      ],
+      "modules": [
+        {
+          "id": "m-scope",
+          "title": "断网恢复的问题与机制分工",
+          "role": "framing",
+          "description": "先明确一条记录在中断期间会遭遇丢失、重复、挤压下游三类风险，再给四个机制定位。",
+          "outcomeRefs": [
+            "design-recovery-path",
+            "verify-delivery"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-buffer",
+          "title": "本地环形缓冲与有损溢出",
+          "role": "core-mechanism",
+          "description": "理解读写指针、覆盖策略、不可覆盖事件与占用率告警的配合。",
+          "outcomeRefs": [
+            "design-recovery-path"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-backoff",
+          "title": "指数退避、全抖动与重试预算",
+          "role": "parameter-and-calculation",
+          "description": "从公式与参数表推算重试等待，并判断何时需要转入死信处理。",
+          "outcomeRefs": [
+            "design-recovery-path",
+            "verify-delivery"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-idempotency",
+          "title": "幂等写入与缺口探测",
+          "role": "core-mechanism",
+          "description": "用业务键去重、审计重复并检测序列缺口，区分原始事实与派生占位。",
+          "outcomeRefs": [
+            "design-recovery-path",
+            "verify-delivery"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-special-and-verify",
+          "title": "事件优先通道与端到端验收",
+          "role": "branch-and-checklist",
+          "description": "处理门磁事件与心跳的分支，并用可观测检查项完成恢复后的验收。",
+          "outcomeRefs": [
+            "verify-delivery"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "design-recovery-path",
+          "verify-delivery"
+        ],
+        "method": "针对一次断网恢复画出缓冲、重试、幂等与验收的处置顺序，并完成占用率与重试预算的计算。",
+        "successCriteria": [
+          "能区分缓冲、退避、幂等各自针对的失败类型",
+          "能按给定参数算出缓冲可覆盖时长与累计重试等待",
+          "能用检查清单说明如何验证不丢序、不重复与缺口可探测"
+        ],
+        "summaryBlockId": "model-handoff",
+        "nextPointId": "point-4-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-scope",
+        "moduleId": "m-scope",
+        "depth": "core",
+        "kind": "other",
+        "title": "本节范围",
+        "markdown": "本知识点处理一条采集记录在断网与恢复期间的可靠投递。教材把它拆成四个相互配合的机制：\n- **本地缓冲**：在网关暂存尚未确认送达的记录；\n- **重试**：失败后重新发送；\n- **退避**：控制重试的时间间隔，避免压垮链路；\n- **幂等**：让重复投递不产生重复事实。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000143"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "本地缓冲、重试、退避与幂等"
+              ],
+              "lineStart": 2624,
+              "lineEnd": 2625,
+              "assetRefs": [],
+              "excerptSha256": "f4e5a72cf28afe7ca7e4061eb30e4d51b6859cfb8e0002cebec0b0117b9a9b23"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline",
+        "moduleId": "m-scope",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "四个机制的分工",
+        "markdown": "把四个机制看成一条防线，而不是四个可互相替代的选项：\n\n- **缓冲**决定“断网时数据放在哪里、能撑多久、先丢什么”；\n- **重试**决定“什么时候再发一次”；\n- **退避与抖动**决定“很多设备同时恢复时，如何错开重试时隙”；\n- **幂等**决定“重复到达的消息如何不变成重复事实”；\n- **占用率与背压**决定“缓冲快满时是否应该放慢采集或提升发送能力”。\n\n只做重试而没有幂等，会把至少一次投递放大成重复写入；只做幂等而没有缓冲，断网期间的数据根本到不了去重逻辑。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scope"
+          ]
+        }
+      },
+      {
+        "id": "tb-buffer",
+        "moduleId": "m-buffer",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "环形缓冲与有损溢出",
+        "markdown": "环形缓冲按**设备-指标组合**预分配，每条约 256 B。写指针由采集线程推进，读指针由发送线程推进；当写指针追上读指针时，新记录**覆盖最旧记录**。\n\n- 示范仓容量为 4096 条，合计约 1 MiB；\n- 有损溢出的取舍是：丢失 30 分钟前的温度点通常优于阻断当前采样；\n- 安全相关事件（如 `door_state` 由 0 变为 1）打上**不可覆盖**标记，单独进入 64 条记录的优先队列；\n- 缓冲必须保留 `event_time`、`device_id`、`metric`、`value`、`unit`、`quality_code`、`sequence_no`，不得改写；\n- 每条记录附加网关本地 `retry_tag`：首次入队时随机生成的 64 位整数，之后每次重试保持不变。\n\n占用率定义为：\n\n$$\\mathrm{occupancy} = \\frac{(w - r) \\bmod C}{C}$$\n\n其中 $w$ 为写指针、$r$ 为读指针、$C$ 为容量。当 occupancy > 0.8 时，网关上报 `edge_buffer_high_water` 告警，值取当前占用率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "本地缓冲、重试、退避与幂等",
+                "边缘网关的缓冲模型与溢出策略"
+              ],
+              "lineStart": 2626,
+              "lineEnd": 2635,
+              "assetRefs": [],
+              "excerptSha256": "87d037cb8516ea531ec7d1c030c10efc6dda8ebc5ca8f9475e5900cbe497711a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-buffer-capacity",
+        "moduleId": "m-buffer",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "缓冲容量能撑多久",
+        "markdown": "把容量换算成时间，才能判断参数是否够用。以 30 s 采样周期计算：\n\n- 4096 条可覆盖 $4096 \\times 30\\ \\mathrm{s} = 122\\,880\\ \\mathrm{s}$，约 **34.1 小时**；\n- 占用率达到 0.8 时约有 $4096 \\times 0.8 = 3276.8$ 条，约 **27.3 小时**；\n- 教材中的 15 s 基站切换只产生约 $15 / 30 = 0.5$ 条记录，占用率约 $0.5 / 4096 \\approx 0.012\\%$；\n- 断网 10 分钟会产生 20 条，占用率约 0.49%。\n\n因此示范仓的 4096 条缓冲主要不是为短时抖动准备，而是为长时间失联留出排空和人工介入的窗口。真正接近 0.8 时，应同时检查发送并发、链路质量和采集速率，而不是只盯着缓冲数字。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-buffer"
+          ]
+        }
+      },
+      {
+        "id": "tb-backoff",
+        "moduleId": "m-backoff",
+        "depth": "core",
+        "kind": "formula",
+        "title": "指数退避、全抖动与重试上限",
+        "markdown": "应用层重试必须与 TCP 重传分开设计，否则二者会在同一时刻放大。第 $n$ 次重试的基准等待为：\n\n$$T_n = \\min\\left(T_{\\text{cap}},\\ T_{\\text{base}} \\cdot 2^n\\right)$$\n\n纯指数退避会让大量设备在链路恢复时同时重试，形成**重试风暴**，因此实际等待需要加入**全抖动**：\n\n$$T_n^{\\text{actual}} \\sim \\text{Uniform}\\left(0,\\ T_n\\right)$$\n\n示范仓参数为 $T_{\\text{base}} = 1$ s、$T_{\\text{cap}} = 60$ s、$N_{\\max} = 5$。\n\n| 重试次数 $n$ | 基准 $T_n$ | 抖动区间 | 单次等待中值 | 累计等待中值 |\n|:---:|:---|:---|:---:|:---:|\n| 0 | 1 s | [0, 1) s | 0.5 s | 0.5 s |\n| 1 | 2 s | [0, 2) s | 1.0 s | 1.5 s |\n| 2 | 4 s | [0, 4) s | 2.0 s | 3.5 s |\n| 3 | 8 s | [0, 8) s | 4.0 s | 7.5 s |\n| 4 | 16 s | [0, 16) s | 8.0 s | 15.5 s |\n| 5 | 60 s（封顶） | [0, 60) s | 30.0 s | 45.5 s |\n\n第 5 次重试仍失败时，记录标记为 `DEAD_LETTER`，转存本地 SQLite，等待人工通过补录接口上传。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000145"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "本地缓冲、重试、退避与幂等",
+                "指数退避与抖动：重试时隙的数学约束"
+              ],
+              "lineStart": 2636,
+              "lineEnd": 2660,
+              "assetRefs": [],
+              "excerptSha256": "4790deddb18b7c1a3d2d6c98e41914bf4ea1d8e3850485f4435c4c6eeb2b9b1f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-backoff-calc",
+        "moduleId": "m-backoff",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "累计等待与参数取舍",
+        "markdown": "把中值串起来，一次完整的失败重试链约等待 $0.5 + 1.0 + 2.0 + 4.0 + 8.0 + 30.0 = 45.5$ s。以压缩机电流 5 s 采样计，这段时间只新增约 9 条记录，远低于 4096 条容量，因此示范仓规模下不必为退避单独扩容。\n\n需要注意两点：\n\n1. **抖动改变的是分布，不是基准**。累计 45.5 s 只是中值；某次实际等待可能几乎为 0，也可能接近封顶值，容量规划应看分布尾部。\n2. **扩容会改变结论**。若设备增至 500 台，等待期间的入队量随设备数线性增长，需要同时下调 $T_{\\text{cap}}$（如 30 s）并增加并发连接池，否则占用率会在链路抖动时快速逼近告警线。\n\n**反例**：若直接用 $T_n$ 作为固定等待、省略抖动，Z1–Z4 四个温区的网关会在基站恢复瞬间同时重试，4G 信道竞争使成功率低于 30%。可在网关日志中统计 `retry_tag` 的重试事件时间分布，若出现周期性尖峰，说明抖动没有生效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-backoff"
+          ]
+        }
+      },
+      {
+        "id": "tb-idempotency",
+        "moduleId": "m-idempotency",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "幂等键、重复审计与缺口探针",
+        "markdown": "MQTT QoS 1 只提供**至少一次**投递：消息能到达 broker，不代表消费者不会重复处理。云平台接入服务必须独立实现幂等去重。\n\n- 幂等键为 **(device_id, metric, sequence_no)**；\n- 首次持久化前先查询该键；不存在则写入完整记录并设置 `ingest_time`；已存在则丢弃重复，并在**分离的审计表**记录 `quality_code='DUPLICATE'`；\n- **反例**：用 event_time 作幂等键。设备 RTC 重启回退会造成 event_time 重复，不同 sequence_no 的记录被误删；event_time 只用于时序分析。\n\n幂等机制隐含假设 sequence_no 严格递增，因此还需要缺口探针：\n\n```sql\nWITH ordered AS (\n  SELECT device_id, metric, sequence_no,\n         sequence_no - LAG(sequence_no) OVER (\n           PARTITION BY device_id, metric ORDER BY sequence_no\n         ) AS gap_size\n  FROM coldchain_raw\n)\nSELECT * FROM ordered WHERE gap_size > 1;\n```\n\n1 小时温度数据在 30 s 采样下应有 $\\lfloor 3600 / 30 \\rfloor = 120$ 条。若 `gap_size = 3`，说明缺 2 条，只能在**派生序列**插入 `value=null`、`quality_code='MISSING'` 的占位行，不得在原始事实表中伪造数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000146"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "本地缓冲、重试、退避与幂等",
+                "幂等投递：sequence_no 与 at-least-once 语义的工程实现"
+              ],
+              "lineStart": 2661,
+              "lineEnd": 2701,
+              "assetRefs": [],
+              "excerptSha256": "48ca8bf5eb356b8f40442a7d92a836cc447bb59a31e7570cc0641b404d1b7c85"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-idempotency-steps",
+        "moduleId": "m-idempotency",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "幂等写入的执行步骤",
+        "markdown": "把幂等写入拆成可执行的分支流程：\n\n1. 从缓冲记录中取出 `(device_id, metric, sequence_no)`；`retry_tag` 只用于日志关联，不进入幂等键。\n2. 查询原始事实表是否已存在该键。\n3. 不存在：写入完整记录，补 `ingest_time`，返回成功。\n4. 已存在：丢弃本条，写 `DUPLICATE` 审计记录；不要覆盖原始行。\n5. 定期运行缺口探针，把缺失数量交给派生层生成 `MISSING` 占位。\n\n关键边界：重试次数增加不会改变幂等键，因此同一条记录重发多少次都只落一行；但若采集端重置了 sequence_no，幂等键就会失效，需要单独识别设备重置并切换计数起点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-idempotency"
+          ]
+        }
+      },
+      {
+        "id": "tb-door",
+        "moduleId": "m-special-and-verify",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "门磁事件与心跳的区别",
+        "markdown": "门磁 Z1-DOOR-01 是**事件驱动 + 周期心跳**的混合模式：状态变化即时上报，60 s 心跳维持活性。二者都是合法新观测，各自递增 `sequence_no`，心跳**不得**标记为 DUPLICATE。\n\n退避策略因此需要分支：\n\n- 状态变化走**紧急重试通道**：跳过前两级，直接从 $T_2 = 4$ s 起步，并进入不可覆盖的优先队列；\n- 心跳使用标准退避，丢失 2～3 条不影响监测，其语义是“设备仍在线”，而非“门仍关闭”；\n- 若事件到达时 `event_time` 已落后当前水位线超过 300 s，不应丢弃，而应标记 `quality_code='LATE'` 写入原始事实表，供下游分析“迟到但真实发生”的事件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000147"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "本地缓冲、重试、退避与幂等",
+                "门磁状态的特殊处理：状态变化与心跳的区分"
+              ],
+              "lineStart": 2702,
+              "lineEnd": 2709,
+              "assetRefs": [],
+              "excerptSha256": "c1b688ab08835f5788c59c59a41c449696d07bd7b118a837a8353abc4efba4b5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-door-flow",
+        "moduleId": "m-special-and-verify",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "断网恢复时的分支顺序",
+        "markdown": "门磁与心跳并存时，恢复流程要按固定顺序判断，避免把安全事件当普通采样处理：\n\n1. **先看事件类型**：门磁开合走优先队列并以 $T_2$ 起步；周期采样与心跳走普通队列和标准退避。\n2. **再看时间**：优先队列只保证记录不被缓冲区覆盖，不改变事件时间；到达云端后再判定是否 `LATE`。\n3. **最后看容量**：恢复后先排空不可覆盖队列，普通队列按 sequence_no 顺序补齐；若占用率仍高于 0.8，应先降采样或提高发送并发，而不是继续扩大缓冲。\n\n这一顺序把教材中的“不可覆盖”“紧急重试”“LATE”三个规则串成了一次可执行的恢复动作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-door"
+          ]
+        }
+      },
+      {
+        "id": "tb-checklist",
+        "moduleId": "m-special-and-verify",
+        "depth": "core",
+        "kind": "table",
+        "title": "端到端一致性检查清单",
+        "markdown": "工程部署后，用可观测数据验证机制，而不是只依赖协议层的理论保证：\n\n| 检查项 | 方法 | 通过标准 |\n|:---|:---|:---|\n| 缓冲不丢序 | 对比网关发送日志与云端接收日志的 sequence_no 序列 | 同一 device_id + metric 内严格递增，无逆序 |\n| 退避抖动生效 | 统计 retry_tag 重试事件时间分布的变异系数 CV | CV > 0.5，排除固定间隔 |\n| 幂等无漏判 | 注入已知 sequence_no 的重复记录 | DUPLICATE 计数等于注入次数，原始表无重复行 |\n| 缺口可探测 | 删除缓冲中 sequence_no = 100～101 的记录 | gap_size 查询返回 3，派生序列出现 MISSING 占位 |\n| 门磁优先通道 | 中断链路并同时触发温度采样与门磁开启 | 门磁 occupancy 峰值 < 5%，温度允许覆盖至 80% |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000148"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "本地缓冲、重试、退避与幂等",
+                "端到端一致性检查清单"
+              ],
+              "lineStart": 2710,
+              "lineEnd": 2723,
+              "assetRefs": [],
+              "excerptSha256": "132936f2c256c4bdb5eb4b0b050fb0d22a62f421c012f81c9360d79ac4d65c17"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-handoff",
+        "moduleId": "m-special-and-verify",
+        "depth": "support",
+        "kind": "summary",
+        "title": "把四个机制串回一次断网",
+        "markdown": "完整链路可以压缩成四步：\n\n1. 断网期间写指针推进、占用率上升，超过 0.8 触发 `edge_buffer_high_water`；\n2. 恢复后按全抖动区间调度重试，失败累积到第 5 次转 `DEAD_LETTER`；\n3. 云端以 `(device_id, metric, sequence_no)` 去重，重复只留审计，缺口在派生层补 `MISSING`；\n4. 用检查清单核对不丢序、抖动生效、幂等无漏判和缺口可探测。\n\n这条链路的底线是“至少一次 + 幂等”，而不是假设传输层会保证恰好一次。下一节 point-4-6 讨论设备身份与加密传输，它决定这条重试链路能否被可信地建立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-checklist",
+            "tb-idempotency"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "buffer-occupancy-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-buffer-capacity",
+        "moduleId": "m-buffer",
+        "depth": "core",
+        "outcomeRefs": [
+          "design-recovery-path"
+        ],
+        "learningPurpose": "检查学习者能否把缓冲容量与采样周期换算成断网可承受时长，而不是只记住 4096 这个数字。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-buffer",
+            "model-buffer-capacity"
+          ]
+        },
+        "config": {
+          "question": "采样周期 30 s、每条约 256 B、缓冲 4096 条。断网 10 分钟后恢复，缓冲占用率最接近哪一项？",
+          "options": [
+            "约 0.5%",
+            "约 5%",
+            "约 50%",
+            "约 100%"
+          ],
+          "answerIndex": 0,
+          "explanation": "10 分钟共 600 s，约 20 条记录；20 / 4096 ≈ 0.49%，远未触及 0.8 的告警阈值。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "**自检**：采样周期 30 s、缓冲 4096 条，断网 10 分钟会产生约多少条记录？占用率是多少？\n\n参考答案：600 s ÷ 30 s = 20 条；20 ÷ 4096 ≈ 0.5%，低于 0.8 告警线。"
+        }
+      }
+    ]
+  },
+  "subtitle": "边缘采集与可靠传输",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000143"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "本地缓冲、重试、退避与幂等"
+      ],
+      "lineStart": 2624,
+      "lineEnd": 2625,
+      "assetRefs": [],
+      "excerptSha256": "f4e5a72cf28afe7ca7e4061eb30e4d51b6859cfb8e0002cebec0b0117b9a9b23"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000144"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "本地缓冲、重试、退避与幂等",
+        "边缘网关的缓冲模型与溢出策略"
+      ],
+      "lineStart": 2626,
+      "lineEnd": 2635,
+      "assetRefs": [],
+      "excerptSha256": "87d037cb8516ea531ec7d1c030c10efc6dda8ebc5ca8f9475e5900cbe497711a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000145"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "本地缓冲、重试、退避与幂等",
+        "指数退避与抖动：重试时隙的数学约束"
+      ],
+      "lineStart": 2636,
+      "lineEnd": 2660,
+      "assetRefs": [],
+      "excerptSha256": "4790deddb18b7c1a3d2d6c98e41914bf4ea1d8e3850485f4435c4c6eeb2b9b1f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000146"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "本地缓冲、重试、退避与幂等",
+        "幂等投递：sequence_no 与 at-least-once 语义的工程实现"
+      ],
+      "lineStart": 2661,
+      "lineEnd": 2701,
+      "assetRefs": [],
+      "excerptSha256": "48ca8bf5eb356b8f40442a7d92a836cc447bb59a31e7570cc0641b404d1b7c85"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000147"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "本地缓冲、重试、退避与幂等",
+        "门磁状态的特殊处理：状态变化与心跳的区分"
+      ],
+      "lineStart": 2702,
+      "lineEnd": 2709,
+      "assetRefs": [],
+      "excerptSha256": "c1b688ab08835f5788c59c59a41c449696d07bd7b118a837a8353abc4efba4b5"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000148"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "本地缓冲、重试、退避与幂等",
+        "端到端一致性检查清单"
+      ],
+      "lineStart": 2710,
+      "lineEnd": 2723,
+      "assetRefs": [],
+      "excerptSha256": "132936f2c256c4bdb5eb4b0b050fb0d22a62f421c012f81c9360d79ac4d65c17"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3115,
+    2617
+  ],
+  "scale": 0.94
+}

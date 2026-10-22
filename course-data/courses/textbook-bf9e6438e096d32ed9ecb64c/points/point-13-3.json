@@ -1,0 +1,554 @@
+{
+  "id": "point-13-3",
+  "title": "水位线、迟到更新与结果撤回",
+  "shortSummary": "用水位线控制窗口输出，并设计迟到更新与结果撤回对下游存储和展示的影响契约。",
+  "keyTerms": [
+    "水位线",
+    "迟到更新",
+    "结果撤回",
+    "窗口输出",
+    "下游契约",
+    "幂等"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-3-6",
+    "point-13-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的定义、180 秒乱序边界、三类迟到判定与撤回语义；按故障诊断顺序重排为“症状—机制—分流—修复—定位—回归”，补入数值化判定示例、下游契约矩阵与排查表，所有事实仍由教材块支撑。",
+      "estimatedMinutes": 19,
+      "outcomes": [
+        {
+          "id": "explain-watermark-and-late-routing",
+          "text": "解释水位线是带置信区间的进度声明，并按 event_time 与水位线的关系判定正常乱序、允许范围内乱序与 LATE 三类处理路径。"
+        },
+        {
+          "id": "diagnose-watermark-stall",
+          "text": "面对水位线停滞或下游重复计数，按源端时钟、数据倾斜、反压三类假设取证定位，并给出重算与下游契约的修复方案。"
+        }
+      ],
+      "misconceptions": [
+        "把水位线当时钟，认为水位线之前的记录一定全部已经到达。",
+        "把 event_time 小于水位线直接判为迟到并标记 LATE，忽略允许乱序边界。",
+        "用 ingest_time 作为水位线基准，把网络延迟误算成设备乱序。",
+        "认为迟到记录可以直接覆盖原始事实表，或下游不做版本化也算得出同一结果。"
+      ],
+      "modules": [
+        {
+          "id": "symptom-entry",
+          "title": "症状入口：小时均值为何变了两次",
+          "role": "problem-introduction",
+          "description": "从看板数值变化和报表双计出发，提出本节要回答的问题。",
+          "outcomeRefs": [
+            "explain-watermark-and-late-routing"
+          ],
+          "order": 0
+        },
+        {
+          "id": "watermark-claim",
+          "title": "机制定位：水位线到底承诺了什么",
+          "role": "mechanism",
+          "description": "给出水位线形式化定义与置信区间解释，澄清它与时钟的区别。",
+          "outcomeRefs": [
+            "explain-watermark-and-late-routing"
+          ],
+          "order": 1
+        },
+        {
+          "id": "late-triage",
+          "title": "证据分流：正常乱序、允许迟到与 LATE",
+          "role": "triage",
+          "description": "用 event_time 与水位线的关系完成三类判定，并用数值例子验证。",
+          "outcomeRefs": [
+            "explain-watermark-and-late-routing"
+          ],
+          "order": 2
+        },
+        {
+          "id": "retraction-contract",
+          "title": "修复契约：撤回-重算与下游幂等",
+          "role": "repair",
+          "description": "说明撤回记录与重算结果的成对输出，以及下游必须承担的版本契约。",
+          "outcomeRefs": [
+            "explain-watermark-and-late-routing",
+            "diagnose-watermark-stall"
+          ],
+          "order": 3
+        },
+        {
+          "id": "stall-diagnosis",
+          "title": "故障假设：水位线停滞的三类根因",
+          "role": "diagnosis",
+          "description": "按源端时钟、数据倾斜、反压组织症状与证据，形成可执行排查表。",
+          "outcomeRefs": [
+            "diagnose-watermark-stall"
+          ],
+          "order": 4
+        },
+        {
+          "id": "regression-check",
+          "title": "回归检查：误区与配置核对",
+          "role": "verification",
+          "description": "用常见误区、参数汇总和上线自检问题收束本节并桥接下一知识点。",
+          "outcomeRefs": [
+            "diagnose-watermark-stall"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-watermark-and-late-routing",
+          "diagnose-watermark-stall"
+        ],
+        "method": "完成两条判定题和一次停滞排查演练，并写出对应的下游契约要点。",
+        "successCriteria": [
+          "能把允许范围内的乱序与 LATE 分开判定并说明依据",
+          "能针对停滞症状给出至少两条带证据的假设与修复方向",
+          "能说明撤回后下游需要版本化或 UPSERT"
+        ],
+        "summaryBlockId": "model-consistency-check",
+        "nextPointId": "point-13-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-scope",
+        "moduleId": "symptom-entry",
+        "depth": "support",
+        "kind": "note",
+        "title": "本节范围",
+        "markdown": "本节把水位线、迟到判定、结果撤回与水位线停滞排查放在同一条故障线上：先看一个聚合结果为何会改变，再逐步确认问题出在乱序判定、撤回契约，还是水位线推进本身。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000465"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "水位线、迟到更新与结果撤回"
+              ],
+              "lineStart": 8664,
+              "lineEnd": 8665,
+              "assetRefs": [],
+              "excerptSha256": "cb1f6774e7f99501b15d7f057da581ffaf185b9d771a63fc516070df1ccbcdd1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-symptom-story",
+        "moduleId": "symptom-entry",
+        "depth": "support",
+        "kind": "example",
+        "title": "两个症状，同一条链路",
+        "markdown": "澄湾冷链的看板上，Z1 温区 `[08:00, 09:00)` 的小时均值先显示 4.2 Cel，十几分钟后变成 4.1 Cel；同一天的日报表里出现了两行相同小时记录。\n\n这两个症状来自同一组机制：一条 event_time 落在 `08:45:00` 的记录晚到，窗口已经输出过结果，随后被撤回并重算；如果下游没有按版本覆盖，就会把撤回后的新旧两行一起累加。下面按“先解释承诺、再判定分流、最后核对契约与排查故障”的顺序展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-scope"
+          ]
+        }
+      },
+      {
+        "id": "tb-watermark-definition",
+        "moduleId": "watermark-claim",
+        "depth": "core",
+        "kind": "definition",
+        "title": "水位线的定义与置信区间",
+        "markdown": "水位线（Watermark）是引擎度量事件时间进展的元数据标记，核心语义是：引擎确信不会再收到 event_time 早于该水位线的记录。常见实现写作\n\n$$W(t) = \\max_{\\text{observed}}(\\text{event\\_time}) - \\delta$$\n\n其中 $\\delta$ 是允许的最大乱序边界，本节案例配置为 180 秒。水位线不是时钟，而是一份带置信区间的进度声明：当 $W(t)$ 推进到 `08:30:00Z` 时，只保证此后不再出现 event_time 早于 `08:27:00Z` 的记录，并不保证 `08:30:00` 之前的记录都已到达。多路并行子流按各自水位线取全局最小值，因此稀疏的门磁心跳不会单独把全局水位线卡住。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000466"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "水位线、迟到更新与结果撤回",
+                "水位线的定义与物理意义"
+              ],
+              "lineStart": 8666,
+              "lineEnd": 8677,
+              "assetRefs": [],
+              "excerptSha256": "5dbf1e0bb00deb9317e3c74ab80fbd572a2fddae86514fd6b43d234506fb6164"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-watermark-interval",
+        "moduleId": "watermark-claim",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把公式当作安全边界来心算",
+        "markdown": "把这条公式当成“安全边界”而不是“当前时间”，可以分三步心算：\n\n1. 取已观察事件时间的最大值，例如 `08:33:00`。\n2. 减去 $\\delta = 180$ 秒，得到水位线 `08:30:00`。\n3. 任何 event_time 落在 `08:27:00` 之后的记录仍可能补进窗口，更早的记录则被视为超出边界。\n\n这也解释了参数取舍：调大 $\\delta$ 会让结果更完整，但状态保留更久、输出更慢；调小则输出更快，却更容易频繁触发迟到处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-watermark-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-late-routing",
+        "moduleId": "late-triage",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "迟到判定与三条处理路径",
+        "markdown": "记录到达时，用 event_time 与当前水位线比较，分成三条路径：\n\n| 条件 | 判定 | 处理 | quality_code |\n|:---|:---|:---|:---|\n| $\\text{event\\_time} \\geq W(t)$ | 正常乱序 | 进入窗口状态，参与常规计算 | 保持原值 |\n| $W(t) - 180 \\leq \\text{event\\_time} < W(t)$ | 允许范围内乱序 | 进入窗口状态，触发窗口重算 | 保持原值，不标 LATE |\n| $\\text{event\\_time} < W(t) - 180$ | 超出迟到边界 | 路由到迟到侧输出，不参与当前窗口 | 标记 LATE |\n\n关键区分：event_time 小于水位线只说明“乱序”，只有小于“水位线减去允许乱序边界”才构成案例约定的 LATE。迟到侧输出有三种处置：丢弃、归档到冷存储、或触发修正重算；本节案例把后两者组合使用，LATE 记录写入 `cold_chain.late_arrival_log`，若属于未最终确认的小时级窗口则发起撤回-重算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000467"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "水位线、迟到更新与结果撤回",
+                "迟到判定与分层处理策略"
+              ],
+              "lineStart": 8678,
+              "lineEnd": 8708,
+              "assetRefs": [],
+              "excerptSha256": "adf41ae2c3fc0c6ba894011eebe24eff9430c9d70bbc58601e0b353271153445"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-routing-worked",
+        "moduleId": "late-triage",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "用三个到达记录走一遍分流",
+        "markdown": "设当前 $W(t) = $ `08:30:00`，$\\delta = 180$ 秒，则迟到下界为 `08:27:00`。\n\n- 记录 A：event_time `08:31:10`，不早于水位线，正常进入窗口。\n- 记录 B：event_time `08:29:30`，小于水位线但仍在 180 秒内，进入窗口并触发重算，不标 LATE。\n- 记录 C：event_time `08:26:00`，低于下界，走迟到侧输出并标 LATE。\n\n同一批数据里，B 和 C 都属于“乱序到达”，但只有 C 需要下游处理归档或撤回。设计分流逻辑时，先比较水位线、再比较迟到下界，顺序不能颠倒。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-late-routing"
+          ]
+        }
+      },
+      {
+        "id": "tb-retraction-mechanism",
+        "moduleId": "retraction-contract",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "撤回记录与重算结果成对出现",
+        "markdown": "水位线越过窗口终点后，窗口会先输出一次结果；允许范围内的乱序记录到达时，引擎必须更新已发出的结果。结果撤回（Retraction）的做法是：先发一条携带负值或特殊标记的撤回记录抵消旧结果，再发出重算后的新结果。\n\n| 步骤 | 输出 | 内容 |\n|:---|:---|:---|\n| 1 | 撤回（-） | `(window_start, window_end, avg_temp, -1)` |\n| 2 | 更新（+） | `(window_start, window_end, avg_temp_new, +1)` |\n\n以 `[08:00, 09:00)` 小时温度窗口为例，先输出 4.2 Cel，`08:45:00` 的迟到记录到达后撤回并重算。下游聚合表必须支持 UPSERT 或版本化存储，否则会双重计数；案例使用 `(zone, window_start, window_end, version)` 复合主键，按 version 取最新值。重算代价与状态保留时长正相关：180 秒边界下，30 秒采样的 1 小时窗口约需保留 120 条原始记录，把边界扩到 1 小时会线性放大状态与重算频率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000468"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "水位线、迟到更新与结果撤回",
+                "结果撤回与窗口重算的语义保证"
+              ],
+              "lineStart": 8709,
+              "lineEnd": 8723,
+              "assetRefs": [],
+              "excerptSha256": "0b57b34b1583a724482c95981fa04be8ab592211f4342b81fc4173b28b948a50"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-retraction-contract",
+        "moduleId": "retraction-contract",
+        "depth": "core",
+        "kind": "application",
+        "title": "把撤回写成下游契约",
+        "markdown": "把撤回当作一种对下游的接口承诺，可以分层落成契约：\n\n| 下游 | 必须支持 | 缺少时的失败表现 |\n|:---|:---|:---|\n| 聚合表 | 按版本 UPSERT，保留旧版本 | 同一窗口出现两行，报表双计 |\n| 看板 | 标记“已修正”并替换旧值 | 用户看到数值跳变却没有解释 |\n| 告警 | 撤回不重复通知，只更新证据 | 同一事件反复打扰值班 |\n\n契约还应写明窗口长度、允许迟到量和版本字段，避免消费方各按自己的假设重新解释同一条结果流。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retraction-mechanism"
+          ]
+        }
+      },
+      {
+        "id": "tb-stall-anomaly",
+        "moduleId": "stall-diagnosis",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "水位线停滞的三类根因",
+        "markdown": "水位线停滞是最常见的生产故障，根因分为三类：\n\n1. **源端时钟漂移**：设备 RTC 未同步，持续上报滞后的 event_time，该子流水位线停在旧值。案例用 `CLOCK_SUSPECT` 标记与 NTP 偏差超过 60 秒的设备，但不修改 event_time；引擎配置 120 秒空闲超时，超过后按处理时间推进该子流水位线。\n2. **数据倾斜**：5 秒高频电流流与稀疏门磁心跳分到同一并行度，门磁成为瓶颈。应按 metric 类型分键，或给稀疏流单独设置更激进的空闲推进策略。\n3. **反压级联**：下游处理慢导致缓冲满，水位线无法传播，形成伪停滞。若 `watermark_lag = current_processing_time - W(t)` 持续增长而源端消费速率正常，指向反压；若某子流 `last_record_event_time` 长期不变，则指向源端问题。\n\n可用按设备统计 `ingest_time - event_time` 的 p99 延迟查询反推 $\\delta$ 是否合理：p99 为 45 秒而 $\\delta = 180$ 秒，说明状态保留存在冗余；p99 为 200 秒，则会频繁触发 LATE。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000469"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "水位线、迟到更新与结果撤回",
+                "水位线推进的异常情形与检查方法"
+              ],
+              "lineStart": 8724,
+              "lineEnd": 8753,
+              "assetRefs": [],
+              "excerptSha256": "57aa3e3f1e0c69e7ca7916e75873cc35751a182c23fa644b97cbb1ad727fe84c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stall-checklist",
+        "moduleId": "stall-diagnosis",
+        "depth": "core",
+        "kind": "table",
+        "title": "证据到修复的排查表",
+        "markdown": "把上面的根因整理成一张排查表，按“先看证据再下结论”的顺序使用：\n\n| 观察到的证据 | 优先假设 | 下一步定位 | 修复方向 |\n|:---|:---|:---|:---|\n| 单设备 p99 延迟持续偏高，且该设备带 `CLOCK_SUSPECT` | 源端时钟漂移 | 对比设备时钟与 NTP 偏差 | 校正 RTC，保留原始 event_time，依赖空闲超时 |\n| 某子流 `last_record_event_time` 长期不变，其余子流正常 | 数据倾斜 | 检查并行度与分区键 | 按 metric 分键，稀疏流单独推进 |\n| `watermark_lag` 持续增长而源端消费速率正常 | 反压 | 查看下游缓冲与背压指标 | 扩容或降低上游速率 |\n\n同一症状可能叠加多个根因，排查表要求每条假设都有对应证据，不能只凭“水位线不动”就判定为时钟问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stall-anomaly"
+          ]
+        }
+      },
+      {
+        "id": "tb-consistency-pitfalls",
+        "moduleId": "regression-check",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "三个高频误区与参数汇总",
+        "markdown": "三个高频误区：\n\n- **把 ingest_time 当水位线基准**：水位线必须基于 event_time。若一条记录 event_time=`08:00:00`、ingest_time=`08:05:00`，另一条 event_time=`08:01:00`、ingest_time=`08:02:00`，用 ingest_time 会把第一条错判为迟到。\n- **给门磁流注入 MISSING 占位推水位线**：门磁是状态变化上报加心跳，不是固定频率连续量；原始记录缺失时没有数据行，若要对齐时间轴，只能在派生序列中插入 `value=null`、`quality_code='MISSING'` 的占位行。\n- **LATE 记录直接覆盖原始事实表**：原始表 `cold_chain.raw_telemetry` 的 quality_code 保持引擎路由前的值，LATE 只作用于迟到侧归档或聚合层的撤回-重算流程。\n\n案例参数汇总：maxOutOfOrderness 180 秒；水位线空闲超时 120 秒（稀疏流单独启用）；CLOCK_SUSPECT 阈值 60 秒；窗口状态保留 180 秒；聚合主键为 `(zone, window_start, window_end, version)`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000470"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "水位线、迟到更新与结果撤回",
+                "端到端一致性约束与常见误区"
+              ],
+              "lineStart": 8754,
+              "lineEnd": 8771,
+              "assetRefs": [],
+              "excerptSha256": "1d420aef0066af7aeb86a1d510386ec9411ec2b9d06b5444f0573b16f5d1a176"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-consistency-check",
+        "moduleId": "regression-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "上线前的四问自检",
+        "markdown": "上线前用四问自检这条链路：\n\n1. 水位线是否只由 event_time 驱动？\n2. 允许迟到量是否与 p99 延迟匹配，且状态保留不少于该边界？\n3. 下游是否按版本 UPSERT，撤回后不会双计？\n4. 稀疏流是否有独立的空闲推进策略？\n\n四问都有明确答案后，才谈交付语义。若下游仍可能收到重复结果，就需要下一节的幂等写入与交付语义来兜底。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retraction-mechanism",
+            "tb-consistency-pitfalls"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-late-routing",
+        "type": "formative-check",
+        "anchorBlockId": "model-routing-worked",
+        "moduleId": "late-triage",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-watermark-and-late-routing"
+        ],
+        "learningPurpose": "检查学习者能否区分允许范围内的乱序与超出边界的 LATE，并说明各自处理路径。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-late-routing"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "当前水位线 W(t)=08:30:00，允许乱序边界为 180 秒，一条 event_time 为 08:29:30 的记录到达，应如何处理？",
+          "options": [
+            "判定为迟到并标记 LATE",
+            "进入窗口并触发重算，不标 LATE",
+            "直接丢弃并计入缺失",
+            "覆盖原始事实表中的历史记录"
+          ],
+          "answerIndex": 1,
+          "explanation": "该记录小于水位线但仍在 180 秒边界内，属于允许范围内的乱序，应进入窗口并触发重算；只有低于 08:27:00 的记录才标记 LATE。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断：W(t)=08:30:00、边界 180 秒时，event_time=08:29:30 的记录属于正常乱序、允许范围内乱序还是迟到？写出判定所用的两个比较条件，并说明它会触发重算还是进入迟到侧输出。"
+        }
+      },
+      {
+        "id": "check-stall-diagnosis",
+        "type": "formative-check",
+        "anchorBlockId": "model-stall-checklist",
+        "moduleId": "stall-diagnosis",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-watermark-stall"
+        ],
+        "learningPurpose": "检查学习者能否从症状证据选择正确假设，并给出可执行的定位与修复动作。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-stall-anomaly"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "水位线持续不推进，但源端消费速率正常、下游缓冲接近上限，最应先排查哪类根因？",
+          "options": [
+            "源端设备时钟漂移",
+            "稀疏流心跳缺失",
+            "下游反压导致的伪停滞",
+            "窗口长度配置过短"
+          ],
+          "answerIndex": 2,
+          "explanation": "源端消费正常而 watermark_lag 持续增长、下游缓冲紧张，符合反压级联形成伪停滞的特征；时钟漂移会表现为某子流 last_record_event_time 长期不变。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定症状：某子流水位线不推进、源端消费速率正常、下游缓冲接近上限。请列出至少两条候选假设、各自的验证证据，以及对应的修复方向。"
+        }
+      }
+    ]
+  },
+  "subtitle": "流式计算与实时管道",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000465"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "水位线、迟到更新与结果撤回"
+      ],
+      "lineStart": 8664,
+      "lineEnd": 8665,
+      "assetRefs": [],
+      "excerptSha256": "cb1f6774e7f99501b15d7f057da581ffaf185b9d771a63fc516070df1ccbcdd1"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000466"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "水位线、迟到更新与结果撤回",
+        "水位线的定义与物理意义"
+      ],
+      "lineStart": 8666,
+      "lineEnd": 8677,
+      "assetRefs": [],
+      "excerptSha256": "5dbf1e0bb00deb9317e3c74ab80fbd572a2fddae86514fd6b43d234506fb6164"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000467"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "水位线、迟到更新与结果撤回",
+        "迟到判定与分层处理策略"
+      ],
+      "lineStart": 8678,
+      "lineEnd": 8708,
+      "assetRefs": [],
+      "excerptSha256": "adf41ae2c3fc0c6ba894011eebe24eff9430c9d70bbc58601e0b353271153445"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000468"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "水位线、迟到更新与结果撤回",
+        "结果撤回与窗口重算的语义保证"
+      ],
+      "lineStart": 8709,
+      "lineEnd": 8723,
+      "assetRefs": [],
+      "excerptSha256": "0b57b34b1583a724482c95981fa04be8ab592211f4342b81fc4173b28b948a50"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000469"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "水位线、迟到更新与结果撤回",
+        "水位线推进的异常情形与检查方法"
+      ],
+      "lineStart": 8724,
+      "lineEnd": 8753,
+      "assetRefs": [],
+      "excerptSha256": "57aa3e3f1e0c69e7ca7916e75873cc35751a182c23fa644b97cbb1ad727fe84c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000470"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "水位线、迟到更新与结果撤回",
+        "端到端一致性约束与常见误区"
+      ],
+      "lineStart": 8754,
+      "lineEnd": 8771,
+      "assetRefs": [],
+      "excerptSha256": "1d420aef0066af7aeb86a1d510386ec9411ec2b9d06b5444f0573b16f5d1a176"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3096,
+    576
+  ],
+  "scale": 0.92
+}

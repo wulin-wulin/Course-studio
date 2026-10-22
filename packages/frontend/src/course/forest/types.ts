@@ -88,18 +88,101 @@ export type TextbookContentBlockProvenance =
   | TextbookContentTextbookProvenance
   | TextbookContentModelProvenance;
 
+export type TextbookLearningDepth = "core" | "support" | "advanced";
+
+export type TextbookLearningOutcome = {
+  id?: string;
+  text: string;
+};
+
+export type TextbookLearningModule = {
+  id: string;
+  title: string;
+  role?: string;
+  description?: string;
+  /** Learning outcomes served by this module in the canonical teaching plan. */
+  outcomeRefs?: string[];
+  /** Explicit module order; array order remains the legacy fallback. */
+  order?: number;
+};
+
+export type TextbookLearningCompletion = {
+  outcomeRefs?: string[];
+  method?: string;
+  successCriteria?: string[];
+  exerciseBlockId?: string;
+  summaryBlockId?: string;
+  nextPointId?: string;
+};
+
+export type TextbookLearningDesign = {
+  primaryPattern?: string;
+  /** Editorial intensity: source-faithful, balanced, or teaching-first. */
+  adaptationLevel?: "faithful" | "balanced" | "teaching-first";
+  /** Short learner-facing explanation of how the textbook was reorganized. */
+  editorialPolicy?: string;
+  estimatedMinutes?: number;
+  outcomes?: TextbookLearningOutcome[];
+  misconceptions?: string[];
+  modules?: TextbookLearningModule[];
+  completion?: TextbookLearningCompletion;
+};
+
+export type TextbookLearningAssetFallback = {
+  type?: string;
+  mode?: string;
+  markdown?: string;
+  caption?: string;
+  content?: string;
+  blockId?: string;
+};
+
+export type TextbookLearningAssetConfig = Record<string, unknown> & {
+  preset?: string | Record<string, unknown>;
+  controls?: string[] | Record<string, unknown>;
+  outputs?: string[] | Record<string, unknown>;
+};
+
+export type TextbookLearningAssetGrounding = {
+  basedOnBlockIds: string[];
+};
+
+export type TextbookLearningAsset = {
+  id: string;
+  type: string;
+  anchorBlockId: string;
+  title?: string;
+  animationType?: string;
+  learningPurpose?: string;
+  caption?: string;
+  moduleId?: string;
+  depth?: TextbookLearningDepth;
+  outcomeRefs?: string[];
+  config?: TextbookLearningAssetConfig;
+  grounding?: TextbookLearningAssetGrounding;
+  fallback?: TextbookLearningAssetFallback;
+};
+
 export type TextbookContentBlock = {
   id: string;
   kind: TextbookContentBlockKind;
   title?: string;
   markdown: string;
   provenance: TextbookContentBlockProvenance;
+  /** Optional teaching module used by the learner-facing reading outline. */
+  moduleId?: string;
+  /** Learning importance is separate from textbook/model authorship. */
+  depth?: TextbookLearningDepth;
 };
 
 /** Ordered, provenance-aware teaching content used by textbook-grounded courses. */
 export type TextbookPointContentV2 = {
   schema_version: typeof TEXTBOOK_CONTENT_V2_SCHEMA;
   blocks: TextbookContentBlock[];
+  /** Forward-compatible teaching metadata; v2 payloads may omit it. */
+  learningDesign?: TextbookLearningDesign;
+  /** Assets are rendered immediately after their anchor block when possible. */
+  learningAssets?: TextbookLearningAsset[];
 };
 
 export type ForestIndex = {
@@ -140,6 +223,9 @@ export type CoursePointDetail = ForestPoint & {
   animationType?: string;
   visualSuggestion?: string;
   animationSuggestion?: string;
+  /** Optional teaching metadata may live beside content during the v2-to-v3 transition. */
+  learningDesign?: TextbookLearningDesign;
+  learningAssets?: TextbookLearningAsset[];
   /** Verifiable textbook excerpts used to ground this point's content. */
   sourceSpans?: ForestSourceSpan[];
   /** True when the point includes model-authored enrichment beyond its source excerpts. */

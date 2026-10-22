@@ -35,6 +35,28 @@
   `content.blocks` 分开保存教材块和模型块；教材块保留精确 spans，模型块通过
   `basedOnBlockIds` 向前引用。教材点和受控扩展点都必须有非空教材锚点和模型补充；顶层
   sourceSpans/modelEnriched 从 blocks 派生，不重复持久化。
+- 生成正文前先按可观察的学习成果设计 `content.learningDesign`：依次确定 `outcomes`、
+  `misconceptions`、`modules` 和 `completion`，再组织内容块与学习资产。每个 block 用
+  `moduleId` 归入模块，并用 `depth: core|support|advanced` 标明学习深度；模块的
+  `outcomeRefs` 必须完整覆盖本知识点的学习目标。
+- `learningDesign.adaptationLevel` 使用 `faithful|balanced|teaching-first`，默认显式写
+  `balanced`。`faithful` 保留教材术语和主要讲解顺序，只做去重、澄清与必要检查；`balanced` 可
+  围绕目标重排教学顺序、压缩重复并增加类比、案例、练习、动画和跨段桥接；`teaching-first` 可按
+  学习任务重建叙事、合并或拆分讲解，并把教材原有段落放到最能帮助理解的位置。三种模式下
+  教材仍约束事实、定义、公式、数值、适用条件、边界和完整覆盖；模型补充若与教材冲突必须修正，
+  不得用固定 token 百分比代替这些允许/禁止动作与覆盖校验。`editorialPolicy` 用一句话记录本点采用的
+  教学重编原则，来源审计仍完全由 block provenance 负责。
+- 内容组织采用“通用学习骨架 + 知识类型模板”：保留问题导入、核心理解、应用活动、达成检查和
+  下一点桥接，再按概念解释、定量机理、操作流程、比较决策、故障诊断或案例分析选择所需模块。
+  概念解释突出定义、边界、正反例；定量机理突出变量、单位、假设、推导与参数实验；操作流程突出
+  前置条件、步骤、分支、错误恢复与检查表；比较决策统一比较维度并给出情境化取舍；故障诊断按
+  症状、假设、证据、定位与修复组织；案例分析按情境、决策、证据、结果、反思与迁移组织。
+  通常使用 4–7 个模块，按内容复杂度增减，不得把示例课程的栏目机械复制到所有知识点。顶部会单独
+  展示 outcomes，正文不要再生成一块完整重复的“学习目标列表”。`estimatedMinutes` 必须按正文阅读量、
+  公式/表格理解、互动活动和练习作答的总负担估算，不能只按字数或使用固定值。
+- 可交互练习、动画、图表等写入 `content.learningAssets`，每项必须声明 `anchorBlockId`、
+  `outcomeRefs`、`learningPurpose`、可追溯的 `grounding.basedOnBlockIds` 和无交互时仍可学习的
+  `fallback`。资产可以有类型自有的 `config`，但不能把 config 当作事实来源或绕过来源块。
 - 最终图必须把教材阅读顺序写入独立的 `sequences.cluster` 与 `sequences.point`；不要把顺序
   自动当成 prerequisites。
 
@@ -93,6 +115,9 @@ course_pipeline {"action":"init-points","courseId":"<course-id>"}
 
 ### G3_CONTENT：生成完整内容
 
+- 教材模式下，每个 worker 先根据本点学习目标完成 `learningDesign`，再按 modules 编排教材块和
+  模型块，最后只为明确的学习目的设计 `learningAssets`；不能先照教材顺序堆完 blocks 再补一层
+  与正文脱节的教学标签。
 - 按内容 Skill 的所有权规则，通过 `course-content-worker` 并发生成每个 `points/<id>.json` 和同名动画请求。
 - 每个 task 提示必须要求 worker 先加载 `candidate-knowledge-point-generator` Skill，再完整读取
   session-local 的 `data-contract.md`、`animation-contract.md`、`schemas/point.schema.json` 和

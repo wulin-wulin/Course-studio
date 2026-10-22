@@ -220,9 +220,30 @@ prerequisites
 ### 教材课程 `textbook-content/2.0`
 
 教材详情保留索引 6 项、`animationType`、`prerequisites`，并新增顶层 `origin` 和 `content`。
-正文只写入有序 `content.blocks`；不得再写 `coreIdea/principles/formula/comparisons/applications/
+正文由 outcome-first 的 `content.learningDesign`、有序 `content.blocks` 和可选的
+`content.learningAssets` 组成；不得再写 `coreIdea/principles/formula/comparisons/applications/
 aliases/intuition/misconceptions/history/yearIntroduced/prosCons/qa/visualType/visualSuggestion`，也不在
 顶层持久化 `sourceSpans/modelEnriched`。
+
+`learningDesign.adaptationLevel` 只使用 `faithful|balanced|teaching-first`，省略时按 `balanced`
+解释，新生成内容应显式写出。默认 balanced 允许围绕学习目标重排教学顺序、压缩重复，增加类比、
+案例、练习、动画和跨段桥接。教材约束事实、定义、公式、数值、适用条件、边界与完整覆盖；模型
+内容与教材冲突时必须修正。不要规定教材/模型 token 百分比，用动作边界、覆盖和冲突校验控制尺度，
+并继续用每个 block 的 provenance 审计事实来源。
+
+- `faithful`：保留教材术语和主要讲解顺序，只做去重、澄清、局部桥接与必要检查；
+- `balanced`：围绕学习成果重排讲解，补足直觉、例题、迁移活动和反馈，作为新内容默认档；
+- `teaching-first`：可按学习任务重建叙事，合并或拆分教材讲解，并把教材段落移动到最有助于理解的
+  模块中，但仍须完整覆盖证据范围并遵守相同事实边界。
+
+正文采用“通用学习骨架 + 知识类型模板”，通常按复杂度使用 4–7 个 modules，不把某个样例的栏目
+复制到整门课程。outcomes 由阅读页顶部统一呈现，blocks 不再重复完整目标列表。`estimatedMinutes`
+按正文阅读、公式与表格理解、互动活动和练习作答的总负担估算。
+
+`primaryPattern` 记录真正采用的类型化教学模式：概念解释围绕定义、边界和正反例；定量机理围绕
+变量、单位、假设、推导、算例和参数实验；操作流程围绕前置条件、步骤、分支、错误恢复和检查表；
+比较决策围绕统一维度、取舍规则和适用情境；故障诊断围绕症状、假设、证据、定位和修复；案例分析
+围绕情境、决策、证据、结果、反思和迁移。不能只修改 `primaryPattern` 名称而复用同一套固定正文。
 
 ```json
 {
@@ -237,9 +258,36 @@ aliases/intuition/misconceptions/history/yearIntroduced/prosCons/qa/visualType/v
   "origin": "textbook",
   "content": {
     "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-example-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材定义与边界，围绕迁移目标补充直觉、例题和检查题。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {"id": "explain-linked-list", "text": "解释链表的节点与链接关系。"},
+        {"id": "apply-linked-list", "text": "判断新情境是否适合使用链表。"}
+      ],
+      "misconceptions": ["把节点在内存中连续排列当作链表的必要条件。"],
+      "modules": [
+        {
+          "id": "concept-and-transfer",
+          "title": "定义、直觉与迁移",
+          "role": "worked-example",
+          "outcomeRefs": ["explain-linked-list", "apply-linked-list"],
+          "order": 0
+        }
+      ],
+      "completion": {
+        "outcomeRefs": ["explain-linked-list", "apply-linked-list"],
+        "method": "完成迁移判断并说明依据。",
+        "successCriteria": ["结论正确", "能引用定义中的判断条件"]
+      }
+    },
     "blocks": [
       {
         "id": "textbook-definition",
+        "moduleId": "concept-and-transfer",
+        "depth": "core",
         "kind": "definition",
         "title": "教材定义",
         "markdown": "链表由一组通过链接关系组织的节点构成。",
@@ -262,12 +310,31 @@ aliases/intuition/misconceptions/history/yearIntroduced/prosCons/qa/visualType/v
       },
       {
         "id": "model-intuition",
+        "moduleId": "concept-and-transfer",
+        "depth": "support",
         "kind": "example",
         "title": "补充直觉",
         "markdown": "可以把节点想成通过挂钩连接的车厢。",
         "provenance": {
           "origin": "model",
           "basedOnBlockIds": ["textbook-definition"]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "linked-list-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-intuition",
+        "moduleId": "concept-and-transfer",
+        "depth": "core",
+        "outcomeRefs": ["apply-linked-list"],
+        "learningPurpose": "检查学习者能否把教材定义迁移到新情境。",
+        "grounding": {"basedOnBlockIds": ["textbook-definition"]},
+        "config": {"attempts": 2},
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断该情境是否适合链表，并写出教材定义中的依据。"
         }
       }
     ]
@@ -288,6 +355,18 @@ misconception | exercise | summary | note | other
 并最终追溯到至少一个教材块；可选 `sourceSpans` 仅表示额外 grounding。每个教材点和受控扩展点
 都至少有一个教材上下文块和一个模型补充块。受控扩展点的教材块只描述锚点或上下文，新增结论
 必须写在模型块中。
+
+`learningDesign` 出现时内部计划必须完整：outcome 和 module ID 在点内唯一，module 的
+`outcomeRefs` 不能悬空且合计覆盖全部 outcomes；每个 module 至少有一个 block。每个 block 的
+`moduleId` 必须命中 module，`depth` 只能是 `core|support|advanced`。`completion` 可用
+`outcomeRefs/method/successCriteria` 描述达成标准，也可用 `exerciseBlockId/summaryBlockId/nextPointId`
+连接正文与下一知识点；块引用必须命中当前点。`nextPointId` 可省略；一旦声明，必须命中本课程
+`index.points[]` 中紧随当前点的稳定 ID，末点必须省略。
+
+`learningAssets` 每项必须声明唯一 `id`、类型、`anchorBlockId`、非空 `outcomeRefs`、
+`learningPurpose`、`grounding.basedOnBlockIds` 和可用 `fallback`。grounding 只能引用 anchor 之前或
+自身、且最终可追溯到教材的 block。类型自有数据放入 `config` 对象；fallback 至少声明
+`type|mode` 之一，并提供 `blockId|markdown|caption|content` 之一。
 
 模型补充按依据就近插入。只引用一个块时，放在该块之后；引用多个块时，放在最后一个被引用块
 之后。允许同一锚点连续跟随多个补充块，但不得先排列全部教材块，再把所有模型块集中堆到末尾。

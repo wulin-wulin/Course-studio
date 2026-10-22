@@ -100,6 +100,17 @@ generated/<course-id>-course-content/
 补充块；扩展点也要有非空教材锚点 span。不得只根据标题生成内容，也不得把模型补充伪装成
 教材原文。
 
+读取证据后先设计学习成果，再编排正文：为每个点填写 `content.learningDesign` 的 outcomes、
+misconceptions、modules 和 completion，然后让 block 的 `moduleId/depth` 服务这些目标。默认采用
+`adaptationLevel: "balanced"`：教材约束事实、定义、公式、数值、适用条件、边界和完整覆盖；模型
+可重排教学顺序、压缩重复、增加类比、案例、练习、动画和桥接。不得用固定 token 百分比衡量教材
+与模型内容；用允许/禁止动作、覆盖检查、冲突检查和 provenance 审计把握重编尺度。
+
+三档控制的是教学重构动作，不是教材/模型文字占比：`faithful` 保留教材术语和主要讲解顺序，只做
+去重、澄清与必要检查；`balanced` 围绕成果重排并补足理解、迁移与练习，作为默认档；
+`teaching-first` 可按学习任务重建叙事、合并或拆分讲解，并把教材段落放到最有助于理解的位置。
+无论哪一档，都必须覆盖完整证据范围，并用 block provenance 区分教材依据和模型补充。
+
 ### 3. 生成课程元数据与规划索引
 
 普通课程先写 `src/data/course.json`、`generation/manifest.json` 和 `src/data/index.json`。绑定
@@ -193,10 +204,23 @@ generation/animation-requests/<id>.json
 
 `shortSummary` 说明“是什么或解决什么问题”；`coreIdea` 解释机制而不是复述摘要；原理每条只表达一个可验证要点；应用必须是真实任务或场景。
 
-教材 `textbook-content/2.0` 详情保留索引元数据、`origin`、`prerequisites` 和动画字段，正文只写
-`content.schema_version/content.blocks`。不得同时写旧正文栏目或顶层 `sourceSpans/modelEnriched`。
+教材 `textbook-content/2.0` 详情保留索引元数据、`origin`、`prerequisites` 和动画字段，正文写入
+`content.schema_version`、`content.learningDesign`、`content.blocks` 以及有明确学习目的时的
+`content.learningAssets`。不得同时写旧正文栏目或顶层 `sourceSpans/modelEnriched`。
 块类型、来源联合和完整字段以 `schemas/textbook-content.schema.json` 为准：
 
+- 先定义 learning outcomes 和常见误区，再选择主要教学模式、模块、完成条件和预计时长；
+- `adaptationLevel` 仅允许 `faithful|balanced|teaching-first`，默认显式写 `balanced`；
+- 内容组织采用“问题导入、核心理解、应用活动、达成检查、下一点桥接”的通用骨架，并按概念解释、
+  定量机理、操作流程、比较决策、故障诊断或案例分析选择类型模板；通常使用 4–7 个模块，按复杂度
+  增减，不得机械凑齐固定栏目；
+- 类型模板必须改变实际编排：概念解释突出定义、边界和正反例；定量机理突出变量、单位、假设、推导、
+  算例和参数实验；操作流程突出前置条件、步骤、分支、错误恢复和检查表；比较决策使用统一维度并给出
+  情境化取舍；故障诊断按症状、假设、证据、定位和修复组织；案例分析按情境、决策、证据、结果、
+  反思和迁移组织。只在 `primaryPattern` 中改名、正文仍使用同一套栏目不算完成差异化重编；
+- 顶部会自动展示 outcomes，正文不得再生成完整重复的学习目标块；`estimatedMinutes` 必须计入正文
+  阅读、公式与表格理解、互动活动和练习作答的总时间；
+- 每个 block 必须用 `moduleId` 命中一个 module，并用 `depth: core|support|advanced` 表示学习深度；
 - 块数组顺序就是阅读顺序，ID 在点内唯一；
 - 教材块至少一个，必须有非空精确 spans；
 - 教材块的 spans 按块顺序和数组顺序做首次出现去重后，必须与注入的完整
@@ -206,6 +230,10 @@ generation/animation-requests/<id>.json
 - 模型块必须就近跟随它所依据的教材内容：单一锚点的补充放在该锚点之后，综合多个块的补充放在最后一个被引用块之后；不得先堆完全部教材块再集中追加所有模型块；
 - 模型块不得引入 `pointEvidence.sourceSpans` 之外的新 span；
 - 模型块可补充解释、推导、例子、对比或练习，但标题和呈现必须让来源清楚；
+- `learningAssets` 的每项必须有 anchor、目标引用、学习目的、可追溯 grounding 和无交互 fallback；
+  类型自有参数放在 `config`，不得借此放入未经 provenance 支持的事实；
+- `completion.nextPointId` 可省略；需要下一点桥接时只能填写冻结 `index.points[]` 中紧随当前点的
+  稳定 ID，末点不得填写；
 - 点级 `sourceSpans` 和 `modelEnriched` 由校验器从 blocks 派生，不由任务重复填写。
 
 所有 point 和 animation request 都是 JSON 文件。LaTeX 的每个反斜杠在文件中必须编码为合法

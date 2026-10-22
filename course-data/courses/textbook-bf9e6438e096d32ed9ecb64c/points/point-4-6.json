@@ -1,0 +1,528 @@
+{
+  "id": "point-4-6",
+  "title": "设备身份、加密传输与密钥轮换",
+  "shortSummary": "建立设备身份、双向认证与密钥轮换机制，并评估证书生命周期、失窃风险与应急处置。",
+  "keyTerms": [
+    "设备身份",
+    "双向认证",
+    "TLS",
+    "密钥轮换",
+    "证书生命周期",
+    "安全边界"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-4-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-error-recovery",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按接入前置条件、握手、轮换、校验、排障的操作顺序重排教材小节，保留全部身份、密钥、协议与检查参数；模型块只补充分支处置、算例和练习，不改变教材结论与阈值。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "provision-device-identity",
+          "text": "按前置条件为边缘网关配置 DUID、证书与最小凭证集，并完成一次受控密钥轮换，说明每一步的判定依据。"
+        },
+        {
+          "id": "diagnose-security-failures",
+          "text": "依据质量码、会话状态与检查表，指出 IP 绑定、轮换丢数据、Nonce 溢出或证书过期等故障的证据与修复动作。"
+        }
+      ],
+      "misconceptions": [
+        "把设备身份绑定到 DHCP 分配的 IP 地址上，设备换地址后就被 ACL 拒绝。",
+        "会话密钥轮换时直接关闭旧会话，丢弃仍未确认的数据。",
+        "认为单会话数据量永远达不到 Nonce 上限，因而不监控会话加密用量。",
+        "让根 CA 证书与设备证书在没有更新窗口的情况下同时到期。"
+      ],
+      "modules": [
+        {
+          "id": "entry-prerequisites",
+          "title": "前置条件与最小凭证集",
+          "role": "prerequisite-check",
+          "outcomeRefs": [
+            "provision-device-identity"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mtls-handshake",
+          "title": "握手：双向认证与套件协商",
+          "role": "procedure",
+          "outcomeRefs": [
+            "provision-device-identity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "rotation-procedure",
+          "title": "轮换：触发条件与并行双会话",
+          "role": "procedure",
+          "outcomeRefs": [
+            "provision-device-identity",
+            "diagnose-security-failures"
+          ],
+          "order": 2
+        },
+        {
+          "id": "replay-guard",
+          "title": "重放校验与时钟容差分支",
+          "role": "guard-gate",
+          "outcomeRefs": [
+            "diagnose-security-failures"
+          ],
+          "order": 3
+        },
+        {
+          "id": "failure-recovery",
+          "title": "误区、错误恢复与检查表",
+          "role": "troubleshooting",
+          "outcomeRefs": [
+            "diagnose-security-failures",
+            "provision-device-identity"
+          ],
+          "order": 4
+        },
+        {
+          "id": "wrap-up",
+          "title": "达成检查与下一节衔接",
+          "role": "completion",
+          "outcomeRefs": [
+            "provision-device-identity",
+            "diagnose-security-failures"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "provision-device-identity",
+          "diagnose-security-failures"
+        ],
+        "method": "按操作顺序完成一次接入配置与轮换演练，并解释每个检查项所需的证据。",
+        "successCriteria": [
+          "能列出最小凭证集并说明三类密钥泄露后各自的影响半径",
+          "能说明轮换时双会话重叠期解决的具体问题",
+          "能根据一条被拒记录判断应标记 DUPLICATE 还是 CLOCK_SUSPECT",
+          "能指出证书生命周期配置中缺失的更新窗口"
+        ],
+        "exerciseBlockId": "model-failure-diagnosis",
+        "summaryBlockId": "model-wrap-up",
+        "nextPointId": "point-5-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-frame",
+        "moduleId": "entry-prerequisites",
+        "depth": "support",
+        "kind": "note",
+        "title": "本节范围",
+        "markdown": "本节属于「边缘采集与可靠传输」，主题是设备身份、加密传输与密钥轮换。教材按接入、轮换、校验与排障的顺序展开，下面沿用该顺序，把分散在各小节中的参数组织成可执行的操作流程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000149"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "设备身份、加密传输与密钥轮换"
+              ],
+              "lineStart": 2724,
+              "lineEnd": 2725,
+              "assetRefs": [],
+              "excerptSha256": "23db16e5b8b5d05406580b2bfffb8a0d0b3fee451a6fcd607d9777543ad74f88"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-identity-credentials",
+        "moduleId": "entry-prerequisites",
+        "depth": "core",
+        "kind": "definition",
+        "title": "身份标识与最小凭证集",
+        "markdown": "工业边缘节点的身份要同时回答“你是谁”和“你被允许做什么”。教材用三级标识拆开这两个问题：\n\n- **DUID（Device Unique Identifier）**：出厂烧录、不可变，案例格式如 `Z1-TEMP-01`；\n- **会话身份（Session Identity）**：认证服务器在每次 TLS 握手成功后签发，承载有效期与权限范围；\n- **权限标签（Capability Tag）**：细化到 metric 级别的发布与订阅许可。\n\n最小凭证集原则要求边缘网关只存储完成当前功能所必需的密钥材料。以 Z2 温区为例，网关仅持有自身 DUID 对应的长期设备密钥 $K_{dev}$、云平台接入服务的公钥证书 $Cert_{broker}$，以及派生会话密钥所需的根密钥 $K_{root}$。长期设备密钥用于证明设备身份，会话密钥用于保护传输机密性，二者分离可缩小密钥泄露后的影响半径。\n\n| 密钥类型 | 存储位置 | 生命周期 | 泄露影响 |\n|---|---|---|---|\n| $K_{dev}$（设备私钥） | SE/TEE 或加密文件系统 | 设备全生命周期 | 可伪造设备身份，需吊销并更换 |\n| $K_{session}$（会话密钥） | 内存 | 单次会话（默认 24h） | 仅影响当前会话数据 |\n| $K_{root}$（密钥派生根） | SE 或 HSM | 与 $K_{dev}$ 同步轮换 | 可派生全部未来会话密钥 |\n\n凭证优先存放在安全元件（SE）或可信执行环境（TEE）；没有硬件支持时，至少采用文件系统级加密与只读挂载。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000150"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "设备身份、加密传输与密钥轮换",
+                "身份标识与最小凭证集"
+              ],
+              "lineStart": 2726,
+              "lineEnd": 2737,
+              "assetRefs": [],
+              "excerptSha256": "b55e2b1041c5fc522983eb3ab529d3b737a4e659db8f1d4da13bebc4401d496a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-credential-checklist",
+        "moduleId": "entry-prerequisites",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "配置前的核对清单（模型整理）",
+        "markdown": "开始握手前逐项确认（清单只整理上表与三级标识，不引入新参数）：\n\n1. DUID 已登记在设备出厂信息中，并写入证书主题字段，而不是只出现在网络配置里；\n2. 设备证书能验证到云平台信任的同一根 CA，中间证书完整；\n3. $K_{dev}$ 存放在 SE/TEE 或加密文件系统中，$K_{root}$ 与 $K_{dev}$ 同步轮换，$K_{session}$ 只驻留内存；\n4. 权限标签已细化到 metric 级别，网关只订阅和发布本点位需要的主题。\n\n任一项不满足就先不要进入握手步骤，否则失败会混在传输层里，难以判断是凭证问题还是协商问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-identity-credentials"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mtls-suites",
+        "moduleId": "mtls-handshake",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "TLS 双向认证与密码套件协商",
+        "markdown": "边缘场景通常采用双向认证（mTLS）：网关向云平台出示设备证书，云平台向网关返回服务证书，双方各自把对端证书链验证到同一根 CA。案例配置要求优先 TLS 1.3，允许回退 TLS 1.2，但禁用 RSA 密钥交换（无前向保密）、CBC 模式（填充 Oracle 风险）以及任何使用 SHA-1 的签名算法。\n\n协商遵循“客户端提议、服务端裁决”：ClientHello 按优先级列出套件，服务端选择首个满足本地策略的套件返回。\n\n1. `TLS_AES_256_GCM_SHA384`（TLS 1.3，AES-256-GCM，SHA-384）；\n2. `TLS_CHACHA20_POLY1305_SHA256`（TLS 1.3，适合没有 AES 硬件加速的 ARM 边缘设备）；\n3. `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`（TLS 1.2，ECDHE 密钥交换，RSA 签名）。\n\n会话密钥由 ECDHE 交换生成，因此即使长期私钥泄露，历史会话仍具前向保密性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000151"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "设备身份、加密传输与密钥轮换",
+                "TLS 双向认证与密码套件协商"
+              ],
+              "lineStart": 2738,
+              "lineEnd": 2749,
+              "assetRefs": [],
+              "excerptSha256": "7ea866b15b8d554cc8f766b3dc602c9d2dbb86b146cb7ea9b87da629aa00e34f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-suite-fallback",
+        "moduleId": "mtls-handshake",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "协商异常的三条分支（模型补充）",
+        "markdown": "握手失败或协商结果异常时，按分支处理：\n\n- **双方无共同套件**：先核对 TLS 版本与禁用项是否与对端策略冲突。若对端只提供 RSA 密钥交换或 CBC 套件，应升级对端而不是放宽本地策略，否则前向保密与填充防护会同时失效。\n- **ARM 边缘设备握手偏慢**：检查是否缺少 AES 硬件加速。这类设备适合协商到 ChaCha20-Poly1305，而不是为了提速改用静态 RSA 密钥交换。\n- **证书验证失败**：与套件选择无关，回到证书链检查，确认中间证书已随设备证书下发，且双方锚定同一根 CA。\n\n判定标准是“本地策略是否被满足”，而不是“握手是否成功”：能握手但失去前向保密的连接同样不合格。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mtls-suites"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rekey-state-machine",
+        "moduleId": "rotation-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "密钥轮换的触发条件与状态机",
+        "markdown": "密钥轮换是受控的状态转换，而不是周期性仪式。案例定义四类触发条件：\n\n- **时间驱动**：以会话密钥有效期为界，默认 24 小时强制轮换；\n- **用量驱动**：监控单会话加密数据量，AES-GCM 的 Nonce 使用超过 $2^{32}-2$ 条记录时触发，避免 Nonce 重用导致认证标签可伪造；\n- **事件驱动**：响应证书吊销列表（CRL）更新或安全事件告警；\n- **手动驱动**：保留给运维人员主动介入。\n\n轮换状态机包含四个可达状态，转换由明确事件触发：\n\n```text\n状态: INIT → ESTABLISHED → REKEYING → ESTABLISHED\n        ↓         ↓            ↓\n      ERROR   (正常传输)    (并行双会话)\n```\n\n- `INIT`：完成首次 mTLS 握手后转入 `ESTABLISHED`；\n- `ESTABLISHED`：正常传输，发送窗口内数据使用当前 $K_{session}^{(n)}$；\n- `REKEYING`：触发条件满足后进入，网关与云平台并行维护新旧双会话——新数据使用 $K_{session}^{(n+1)}$，未完成确认的旧数据仍可用 $K_{session}^{(n)}$ 重传；\n- 双会话重叠期（案例配置 60 秒）结束后显式关闭旧会话，返回 `ESTABLISHED`，并清零用量计数器。\n\n伪代码要点：状态不是 `ESTABLISHED` 时收到轮换触发，直接返回 `ERROR_INVALID_STATE`；新会话握手失败则返回 `ERROR_HANDSHAKE_FAILED`，并停留在原状态继续使用旧会话。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000152"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "设备身份、加密传输与密钥轮换",
+                "密钥轮换的触发条件与状态机"
+              ],
+              "lineStart": 2750,
+              "lineEnd": 2793,
+              "assetRefs": [],
+              "excerptSha256": "c2843217f584a1d4081604067ff2f0215317ca59d1c202bf63f5fe78f182d9ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rekey-worked-example",
+        "moduleId": "rotation-procedure",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：一次轮换的完整操作顺序（模型）",
+        "markdown": "以压缩机电流 5 秒采样、单会话 24 小时为例：单会话产生 $86400 / 5 = 17280$ 条记录，远低于 $2^{32}-2$，因此正常工况下由时间驱动到期，用量驱动只是兜底。\n\n1. 触发到达，确认当前状态为 `ESTABLISHED`；否则记录非法状态错误并放弃本次轮换；\n2. 发起新会话密钥交换并校验握手结果；失败则留在旧会话继续传输，不提前关闭任何通路；\n3. 进入 `REKEYING` 并启动 60 秒重叠计时：新数据走新会话，存在未确认数据的旧会话仍可重传；\n4. 重叠期结束，确认旧会话无待确认数据后关闭它，切换当前会话并清零用量计数器。\n\n教材同时给出反例：若某故障使网关以 100 Hz 突发上报，教材指出 6 小时即可触发用量阈值。这说明仅靠 24 小时定时轮换不够，还需要监控会话的实际加密用量与会话时长。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rekey-state-machine"
+          ]
+        }
+      },
+      {
+        "id": "textbook-replay-guard",
+        "moduleId": "replay-guard",
+        "depth": "core",
+        "kind": "formula",
+        "title": "重放攻击防护与序列号验证",
+        "markdown": "时序数据的重放攻击具有隐蔽性：攻击者截获合法记录后延迟或重复投递，可能触发错误的温控决策。TLS 记录层本身提供序列号与认证标签保护，但边缘网关与云平台之间的会话可能由中间代理终结，因此应用层仍需独立验证。\n\n案例依赖两个机制：4.1 节定义的 `sequence_no` 严格单调递增，以及本节引入的 64 位发送时间戳 $T_{send}$（派生字段，不属于原始事实表）。云平台为每个 `(device_id, metric)` 二元组维护状态窗口，记录已接收的最大序列号 $S_{max}$ 与对应时间戳 $T_{max}$，接受条件为：\n\n$$\\text{accept} \\iff (S_{new} > S_{max}) \\land (T_{new} \\geq T_{max} - \\Delta_{clock}) \\land (T_{new} \\leq T_{now} + \\Delta_{future})$$\n\n其中 $\\Delta_{clock}$ 是允许的设备时钟回退容差（案例配置 5 秒），$\\Delta_{future}$ 是允许的未来时间偏移（案例配置 2 秒）。第二项防止攻击者回拨序列号配合旧时间戳绕过检查，第三项防止极端时钟超前导致缓存膨胀。\n\n验证失败时标记 `quality_code = 'DUPLICATE'` 或 `'CLOCK_SUSPECT'` 后进入异常处理流，不得覆盖已持久化的原始记录。Z3 温区的真实故障是 RTC 电池耗尽、重启后时钟回退到 2023-01-01，连续 180 条温度记录因 $T_{new} < T_{max} - \\Delta_{clock}$ 被拒绝，运维通过 `CLOCK_SUSPECT` 质量码聚合告警定位根因。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000153"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "设备身份、加密传输与密钥轮换",
+                "重放攻击防护与序列号验证"
+              ],
+              "lineStart": 2794,
+              "lineEnd": 2805,
+              "assetRefs": [],
+              "excerptSha256": "008218eb92355472e884530d08ae5316de46e1d86e01296cea7f1dac1ec4f026"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-replay-rejection-branches",
+        "moduleId": "replay-guard",
+        "depth": "support",
+        "kind": "warning",
+        "title": "被拒记录的三分支处置（模型补充）",
+        "markdown": "被拒记录不要直接丢弃，先按三元判定拆分原因，再决定修复动作：\n\n- **$S_{new} \\le S_{max}$**：原因落在序列号维度，标记 `DUPLICATE` 并进入去重审计，不覆盖原记录；\n- **$S_{new} > S_{max}$ 但 $T_{new} < T_{max} - \\Delta_{clock}$**：序列号前进而时间回退，优先怀疑设备时钟（如 RTC 电池耗尽），标记 `CLOCK_SUSPECT`，并检查同一设备的相邻点位是否成批出现同类拒绝；\n- **$T_{new} > T_{now} + \\Delta_{future}$**：时钟超前会撑大缓存，应先修正授时再放量接入。\n\n若同一设备在重启后成批出现第二类拒绝，正确处置是恢复授时并补录，而不是临时放大 $\\Delta_{clock}$——放宽容差只会给重放留下更大的时间窗口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-replay-guard"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pitfalls-checklist",
+        "moduleId": "failure-recovery",
+        "depth": "core",
+        "kind": "warning",
+        "title": "常见误区与可验证检查清单",
+        "markdown": "教材给出四个常见误区，每个都配有可验证的检查方式：\n\n1. **把设备身份绑定到网络地址。** DHCP 分配的 IP 会变化，若 ACL 基于 IP 而非 DUID，设备重连即被拒。验证：模拟 IP 变更，确认 mTLS 只依赖证书主题中的 DUID 字段。\n2. **轮换时丢弃未确认数据。** 直接关闭旧会话会让应用层重传与 TLS 重传叠加，造成序列号混乱。正确做法是保持 `REKEYING` 重叠期，由应用层确认回调显式释放旧会话。\n3. **忽略 Nonce 计数器溢出。** AES-GCM 的 96 位 Nonce 中 32 位为固定 IV、64 位为分组计数器，单会话最大安全分组数为 $2^{32}-2$；5 秒采样 24 小时仅 17280 条，但 100 Hz 突发上报时 6 小时即可触发。验证：在网关日志中检索 `nonce_exhaustion_warning`，或观察会话持续时间是否异常缩短。\n4. **证书过期导致连锁失效。** 根 CA 与设备证书同时过期且无更新窗口时，全仓设备会集体离线。案例配置要求根 CA 证书 10 年、设备证书 3 年，设备证书过期前 90 天推送新证书，旧证书保留 180 天宽限期。\n\n| 检查项 | 验证方法 | 预期结果 |\n|---|---|---|\n| mTLS 强制启用 | `openssl s_client -connect broker:8883 -cert device.crt -key device.key -CAfile ca.crt` | 握手成功，协议版本 ≥ TLS 1.2 |\n| 证书链完整性 | `openssl verify -CAfile ca.crt -untrusted intermediate.crt device.crt` | 返回 `device.crt: OK` |\n| 会话密钥有效期 | 解析云平台返回的 SessionTicket 的 `lifetime` 字段 | ≤ 86400 秒 |\n| 重放过滤生效 | 用 tcpreplay 重复投递 5 分钟前的原始报文 | 应用层返回 DUPLICATE，不重复持久化 |\n| 时钟回退检测 | 手动把边缘网关 RTC 调慢 10 秒，观察上报质量码 | 首批记录标记 CLOCK_SUSPECT |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000154"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "设备身份、加密传输与密钥轮换",
+                "常见误区与可验证检查清单"
+              ],
+              "lineStart": 2806,
+              "lineEnd": 2823,
+              "assetRefs": [],
+              "excerptSha256": "305858039930750bc3d37d741c1dc22f65f7146d309a3c7e665e638436a622f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-diagnosis",
+        "moduleId": "failure-recovery",
+        "depth": "core",
+        "kind": "table",
+        "title": "故障诊断表（模型整理）",
+        "markdown": "把上节误区转成“症状—证据—修复”的诊断表，排障时按证据列取数，而不是凭经验重启：\n\n| 症状 | 先验证的假设 | 证据 | 修复动作 |\n|---|---|---|---|\n| 设备重连后 mTLS 被拒绝 | ACL 绑定了旧 IP | 证书主题含 DUID；DHCP 租约已变 | 把授权改为基于 DUID，重连前不依赖地址 |\n| 轮换后出现序列号混乱与重复重传 | 旧会话被过早关闭 | 应用层存在未确认回调，TLS 层同时重传 | 恢复双会话重叠期，用确认回调释放旧会话 |\n| 会话时长异常缩短、日志出现 `nonce_exhaustion_warning` | 突发上报耗尽 Nonce 预算 | 实际采样率远高于配置值 | 定位突发源并限速，缩短轮换周期或提前重协商 |\n| 全仓设备同时离线 | 证书无更新窗口 | 根 CA 与设备证书到期时间接近 | 按 90 天预警与 180 天宽限期重建签发流程 |\n\n表中阈值、字段和命令均来自教材；诊断表只改变组织方式，不改变判定标准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pitfalls-checklist"
+          ]
+        }
+      },
+      {
+        "id": "model-wrap-up",
+        "moduleId": "wrap-up",
+        "depth": "support",
+        "kind": "summary",
+        "title": "流程回顾与下一节衔接",
+        "markdown": "把本点压缩成一条可复述的链路：\n\n**身份 → 凭证 → 握手 → 轮换 → 校验 → 排障**。身份用 DUID、会话身份与权限标签分层；凭证遵守最小集合并放入 SE/TEE；握手坚持 mTLS 与禁用项；轮换由四类触发驱动，靠 `REKEYING` 双会话跨越切换空窗；校验用 $S_{max}$、$T_{max}$ 与两个时间容差把重放和时钟故障分流到不同质量码。\n\n这条链路的产物是“哪些记录可以进入可信序列”。下一节转向数据模型，讨论窄表、宽表与点位模型如何承载这些记录，以及在写入与查询之间如何取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-identity-credentials",
+            "textbook-rekey-state-machine",
+            "textbook-replay-guard",
+            "textbook-pitfalls-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "point-4-6-security-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-failure-diagnosis",
+        "moduleId": "failure-recovery",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-security-failures"
+        ],
+        "learningPurpose": "检查学习者能否依据教材的判定条件与质量码，把接入失败分流到正确的故障类别。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-replay-guard",
+            "textbook-pitfalls-checklist",
+            "model-failure-diagnosis"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "scenario": "设备更换 DHCP 地址后，使用同一张设备证书的 mTLS 握手被接入服务拒绝。",
+              "prompt": "指出首先应怀疑的配置层，并给出一个验证动作。"
+            },
+            {
+              "scenario": "设备重启后连续 180 条温度记录被拒，序列号仍在递增，但时间戳早于上一条已接收记录 5 秒以上。",
+              "prompt": "应标记哪个质量码？修复动作是什么？"
+            },
+            {
+              "scenario": "某网关正常上报时会话在 6 小时内多次提前重协商，日志出现 nonce_exhaustion_warning。",
+              "prompt": "说明触发的是哪类轮换条件，并给出一个排查方向。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "离线作答：针对三个场景各写一句诊断结论与一个验证动作。参考标准——IP 变更应回到 DUID 授权而非地址放行；时间回退应标记 `CLOCK_SUSPECT` 并恢复授时后补录；Nonce 告警属于用量驱动触发，应排查突发采样率并调整轮换或限速。"
+        }
+      }
+    ]
+  },
+  "subtitle": "边缘采集与可靠传输",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000149"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "设备身份、加密传输与密钥轮换"
+      ],
+      "lineStart": 2724,
+      "lineEnd": 2725,
+      "assetRefs": [],
+      "excerptSha256": "23db16e5b8b5d05406580b2bfffb8a0d0b3fee451a6fcd607d9777543ad74f88"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000150"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "设备身份、加密传输与密钥轮换",
+        "身份标识与最小凭证集"
+      ],
+      "lineStart": 2726,
+      "lineEnd": 2737,
+      "assetRefs": [],
+      "excerptSha256": "b55e2b1041c5fc522983eb3ab529d3b737a4e659db8f1d4da13bebc4401d496a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000151"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "设备身份、加密传输与密钥轮换",
+        "TLS 双向认证与密码套件协商"
+      ],
+      "lineStart": 2738,
+      "lineEnd": 2749,
+      "assetRefs": [],
+      "excerptSha256": "7ea866b15b8d554cc8f766b3dc602c9d2dbb86b146cb7ea9b87da629aa00e34f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000152"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "设备身份、加密传输与密钥轮换",
+        "密钥轮换的触发条件与状态机"
+      ],
+      "lineStart": 2750,
+      "lineEnd": 2793,
+      "assetRefs": [],
+      "excerptSha256": "c2843217f584a1d4081604067ff2f0215317ca59d1c202bf63f5fe78f182d9ab"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000153"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "设备身份、加密传输与密钥轮换",
+        "重放攻击防护与序列号验证"
+      ],
+      "lineStart": 2794,
+      "lineEnd": 2805,
+      "assetRefs": [],
+      "excerptSha256": "008218eb92355472e884530d08ae5316de46e1d86e01296cea7f1dac1ec4f026"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000154"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "设备身份、加密传输与密钥轮换",
+        "常见误区与可验证检查清单"
+      ],
+      "lineStart": 2806,
+      "lineEnd": 2823,
+      "assetRefs": [],
+      "excerptSha256": "305858039930750bc3d37d741c1dc22f65f7146d309a3c7e665e638436a622f8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3120,
+    2488
+  ],
+  "scale": 0.97
+}

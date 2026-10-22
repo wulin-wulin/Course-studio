@@ -1,0 +1,526 @@
+{
+  "id": "point-13-6",
+  "title": "容量估算、背压与负载测试",
+  "shortSummary": "估算吞吐与状态容量，设计背压机制和负载测试，验证管道在峰值负载下的稳定性。",
+  "keyTerms": [
+    "容量估算",
+    "背压",
+    "负载测试",
+    "吞吐",
+    "状态容量",
+    "峰值稳定性"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-13-1",
+    "point-13-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的速率口径、状态估算数值、背压三级机制、负载测试准则与并行度公式，按“变量与单位—算例—参数实验—验证闭环”重排讲解，补充协议膨胀与状态膨胀的换算步骤，不改变原有结论与阈值。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "estimate-capacity",
+          "text": "依据标称速率、协议膨胀系数、突发倍率与实测单并行吞吐，计算最小并行度，并估算状态容量与状态后端选择。"
+        },
+        {
+          "id": "validate-peak-stability",
+          "text": "结合端到端 SLO 设定背压阈值，设计阶梯负载、数据特征与故障注入测试，判定峰值负载下是否稳定且无数据丢失。"
+        }
+      ],
+      "misconceptions": [
+        "把标称速率直接当作容量需求，忽略协议膨胀、门磁突发与网络恢复后的批量补传。",
+        "用厂商标称的 pass-through 峰值吞吐估算并行度，忽略窗口聚合与状态访问带来的复杂度。",
+        "把背压当成纯粹的故障，忽略它是以增加延迟换取不丢数据的保护机制，因而与丢弃策略不可兼得。"
+      ],
+      "modules": [
+        {
+          "id": "rate-budget",
+          "title": "输入速率的变量与单位",
+          "role": "variable-modeling",
+          "description": "先区分标称速率与突发速率，再叠加协议膨胀系数，把教材表格换算成可用于容量计算的每秒预算。",
+          "outcomeRefs": [
+            "estimate-capacity"
+          ],
+          "order": 0
+        },
+        {
+          "id": "operator-state-capacity",
+          "title": "算子复杂度与状态容量",
+          "role": "capacity-estimation",
+          "description": "用计算复杂度与状态访问复杂度定位瓶颈，按每点字节数与膨胀倍数估算状态量，并对照堆内存红线。",
+          "outcomeRefs": [
+            "estimate-capacity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "backpressure-control",
+          "title": "背压机制与 SLO 阈值",
+          "role": "control-design",
+          "description": "解释背压的不丢数据语义与三级实现，再由端到端 SLO 反推阈值和根因处置顺序。",
+          "outcomeRefs": [
+            "validate-peak-stability"
+          ],
+          "order": 2
+        },
+        {
+          "id": "load-test-verification",
+          "title": "负载测试与故障注入",
+          "role": "verification",
+          "description": "把速率梯度、数据特征与故障模式组织为测试矩阵，并为每行绑定量化通过条件与观测证据。",
+          "outcomeRefs": [
+            "validate-peak-stability"
+          ],
+          "order": 3
+        },
+        {
+          "id": "capacity-derivation",
+          "title": "并行度推导与参数实验",
+          "role": "quantitative-synthesis",
+          "description": "由容量公式推导并行度下界，改变突发倍率与实测吞吐做敏感性实验，并收敛为容量与验证闭环。",
+          "outcomeRefs": [
+            "estimate-capacity",
+            "validate-peak-stability"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "estimate-capacity",
+          "validate-peak-stability"
+        ],
+        "method": "完成情境练习：为新设备组合计算输入预算与最小并行度，选择状态后端，并写出至少两条可执行的负载测试通过条件与背压处置依据。",
+        "successCriteria": [
+          "速率预算能区分标称、协议膨胀与突发三个系数，并说明取值依据",
+          "并行度计算使用实测单并行吞吐，且能解释结果为何仍要提高部署并行度",
+          "测试条件包含量化阈值与观测证据，而非仅声明系统可承受峰值"
+        ],
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-14-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-scope",
+        "moduleId": "rate-budget",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节范围：从速率到验证",
+        "markdown": "本节把容量问题拆成一条可计算的链条：先刻画输入速率，再定位算子与状态瓶颈，然后设定背压阈值，最后用负载测试验证并汇总为容量公式。每个环节都要给出变量、单位与可复核的判据，而不是只给一个并行度数字。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000483"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "容量估算、背压与负载测试"
+              ],
+              "lineStart": 8979,
+              "lineEnd": 8980,
+              "assetRefs": [],
+              "excerptSha256": "90e4ca600c5e40e7d269df42bff780fe30cd106cd2dd6b5b28a2caabdb3392b9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-rate-model",
+        "moduleId": "rate-budget",
+        "depth": "core",
+        "kind": "table",
+        "title": "标称速率、突发速率与协议膨胀",
+        "markdown": "输入速率不能用一个“每秒多少条”的经验值概括，必须区分**标称速率**与**突发速率**。标称速率反映稳态负载；突发速率捕捉状态切换、网络重连或批量补传时的峰值。\n\n澄湾案例的四类设备到达模式不同：温湿度为固定周期采样，门磁由状态变化驱动并叠加 60 秒心跳，压缩机电流为 5 秒高频周期流。Z1 温区标称速率为 17 条/60 s ≈ 0.283 条/s，四温区全仓为 68 条/60 s = 1.13 条/s，且不含派生字段与协议开销。\n\n工程上还要乘**协议膨胀系数**：TLS 记录层、MQTT 报文头或 HTTP 分块编码使实际网络帧通常达到原始字段的 1.5–2.0 倍。门磁突发需单独建模：1 分钟开合 3 次时事件数从 1 条升至 4 条，突发倍率为 4；网络分区恢复后的批量补传，秒级窗口内可达标称值的数十倍。容量设计因此必须针对突发速率预留 headroom。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000484"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "容量估算、背压与负载测试",
+                "吞吐基线与输入速率建模"
+              ],
+              "lineStart": 8981,
+              "lineEnd": 8997,
+              "assetRefs": [],
+              "excerptSha256": "a02e9629564d042c7d441de37fc1250429ea159438369c4d756d29b62adf4167"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rate-budget",
+        "moduleId": "rate-budget",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "把速率换算成每秒预算",
+        "markdown": "把教材表格统一换算成每秒，并叠加协议与突发系数，才能得到可用于容量计算的输入预算：\n\n| 口径 | 计算 | 结果 |\n|:---|:---|:---|\n| Z1 标称 | $17 \\div 60$ | ≈ 0.283 条/s |\n| 全仓标称 | $68 \\div 60$ | ≈ 1.13 条/s |\n| 门磁单分钟突发 | 1 条 → 4 条 | 突发倍率 4 |\n| 全仓含协议膨胀 | $1.13 \\times 1.5$ | ≈ 1.70 条/s |\n| 全仓保守峰值 | $1.13 \\times 1.5 \\times 2.0$ | ≈ 3.39 条/s |\n\n最后一行仍不是最坏情况：批量补传可能在秒级窗口内达到标称值的数十倍，因此容量设计要针对突发速率留 headroom，而不是只满足标称速率。协议膨胀系数在 1.5–2.0 之间选取时，必须写明取值依据，否则同一份容量文档无法复核。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-rate-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-operator-bottleneck",
+        "moduleId": "operator-state-capacity",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "水桶效应：最慢算子决定上限",
+        "markdown": "流式管道的吞吐上限由最慢算子决定，遵循“水桶效应”。算子复杂度需同时看**计算复杂度**与**状态访问复杂度**。\n\n- 计算复杂度：若温度异常规则是“连续 3 个采样周期 temperature > −15 °C 则告警”，每设备只需保留最近 2 个历史值，单事件为 O(1)。若升级为 120 点滑动窗口的标准差，朴素实现每事件为 O(N)；采用 Welford 在线算法可降回 O(1)，只需维护 $n$、$mean$、$M2$ 三个量。\n- 状态访问复杂度：RocksDB 后端把大状态卸载到磁盘，单次访问包含序列化、磁盘 I/O 与反序列化，延迟为毫秒级；Heap 后端把状态保留在 JVM 堆内，延迟为微秒级，但受 GC 停顿与内存容量限制。\n\n案例的 30 天窗口状态估算为：单设备温度点 $30 \\times 24 \\times 120 = 86{,}400$，单点开销约 24 B，16 台设备约 33.2 MB；叠加窗口聚合的 sum、count、M2 后，状态量膨胀 3–4 倍。当状态量超过 TaskManager 堆内存的 30%–40%，必须切换至 RocksDB 并承受访问延迟惩罚。\n\n瓶颈定位的实操方法是逐算子反压传播分析：观察 `backPressuredTimeMsPerSecond`，若某算子该值持续大于 0 而其下游为 0，则该算子即为瓶颈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "容量估算、背压与负载测试",
+                "算子复杂度与管道瓶颈定位"
+              ],
+              "lineStart": 8998,
+              "lineEnd": 9028,
+              "assetRefs": [],
+              "excerptSha256": "c2342e833ca05d49199167ed722059f58bd2a5467090217cadbf0b51be8494b7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-checklist",
+        "moduleId": "operator-state-capacity",
+        "depth": "advanced",
+        "kind": "table",
+        "title": "状态容量与瓶颈定位的联合检查",
+        "markdown": "把两个复杂度合成一张可执行的检查表，先算容量再定后端：\n\n| 检查项 | 计算或观察 | 判定 |\n|:---|:---|:---|\n| 原始状态量 | $16 \\times 86{,}400 \\times 24\\,\\text{B}$ | ≈ 33.2 MB |\n| 含聚合中间结果 | $33.2\\,\\text{MB} \\times 3\\text{–}4$ | ≈ 100–133 MB |\n| 堆内存红线 | 状态量 $\\div$ 0.3–0.4 | 需约 250–440 MB 堆 |\n| 单事件计算 | 120 点窗口朴素 O(N) 与 Welford O(1) 对比 | 优先 Welford |\n| 反压归属 | 上游 `backPressuredTimeMsPerSecond` > 0、下游 = 0 | 上游算子为瓶颈 |\n\n用法是先判断状态是否已逼近堆内存红线；一旦超过 30%–40%，即使当前吞吐达标，也应规划 RocksDB 与增量检查点，而不是等到 OOM 再迁移。反压指标则用来确认瓶颈位置，避免把扩容资源投到并非瓶颈的下游。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-operator-bottleneck"
+          ]
+        }
+      },
+      {
+        "id": "tb-backpressure",
+        "moduleId": "backpressure-control",
+        "depth": "core",
+        "kind": "definition",
+        "title": "背压的语义与三级实现",
+        "markdown": "背压是流处理系统的自我保护机制：当下游处理速率低于上游发送速率时，通过阻塞或降低上游发送速率，避免无界缓冲区导致内存耗尽或 OOM。背压保证**不丢数据但可能增加延迟**；丢弃策略保证**低延迟但损失数据**，二者不可兼得。\n\n教材把实现路径分为三级：\n\n| 层级 | 机制 | 触发条件 | 副作用 |\n|:---|:---|:---|:---|\n| 算子内 | 输出队列满阻塞 | 单算子瞬时过载 | 仅影响本算子上下游 |\n| TaskManager 间 | credit-based 流控 | 跨节点网络缓冲区耗尽 | 反压传播至整个作业链 |\n| 作业级 | 动态缩放或作业重启 | 持续过载且无法自动恢复 | 短暂中断或状态恢复开销 |\n\n案例默认采用 credit-based 反压，1.14+ 可用 `network.memory.buffer-debloat.enabled` 按实际吞吐动态调整缓冲区，减少静态配置造成的吞吐损失或内存浪费。\n\n反压阈值需结合 SLO：案例要求 event_time 到告警触达的端到端延迟不超过 30 秒。若背压使延迟持续逼近或超过该阈值，背压本身就成为故障模式，根因分**资源不足型**与**数据倾斜型**。倾斜系数用最大与最小 subtask 的 `numRecordsInPerSecond` 之比衡量，应低于 1.5；超过 3.0 时需重新分区，例如把 `device_id` 哈希改为带随机盐值的复合 key。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000486"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "容量估算、背压与负载测试",
+                "背压机制与反压阈值设定"
+              ],
+              "lineStart": 9029,
+              "lineEnd": 9049,
+              "assetRefs": [],
+              "excerptSha256": "ae067b897dce5863e7fdf2d3b117e518d8fcec24e1725c12883e34b72190d55b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-backpressure-runbook",
+        "moduleId": "backpressure-control",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "从 SLO 反推背压处置顺序",
+        "markdown": "反压阈值不是一个固定百分比，而是由 SLO 反推的处置顺序：\n\n1. **确认延迟口径**：使用 event_time 到告警触达的端到端延迟，而不是 ingest_time 到处理完成。案例阈值为 30 秒。\n2. **判断背压是否已成故障**：延迟持续逼近或超过 30 秒时，不能继续把背压当作“正常保护”。\n3. **先分辨根因**：CPU、内存或 I/O 打满属于资源不足型；个别 key 事件量远超均值属于数据倾斜型。\n4. **按根因处置**：资源不足型扩容或优化算子；数据倾斜型先看 `numRecordsInPerSecond` 分布，倾斜系数超过 3.0 时改用带随机盐值的复合 key。\n5. **复测**：重跑同一速率梯度，确认延迟回落且没有把背压转移到下游。\n\n顺序不能颠倒：先扩容再查倾斜，往往只是把瓶颈推到另一个 subtask，延迟并不会真正改善。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-backpressure"
+          ]
+        }
+      },
+      {
+        "id": "tb-load-test",
+        "moduleId": "load-test-verification",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "三维负载测试与故障注入",
+        "markdown": "负载测试的目标是验证管道在标称负载、突发负载及故障场景下的行为符合预期，而非仅证明“能跑通”。测试覆盖三个维度：**速率梯度**、**数据特征**与**故障模式**。\n\n- 速率梯度：从 50% 标称速率开始，每阶段持续 5 分钟，按 25% 步长递增至 200%，最后保持 10 分钟观察稳态。每阶段记录端到端延迟、CPU 利用率、GC 频率、状态后端 I/O 速率、检查点时长与背压占比。\n- 数据特征：门磁 1 分钟开合 10 次验证 sequence_no 连续性；注入 5% CLOCK_SUSPECT 与 2% OUT_OF_RANGE 验证质量码处理；延迟投递 1% 事件验证 LATE 标注与窗口撤回。\n- 故障模式：kill -9 TaskManager、iptables 阻断网络、删除 RocksDB 部分 SST 文件、暂停 Sink 下游，分别验证检查点恢复、fencing、历史检查点回退与重试/死信队列。\n\n案例的通过准则为：标称负载下端到端延迟 P99 < 10 s；150% 突发负载下 P99 < 30 s 且无数据丢失；TaskManager 故障恢复后 30 秒内处理速率恢复至故障前 90% 以上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000487"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "容量估算、背压与负载测试",
+                "负载测试设计与故障注入"
+              ],
+              "lineStart": 9050,
+              "lineEnd": 9072,
+              "assetRefs": [],
+              "excerptSha256": "ea53d9c69bf5a1020dc32a2949f0b6ccadbc14be6b1b20cee0c5575761694cd9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-test-matrix",
+        "moduleId": "load-test-verification",
+        "depth": "advanced",
+        "kind": "table",
+        "title": "把通过准则写成测试矩阵",
+        "markdown": "把教材场景整理成可执行矩阵，每行都必须有量化通过条件和观测证据：\n\n| 场景 | 负载或注入 | 观测指标 | 通过条件 |\n|:---|:---|:---|:---|\n| 标称稳态 | 100% 标称速率 | 端到端延迟 P99 | < 10 s |\n| 突发峰值 | 150% 标称速率 | 延迟 P99、丢失计数 | < 30 s 且无丢失 |\n| 门磁高峰 | 单温区 1 分钟开合 10 次 | sequence_no 连续性 | 无断号、无重复 |\n| 质量码混合 | 5% CLOCK_SUSPECT + 2% OUT_OF_RANGE | 下游质量码分支 | 不盲目参与数值计算 |\n| TaskManager 宕机 | kill -9 随机进程 | 恢复时间、处理速率 | 30 秒内回到 90% |\n| Sink 不可用 | 暂停数据库服务 | 背压层级、重试与死信 | 有超时释放，不无限重试 |\n\n矩阵中的空白格不是可选项，而是尚未验证的风险项；容量文档应把每一行对应的证据位置写清楚，便于下一次复核。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-load-test"
+          ]
+        }
+      },
+      {
+        "id": "tb-capacity-formula",
+        "moduleId": "capacity-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "并行度公式与成本权衡",
+        "markdown": "把上述分析整合为可复用的容量公式。设标称输入速率为 $R_{nom}$（条/s），目标并行度为 $P$，单并行子任务目标吞吐为 $C_{target}$（条/s），则：\n\n$$P \\geq \\left\\lceil \\frac{R_{nom} \\times \\alpha_{protocol} \\times \\alpha_{burst}}{C_{target}} \\right\\rceil$$\n\n其中 $\\alpha_{protocol}$ 为协议膨胀系数（案例取 1.5），$\\alpha_{burst}$ 为突发倍率（门磁场景取 4.0，保守综合取 2.0）。$C_{target}$ 必须通过负载测试确定，不能直接采用厂商标称峰值——厂商数据通常基于无状态、无窗口的 pass-through 作业，与真实算子复杂度差异显著。\n\n代入案例数值：$R_{nom} = 1.13$、$\\alpha_{protocol} = 1.5$、$\\alpha_{burst} = 2.0$、$C_{target} = 500$，得 $P \\geq \\lceil 0.00678 \\rceil = 1$。该结果只说明单并行度可满足吞吐；生产环境还要考虑高可用与滚动升级，实际取 $P = 2$ 或 $P = 4$，使单 TaskManager 故障时不触发全作业重启。\n\n成本权衡存在于**计算资源**、**状态存储**与**恢复时间**之间：增大检查点间隔可降低 I/O 开销与对正常处理的干扰，但延长故障恢复的重放窗口；增量检查点减少单次上传数据量，却增加恢复时的状态拼接复杂度。案例采用 10 分钟全量检查点加 1 分钟增量检查点，4 温区规模下状态上传耗时 < 15 s、恢复重放窗口 < 2 分钟。容量文档需随业务增长定期复核，设备数量或采样频率变更时重新执行全量负载测试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000488"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "容量估算、背压与负载测试",
+                "容量规划公式与成本权衡"
+              ],
+              "lineStart": 9073,
+              "lineEnd": 9090,
+              "assetRefs": [],
+              "excerptSha256": "4c93748264d01f44b53c01921baf011ca36cbcacbbb0befd2c9d3cdd72c03283"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-capacity-sensitivity",
+        "moduleId": "capacity-derivation",
+        "depth": "advanced",
+        "kind": "worked-example",
+        "title": "并行度公式的参数实验",
+        "markdown": "公式的价值在于做参数实验，而不是只算出一个数字。固定 $R_{nom} = 1.13$、$\\alpha_{protocol} = 1.5$，改变 $\\alpha_{burst}$ 与实测 $C_{target}$：\n\n| $\\alpha_{burst}$ | $C_{target}$（条/s） | $P$ 下界 | 工程解读 |\n|:---|:---|:---|:---|\n| 2.0 | 500 | 1 | 案例取值，吞吐充足，靠 $P = 2/4$ 保高可用 |\n| 4.0（门磁） | 500 | 1 | 单点突发仍被 500 条/s 吸收 |\n| 2.0 | 0.5 | 7 | 含重窗口聚合与慢状态访问时并行度急升 |\n| 20（批量补传） | 0.5 | 68 | 秒级补传风暴下，单纯加并行度成本极高 |\n\n最后一行说明为什么教材强调针对突发速率留 headroom：当突发来自补传风暴时，高估 $C_{target}$ 或忽略 $\\alpha_{burst}$ 会让并行度严重不足；此时更经济的做法往往是入口限流、分批回放与背压配合，而不是无限扩容。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-capacity-formula"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "capacity-derivation",
+        "depth": "core",
+        "kind": "summary",
+        "title": "收敛为容量与验证闭环",
+        "markdown": "本知识点的链条可以压缩为一个闭环：\n\n1. **量化输入**：把标称速率换算为每秒，叠加协议膨胀与突发倍率。\n2. **量化容量**：用实测 $C_{target}$ 推导并行度下界，用状态量与堆内存红线选择状态后端。\n3. **设定控制**：由 SLO 反推背压阈值，区分资源不足与数据倾斜。\n4. **验证闭环**：用速率梯度、数据特征与故障注入证明峰值稳定，并把证据写回容量文档。\n\n容量结论不是一次性配置：设备数量、采样频率或检查点策略变化后都要重跑负载测试。下一知识点转向指标、日志与追踪的联合诊断，正是为这套闭环提供持续观测与根因定位手段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-capacity-formula",
+            "model-capacity-sensitivity"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "capacity-check",
+        "type": "formative-check",
+        "title": "为扩容场景计算并行度并设计验证",
+        "anchorBlockId": "model-summary-bridge",
+        "moduleId": "capacity-derivation",
+        "depth": "core",
+        "outcomeRefs": [
+          "estimate-capacity",
+          "validate-peak-stability"
+        ],
+        "learningPurpose": "检查学习者能否把速率预算、状态估算与背压阈值迁移到新的设备组合，并写出可执行的负载测试判据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-rate-model",
+            "tb-operator-bottleneck",
+            "tb-backpressure",
+            "tb-load-test",
+            "tb-capacity-formula"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "示范仓新增 8 台同型号温湿度设备，采样周期仍为 30 秒，使全仓标称速率从 1.13 条/s 升至约 1.40 条/s；同时窗口聚合由 7 天延长到 30 天，实测单并行吞吐降至 120 条/s。",
+          "questions": [
+            {
+              "id": "q1",
+              "prompt": "取协议膨胀 1.5、保守突发倍率 2.0，写出最小并行度计算式与结果，并说明是否直接按该结果部署。",
+              "expected": "P ≥ ceil(1.40 × 1.5 × 2.0 ÷ 120) = ceil(0.035) = 1；吞吐足够，但生产需按高可用取 P = 2 或 4。"
+            },
+            {
+              "id": "q2",
+              "prompt": "同一批设备把窗口从 7 天延长到 30 天时，状态量约变为原来的多少倍？叠加聚合中间结果后应如何选择状态后端？",
+              "expected": "30 ÷ 7 ≈ 4.3 倍；再叠加聚合中间结果会继续膨胀 3–4 倍，需对照 TaskManager 堆内存 30%–40% 红线，超限则切换 RocksDB 并接受毫秒级访问延迟。"
+            },
+            {
+              "id": "q3",
+              "prompt": "写出两条负载测试通过条件，并说明背压延迟超过 30 秒时先查什么。",
+              "expected": "例如标称 P99 < 10 s、150% 突发 P99 < 30 s 且无丢失；背压超阈值时先用 numRecordsInPerSecond 分布区分资源不足与数据倾斜，倾斜系数超过 3.0 则加盐复合 key 重新分区。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "新增 8 台温湿度设备后全仓标称速率约 1.40 条/s，30 天窗口使实测单并行吞吐降至 120 条/s。请完成：1）用 1.5 协议膨胀与 2.0 突发倍率计算最小并行度，并说明部署取值；2）估算状态量变化并选择状态后端；3）写出两条负载测试通过条件与背压超 30 秒时的排查顺序。"
+        }
+      }
+    ]
+  },
+  "subtitle": "流式计算与实时管道",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000483"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "容量估算、背压与负载测试"
+      ],
+      "lineStart": 8979,
+      "lineEnd": 8980,
+      "assetRefs": [],
+      "excerptSha256": "90e4ca600c5e40e7d269df42bff780fe30cd106cd2dd6b5b28a2caabdb3392b9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000484"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "容量估算、背压与负载测试",
+        "吞吐基线与输入速率建模"
+      ],
+      "lineStart": 8981,
+      "lineEnd": 8997,
+      "assetRefs": [],
+      "excerptSha256": "a02e9629564d042c7d441de37fc1250429ea159438369c4d756d29b62adf4167"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000485"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "容量估算、背压与负载测试",
+        "算子复杂度与管道瓶颈定位"
+      ],
+      "lineStart": 8998,
+      "lineEnd": 9028,
+      "assetRefs": [],
+      "excerptSha256": "c2342e833ca05d49199167ed722059f58bd2a5467090217cadbf0b51be8494b7"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000486"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "容量估算、背压与负载测试",
+        "背压机制与反压阈值设定"
+      ],
+      "lineStart": 9029,
+      "lineEnd": 9049,
+      "assetRefs": [],
+      "excerptSha256": "ae067b897dce5863e7fdf2d3b117e518d8fcec24e1725c12883e34b72190d55b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000487"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "容量估算、背压与负载测试",
+        "负载测试设计与故障注入"
+      ],
+      "lineStart": 9050,
+      "lineEnd": 9072,
+      "assetRefs": [],
+      "excerptSha256": "ea53d9c69bf5a1020dc32a2949f0b6ccadbc14be6b1b20cee0c5575761694cd9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000488"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "容量估算、背压与负载测试",
+        "容量规划公式与成本权衡"
+      ],
+      "lineStart": 9073,
+      "lineEnd": 9090,
+      "assetRefs": [],
+      "excerptSha256": "4c93748264d01f44b53c01921baf011ca36cbcacbbb0befd2c9d3cdd72c03283"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3049,
+    219
+  ],
+  "scale": 0.94
+}

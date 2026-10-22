@@ -47,9 +47,26 @@ function canonicalPoint(id = "finite-state") {
     origin: "textbook",
     content: {
       schema_version: "textbook-content/2.0",
+      learningDesign: {
+        primaryPattern: "concept-example-check",
+        adaptationLevel: "balanced",
+        editorialPolicy: "保持教材事实与边界，围绕迁移目标补充例题。",
+        estimatedMinutes: 10,
+        outcomes: [{ id: "explain-state", text: "解释有限状态。" }],
+        misconceptions: [],
+        modules: [{
+          id: "concept-and-check",
+          title: "概念与检查",
+          outcomeRefs: ["explain-state"],
+          order: 0,
+        }],
+        completion: { exerciseBlockId: "model-example" },
+      },
       blocks: [
         {
           id: "textbook-definition",
+          moduleId: "concept-and-check",
+          depth: "core",
           kind: "definition",
           title: "教材定义",
           markdown: "教材将状态定义为足以决定后续行为的系统信息集合。",
@@ -61,6 +78,8 @@ function canonicalPoint(id = "finite-state") {
         },
         {
           id: "model-example",
+          moduleId: "concept-and-check",
+          depth: "support",
           kind: "example",
           title: "补充示例",
           markdown: "把交通灯颜色视为三个离散状态，可以直接列出所有合法转移。",
@@ -80,6 +99,15 @@ function canonicalPoint(id = "finite-state") {
           },
         },
       ],
+      learningAssets: [{
+        id: "state-check",
+        type: "formative-check",
+        anchorBlockId: "model-example",
+        outcomeRefs: ["explain-state"],
+        learningPurpose: "检查学习者能否识别有限状态。",
+        grounding: { basedOnBlockIds: ["textbook-definition"] },
+        fallback: { type: "markdown", markdown: "请列出所有有限状态。" },
+      }],
     },
   };
 }
@@ -152,6 +180,7 @@ test("clustered-graph/3.0 发布时合并 canonical 正文与薄图关系且正�
   assert.equal(result.details.length, 1);
   const detail = result.details[0];
   assert.deepEqual(detail.content, originalContent);
+  assert.notEqual(detail.content, canonical.content);
   assert.deepEqual(canonical.content, originalContent);
   assert.deepEqual(thinGraph, graphBefore);
   assert.deepEqual(detail.sourceSpans, [sourceSpan()]);

@@ -4,6 +4,13 @@ import {
   type TextbookContentBlock,
   type TextbookContentBlockKind,
   type TextbookContentBlockProvenance,
+  type TextbookLearningAsset,
+  type TextbookLearningAssetFallback,
+  type TextbookLearningCompletion,
+  type TextbookLearningDepth,
+  type TextbookLearningDesign,
+  type TextbookLearningModule,
+  type TextbookLearningOutcome,
   type TextbookPointContentV2,
 } from "./types";
 
@@ -28,9 +35,14 @@ const BLOCK_KINDS = new Set<TextbookContentBlockKind>([
   "other",
 ]);
 
+const LEARNING_DEPTHS = new Set<TextbookLearningDepth>(["core", "support", "advanced"]);
+const ADAPTATION_LEVELS = new Set(["faithful", "balanced", "teaching-first"] as const);
+
 type TextbookContentV2Envelope = {
   schema_version: typeof TEXTBOOK_CONTENT_V2_SCHEMA;
   blocks: unknown[];
+  learningDesign?: unknown;
+  learningAssets?: unknown;
 };
 
 /**
@@ -47,6 +59,8 @@ export function isTextbookContentV2(value: unknown): value is TextbookContentV2E
 export function normalizeTextbookContentV2(value: unknown): TextbookPointContentV2 | null {
   if (!isTextbookContentV2(value)) return null;
   const blockIds = new Set<string>();
+  const learningDesign = normalizeTextbookLearningDesign(value.learningDesign);
+  const learningAssets = normalizeTextbookLearningAssets(value.learningAssets);
   return {
     schema_version: TEXTBOOK_CONTENT_V2_SCHEMA,
     blocks: value.blocks.flatMap((block) => {
@@ -55,7 +69,56 @@ export function normalizeTextbookContentV2(value: unknown): TextbookPointContent
       blockIds.add(normalized.id);
       return [normalized];
     }),
+    ...(learningDesign ? { learningDesign } : {}),
+    ...(learningAssets.length > 0 ? { learningAssets } : {}),
   };
+}
+
+/**
+ * Reads optional teaching metadata without making it part of the v2 validity
+ * boundary. Malformed future metadata is ignored while the grounded blocks
+ * remain readable.
+ */
+export function normalizeTextbookLearningDesign(value: unknown): TextbookLearningDesign | null {
+  if (!isRecord(value)) return null;
+  const primaryPattern = readOptionalString(value.primaryPattern);
+  const adaptationLevel = typeof value.adaptationLevel === "string"
+    && ADAPTATION_LEVELS.has(value.adaptationLevel as "faithful" | "balanced" | "teaching-first")
+    ? value.adaptationLevel as "faithful" | "balanced" | "teaching-first"
+    : undefined;
+  const editorialPolicy = readOptionalString(value.editorialPolicy);
+  const estimatedMinutes = typeof value.estimatedMinutes === "number"
+    && Number.isFinite(value.estimatedMinutes)
+    && value.estimatedMinutes > 0
+    ? Math.round(value.estimatedMinutes)
+    : undefined;
+  const outcomes = normalizeLearningOutcomes(value.outcomes);
+  const misconceptions = normalizeOptionalStringArray(value.misconceptions);
+  const modules = normalizeLearningModules(value.modules);
+  const completion = normalizeLearningCompletion(value.completion);
+  const design: TextbookLearningDesign = {
+    ...(primaryPattern ? { primaryPattern } : {}),
+    ...(adaptationLevel ? { adaptationLevel } : {}),
+    ...(editorialPolicy ? { editorialPolicy } : {}),
+    ...(estimatedMinutes ? { estimatedMinutes } : {}),
+    ...(outcomes.length > 0 ? { outcomes } : {}),
+    ...(misconceptions.length > 0 ? { misconceptions } : {}),
+    ...(modules.length > 0 ? { modules } : {}),
+    ...(completion ? { completion } : {}),
+  };
+  if (Object.keys(design).length === 0) return null;
+  return design.adaptationLevel ? design : { ...design, adaptationLevel: "balanced" };
+}
+
+export function normalizeTextbookLearningAssets(value: unknown): TextbookLearningAsset[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<string>();
+  return value.flatMap((candidate) => {
+    const asset = normalizeLearningAsset(candidate);
+    if (!asset || ids.has(asset.id)) return [];
+    ids.add(asset.id);
+    return [asset];
+  });
 }
 
 export function textbookContentBlockKindLabel(kind: TextbookContentBlockKind): string {
@@ -80,6 +143,20 @@ export function textbookContentBlockKindLabel(kind: TextbookContentBlockKind): s
     other: "扩展内容",
   };
   return labels[kind];
+}
+
+/** Splits an exercise's final reference path so learners can attempt it first. */
+export function splitTextbookExerciseReference(markdown: string): { prompt: string; reference?: string } {
+  const marker = /(?:^|\n)(?:\*\*)?参考路径[：:](?:\*\*)?[ \t]*/gu;
+  let lastMatch: RegExpExecArray | null = null;
+  for (let match = marker.exec(markdown); match; match = marker.exec(markdown)) lastMatch = match;
+  if (!lastMatch || lastMatch.index === undefined) return { prompt: markdown };
+  const reference = markdown.slice(lastMatch.index + lastMatch[0].length).trim();
+  if (!reference) return { prompt: markdown };
+  return {
+    prompt: markdown.slice(0, lastMatch.index).trim(),
+    reference,
+  };
 }
 
 /**
@@ -284,13 +361,153 @@ function normalizeBlock(value: unknown): TextbookContentBlock | null {
   if (value.title !== undefined && !isNonEmptyString(value.title)) return null;
   const provenance = normalizeProvenance(value.provenance);
   if (!provenance) return null;
+  const moduleId = readOptionalString(value.moduleId);
+  const depth = typeof value.depth === "string" && LEARNING_DEPTHS.has(value.depth as TextbookLearningDepth)
+    ? value.depth as TextbookLearningDepth
+    : undefined;
   return {
     id: value.id.trim(),
     kind: value.kind as TextbookContentBlockKind,
     ...(typeof value.title === "string" ? { title: value.title.trim() } : {}),
     markdown: value.markdown.trim(),
     provenance,
+    ...(moduleId ? { moduleId } : {}),
+    ...(depth ? { depth } : {}),
   };
+}
+
+function normalizeLearningOutcomes(value: unknown): TextbookLearningOutcome[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (isNonEmptyString(candidate)) return [{ text: candidate.trim() }];
+    if (!isRecord(candidate) || !isNonEmptyString(candidate.text)) return [];
+    const id = readOptionalString(candidate.id);
+    return [{ ...(id ? { id } : {}), text: candidate.text.trim() }];
+  });
+}
+
+function normalizeLearningModules(value: unknown): TextbookLearningModule[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((candidate) => {
+      const module = normalizeLearningModule(candidate);
+      return module ? [module] : [];
+    });
+  }
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([id, candidate]) => {
+    const module = normalizeLearningModule(candidate, id);
+    return module ? [module] : [];
+  });
+}
+
+function normalizeLearningModule(value: unknown, fallbackId?: string): TextbookLearningModule | null {
+  if (isNonEmptyString(value) && isNonEmptyString(fallbackId)) {
+    return { id: fallbackId.trim(), title: value.trim() };
+  }
+  if (!isRecord(value)) return null;
+  const id = readOptionalString(value.id) ?? (isNonEmptyString(fallbackId) ? fallbackId.trim() : undefined);
+  const title = readOptionalString(value.title);
+  if (!id || !title) return null;
+  const role = readOptionalString(value.role);
+  const description = readOptionalString(value.description);
+  const outcomeRefs = normalizeOptionalStringArray(value.outcomeRefs);
+  const order = Number.isInteger(value.order) && (value.order as number) >= 0
+    ? value.order as number
+    : undefined;
+  return {
+    id,
+    title,
+    ...(role ? { role } : {}),
+    ...(description ? { description } : {}),
+    ...(outcomeRefs.length > 0 ? { outcomeRefs } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
+}
+
+function normalizeLearningCompletion(value: unknown): TextbookLearningCompletion | null {
+  if (!isRecord(value)) return null;
+  const outcomeRefs = normalizeOptionalStringArray(value.outcomeRefs);
+  const method = readOptionalString(value.method);
+  const successCriteria = normalizeOptionalStringArray(value.successCriteria);
+  const exerciseBlockId = readOptionalString(value.exerciseBlockId);
+  const summaryBlockId = readOptionalString(value.summaryBlockId);
+  const nextPointId = readOptionalString(value.nextPointId);
+  const completion: TextbookLearningCompletion = {
+    ...(outcomeRefs.length > 0 ? { outcomeRefs } : {}),
+    ...(method ? { method } : {}),
+    ...(successCriteria.length > 0 ? { successCriteria } : {}),
+    ...(exerciseBlockId ? { exerciseBlockId } : {}),
+    ...(summaryBlockId ? { summaryBlockId } : {}),
+    ...(nextPointId ? { nextPointId } : {}),
+  };
+  return Object.keys(completion).length > 0 ? completion : null;
+}
+
+function normalizeLearningAsset(value: unknown): TextbookLearningAsset | null {
+  if (!isRecord(value)) return null;
+  const id = readOptionalString(value.id);
+  const type = readOptionalString(value.type);
+  const anchorBlockId = readOptionalString(value.anchorBlockId);
+  if (!id || !type || !anchorBlockId) return null;
+  const title = readOptionalString(value.title);
+  const animationType = readOptionalString(value.animationType)
+    ?? readOptionalString(value.runtimeType)
+    ?? readOptionalString(value.assetId);
+  const learningPurpose = readOptionalString(value.learningPurpose);
+  const caption = readOptionalString(value.caption);
+  const moduleId = readOptionalString(value.moduleId);
+  const depth = typeof value.depth === "string" && LEARNING_DEPTHS.has(value.depth as TextbookLearningDepth)
+    ? value.depth as TextbookLearningDepth
+    : undefined;
+  const outcomeRefs = normalizeOptionalStringArray(value.outcomeRefs);
+  const config = normalizeLearningAssetConfig(value.config);
+  const grounding = normalizeLearningAssetGrounding(value.grounding);
+  const fallback = normalizeLearningAssetFallback(value.fallback);
+  return {
+    id,
+    type,
+    anchorBlockId,
+    ...(title ? { title } : {}),
+    ...(animationType ? { animationType } : {}),
+    ...(learningPurpose ? { learningPurpose } : {}),
+    ...(caption ? { caption } : {}),
+    ...(moduleId ? { moduleId } : {}),
+    ...(depth ? { depth } : {}),
+    ...(outcomeRefs.length > 0 ? { outcomeRefs } : {}),
+    ...(config ? { config } : {}),
+    ...(grounding ? { grounding } : {}),
+    ...(fallback ? { fallback } : {}),
+  };
+}
+
+function normalizeLearningAssetFallback(value: unknown): TextbookLearningAssetFallback | null {
+  if (!isRecord(value) || Array.isArray(value)) return null;
+  const type = readOptionalString(value.type);
+  const mode = readOptionalString(value.mode);
+  const markdown = readOptionalString(value.markdown);
+  const caption = readOptionalString(value.caption);
+  const content = readOptionalString(value.content);
+  const blockId = readOptionalString(value.blockId);
+  if (!type && !mode && !markdown && !caption && !content && !blockId) return null;
+  return {
+    ...(type ? { type } : {}),
+    ...(mode ? { mode } : {}),
+    ...(markdown ? { markdown } : {}),
+    ...(caption ? { caption } : {}),
+    ...(content ? { content } : {}),
+    ...(blockId ? { blockId } : {}),
+  };
+}
+
+function normalizeLearningAssetConfig(value: unknown): TextbookLearningAsset["config"] | null {
+  if (!isRecord(value) || Array.isArray(value)) return null;
+  return { ...value };
+}
+
+function normalizeLearningAssetGrounding(value: unknown): TextbookLearningAsset["grounding"] | null {
+  if (!isRecord(value)) return null;
+  const basedOnBlockIds = normalizeOptionalStringArray(value.basedOnBlockIds);
+  return basedOnBlockIds.length > 0 ? { basedOnBlockIds } : null;
 }
 
 function normalizeProvenance(value: unknown): TextbookContentBlockProvenance | null {
@@ -359,6 +576,15 @@ function isForestSourceSpan(value: unknown): value is ForestSourceSpan {
 
 function isNonEmptyStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonEmptyString);
+}
+
+function normalizeOptionalStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isNonEmptyString).map((item) => item.trim());
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return isNonEmptyString(value) ? value.trim() : undefined;
 }
 
 function isNonEmptyString(value: unknown): value is string {

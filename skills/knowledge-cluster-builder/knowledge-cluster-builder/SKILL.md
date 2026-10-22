@@ -54,6 +54,8 @@ description: 接收已校验的课程内容包，为冻结的知识点集合补�
 `content`、`sourceSpans`、`modelEnriched`、摘要、术语和动画信息全部留在
 `src/data/points/<id>.json`。发布器会从 canonical point 加载正文并合并图关系；
 兼容接口需要的顶层 `sourceSpans/modelEnriched` 在发布边界从 `content.blocks` 派生。
+`content.learningDesign`、block 的 `moduleId/depth` 与 `content.learningAssets` 也只保留在 canonical
+point 中，由发布器原样带入课程详情；不得复制到薄图、概括后覆盖，或因构图阶段未使用而删除。
 
 ### 旧内容包：clustered-graph/2.0
 

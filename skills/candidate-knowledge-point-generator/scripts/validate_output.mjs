@@ -1113,6 +1113,9 @@ function validatePointsStage(
   { requireDraftAnimations = false } = {},
 ) {
   const prerequisitesById = new Map();
+  const canonicalPointPosition = new Map(
+    indexContext.orderedIds.map((id, index) => [id, index]),
+  );
   for (const artifact of artifacts.pointArtifacts) {
     const point = artifact.value;
     const label = `src/data/points/${artifact.filename}`;
@@ -1133,6 +1136,39 @@ function validatePointsStage(
     }
     checkPoint(point, label, errors);
     collectForbiddenFields(point, label, errors);
+    const completion = isTextbookContentPoint(point)
+      ? point.content?.learningDesign?.completion
+      : null;
+    if (
+      isRecord(completion)
+      && typeof completion.nextPointId === 'string'
+      && ID_PATTERN.test(completion.nextPointId)
+    ) {
+      const nextPointId = completion.nextPointId;
+      if (!artifacts.universeIds.has(nextPointId)) {
+        errors.push(
+          `${label}.content.learningDesign.completion.nextPointId `
+          + `引用了本课程不存在的知识点: ${nextPointId}`,
+        );
+      } else if (indexContext.hasPointArray) {
+        const position = canonicalPointPosition.get(artifact.fileId);
+        if (position !== undefined) {
+          const expectedNext = indexContext.orderedIds[position + 1];
+          if (expectedNext === undefined) {
+            errors.push(
+              `${label} 位于 canonical index 知识点顺序末尾，`
+              + '不应声明 content.learningDesign.completion.nextPointId',
+            );
+          } else if (nextPointId !== expectedNext) {
+            errors.push(
+              `${label}.content.learningDesign.completion.nextPointId `
+              + `必须指向 canonical index 中的直接下一点 ${expectedNext}，`
+              + `实际为 ${nextPointId}`,
+            );
+          }
+        }
+      }
+    }
     if (requireDraftAnimations) {
       if (point.animationType !== 'none') {
         errors.push(

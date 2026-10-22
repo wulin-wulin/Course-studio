@@ -1,0 +1,543 @@
+{
+  "id": "point-12-4",
+  "title": "回归、树模型与外生变量",
+  "shortSummary": "用回归与树模型引入外生变量，处理非线性、缺失值和特征时间对齐等工程问题。",
+  "keyTerms": [
+    "回归",
+    "树模型",
+    "外生变量",
+    "非线性",
+    "特征对齐",
+    "缺失值"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-8-6",
+    "point-12-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的对齐规则、公式、滞后设置与反例清单，围绕“先保证时序安全、再按物理结构与部署约束选型”重排讲解，并补充决策维度、检查表和迁移练习。",
+      "estimatedMinutes": 19,
+      "outcomes": [
+        {
+          "id": "align-exogenous-samples",
+          "text": "能把异频外生变量对齐成时序监督样本，并说明目标步长、窗口宽度与时间戳选择对样本正确性的影响。"
+        },
+        {
+          "id": "choose-time-series-model",
+          "text": "能依据滞后结构、阈值效应和部署约束，在正则化回归与树集成之间做出有理由的取舍，并指出对应的泄露与冗余检查。"
+        }
+      ],
+      "misconceptions": [
+        "把 `ingest_time` 当作模型输入时间戳，忽略了网络传输抖动与物理过程无关。",
+        "认为树模型自带时序感知，因此不需要按 `event_time` 排序，也不需要显式构造滞后和趋势特征。",
+        "认为外生变量越多预测越准，忽视了因果倒置、代理变量冗余与心跳伪信号带来的虚假精度。"
+      ],
+      "modules": [
+        {
+          "id": "m-context",
+          "title": "问题定位：为什么需要外生变量",
+          "role": "framing",
+          "description": "从单变量自回归的边界切入，说明本节要解决的是外部驱动因素建模。",
+          "outcomeRefs": [
+            "align-exogenous-samples",
+            "choose-time-series-model"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-align",
+          "title": "构造监督样本",
+          "role": "procedure",
+          "description": "把异频传感器对齐到统一时间索引，并声明派生处理与缺失占位。",
+          "outcomeRefs": [
+            "align-exogenous-samples"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-linear",
+          "title": "线性回归与正则化基线",
+          "role": "model-family",
+          "description": "建立点预测公式，显式补齐门状态滞后，并用滚动交叉验证选正则化强度。",
+          "outcomeRefs": [
+            "align-exogenous-samples",
+            "choose-time-series-model"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-tree",
+          "title": "树集成的时序适配",
+          "role": "mechanism",
+          "description": "处理树模型的两类故障：未来信息泄露与滞后结构缺失。",
+          "outcomeRefs": [
+            "choose-time-series-model"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-audit",
+          "title": "外生变量审计",
+          "role": "guardrail",
+          "description": "用反例清单与检查表筛掉不可信特征。",
+          "outcomeRefs": [
+            "align-exogenous-samples",
+            "choose-time-series-model"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-decide",
+          "title": "按维度完成选型",
+          "role": "decision",
+          "description": "统一比较维度，并给出情境化的取舍规则。",
+          "outcomeRefs": [
+            "choose-time-series-model"
+          ],
+          "order": 5
+        },
+        {
+          "id": "m-check",
+          "title": "迁移检查与下一点桥接",
+          "role": "assessment",
+          "description": "在新场景中完成选型、特征计划与泄露检查。",
+          "outcomeRefs": [
+            "align-exogenous-samples",
+            "choose-time-series-model"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "align-exogenous-samples",
+          "choose-time-series-model"
+        ],
+        "method": "完成迁移练习：为给定新仓选择模型族、列出必要特征，并指出一个时序泄露点与检查方法。",
+        "successCriteria": [
+          "能写出目标步长、窗口宽度与对齐所用的时间戳",
+          "能说明选型依据来自物理响应结构还是部署约束",
+          "能给出至少一个可执行的泄露或冗余检查"
+        ],
+        "exerciseBlockId": "model-transfer-check",
+        "summaryBlockId": "model-decision-matrix",
+        "nextPointId": "point-12-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-intro",
+        "moduleId": "m-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材本节的组织方式",
+        "markdown": "教材把本节定位在单变量自回归模型的能力边界之外：当温度等目标序列受到压缩机启停、库门开启或室外气象等外部因素驱动时，继续提高 AR 或 ARIMA 的阶数并不能消除系统性偏差，需要引入**外生变量**，改用回归或树模型建立映射。\n\n本节的组织线索是：先构造可监督学习的样本，再比较线性与树两类模型，最后用工程检查与决策框架完成选型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000434"
+              ],
+              "headingPath": [
+                "预测与趋势判断",
+                "回归、树模型与外生变量"
+              ],
+              "lineStart": 8100,
+              "lineEnd": 8101,
+              "assetRefs": [],
+              "excerptSha256": "08c3af6161cff69dc6a579c41fc24708b9cb89586239a2ca906baf3b4ec4ee8a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-exogenous-samples",
+        "moduleId": "m-align",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "外生变量与监督样本的构造",
+        "markdown": "冷链仓中的外生变量有明确的物理含义与不同的采样节拍：压缩机电流 `compressor_current`（单位 A）反映制冷负载，按 5 秒采样；门磁状态 `door_state`（0 关闭、1 开启）按状态变化上报并带 60 秒心跳；温湿度按 30 秒采样。\n\n构造监督样本时，把这些异频序列对齐到统一的 30 秒时间索引，并明确声明对齐结果是派生处理，不覆盖原始事实表。教材给出的目标与窗口设定是：目标为 Z1 区温度，预测步长 $h=4$（向前 2 分钟），输入窗口宽度 $w=12$（回溯 6 分钟）。\n\n| 对齐字段 | 来源 | 聚合方式 | 说明 |\n|---|---|---|---|\n| `temperature` | Z1-TEMP-01 | 原始 30 秒值直接取用 | 目标变量 |\n| `compressor_current_mean` | Z1-COMP-01 | 30 秒窗口均值 | 5 秒采样内聚合 6 点 |\n| `door_state_max` | Z1-DOOR-01 | 30 秒窗口最大值 | 捕捉门开启事件 |\n| `hour_of_day` | 派生 | `EXTRACT(HOUR FROM event_time)` | 周期性编码 |\n\n若某个 30 秒槽位没有门磁上报，就先插入 `value=null`、`quality_code='MISSING'` 的占位行，再在派生样本矩阵中做前向填充；原始事实表仍保持稀疏。监督样本的输入输出形式化为\n\n$$\\mathbf{X}_t = \\left[ T_{t-w+1}, \\dots, T_t,\\; C^{\\text{mean}}_{t-w+1}, \\dots, C^{\\text{mean}}_t,\\; D^{\\text{max}}_{t-w+1}, \\dots, D^{\\text{max}}_t,\\; H_t \\right]$$\n\n$$y_t = T_{t+h}$$\n\n窗口期望点数由 $\\lfloor 360\\,\\text{s}/30\\,\\text{s} \\rfloor = 12$ 得到，与 $w=12$ 一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000435"
+              ],
+              "headingPath": [
+                "预测与趋势判断",
+                "回归、树模型与外生变量",
+                "外生变量与监督样本的构造"
+              ],
+              "lineStart": 8102,
+              "lineEnd": 8122,
+              "assetRefs": [],
+              "excerptSha256": "8f7678a84e1f88a4a6e6069188d5afca224179f52c5a8d63cef663a10a3a17a0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-alignment-intuition",
+        "moduleId": "m-align",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把对齐理解成统一时间表",
+        "markdown": "可以把对齐理解成“给不同节拍的传感器找同一张时间表”：5 秒的电流、事件触发的门磁和 30 秒的温度，最终都要落到 30 秒槽位上，才能放进同一个特征向量。\n\n三个工程含义值得记住：\n1. 聚合函数要匹配物理语义——电流取均值表示负载水平，门状态取最大值表示该窗口内是否开过门。\n2. 缺失占位是派生层的显式声明，前向填充只影响训练矩阵，不回头修改原始事实表。\n3. 对齐表本身就是特征定义；$h$ 与 $w$ 一旦确定，窗口长度与目标位移就必须与之一致，否则训练样本与线上推断会错位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-intro",
+            "tb-exogenous-samples"
+          ]
+        }
+      },
+      {
+        "id": "tb-linear-baseline",
+        "moduleId": "m-linear",
+        "depth": "core",
+        "kind": "formula",
+        "title": "线性回归与正则化扩展",
+        "markdown": "多元线性回归把对齐后的特征向量映射为点预测：\n\n$$\\hat{y}_t = \\mathbf{X}_t \\boldsymbol{\\beta} + \\beta_0$$\n\n参数可用普通最小二乘（OLS）估计，也可用带 L2 惩罚的岭回归（Ridge）稳定估计。教材强调一个时序特有的问题：开门后热空气侵入、冷空气下沉，温度响应通常在 1–3 分钟后显现，而线性模型不会自动学到这段滞后，因此必须显式构造门状态的多阶滞后特征 $D^{\\text{max}}_{t-k}$（$k=0,1,2,3$），否则会低估开门事件的影响。\n\n正则化强度 $\\alpha$ 要用滚动时间序列交叉验证选择，而不是随机打乱划分；验证折以 24 小时为块单位以避免数据泄露，案例配置在 $[10^{-4}, 10^{2}]$ 上按对数均匀采样 20 个候选值。\n\n教材还给出一个常见错误：把 `ingest_time` 当成模型输入时间戳。`ingest_time` 含网络传输抖动，与物理过程无关；模型必须用 `event_time` 构造时序特征。检查方法是比较同一记录的 `event_time` 与 `ingest_time` 的差值分布，若出现与业务无关的尖峰（例如整点批量延迟），就说明用错了时间戳。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000436"
+              ],
+              "headingPath": [
+                "预测与趋势判断",
+                "回归、树模型与外生变量",
+                "线性回归与正则化扩展"
+              ],
+              "lineStart": 8123,
+              "lineEnd": 8133,
+              "assetRefs": [],
+              "excerptSha256": "286a291c03912a231ab5e8cff81f9159b7ba27054917e2a5e77567a333e998a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lag-and-leak",
+        "moduleId": "m-linear",
+        "depth": "core",
+        "kind": "warning",
+        "title": "滞后特征与泄露边界是同一条规则",
+        "markdown": "滞后特征和防泄露其实受同一条规则约束：**第 $t$ 行样本只能使用在 $t$ 时刻已经可得的输入，标签只能来自 $t+h$。**\n\n由此可以推出三条落地检查：\n- 门状态要按物理响应时间展开 $k=0,1,2,3$ 的滞后列，让模型自己给不同滞后分配权重，而不是假设“开门即立刻升温”。\n- 目标列按 $h=4$ 构造时，特征窗口必须整段对齐到同一个时间索引，不能把 $t+1$ 之后的温度混入输入。\n- 训练集的时间上界必须早于验证集的时间下界；只要使用随机打乱的 K 折，上述保证立刻失效。\n\n如果数据里同时存在 `event_time` 与 `ingest_time`，特征工程只认前者，后者最多用于诊断采集链路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-linear-baseline",
+            "model-alignment-intuition"
+          ]
+        }
+      },
+      {
+        "id": "tb-tree-adaptation",
+        "moduleId": "m-tree",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "树集成模型的时序适配",
+        "markdown": "梯度提升树（GBDT）与随机森林能捕捉特征间非单调的交互，例如“电流高且门开”与“电流高且门关”可能有完全不同的升温路径。但树模型对时间结构没有内在感知，直接套用标准实现会出现两类故障。\n\n**故障一：未来信息泄露。** 若样本按随机顺序送入训练，树的分裂可能利用 $t+1$ 时刻的门状态去预测 $t$ 时刻的温度，而这种关系在在线部署时不可复现。修正方法是严格按 `event_time` 排序，保证训练集的时间上限早于验证集的时间下限。\n\n**故障二：滞后结构缺失。** 树模型不会自动外推趋势，需要显式注入趋势特征。对输入窗口内的温度序列，可计算线性趋势斜率\n\n$$\\text{trend}_t = \\frac{\\sum_{i=1}^{w}(i-\\bar{i})(T_{t-w+i}-\\bar{T})}{\\sum_{i=1}^{w}(i-\\bar{i})^2}$$\n\n其中 $\\bar{i}=(w+1)/2$，$\\bar{T}$ 为窗口温度均值。把该斜率作为标量特征加入 $\\mathbf{X}_t$，树才能区分“正在升温”和“已经稳定”两种状态。\n\n教材给出的时序安全训练流程要点是：特征含温度与电流的 0–11 阶滞后、门状态的 0–3 阶滞后、小时正余弦编码和趋势斜率；训练集取 `event_time < train_until`，验证集取随后 24 小时；禁止使用默认打乱划分的 KFold；验证时逐点预测，不得批量填充未来值。特征重要性分析还需警惕高频采样变量的数值优势，建议按物理单位归一化后再比较分裂增益。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000437"
+              ],
+              "headingPath": [
+                "预测与趋势判断",
+                "回归、树模型与外生变量",
+                "树集成模型的时序适配"
+              ],
+              "lineStart": 8134,
+              "lineEnd": 8169,
+              "assetRefs": [],
+              "excerptSha256": "02b6178bf04346c792f0d7025a228e03b61b8aca7a32607aac0dbc4dbf4acab8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tree-worked-example",
+        "moduleId": "m-tree",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "一次可复现的 2 分钟超前预测配置",
+        "markdown": "把教材流程落到一个具体配置上，可以按四步检查：\n\n1. **切分**：以某个 `train_until` 为界，训练集取其上界之前的所有样本，验证集取随后 24 小时；切分只按 `event_time` 做，不用随机索引。\n2. **特征**：温度与电流各 12 个滞后值、门状态 4 个滞后值、小时正余弦编码，再加上窗口趋势斜率；目标列是 4 步之后的温度。\n3. **训练**：以 `max_depth=4`、`n_estimators=200` 作为起点跑通流程，先验证管道没有泄露，再谈调参。\n4. **验收**：逐点预测验证窗口，检查趋势特征是否让模型区分“升温中”与“已稳定”，并用滚动验证而非单次划分估计误差。\n\n其中最容易被跳过的是第 3 步之前的管道检查：只要划分顺序错一次，后面所有精度数字都不可信。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tree-adaptation",
+            "model-lag-and-leak"
+          ]
+        }
+      },
+      {
+        "id": "tb-engineering-traps",
+        "moduleId": "m-audit",
+        "depth": "core",
+        "kind": "warning",
+        "title": "外生变量的工程陷阱与验证",
+        "markdown": "外生变量并非越多越好。教材列出冷链场景中三类典型反例：\n\n| 反例类型 | 具体表现 | 后果 | 检查方法 |\n|---|---|---|---|\n| 因果倒置 | 用当前温度预测压缩机电流，再声称电流“预测”温度 | 虚假的高 $R^2$，部署失效 | 绘制交叉相关函数（CCF），确认峰值位于正滞后 |\n| 代理变量冗余 | 同时注入压缩机电流与由其计算的能耗代理指标 | 多重共线性，系数不稳定 | 计算特征间 Pearson 相关系数，绝对值超过 0.95 时剔除 |\n| 心跳伪信号 | 把门磁 60 秒心跳误读为频繁开关门 | 门状态特征方差虚高 | 结合 `value` 变化与 `sequence_no` 差值判断真实状态变化 |\n\n边界声明同样重要：压缩机电流只能指示负载水平，仅凭电流与温度无法计算制冷系数（COP）；COP 需要独立的电压、功率因数与制冷量测量，电流的绝对数值不能直接换算为能耗成本。\n\n样本提取用 SQL 实现时，核心是三次时间处理：`time_bucket('30 seconds', event_time)` 把原始事实聚合到 30 秒桶；`OVER w30` 定义 12 点回溯窗口；`LAG(a.temperature, 4)` 构造 2 分钟超前目标。门磁侧先按桶取 `MAX(value)`，外层 `LEFT JOIN` 后用 `COALESCE` 补 0，表示窗口内无上报时默认门关闭；这一数值填充属于派生层选择，需与“插入 MISSING 占位”的声明保持一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000438"
+              ],
+              "headingPath": [
+                "预测与趋势判断",
+                "回归、树模型与外生变量",
+                "外生变量的工程陷阱与验证"
+              ],
+              "lineStart": 8170,
+              "lineEnd": 8222,
+              "assetRefs": [],
+              "excerptSha256": "806fc406433182f8aa4e2e548f5b70f8c947e4d018fef668a48cb47ee4688d3f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trap-checklist",
+        "moduleId": "m-audit",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "上线前的外生变量检查表",
+        "markdown": "把上面的反例转成上线前的检查表，逐项打勾比事后调参更有效：\n\n1. **方向检查**：对每个外生变量画 CCF，确认目标对输入的响应峰值出现在正滞后；若峰值落在负滞后，说明它更像结果而不是驱动因素。\n2. **冗余检查**：对候选特征两两计算相关系数，绝对值超过 0.95 的组合只保留物理含义更直接的一个。\n3. **事件检查**：门磁这类状态量要先区分真实状态变化与心跳上报，再计算窗口最大值，否则开门频次会被系统性高估。\n4. **口径检查**：每个外生变量写清单位、采样周期与聚合方式；电流只当负载指标使用，不越权解释为能耗或 COP。\n\n这四项都属于“特征是否可信”的问题，与模型精度无关；特征不可信时，更高的 $R^2$ 只意味着更严重的过拟合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-engineering-traps",
+            "tb-exogenous-samples"
+          ]
+        }
+      },
+      {
+        "id": "tb-selection-framework",
+        "moduleId": "m-decide",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型选择决策框架",
+        "markdown": "回归与树模型的选择不取决于抽象精度排名，而取决于预测任务的时序特性与运维约束。教材给出两条判断线索：\n\n- **线性模型**：适用于趋势主导、滞后结构已知的场景；系数可解释，便于与物理直觉对照；推断速度快，适合边缘侧部署。\n- **树集成**：适用于存在阈值效应的场景，例如压缩机启停、门开启触发制冷强化；能自动学习特征交互，但必须警惕时序泄露；模型体积较大，通常运行在云平台。\n\n在案例配置下，若预测目标是“未来 2 分钟温度是否超过告警阈值”，树模型的分类扩展（如 XGBoost 配合逻辑损失）能给出更准确的决策边界；若目标是“生成连续温度预测供能耗优化调度”，线性模型加预测区间更便于与约束优化器对接。两种模型的滚动验证与误差指标将由后续知识点统一讨论。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000439"
+              ],
+              "headingPath": [
+                "预测与趋势判断",
+                "回归、树模型与外生变量",
+                "模型选择决策框架"
+              ],
+              "lineStart": 8223,
+              "lineEnd": 8231,
+              "assetRefs": [],
+              "excerptSha256": "95af8805600069b867eea4cfe0e81e60db4e7572c95ee779daef0afd58ecaeba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decision-matrix",
+        "moduleId": "m-decide",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "四个维度上的取舍规则",
+        "markdown": "把选型收敛到四个统一维度，可以避免“哪个模型更强”的无效争论：\n\n| 维度 | 正则化线性回归 | 梯度提升树 / 随机森林 |\n|---|---|---|\n| 主驱动结构 | 趋势与已知滞后占主导 | 阈值、分段与特征交互占主导 |\n| 滞后处理 | 需显式构造 $k=0,1,2,3$ 等滞后列 | 同样需显式滞后列与趋势斜率 |\n| 部署与解释 | 系数可对照物理直觉，适合边缘侧 | 体积大、推理重，通常放云端 |\n| 主要风险 | 漏掉非线性与滞后，欠拟合 | 随机划分导致泄露，过拟合时间噪声 |\n\n取舍规则可以写成两句话：**先看物理响应是连续渐变还是阈值触发，再看部署位置能否承担模型体积与推理成本。** 若两个条件冲突，优先保证时序安全（按 `event_time` 排序、训练早于验证），再在安全前提下比较精度。\n\n需要连续输出并接入优化器时，线性模型加区间更容易被下游消费；需要判定“是否越限”这类离散决策时，树模型的分类扩展更直接。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-selection-framework",
+            "tb-tree-adaptation",
+            "tb-linear-baseline"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "迁移练习：新仓的模型与特征计划",
+        "markdown": "**迁移练习**：某新仓只提供两类信号——压缩机启停状态（事件上报，存在明显阈值效应）和 3 分钟前已知的温度滞后；推理必须跑在边缘网关，且运维团队要求能解释每个特征的贡献。\n\n请完成三件事：\n1. 选择模型族，并说明是哪一个维度决定了你的选择。\n2. 写出至少两个必须构造的特征，并说明各自的聚合或滞后方式。\n3. 指出一个最容易发生的时序泄露点，以及对应的检查方法。\n\n自查要点：阈值效应支持树模型，但边缘部署与可解释性支持线性模型，需要说明冲突时如何取舍；特征应包含启停状态的窗口统计量与温度滞后；泄露检查应回到 `event_time` 排序与训练/验证时间边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-decision-matrix",
+            "tb-selection-framework"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "exogenous-model-check",
+        "type": "formative-check",
+        "title": "外生变量与模型选型检查",
+        "anchorBlockId": "model-transfer-check",
+        "moduleId": "m-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "align-exogenous-samples",
+          "choose-time-series-model"
+        ],
+        "learningPurpose": "检查学习者能否在新场景中同时处理特征构造与时序安全，并说明选型依据来自物理结构还是部署约束。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-decision-matrix",
+            "tb-selection-framework"
+          ]
+        },
+        "config": {
+          "question": "某仓只有压缩机启停状态与 3 分钟前温度滞后，推理需在边缘网关运行且要求特征可解释。最稳妥的起点是什么？",
+          "options": [
+            "直接用默认 KFold 打乱样本训练 GBDT，以追求最高精度",
+            "以正则化线性回归为基线，显式加入启停状态与温度滞后特征，并按 event_time 做时间切分",
+            "不构造滞后特征，把启停状态当作即时输入",
+            "只使用压缩机电流，忽略门状态与温度滞后"
+          ],
+          "correctOptionIndex": 1,
+          "explanation": "边缘部署与可解释性支持线性基线；阈值效应提示可进一步比较树模型，但无论选哪一族，都必须显式构造滞后特征并按 event_time 切分以避免泄露。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请作答：在新仓场景中选择模型族并写出两个必要特征，同时指出一个时序泄露点及检查方法。参考思路：以线性回归为基线保证可解释与边缘部署，显式构造启停状态统计量与温度滞后；泄露检查依赖 `event_time` 排序和训练/验证时间边界。"
+        }
+      }
+    ]
+  },
+  "subtitle": "预测与趋势判断",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000434"
+      ],
+      "headingPath": [
+        "预测与趋势判断",
+        "回归、树模型与外生变量"
+      ],
+      "lineStart": 8100,
+      "lineEnd": 8101,
+      "assetRefs": [],
+      "excerptSha256": "08c3af6161cff69dc6a579c41fc24708b9cb89586239a2ca906baf3b4ec4ee8a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000435"
+      ],
+      "headingPath": [
+        "预测与趋势判断",
+        "回归、树模型与外生变量",
+        "外生变量与监督样本的构造"
+      ],
+      "lineStart": 8102,
+      "lineEnd": 8122,
+      "assetRefs": [],
+      "excerptSha256": "8f7678a84e1f88a4a6e6069188d5afca224179f52c5a8d63cef663a10a3a17a0"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000436"
+      ],
+      "headingPath": [
+        "预测与趋势判断",
+        "回归、树模型与外生变量",
+        "线性回归与正则化扩展"
+      ],
+      "lineStart": 8123,
+      "lineEnd": 8133,
+      "assetRefs": [],
+      "excerptSha256": "286a291c03912a231ab5e8cff81f9159b7ba27054917e2a5e77567a333e998a7"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000437"
+      ],
+      "headingPath": [
+        "预测与趋势判断",
+        "回归、树模型与外生变量",
+        "树集成模型的时序适配"
+      ],
+      "lineStart": 8134,
+      "lineEnd": 8169,
+      "assetRefs": [],
+      "excerptSha256": "02b6178bf04346c792f0d7025a228e03b61b8aca7a32607aac0dbc4dbf4acab8"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000438"
+      ],
+      "headingPath": [
+        "预测与趋势判断",
+        "回归、树模型与外生变量",
+        "外生变量的工程陷阱与验证"
+      ],
+      "lineStart": 8170,
+      "lineEnd": 8222,
+      "assetRefs": [],
+      "excerptSha256": "806fc406433182f8aa4e2e548f5b70f8c947e4d018fef668a48cb47ee4688d3f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000439"
+      ],
+      "headingPath": [
+        "预测与趋势判断",
+        "回归、树模型与外生变量",
+        "模型选择决策框架"
+      ],
+      "lineStart": 8223,
+      "lineEnd": 8231,
+      "assetRefs": [],
+      "excerptSha256": "95af8805600069b867eea4cfe0e81e60db4e7572c95ee779daef0afd58ecaeba"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3452,
+    1292
+  ],
+  "scale": 0.93
+}

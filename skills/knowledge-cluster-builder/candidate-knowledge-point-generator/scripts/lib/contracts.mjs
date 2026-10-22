@@ -35,6 +35,12 @@ export const REPLAY_MODES = new Set([
 ]);
 export const POINT_ORIGINS = new Set(['textbook', 'llm-extension', 'user']);
 export const TEXTBOOK_CONTENT_SCHEMA = 'textbook-content/2.0';
+export const TEXTBOOK_ADAPTATION_LEVELS = new Set([
+  'faithful',
+  'balanced',
+  'teaching-first',
+]);
+export const TEXTBOOK_LEARNING_DEPTHS = new Set(['core', 'support', 'advanced']);
 export const TEXTBOOK_BLOCK_KINDS = new Set([
   'definition',
   'explanation',
@@ -612,8 +618,322 @@ function checkPointBase(point, label, errors) {
   }
 }
 
+function collectKebabRefs(value, label, errors, { min = 1 } = {}) {
+  const validStrings = checkStringArray(value, label, errors, { min, unique: true });
+  if (!validStrings) return [];
+  return value.filter((item, index) => {
+    if (!ID_PATTERN.test(item)) {
+      errors.push(`${label}[${index}] 必须是 ASCII kebab-case: ${JSON.stringify(item)}`);
+      return false;
+    }
+    return true;
+  });
+}
+
+function checkTextbookLearningDesign(content, label, errors) {
+  const design = content.learningDesign;
+  const outcomeIds = new Set();
+  const moduleIds = new Set();
+  if (!checkObjectShape(
+    design,
+    [
+      'primaryPattern',
+      'adaptationLevel',
+      'editorialPolicy',
+      'estimatedMinutes',
+      'outcomes',
+      'misconceptions',
+      'modules',
+      'completion',
+    ],
+    [
+      'primaryPattern',
+      'adaptationLevel',
+      'editorialPolicy',
+      'estimatedMinutes',
+      'outcomes',
+      'misconceptions',
+      'modules',
+      'completion',
+    ],
+    label,
+    errors,
+  )) {
+    return { outcomeIds, moduleIds };
+  }
+  checkNonEmptyString(design.primaryPattern, `${label}.primaryPattern`, errors);
+  if (!TEXTBOOK_ADAPTATION_LEVELS.has(design.adaptationLevel)) {
+    errors.push(`${label}.adaptationLevel 必须是 faithful/balanced/teaching-first`);
+  }
+  checkNonEmptyString(design.editorialPolicy, `${label}.editorialPolicy`, errors);
+  if (!Number.isInteger(design.estimatedMinutes) || design.estimatedMinutes < 1) {
+    errors.push(`${label}.estimatedMinutes 必须是正整数`);
+  }
+
+  if (!Array.isArray(design.outcomes) || design.outcomes.length < 1) {
+    errors.push(`${label}.outcomes 必须是非空数组`);
+  } else {
+    design.outcomes.forEach((outcome, index) => {
+      const outcomeLabel = `${label}.outcomes[${index}]`;
+      if (!checkExactKeys(outcome, ['id', 'text'], outcomeLabel, errors)) return;
+      checkKebabId(outcome.id, `${outcomeLabel}.id`, errors);
+      checkNonEmptyString(outcome.text, `${outcomeLabel}.text`, errors);
+      if (typeof outcome.id === 'string' && ID_PATTERN.test(outcome.id)) {
+        if (outcomeIds.has(outcome.id)) {
+          errors.push(`${outcomeLabel}.id 重复: ${outcome.id}`);
+        }
+        outcomeIds.add(outcome.id);
+      }
+    });
+  }
+  checkStringArray(
+    design.misconceptions,
+    `${label}.misconceptions`,
+    errors,
+    { unique: true },
+  );
+
+  const coveredOutcomes = new Set();
+  const moduleOrders = new Set();
+  if (!Array.isArray(design.modules) || design.modules.length < 1) {
+    errors.push(`${label}.modules 必须是非空数组`);
+  } else {
+    design.modules.forEach((module, index) => {
+      const moduleLabel = `${label}.modules[${index}]`;
+      if (!checkObjectShape(
+        module,
+        ['id', 'title', 'outcomeRefs', 'order'],
+        ['id', 'title', 'role', 'description', 'outcomeRefs', 'order'],
+        moduleLabel,
+        errors,
+      )) return;
+      checkKebabId(module.id, `${moduleLabel}.id`, errors);
+      checkNonEmptyString(module.title, `${moduleLabel}.title`, errors);
+      for (const optional of ['role', 'description']) {
+        if (optional in module) {
+          checkNonEmptyString(module[optional], `${moduleLabel}.${optional}`, errors);
+        }
+      }
+      if (typeof module.id === 'string' && ID_PATTERN.test(module.id)) {
+        if (moduleIds.has(module.id)) {
+          errors.push(`${moduleLabel}.id 重复: ${module.id}`);
+        }
+        moduleIds.add(module.id);
+      }
+      if (!Number.isInteger(module.order) || module.order < 0) {
+        errors.push(`${moduleLabel}.order 必须是非负整数`);
+      } else if (moduleOrders.has(module.order)) {
+        errors.push(`${moduleLabel}.order 重复: ${module.order}`);
+      } else {
+        moduleOrders.add(module.order);
+      }
+      for (const outcomeId of collectKebabRefs(
+        module.outcomeRefs,
+        `${moduleLabel}.outcomeRefs`,
+        errors,
+      )) {
+        if (!outcomeIds.has(outcomeId)) {
+          errors.push(`${moduleLabel}.outcomeRefs 引用了不存在的学习目标: ${outcomeId}`);
+        } else {
+          coveredOutcomes.add(outcomeId);
+        }
+      }
+    });
+  }
+  for (const outcomeId of outcomeIds) {
+    if (!coveredOutcomes.has(outcomeId)) {
+      errors.push(`${label}.modules 未覆盖学习目标: ${outcomeId}`);
+    }
+  }
+
+  const completion = design.completion;
+  if (!isRecord(completion) || Object.keys(completion).length === 0) {
+    errors.push(`${label}.completion 必须是非空对象`);
+  } else {
+    checkObjectShape(
+      completion,
+      [],
+      [
+        'outcomeRefs',
+        'method',
+        'successCriteria',
+        'exerciseBlockId',
+        'summaryBlockId',
+        'nextPointId',
+      ],
+      `${label}.completion`,
+      errors,
+    );
+    if ('outcomeRefs' in completion) {
+      const completionRefs = collectKebabRefs(
+        completion.outcomeRefs,
+        `${label}.completion.outcomeRefs`,
+        errors,
+      );
+      for (const outcomeId of completionRefs) {
+        if (!outcomeIds.has(outcomeId)) {
+          errors.push(`${label}.completion.outcomeRefs 引用了不存在的学习目标: ${outcomeId}`);
+        }
+      }
+      for (const outcomeId of outcomeIds) {
+        if (!completionRefs.includes(outcomeId)) {
+          errors.push(`${label}.completion 未覆盖学习目标: ${outcomeId}`);
+        }
+      }
+    }
+    if ('method' in completion) {
+      checkNonEmptyString(completion.method, `${label}.completion.method`, errors);
+    }
+    if ('successCriteria' in completion) {
+      checkStringArray(
+        completion.successCriteria,
+        `${label}.completion.successCriteria`,
+        errors,
+        { min: 1 },
+      );
+    }
+    for (const field of ['exerciseBlockId', 'summaryBlockId', 'nextPointId']) {
+      if (field in completion) {
+        checkKebabId(completion[field], `${label}.completion.${field}`, errors);
+      }
+    }
+  }
+
+  return { outcomeIds, moduleIds };
+}
+
+function checkTextbookLearningAssets(
+  assets,
+  label,
+  errors,
+  { outcomeIds, moduleIds, blockIds, blockIndexById, groundedById, blockById },
+) {
+  if (!Array.isArray(assets) || assets.length < 1) {
+    errors.push(`${label} 必须是非空数组`);
+    return;
+  }
+  const assetIds = new Set();
+  assets.forEach((asset, index) => {
+    const assetLabel = `${label}[${index}]`;
+    if (!checkObjectShape(
+      asset,
+      ['id', 'type', 'anchorBlockId', 'outcomeRefs', 'learningPurpose', 'grounding', 'fallback'],
+      [
+        'id',
+        'type',
+        'anchorBlockId',
+        'title',
+        'moduleId',
+        'depth',
+        'animationType',
+        'caption',
+        'outcomeRefs',
+        'learningPurpose',
+        'grounding',
+        'config',
+        'fallback',
+      ],
+      assetLabel,
+      errors,
+    )) return;
+    checkKebabId(asset.id, `${assetLabel}.id`, errors);
+    checkKebabId(asset.type, `${assetLabel}.type`, errors);
+    checkKebabId(asset.anchorBlockId, `${assetLabel}.anchorBlockId`, errors);
+    checkNonEmptyString(asset.learningPurpose, `${assetLabel}.learningPurpose`, errors);
+    if (typeof asset.id === 'string' && ID_PATTERN.test(asset.id)) {
+      if (assetIds.has(asset.id)) errors.push(`${assetLabel}.id 重复: ${asset.id}`);
+      assetIds.add(asset.id);
+    }
+    for (const field of ['title', 'animationType', 'caption']) {
+      if (field in asset) checkNonEmptyString(asset[field], `${assetLabel}.${field}`, errors);
+    }
+    if (!blockIds.has(asset.anchorBlockId)) {
+      errors.push(`${assetLabel}.anchorBlockId 引用了不存在的内容块: ${asset.anchorBlockId}`);
+    }
+    for (const outcomeId of collectKebabRefs(
+      asset.outcomeRefs,
+      `${assetLabel}.outcomeRefs`,
+      errors,
+    )) {
+      if (!outcomeIds.has(outcomeId)) {
+        errors.push(`${assetLabel}.outcomeRefs 引用了不存在的学习目标: ${outcomeId}`);
+      }
+    }
+    if ('moduleId' in asset) {
+      checkKebabId(asset.moduleId, `${assetLabel}.moduleId`, errors);
+      if (!moduleIds.has(asset.moduleId)) {
+        errors.push(`${assetLabel}.moduleId 引用了不存在的教学模块: ${asset.moduleId}`);
+      }
+      const anchor = blockById.get(asset.anchorBlockId);
+      if (anchor && anchor.moduleId !== asset.moduleId) {
+        errors.push(`${assetLabel}.moduleId 必须与 anchorBlockId 所属模块一致`);
+      }
+    }
+    if ('depth' in asset && !TEXTBOOK_LEARNING_DEPTHS.has(asset.depth)) {
+      errors.push(`${assetLabel}.depth 必须是 core/support/advanced`);
+    }
+    if ('config' in asset && !isRecord(asset.config)) {
+      errors.push(`${assetLabel}.config 必须是对象`);
+    }
+
+    if (!checkExactKeys(
+      asset.grounding,
+      ['basedOnBlockIds'],
+      `${assetLabel}.grounding`,
+      errors,
+    )) return;
+    const anchorIndex = blockIndexById.get(asset.anchorBlockId);
+    for (const blockId of collectKebabRefs(
+      asset.grounding.basedOnBlockIds,
+      `${assetLabel}.grounding.basedOnBlockIds`,
+      errors,
+    )) {
+      if (!blockIds.has(blockId)) {
+        errors.push(`${assetLabel}.grounding 引用了不存在的内容块: ${blockId}`);
+      } else if (groundedById.get(blockId) !== true) {
+        errors.push(`${assetLabel}.grounding 的内容块不能追溯到教材: ${blockId}`);
+      } else if (anchorIndex !== undefined && blockIndexById.get(blockId) > anchorIndex) {
+        errors.push(`${assetLabel}.grounding 只能引用 anchorBlockId 之前或自身的内容块: ${blockId}`);
+      }
+    }
+
+    if (!isRecord(asset.fallback) || Object.keys(asset.fallback).length === 0) {
+      errors.push(`${assetLabel}.fallback 必须是非空对象`);
+    } else {
+      checkObjectShape(
+        asset.fallback,
+        [],
+        ['type', 'mode', 'blockId', 'markdown', 'caption', 'content'],
+        `${assetLabel}.fallback`,
+        errors,
+      );
+      for (const [field, value] of Object.entries(asset.fallback)) {
+        checkNonEmptyString(value, `${assetLabel}.fallback.${field}`, errors);
+      }
+      if (!('type' in asset.fallback) && !('mode' in asset.fallback)) {
+        errors.push(`${assetLabel}.fallback 必须声明 type 或 mode`);
+      }
+      if (!["blockId", "markdown", "caption", "content"].some((field) => field in asset.fallback)) {
+        errors.push(`${assetLabel}.fallback 必须提供可用的降级内容`);
+      }
+      if ('blockId' in asset.fallback && !blockIds.has(asset.fallback.blockId)) {
+        errors.push(`${assetLabel}.fallback.blockId 引用了不存在的内容块: ${asset.fallback.blockId}`);
+      }
+      if ('markdown' in asset.fallback) {
+        checkTextbookMarkdown(asset.fallback.markdown, `${assetLabel}.fallback.markdown`, errors);
+      }
+    }
+  });
+}
+
 function checkTextbookContent(content, label, errors) {
-  if (!checkExactKeys(content, ['schema_version', 'blocks'], label, errors)) {
+  if (!checkObjectShape(
+    content,
+    ['schema_version', 'blocks', 'learningDesign'],
+    ['schema_version', 'blocks', 'learningDesign', 'learningAssets'],
+    label,
+    errors,
+  )) {
     return;
   }
   if (content.schema_version !== TEXTBOOK_CONTENT_SCHEMA) {
@@ -629,6 +949,7 @@ function checkTextbookContent(content, label, errors) {
 
   const blockIds = new Set();
   const blockIndexById = new Map();
+  const blockById = new Map();
   const groundedById = new Map();
   let textbookBlocks = 0;
   let modelBlocks = 0;
@@ -637,7 +958,7 @@ function checkTextbookContent(content, label, errors) {
     if (!checkObjectShape(
       block,
       ['id', 'kind', 'markdown', 'provenance'],
-      ['id', 'kind', 'title', 'markdown', 'provenance'],
+      ['id', 'kind', 'title', 'markdown', 'provenance', 'moduleId', 'depth'],
       blockLabel,
       errors,
     )) {
@@ -650,6 +971,7 @@ function checkTextbookContent(content, label, errors) {
       } else {
         blockIds.add(block.id);
         blockIndexById.set(block.id, index);
+        blockById.set(block.id, block);
       }
     }
     if (!TEXTBOOK_BLOCK_KINDS.has(block.kind)) {
@@ -657,6 +979,10 @@ function checkTextbookContent(content, label, errors) {
     }
     if ('title' in block) {
       checkNonEmptyString(block.title, `${blockLabel}.title`, errors);
+    }
+    if ('moduleId' in block) checkKebabId(block.moduleId, `${blockLabel}.moduleId`, errors);
+    if ('depth' in block && !TEXTBOOK_LEARNING_DEPTHS.has(block.depth)) {
+      errors.push(`${blockLabel}.depth 必须是 core/support/advanced`);
     }
     checkTextbookMarkdown(block.markdown, `${blockLabel}.markdown`, errors);
 
@@ -758,6 +1084,65 @@ function checkTextbookContent(content, label, errors) {
 
   if (textbookBlocks < 1) errors.push(`${label}.blocks 至少需要 1 个教材块`);
   if (modelBlocks < 1) errors.push(`${label}.blocks 至少需要 1 个模型补充块`);
+
+  let outcomeIds = new Set();
+  let moduleIds = new Set();
+  if ('learningDesign' in content) {
+    ({ outcomeIds, moduleIds } = checkTextbookLearningDesign(
+      content,
+      `${label}.learningDesign`,
+      errors,
+    ));
+    const blocksByModule = new Map([...moduleIds].map((moduleId) => [moduleId, 0]));
+    content.blocks.forEach((block, index) => {
+      if (!isRecord(block)) return;
+      const blockLabel = `${label}.blocks[${index}]`;
+      if (!ID_PATTERN.test(block.moduleId ?? '')) {
+        errors.push(`${blockLabel}.moduleId 必须是 ASCII kebab-case`);
+      } else if (!moduleIds.has(block.moduleId)) {
+        errors.push(`${blockLabel}.moduleId 引用了不存在的教学模块: ${block.moduleId}`);
+      } else {
+        blocksByModule.set(block.moduleId, blocksByModule.get(block.moduleId) + 1);
+      }
+      if (!TEXTBOOK_LEARNING_DEPTHS.has(block.depth)) {
+        errors.push(`${blockLabel}.depth 必须是 core/support/advanced`);
+      }
+    });
+    for (const [moduleId, count] of blocksByModule) {
+      if (count === 0) errors.push(`${label}.learningDesign.modules 中的模块没有内容块: ${moduleId}`);
+    }
+    const completion = content.learningDesign?.completion;
+    if (isRecord(completion)) {
+      for (const field of ['exerciseBlockId', 'summaryBlockId']) {
+        if (field in completion && !blockIds.has(completion[field])) {
+          errors.push(`${label}.learningDesign.completion.${field} 引用了不存在的内容块: ${completion[field]}`);
+        }
+      }
+    }
+  } else if (content.blocks.some((block) => (
+    isRecord(block) && ('moduleId' in block || 'depth' in block)
+  ))) {
+    errors.push(`${label}.blocks 的 moduleId/depth 需要 learningDesign`);
+  }
+
+  if ('learningAssets' in content) {
+    if (!('learningDesign' in content)) {
+      errors.push(`${label}.learningAssets 需要 learningDesign`);
+    }
+    checkTextbookLearningAssets(
+      content.learningAssets,
+      `${label}.learningAssets`,
+      errors,
+      {
+        outcomeIds,
+        moduleIds,
+        blockIds,
+        blockIndexById,
+        groundedById,
+        blockById,
+      },
+    );
+  }
 }
 
 function checkTextbookPoint(point, label, errors) {

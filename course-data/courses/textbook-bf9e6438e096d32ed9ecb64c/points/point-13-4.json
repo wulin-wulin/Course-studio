@@ -1,0 +1,552 @@
+{
+  "id": "point-13-4",
+  "title": "交付语义与幂等写入",
+  "shortSummary": "区分至多一次、至少一次与恰好一次交付语义，用幂等写入补齐端到端的一致性缺口。",
+  "keyTerms": [
+    "交付语义",
+    "至多一次",
+    "至少一次",
+    "恰好一次",
+    "幂等写入",
+    "端到端一致性"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-4-5",
+    "point-13-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三级语义、键方案、故障情形与检查点数值边界，围绕“损失函数驱动的语义选择”重排为统一比较维度、决策链与验证清单，补充参数敏感性实验，不改变原有结论与阈值。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "choose-delivery-semantics",
+          "text": "依据业务损失函数与统一比较维度，为具体数据用途选择交付语义并说明理由。"
+        },
+        {
+          "id": "design-idempotent-write",
+          "text": "为给定管道设计幂等键与冲突处理策略，并说明如何验证重复没有污染原始事实。"
+        }
+      ],
+      "misconceptions": [
+        "把恰好一次理解为管道某一环节只收到一次记录，忽略端到端仍需要事务或幂等写入配合。",
+        "看到重复记录携带更晚的 ingest_time，就更新已持久化行的 ingest_time。",
+        "以为生产者不主动重发就不需要幂等键，忽略分区再均衡、偏移量滞后与网关故障切换同样会制造重复。"
+      ],
+      "modules": [
+        {
+          "id": "semantics-comparison",
+          "title": "用统一维度比较三级语义",
+          "role": "comparison-frame",
+          "description": "先建立丢失代价、重复代价、实现成本和可验证性四个维度，再把三级语义放回维度中比较。",
+          "outcomeRefs": [
+            "choose-delivery-semantics"
+          ],
+          "order": 0
+        },
+        {
+          "id": "idempotent-key",
+          "title": "幂等写入与键方案选择",
+          "role": "key-design",
+          "description": "从幂等形式化定义出发，比较三种键方案的风险并给出选择与自查条件。",
+          "outcomeRefs": [
+            "design-idempotent-write"
+          ],
+          "order": 1
+        },
+        {
+          "id": "duplicate-handling",
+          "title": "重复识别与质量码处置",
+          "role": "implementation",
+          "description": "区分网络重发与网关切换两类重复，落实首达保留、重复入审计与质量码标注。",
+          "outcomeRefs": [
+            "design-idempotent-write"
+          ],
+          "order": 2
+        },
+        {
+          "id": "end-to-end-verification",
+          "title": "端到端故障与可复现验证",
+          "role": "verification",
+          "description": "用三类组合故障检查单环节幂等是否真的延伸到端到端，并给出验证证据。",
+          "outcomeRefs": [
+            "choose-delivery-semantics",
+            "design-idempotent-write"
+          ],
+          "order": 3
+        },
+        {
+          "id": "checkpoint-tradeoff",
+          "title": "检查点间隔与重放成本",
+          "role": "cost-analysis",
+          "description": "用重放量与状态规模估算检查点间隔的取舍，并区分 TTL 与迟到边界的不同约束。",
+          "outcomeRefs": [
+            "choose-delivery-semantics",
+            "design-idempotent-write"
+          ],
+          "order": 4
+        },
+        {
+          "id": "decision-review",
+          "title": "决策链与下一知识点桥接",
+          "role": "synthesis",
+          "description": "把四维比较收敛为可执行的决策链，并以练习检查迁移能力。",
+          "outcomeRefs": [
+            "choose-delivery-semantics",
+            "design-idempotent-write"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "choose-delivery-semantics",
+          "design-idempotent-write"
+        ],
+        "method": "完成情境练习：为两种用途分别选择交付语义，写出幂等键及其失效条件，并给出一个可执行的重复验证动作。",
+        "successCriteria": [
+          "语义选择能对应到丢失代价与重复代价的具体比较维度",
+          "幂等键与教材中的键方案一致，且能指出至少一个失效条件",
+          "验证动作能产生可观测证据，而非只声明系统已幂等"
+        ],
+        "summaryBlockId": "model-decision-summary",
+        "nextPointId": "point-13-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-hop-risk",
+        "moduleId": "semantics-comparison",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "每一跳都可能重发或丢失",
+        "markdown": "流式管道从边缘网关经消息中间件、流处理引擎到持久化存储，每一跳都可能因网络抖动、进程重启或分区再均衡而重发记录，也可能因确认过早或状态未落盘而丢失记录。交付语义要回答的不是“网络是否可靠”，而是“站在消费者视角，一条记录最终被处理多少次”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000471"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "交付语义与幂等写入"
+              ],
+              "lineStart": 8772,
+              "lineEnd": 8773,
+              "assetRefs": [],
+              "excerptSha256": "d3c75793d878799315965a0eb68ce61cc211dd615b13ab21e7aa275148f90bc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-axes",
+        "moduleId": "semantics-comparison",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "先建比较维度，再挑语义",
+        "markdown": "选择交付语义前，先把三类后果放到同一张表上比较，而不是先挑技术方案：\n\n| 比较维度 | 需要回答的问题 |\n|:---|:---|\n| 丢失代价 | 漏掉一条记录会造成什么后果，能否事后补采？ |\n| 重复代价 | 重复行会让聚合、计费或告警偏差多大，下游能否吸收？ |\n| 实现与运行成本 | 事务、两阶段提交、状态存储与审计各要付出多少复杂度？ |\n| 可验证性 | 能否用重复计数、对账或查询证明没有静默错误？ |\n\n这套维度把“选哪种语义”转成“哪一种损失更可接受”。后面的三级语义和键设计，本质上是在这四个维度上取不同取值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hop-risk"
+          ]
+        }
+      },
+      {
+        "id": "tb-three-semantics",
+        "moduleId": "semantics-comparison",
+        "depth": "core",
+        "kind": "definition",
+        "title": "三级交付语义与损失函数判据",
+        "markdown": "教材按消费者视角划分三级语义：\n\n- **至多一次（At-most-once）**：投递后即确认，不等待持久化；确认后消费者崩溃则记录永久丢失。适用于可容忍偶发缺失的辅助遥测，例如趋势绘图用的电流采样副本。\n- **至少一次（At-least-once）**：确认前可能重发，消费者会收到重复记录，需要下游具备去重或幂等能力。工业监测普遍采用，因为丢失关键温湿度告警的代价远高于处理重复。\n- **精确一次（Exactly-once，也称恰好一次）**：记录被处理且仅被处理一次，通常依赖事务性写入与两阶段提交，或幂等写入配合确定性重放；代价高，只建议用于计费结算、合规审计等不可重复计量的派生指标。\n\n教材给出的核心判据是**业务损失函数**而非技术完备性：重复造成的派生聚合偏差若可被后续修正，至少一次配合幂等写入就是更优的工程权衡。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000472"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "交付语义与幂等写入",
+                "交付语义的三级分类与适用场景"
+              ],
+              "lineStart": 8774,
+              "lineEnd": 8783,
+              "assetRefs": [],
+              "excerptSha256": "20c49c1373c32958eed818cfda6780ac904bc598f2a4bce003425ab5ae8b6d34"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-function",
+        "moduleId": "semantics-comparison",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把四维比较写成决策问题",
+        "markdown": "按上面的比较维度，选择过程可以写成一串可复核的问题：\n\n1. 这条记录丢失是否可直接补采或忽略？是，则至多一次足够。\n2. 重复记录是否会让下游产生不可接受且不可修正的偏差？否，则至少一次即可。\n3. 下游是否已有稳定的键级去重能力？是，则至少一次加幂等键通常比追求恰好一次更便宜。\n4. 偏差不可修正且必须精确计量？是，才进入恰好一次，并明确事务边界与重放范围。\n\n冷链案例中，温湿度与压缩机电流的监测告警走第 3 条；只有计费与合规审计类派生指标才进入第 4 条。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-three-semantics"
+          ]
+        }
+      },
+      {
+        "id": "tb-idempotent-definition",
+        "moduleId": "idempotent-key",
+        "depth": "core",
+        "kind": "definition",
+        "title": "幂等写入与键方案",
+        "markdown": "幂等写入要求同一操作的多次执行与单次执行产生相同的效果。设持久化操作为 $f$，输入记录为 $r$，初始状态为 $S_0$：\n\n$$f(f(r,S_0)) = f(r,S_0)$$\n\n实现的关键是**唯一键的选取与冲突处理策略**。案例数据中 `device_id`、`metric`、`sequence_no` 三元组在单设备生命周期内严格单调递增，构成理想幂等键；接入服务在首次持久接收时写入 `ingest_time`，同一三元组再次到达应触发冲突忽略或更新判定，而不是插入新行。\n\n| 幂等键方案 | 适用场景 | 风险点 |\n|:---|:---|:---|\n| `device_id` + `metric` + `sequence_no` | 设备侧序列号可靠递增 | 固件缺陷导致序列回绕或跳号 |\n| `device_id` + `metric` + `event_time` | 序列号不可靠或需跨系统对齐 | 时钟回退使去重失效；高频采样碰撞 |\n| 内容哈希（全字段） | 端到端完整性校验 | 计算开销大；`ingest_time` 差异使相同业务记录哈希不同 |\n\n案例采用第一方案，并把去重责任下沉到设备端：`sequence_no` 设备重启不得归零，不同设备或 metric 之间不可比较。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "交付语义与幂等写入",
+                "幂等写入的形式化定义与键设计"
+              ],
+              "lineStart": 8784,
+              "lineEnd": 8803,
+              "assetRefs": [],
+              "excerptSha256": "58a0c9a9cf5523ccaa9b335e18e3e516fbc9988531da40e145869fcd12cac4ee"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-key-selection",
+        "moduleId": "idempotent-key",
+        "depth": "support",
+        "kind": "warning",
+        "title": "键方案的三条否决条件",
+        "markdown": "选定键方案后，用三条否决条件自查，任何一条不满足都不要把去重押在该键上：\n\n- **序列号是否真正单调**：固件回绕、恢复出厂或批量烧录都会让 `sequence_no` 重新计数，需要在接入侧检测跳号与回绕。\n- **时间是否可信**：用 `event_time` 作键时，时钟回退会产生重复键，高频采样还会让不同记录共享同一时间戳。\n- **哈希是否稳定**：全字段哈希一旦包含 `ingest_time`，同一条业务记录经不同接入路径就会得到不同摘要，去重直接失效。\n\n三条都不满足时，退回审计加人工对账，比在不稳定的键上声明幂等更安全。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-idempotent-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-duplicate-quality-code",
+        "moduleId": "duplicate-handling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "两类重复与质量码处置",
+        "markdown": "至少一次语义下收到重复记录，要先分辨来源再决定落库方式：\n\n1. **网络重发**：相同 `device_id`、`metric`、`sequence_no` 在偏移量提交前被重新投递；应丢弃并在审计日志中计数，不产生新数据行。\n2. **边缘网关故障切换**：主网关已转发、备用网关未同步状态又发送一次；记录内容相同但可能携带不同的 `ingest_time`。此时保留首次 `ingest_time`，把后续记录标记 `quality_code='DUPLICATE'` 存入审计表，供运维追溯而非覆盖原始事实。\n\n算子逻辑因此很直接：\n\n```python\nkey = (record.device_id, record.metric, record.sequence_no)\nif state.contains(key):\n    audit_sink.write({'quality_code': 'DUPLICATE'})\nelse:\n    fact_table.insert(record)\n    state.put(key, record.ingest_time)\n```\n\n教材特别点出一个误区：不能因为重复记录携带更晚的 `ingest_time` 就更新已持久化的行。原始契约把 `ingest_time` 定义为“首次持久接收时刻”，重复投递不改变“首次”这个事实。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000474"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "交付语义与幂等写入",
+                "重复识别与质量码标注的工程实现"
+              ],
+              "lineStart": 8804,
+              "lineEnd": 8838,
+              "assetRefs": [],
+              "excerptSha256": "c44f6a4a40f438adfed01773ae32e59261b7aa15295414321b840f17f4c42647"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dedupe-checklist",
+        "moduleId": "duplicate-handling",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "去重实现的检查表",
+        "markdown": "把去重逻辑落到代码时，按顺序过一遍检查表：\n\n1. 状态键与幂等键完全一致，且不含 `ingest_time`、接入节点等路径字段。\n2. 首达路径只写事实表一次，重复路径只写审计表，两条路径互斥。\n3. 审计记录同时保留原始与重复的 `ingest_time`，便于区分网络重发与网关切换。\n4. 状态更新与事实表写入位于同一失败边界内，崩溃重放不会产生第二次插入。\n5. 用 `DUPLICATE` 计数与未提交偏移量区间对账，确认没有静默丢失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-duplicate-quality-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-end-to-end-failures",
+        "moduleId": "end-to-end-verification",
+        "depth": "core",
+        "kind": "warning",
+        "title": "单环节幂等不等于端到端幂等",
+        "markdown": "即使单个环节实现幂等，端到端管道仍可能因组合故障产生异常状态。教材要求用三类情形在负载测试中验证：\n\n- **消费者偏移量滞后于状态提交**：先写状态后端再提交偏移量，崩溃重启会重复消费；验证方法是 kill -9 消费者进程，检查重启后审计表 `DUPLICATE` 计数是否与未提交偏移量区间的记录数一致。\n- **状态快照与输出 Sink 非原子**：检查点快照先于 JDBC Sink 事务提交时，恢复后状态已推进而输出未落盘，形成“幽灵成功”；解决方式是两阶段提交 Sink，预写阶段缓冲记录，检查点完成时统一提交事务。\n- **跨分区序列号乱序到达**：`sequence_no=100` 可能先于 `99` 到达，若按到达顺序写入，`99` 会被误判为旧记录丢弃。案例配置要求窗口内按 `event_time` 排序，去重键仍为三元组、不依赖到达顺序，只要未超水位线迟到范围就正常写入。\n\n验证时可用 SQL 检查是否存在 `sequence_no` 逆序但都被成功写入的记录：结果为空表示异常，非空才说明乱序被正常容忍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000475"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "交付语义与幂等写入",
+                "端到端幂等的故障情形与验证"
+              ],
+              "lineStart": 8839,
+              "lineEnd": 8874,
+              "assetRefs": [],
+              "excerptSha256": "a1ac61c96e13b935c6b2b3b1b762180b1977d105abc6c949fea2c8eb5b36ebd6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-matrix",
+        "moduleId": "end-to-end-verification",
+        "depth": "support",
+        "kind": "table",
+        "title": "故障到验证证据的对照",
+        "markdown": "把三类故障整理成可执行的排查矩阵：\n\n| 故障形态 | 典型症状 | 验证证据 | 修复方向 |\n|:---|:---|:---|:---|\n| 偏移量滞后 | 重启后重复计数上升 | 审计 `DUPLICATE` 计数与未提交区间比对 | 调整状态与偏移量的提交边界，或改用事务写入 |\n| 快照与 Sink 非原子 | 状态显示成功但目标表缺行 | 检查点完成后对账目标表行数 | 两阶段提交 Sink，预写加统一提交 |\n| 跨分区乱序 | 迟到记录被当作旧数据丢弃 | 按 `event_time` 排序后检查序列逆序 | 去重键与排序键分离，保留水位线内迟到数据 |\n\n矩阵的作用是把“系统已幂等”的口头声明换成可复现的验证动作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-end-to-end-failures"
+          ]
+        }
+      },
+      {
+        "id": "tb-checkpoint-coupling",
+        "moduleId": "checkpoint-tradeoff",
+        "depth": "core",
+        "kind": "formula",
+        "title": "检查点间隔决定重放量",
+        "markdown": "交付语义直接约束检查点间隔。至少一次语义下，检查点间隔 $T_c$ 与偏移量提交周期绑定：$T_c$ 过大，故障重放窗口与重复处理量增大；$T_c$ 过小，检查点开销侵蚀吞吐。\n\n案例中压缩机电流采样周期 $T_s = 5\\,\\text{s}$，单分区峰值吞吐 $R = 2000\\,\\text{records/s}$，取 $T_c = 30\\,\\text{s}$：\n\n$$N_{\\text{replay}} = R \\times T_c = 2000 \\times 30 = 60\\,000\\ \\text{records}$$\n\n这些记录的去重依赖状态后端中的已处理键集合。每键约 40 字节，RocksDB 额外开销约 2 倍，单次重放对应的状态约 $60\\,000 \\times 80\\,\\text{B} \\approx 4.8\\,\\text{MB}$，可完全驻留内存。扩到全仓 16 台设备、4 类 metric 后，单日状态增长约 $16 \\times 4 \\times \\frac{86400}{5} \\times 80\\,\\text{B} \\approx 88\\,\\text{MB}$，因此需要增量快照与 TTL 淘汰。案例把 TTL 设为 48 小时，与水位线允许迟到 2 小时解耦：前者是状态存储的经济性约束，后者是业务时效性约束。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000476"
+              ],
+              "headingPath": [
+                "流式计算与实时管道",
+                "交付语义与幂等写入",
+                "交付语义与检查点的协同设计"
+              ],
+              "lineStart": 8875,
+              "lineEnd": 8898,
+              "assetRefs": [],
+              "excerptSha256": "ef5275fad9328ad6436a80836c6f5d339c9e4c7baa124c063d0ed68fc3a6679b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checkpoint-cost",
+        "moduleId": "checkpoint-tradeoff",
+        "depth": "advanced",
+        "kind": "worked-example",
+        "title": "检查点间隔的敏感性实验",
+        "markdown": "沿用同一组参数做一次敏感性实验，就能看出间隔与成本的交换关系（$R = 2000\\,\\text{records/s}$，每键约 80 字节含 RocksDB 开销）：\n\n| 检查点间隔 $T_c$ | 最大重放记录数 | 对应去重状态 | 运行含义 |\n|:---|:---|:---|:---|\n| 10 s | 20 000 | 约 1.6 MB | 重放少，但检查点频率高，吞吐开销大 |\n| 30 s | 60 000 | 约 4.8 MB | 案例取值，重放与开销相对平衡 |\n| 60 s | 120 000 | 约 9.6 MB | 开销低，故障后重复处理量与状态峰值翻倍 |\n\n注意 TTL 不能跟着 $T_c$ 一起缩短：TTL 过短会让网络分区恢复后的旧记录因状态被清除而重新插入，造成聚合窗口重复计数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-checkpoint-coupling"
+          ]
+        }
+      },
+      {
+        "id": "model-decision-summary",
+        "moduleId": "decision-review",
+        "depth": "core",
+        "kind": "summary",
+        "title": "收敛为一条决策链",
+        "markdown": "回到四维比较，本知识点可以压缩成一条决策链：先看丢失代价，再看重复是否可吸收，再看下游是否具备稳定幂等键，最后才用检查点与 TTL 控制重放成本。\n\n- 辅助遥测、可补采的趋势副本 → 至多一次，成本最低。\n- 关键监测、可去重的原始事实 → 至少一次加三元组幂等键，重复写审计表。\n- 计费、合规等不可重复计量 → 恰好一次，明确事务边界与重放范围。\n- 任何选择都要配一个验证动作：审计计数、对账查询或乱序窗口检查。\n\n下一知识点将展开检查点、状态一致性与恢复重放成本，正是这条决策链最后一步的工程细节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-checkpoint-coupling",
+            "model-checkpoint-cost"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "delivery-semantics-check",
+        "type": "formative-check",
+        "title": "为两种用途选择语义并写出幂等键",
+        "anchorBlockId": "model-decision-summary",
+        "moduleId": "decision-review",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-delivery-semantics",
+          "design-idempotent-write"
+        ],
+        "learningPurpose": "检查学习者能否把四维比较迁移到新场景，并给出与语义匹配的幂等键与可执行验证动作。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-loss-function",
+            "model-key-selection",
+            "model-failure-matrix"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "某仓新增振动传感器，以 50 Hz 采样用于事后趋势回看；同一批数据还要生成按小时结算的设备租赁账单。",
+          "questions": [
+            {
+              "id": "q1",
+              "prompt": "趋势回看与账单计算分别应选择哪种交付语义？请指明所依据的比较维度。",
+              "expected": "趋势回看可用至多一次；账单需恰好一次，或至少一次加可验证幂等。理由应落在丢失代价与重复代价两个维度上。"
+            },
+            {
+              "id": "q2",
+              "prompt": "为账单数据写出幂等键，并指出该键的一个失效条件。",
+              "expected": "例如 device_id + metric + sequence_no；失效条件可举序列号回绕、跨设备混用或时钟回退导致重复键。"
+            },
+            {
+              "id": "q3",
+              "prompt": "给出一个能证明重复未污染事实表的验证动作。",
+              "expected": "例如比对审计表 DUPLICATE 计数与未提交偏移量区间，或按 event_time 排序检查序列逆序与对账结果。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某仓新增振动传感器：50 Hz 采样用于趋势回看，同时生成按小时结算的账单。请写出：1）两类用途各自的交付语义与理由；2）账单数据的幂等键及其失效条件；3）一个可执行的重复验证动作。"
+        }
+      }
+    ]
+  },
+  "subtitle": "流式计算与实时管道",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [
+    "point-13-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000471"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "交付语义与幂等写入"
+      ],
+      "lineStart": 8772,
+      "lineEnd": 8773,
+      "assetRefs": [],
+      "excerptSha256": "d3c75793d878799315965a0eb68ce61cc211dd615b13ab21e7aa275148f90bc8"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000472"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "交付语义与幂等写入",
+        "交付语义的三级分类与适用场景"
+      ],
+      "lineStart": 8774,
+      "lineEnd": 8783,
+      "assetRefs": [],
+      "excerptSha256": "20c49c1373c32958eed818cfda6780ac904bc598f2a4bce003425ab5ae8b6d34"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000473"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "交付语义与幂等写入",
+        "幂等写入的形式化定义与键设计"
+      ],
+      "lineStart": 8784,
+      "lineEnd": 8803,
+      "assetRefs": [],
+      "excerptSha256": "58a0c9a9cf5523ccaa9b335e18e3e516fbc9988531da40e145869fcd12cac4ee"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000474"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "交付语义与幂等写入",
+        "重复识别与质量码标注的工程实现"
+      ],
+      "lineStart": 8804,
+      "lineEnd": 8838,
+      "assetRefs": [],
+      "excerptSha256": "c44f6a4a40f438adfed01773ae32e59261b7aa15295414321b840f17f4c42647"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000475"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "交付语义与幂等写入",
+        "端到端幂等的故障情形与验证"
+      ],
+      "lineStart": 8839,
+      "lineEnd": 8874,
+      "assetRefs": [],
+      "excerptSha256": "a1ac61c96e13b935c6b2b3b1b762180b1977d105abc6c949fea2c8eb5b36ebd6"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000476"
+      ],
+      "headingPath": [
+        "流式计算与实时管道",
+        "交付语义与幂等写入",
+        "交付语义与检查点的协同设计"
+      ],
+      "lineStart": 8875,
+      "lineEnd": 8898,
+      "assetRefs": [],
+      "excerptSha256": "ef5275fad9328ad6436a80836c6f5d339c9e4c7baa124c063d0ed68fc3a6679b"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3136,
+    452
+  ],
+  "scale": 0.97
+}

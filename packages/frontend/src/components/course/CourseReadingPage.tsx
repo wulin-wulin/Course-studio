@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
 import {
   AlertTriangle,
@@ -26,18 +26,27 @@ import type {
   ForestPoint,
   ForestSourceSpan,
   TextbookContentBlock,
+  TextbookContentBlockKind,
+  TextbookLearningAsset,
+  TextbookLearningDepth,
+  TextbookLearningDesign,
+  TextbookLearningModule,
   TextbookPointContentV2,
 } from "@/course/forest/types";
 import { buildCourseDirectory, normalizeForestIndex } from "@/course/forest/forestAdapter";
 import {
   normalizeTextbookMarkdown,
   normalizeTextbookContentV2,
+  normalizeTextbookLearningAssets,
+  normalizeTextbookLearningDesign,
+  splitTextbookExerciseReference,
   textbookContentBlockKindLabel,
   textbookSourceHeading,
   textbookSourceLocator,
   textbookSourceTechnicalDetails,
 } from "@/course/forest/textbookContent";
 import { MarkdownContent } from "../chat/MarkdownContent";
+import { QuantizationLab, type QuantizationLabPreset } from "./QuantizationLab";
 import "./courseReading.css";
 
 type CourseReadingPageProps = {
@@ -62,6 +71,22 @@ type ContentBlockReference = {
 
 type AnimationAvailability = "checking" | "available" | "unavailable";
 type ReaderLayoutMode = "wide" | "compact" | "narrow";
+type TextbookReaderView = "learning" | "comparison" | "audit";
+type TextbookReadingDepthMode = "core" | "full";
+
+type IndexedTextbookBlock = {
+  block: TextbookContentBlock;
+  sourceIndex: number;
+};
+
+type TextbookReadingModule = {
+  id: string;
+  title: string;
+  role?: string;
+  description?: string;
+  explicit: boolean;
+  blocks: IndexedTextbookBlock[];
+};
 
 const courseIndexCache = new Map<string, ForestIndex>();
 
@@ -519,6 +544,191 @@ function ReadingArticle(props: ReadingArticleProps) {
     : <LegacyReadingArticle {...props} />;
 }
 
+function mergeLearningDesign(
+  pointDesign: TextbookLearningDesign | null,
+  contentDesign: TextbookLearningDesign | null,
+): TextbookLearningDesign | null {
+  if (!pointDesign && !contentDesign) return null;
+  const merged = { ...pointDesign, ...contentDesign };
+  const pointModules = pointDesign?.modules ?? [];
+  const contentModules = contentDesign?.modules ?? [];
+  if (pointModules.length > 0 || contentModules.length > 0) {
+    const modules = new Map<string, TextbookLearningModule>();
+    for (const module of [...pointModules, ...contentModules]) modules.set(module.id, module);
+    merged.modules = [...modules.values()];
+  }
+  return merged;
+}
+
+function buildTextbookReadingModules(
+  blocks: TextbookContentBlock[],
+  definitions: TextbookLearningModule[],
+): TextbookReadingModule[] {
+  const definitionById = new Map(definitions.map((module) => [module.id, module]));
+  const hasAssignments = blocks.some((block) => Boolean(block.moduleId));
+  if (!hasAssignments) {
+    return blocks.map((block, sourceIndex) => ({
+      id: block.id,
+      title: learningBlockTitle(block),
+      explicit: false,
+      blocks: [{ block, sourceIndex }],
+    }));
+  }
+
+  const occurrences = new Map<string, number>();
+  const modules: TextbookReadingModule[] = [];
+  for (const [sourceIndex, block] of blocks.entries()) {
+    const baseId = block.moduleId ?? `unassigned-${block.id}`;
+    const previous = modules.at(-1);
+    if (previous?.id === baseId || previous?.id.startsWith(`${baseId}--segment-`)) {
+      previous.blocks.push({ block, sourceIndex });
+      continue;
+    }
+    const occurrence = (occurrences.get(baseId) ?? 0) + 1;
+    occurrences.set(baseId, occurrence);
+    const definition = block.moduleId ? definitionById.get(block.moduleId) : undefined;
+    modules.push({
+      id: occurrence === 1 ? baseId : `${baseId}--segment-${occurrence}`,
+      title: definition?.title ?? learningBlockTitle(block),
+      ...(definition?.role ? { role: definition.role } : {}),
+      ...(definition?.description ? { description: definition.description } : {}),
+      explicit: Boolean(block.moduleId),
+      blocks: [{ block, sourceIndex }],
+    });
+  }
+  return modules;
+}
+
+function placeLearningAssets(assets: TextbookLearningAsset[], blocks: TextbookContentBlock[]) {
+  const blockIds = new Set(blocks.map((block) => block.id));
+  const byAnchor = new Map<string, TextbookLearningAsset[]>();
+  const unanchored: TextbookLearningAsset[] = [];
+  for (const asset of assets) {
+    if (!blockIds.has(asset.anchorBlockId)) {
+      unanchored.push(asset);
+      continue;
+    }
+    const anchored = byAnchor.get(asset.anchorBlockId) ?? [];
+    anchored.push(asset);
+    byAnchor.set(asset.anchorBlockId, anchored);
+  }
+  return { byAnchor, unanchored };
+}
+
+function LearningDesignOverview({
+  design,
+  prerequisites,
+  allPoints,
+  showEditorialPolicy,
+}: {
+  design: TextbookLearningDesign;
+  prerequisites: string[];
+  allPoints: ForestPoint[];
+  showEditorialPolicy: boolean;
+}) {
+  const outcomes = design.outcomes ?? [];
+  const prerequisiteLabels = prerequisites.map((reference) => (
+    allPoints.find((candidate) => candidate.id === reference || candidate.title === reference)?.title ?? reference
+  ));
+  const editorialPolicy = showEditorialPolicy ? design.editorialPolicy : undefined;
+  if (outcomes.length === 0 && prerequisites.length === 0 && !editorialPolicy) return null;
+  const hasLessonNotes = prerequisites.length > 0 || Boolean(editorialPolicy);
+  return (
+    <section
+      className={`course-reader__learning-overview ${hasLessonNotes ? "" : "is-outcomes-only"}`.trim()}
+      aria-label="本节学习设计"
+    >
+      {outcomes.length > 0 && (
+        <div className="course-reader__learning-outcomes">
+          <strong><CheckCircle2 aria-hidden="true" size={15} />学完你将能够</strong>
+          <ul>
+            {outcomes.map((outcome, index) => <li key={outcome.id ?? `${outcome.text}-${index}`}>{outcome.text}</li>)}
+          </ul>
+        </div>
+      )}
+      {hasLessonNotes && (
+        <div className="course-reader__lesson-notes">
+          {prerequisites.length > 0 && (
+            <p><strong>开始前</strong><span>{prerequisiteLabels.join("、")}</span></p>
+          )}
+          {editorialPolicy && (
+            <p><strong>编排说明</strong><span>{editorialPolicy}</span></p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LearningCompletionCard({
+  design,
+  blocks,
+  allPoints,
+  onOpenPoint,
+}: {
+  design: TextbookLearningDesign;
+  blocks: TextbookContentBlock[];
+  allPoints: ForestPoint[];
+  onOpenPoint: (point: ForestPoint) => void;
+}) {
+  const completion = design.completion;
+  if (!completion) return null;
+  const outcomeRefs = new Set(completion.outcomeRefs ?? []);
+  const outcomes = (design.outcomes ?? []).filter((outcome) => (
+    outcomeRefs.size === 0 || (outcome.id ? outcomeRefs.has(outcome.id) : false)
+  ));
+  const exercise = completion.exerciseBlockId
+    ? blocks.find((block) => block.id === completion.exerciseBlockId)
+    : undefined;
+  const nextPoint = completion.nextPointId
+    ? allPoints.find((candidate) => candidate.id === completion.nextPointId)
+    : undefined;
+  if (
+    outcomes.length === 0
+    && !completion.method
+    && (completion.successCriteria?.length ?? 0) === 0
+    && !exercise
+    && !nextPoint
+  ) return null;
+
+  return (
+    <section className="course-reader__completion" aria-label="本节达成检查">
+      <header>
+        <span><CheckCircle2 aria-hidden="true" size={15} />达成检查</span>
+        <h2>把本节知识变成可用能力</h2>
+      </header>
+      {completion.method && <RichText content={completion.method} />}
+      {outcomes.length > 0 && (
+        <ul className="course-reader__completion-outcomes">
+          {outcomes.map((outcome, index) => (
+            <li key={outcome.id ?? `${outcome.text}-${index}`}>{outcome.text}</li>
+          ))}
+        </ul>
+      )}
+      {(completion.successCriteria?.length ?? 0) > 0 && (
+        <div className="course-reader__completion-criteria">
+          <strong>完成标准</strong>
+          <ul>
+            {completion.successCriteria?.map((criterion, index) => (
+              <li key={`${criterion}-${index}`}>{criterion}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {(exercise || nextPoint) && (
+        <footer>
+          {exercise && <span>完成“{learningBlockTitle(exercise)}”后，再检查上述目标。</span>}
+          {nextPoint && (
+            <button type="button" onClick={() => onOpenPoint(nextPoint)}>
+              继续学习：{nextPoint.title}<ChevronRight aria-hidden="true" size={15} />
+            </button>
+          )}
+        </footer>
+      )}
+    </section>
+  );
+}
+
 function TextbookReadingArticle({
   point,
   content,
@@ -534,27 +744,71 @@ function TextbookReadingArticle({
   scrollRootRef,
   onOpenPoint,
 }: ReadingArticleProps & { content: TextbookPointContentV2 }) {
-  const [showModelEnrichment, setShowModelEnrichment] = useState(true);
-  const hasDeclaredAnimation = Boolean(point.animationType && point.animationType !== "none");
+  const [viewMode, setViewMode] = useState<TextbookReaderView>("learning");
+  const [readingDepth, setReadingDepth] = useState<TextbookReadingDepthMode>("full");
+  const pointLearningDesign = useMemo(
+    () => normalizeTextbookLearningDesign(point.learningDesign),
+    [point.learningDesign],
+  );
+  const learningDesign = useMemo(
+    () => mergeLearningDesign(pointLearningDesign, content.learningDesign ?? null),
+    [content.learningDesign, pointLearningDesign],
+  );
+  const learningAssets = useMemo(() => {
+    const pointAssets = normalizeTextbookLearningAssets(point.learningAssets);
+    const merged = [...(content.learningAssets ?? []), ...pointAssets];
+    const ids = new Set<string>();
+    return merged.flatMap((asset) => {
+      if (ids.has(asset.id)) return [];
+      ids.add(asset.id);
+      return [asset];
+    }).map((asset, index) => (
+      !asset.animationType && index === 0 && point.animationType && point.animationType !== "none"
+        ? { ...asset, animationType: point.animationType }
+        : asset
+    ));
+  }, [content.learningAssets, point.animationType, point.learningAssets]);
+  const showAllDepths = viewMode !== "learning" || readingDepth === "full";
+  const visibleLearningAssets = useMemo(
+    () => showAllDepths
+      ? learningAssets
+      : learningAssets.filter((asset) => !asset.depth || asset.depth === "core"),
+    [learningAssets, showAllDepths],
+  );
+  const hasLegacyAnimation = Boolean(point.animationType && point.animationType !== "none");
+  const hasInlineAnimation = visibleLearningAssets.some((asset) => Boolean(asset.animationType));
+  const hasDeclaredAnimation = hasInlineAnimation || (learningAssets.length === 0 && hasLegacyAnimation);
   const [animationAvailability, setAnimationAvailability] = useState<AnimationAvailability>(
     hasDeclaredAnimation ? "checking" : "unavailable",
   );
-  const orderedBlocks = useMemo(
-    () => content.blocks
-      .map((block, sourceIndex) => ({ block, sourceIndex }))
-      .filter(({ block }) => showModelEnrichment || block.provenance.origin !== "model"),
-    [content.blocks, showModelEnrichment],
+  const modules = useMemo(
+    () => buildTextbookReadingModules(content.blocks, learningDesign?.modules ?? []),
+    [content.blocks, learningDesign?.modules],
   );
-  const textbookBlockCount = content.blocks.filter((block) => block.provenance.origin === "textbook").length;
-  const modelBlockCount = content.blocks.length - textbookBlockCount;
+  const visibleModules = useMemo(() => {
+    if (showAllDepths) return modules;
+    return modules.flatMap((module) => {
+      const blocks = module.blocks.filter(({ block }) => !block.depth || block.depth === "core");
+      return blocks.length > 0 ? [{ ...module, blocks }] : [];
+    });
+  }, [modules, showAllDepths]);
+  const visibleBlocks = useMemo(
+    () => visibleModules.flatMap((module) => module.blocks.map(({ block }) => block)),
+    [visibleModules],
+  );
+  const assetPlacement = useMemo(
+    () => placeLearningAssets(visibleLearningAssets, content.blocks),
+    [content.blocks, visibleLearningAssets],
+  );
   const sections = useMemo<ArticleSection[]>(
-    () => orderedBlocks.map(({ block, sourceIndex }) => ({
-      id: textbookBlockDomId(block, sourceIndex),
-      label: block.title ?? textbookContentBlockKindLabel(block.kind),
+    () => visibleModules.map((module, moduleIndex) => ({
+      id: textbookModuleDomId(module, moduleIndex),
+      label: module.title,
     })),
-    [orderedBlocks],
+    [visibleModules],
   );
   const [activeSectionId, setActiveSectionId] = useState(sections[0]?.id ?? "");
+  const articleTocRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setAnimationAvailability(hasDeclaredAnimation ? "checking" : "unavailable");
@@ -589,15 +843,29 @@ function TextbookReadingArticle({
     };
   }, [point.id, scrollRootRef, sections]);
 
+  useEffect(() => {
+    const container = articleTocRef.current;
+    const activeButton = container?.querySelector<HTMLElement>("[data-section-active='true']");
+    if (!container || !activeButton) return;
+    container.scrollTo({
+      left: activeButton.offsetLeft - (container.clientWidth - activeButton.clientWidth) / 2,
+      behavior: "smooth",
+    });
+  }, [activeSectionId]);
+
   const scrollToSection = (section: ArticleSection) => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const target = document.getElementById(section.id);
-    if (!target) return;
+    const root = scrollRootRef.current;
+    if (!target || !root) return;
     target.tabIndex = -1;
     if (!target.hasAttribute("aria-label")) target.setAttribute("aria-label", section.label);
-    target.scrollIntoView({
+    root.scrollTo({
+      top: Math.max(
+        0,
+        root.scrollTop + target.getBoundingClientRect().top - root.getBoundingClientRect().top - 72,
+      ),
       behavior: reducedMotion ? "auto" : "smooth",
-      block: "start",
     });
     setActiveSectionId(section.id);
     window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
@@ -606,66 +874,106 @@ function TextbookReadingArticle({
   const expressionTags = [
     point.difficulty || null,
     point.kind ? formatPointKind(point.kind) : null,
+    viewMode !== "learning" && point.origin ? formatPointOrigin(point.origin) : null,
     animationAvailability === "available" ? "交互演示" : null,
   ].filter((tag): tag is string => Boolean(tag));
 
-  return (
-    <article className="course-reader__article course-reader__article--textbook">
-      <PointNavigation
-        clusterTitle={cluster?.title ?? course.title}
-        previous={previous}
-        next={next}
-        position={positionInCluster}
-        total={clusterTotal}
-        usesCourseSequence={usesCourseSequence}
-        onOpenPoint={onOpenPoint}
-      />
+  const onAssetAvailabilityChange = useCallback((availability: AnimationAvailability) => {
+    setAnimationAvailability((current) => {
+      if (availability === "available" || current !== "available") return availability;
+      return current;
+    });
+  }, []);
 
+  return (
+    <article className={`course-reader__article course-reader__article--textbook course-reader__article--view-${viewMode}`}>
       <header className="course-reader__heading">
         <div className="course-reader__tags">
           <span>{cluster?.title ?? course.title}</span>
           {point.subtitle && point.subtitle !== cluster?.title && <span>{point.subtitle}</span>}
-          {point.origin && <span>{formatPointOrigin(point.origin)}</span>}
           {expressionTags.map((tag) => <span key={tag}>{tag}</span>)}
         </div>
         <h1 ref={headingRef} id="course-point-title" tabIndex={-1}>{point.title}</h1>
         {point.shortSummary && <RichText content={point.shortSummary} className="course-reader__summary" />}
         <div className="course-reader__heading-meta" aria-label="知识点学习信息">
           <span>{usesCourseSequence ? "学习路径" : "本簇"}第 {Math.max(positionInCluster, 1)} / {clusterTotal || 1} 点</span>
-          <span>教材正文 {textbookBlockCount} 节</span>
-          {modelBlockCount > 0 && <span>扩展讲解 {modelBlockCount} 节</span>}
+          {learningDesign?.estimatedMinutes && <span>预计 {learningDesign.estimatedMinutes} 分钟</span>}
+          {learningDesign?.adaptationLevel && (
+            <span>{formatAdaptationLevel(learningDesign.adaptationLevel)}</span>
+          )}
         </div>
       </header>
 
-      <section className="course-reader__content-controls" aria-label="正文来源显示设置">
-        <div className="course-reader__provenance-legend" aria-label="内容来源图例">
-          <span className="course-reader__provenance-badge is-textbook">教材内容</span>
-          {modelBlockCount > 0 && (
-            <span className="course-reader__provenance-badge is-model">模型扩展</span>
-          )}
+      {learningDesign && (
+        <LearningDesignOverview
+          design={learningDesign}
+          prerequisites={point.prerequisites ?? []}
+          allPoints={allPoints}
+          showEditorialPolicy={viewMode !== "learning"}
+        />
+      )}
+
+      <section className="course-reader__view-controls" aria-label="阅读视图">
+        <div>
+          <strong>阅读视图</strong>
+          <span>{readerViewDescription(viewMode)}</span>
         </div>
-        {modelBlockCount > 0 && (
-          <button
-            type="button"
-            className="course-reader__enrichment-toggle"
-            aria-pressed={showModelEnrichment}
-            onClick={() => setShowModelEnrichment((current) => !current)}
-          >
-            <span aria-hidden="true" className="course-reader__toggle-track"><span /></span>
-            <span>{showModelEnrichment ? "模型扩展已显示" : "模型扩展已隐藏"}</span>
-          </button>
-        )}
+        <div className="course-reader__view-actions">
+          {viewMode === "learning" && (
+            <div className="course-reader__depth-switcher" role="group" aria-label="学习内容深度">
+              <span>学习深度</span>
+              <div>
+                {([
+                  ["core", "核心阅读"],
+                  ["full", "完整阅读"],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    type="button"
+                    key={mode}
+                    className={readingDepth === mode ? "is-current" : ""}
+                    aria-pressed={readingDepth === mode}
+                    onClick={() => setReadingDepth(mode)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="course-reader__view-switcher" role="group" aria-label="切换阅读视图">
+            {([
+              ["learning", "学习"],
+              ["comparison", "教材对照"],
+              ["audit", "来源审计"],
+            ] as const).map(([mode, label]) => (
+              <button
+                type="button"
+                key={mode}
+                className={viewMode === mode ? "is-current" : ""}
+                aria-pressed={viewMode === mode}
+                onClick={() => setViewMode(mode)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
 
       {sections.length > 1 && (
         <nav className="course-reader__article-toc" aria-label="本文内容目录">
-          <span><ListTree aria-hidden="true" size={14} />本文内容</span>
-          <div>
+          <span>
+            <ListTree aria-hidden="true" size={14} />
+            本文内容
+            <small>{Math.max(sections.findIndex((section) => section.id === activeSectionId) + 1, 1)}/{sections.length}</small>
+          </span>
+          <div ref={articleTocRef}>
             {sections.map((section) => (
               <button
                 type="button"
                 key={section.id}
                 className={activeSectionId === section.id ? "is-current" : ""}
+                data-section-active={activeSectionId === section.id}
                 aria-current={activeSectionId === section.id ? "location" : undefined}
                 onClick={() => scrollToSection(section)}
               >
@@ -676,26 +984,77 @@ function TextbookReadingArticle({
         </nav>
       )}
 
-      <div className="course-reader__content-blocks">
-        {orderedBlocks.map(({ block, sourceIndex }) => (
-          <TextbookContentBlockSection
-            key={block.id}
-            block={block}
-            sourceIndex={sourceIndex}
-            allBlocks={content.blocks}
+      <div className="course-reader__content-modules">
+        {visibleModules.map((module, moduleIndex) => {
+          const showModuleHeading = module.explicit
+            && normalizeComparableText(module.title)
+              !== normalizeComparableText(module.blocks[0]?.block.title ?? "");
+          return (
+            <section
+              key={`${module.id}-${moduleIndex}`}
+              id={textbookModuleDomId(module, moduleIndex)}
+              className={`course-reader__module course-reader__anchored-section ${module.explicit ? "is-designed" : "is-legacy"}`}
+            >
+              {showModuleHeading && (
+                <header className="course-reader__module-head">
+                  {module.role && <span>{formatLearningModuleRole(module.role)}</span>}
+                  <h2>{module.title}</h2>
+                  {module.description && <RichText content={module.description} />}
+                </header>
+              )}
+              <div className="course-reader__module-content">
+                {module.blocks.map(({ block, sourceIndex }) => (
+                  <Fragment key={block.id}>
+                    <TextbookContentBlockSection
+                      block={block}
+                      sourceIndex={sourceIndex}
+                      allBlocks={content.blocks}
+                      viewMode={viewMode}
+                      nestedHeading={showModuleHeading}
+                    />
+                    {(assetPlacement.byAnchor.get(block.id) ?? []).map((asset) => (
+                      <LearningAssetSection
+                        key={asset.id}
+                        asset={asset}
+                        courseId={course.id}
+                        pointTitle={point.title}
+                        viewMode={viewMode}
+                        onAvailabilityChange={onAssetAvailabilityChange}
+                      />
+                    ))}
+                  </Fragment>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+        {assetPlacement.unanchored.map((asset) => (
+          <LearningAssetSection
+            key={asset.id}
+            asset={asset}
+            courseId={course.id}
+            pointTitle={point.title}
+            viewMode={viewMode}
+            onAvailabilityChange={onAssetAvailabilityChange}
           />
         ))}
-        {orderedBlocks.length === 0 && content.blocks.length > 0 && (
+        {visibleModules.length === 0 && (
           <div className="course-reader__content-empty" role="status">
-            当前知识点只有模型扩展内容。打开“模型扩展”即可继续阅读。
-          </div>
-        )}
-        {content.blocks.length === 0 && (
-          <div className="course-reader__content-empty" role="status">
-            该知识点暂时没有可展示的教材正文，请返回知识森林选择其他知识点或重新生成内容。
+            {content.blocks.length === 0
+              ? "该知识点暂时没有可展示的教材正文，请返回知识森林选择其他知识点或重新生成内容。"
+              : "该知识点暂时没有标记为核心的正文，可切换到完整阅读查看全部内容。"}
           </div>
         )}
       </div>
+
+      {learningDesign && (
+        <LearningCompletionCard
+          design={learningDesign}
+          blocks={visibleBlocks}
+          allPoints={allPoints}
+          onOpenPoint={onOpenPoint}
+        />
+      )}
 
       <div className="course-reader__reference-grid course-reader__reference-grid--textbook">
         {(point.keyTerms?.length ?? 0) > 0 && <TagSection title="关键词" items={point.keyTerms ?? []} />}
@@ -717,7 +1076,7 @@ function TextbookReadingArticle({
         )}
       </div>
 
-      {hasDeclaredAnimation && point.animationType && (
+      {learningAssets.length === 0 && hasLegacyAnimation && point.animationType && (
         <CourseAnimationFrame
           courseId={course.id}
           animationType={point.animationType}
@@ -745,13 +1104,25 @@ function TextbookContentBlockSection({
   block,
   sourceIndex,
   allBlocks,
+  viewMode,
+  nestedHeading,
 }: {
   block: TextbookContentBlock;
   sourceIndex: number;
   allBlocks: TextbookContentBlock[];
+  viewMode: TextbookReaderView;
+  nestedHeading: boolean;
 }) {
   const isTextbook = block.provenance.origin === "textbook";
-  const title = block.title ?? textbookContentBlockKindLabel(block.kind);
+  const title = viewMode === "learning"
+    ? learningBlockTitle(block)
+    : block.title ?? textbookContentBlockKindLabel(block.kind);
+  const semanticCard = isSemanticCardKind(block.kind);
+  const Heading = nestedHeading ? "h3" : "h2";
+  const normalizedMarkdown = normalizeTextbookMarkdown(block.markdown);
+  const exerciseContent = block.kind === "exercise"
+    ? splitTextbookExerciseReference(normalizedMarkdown)
+    : null;
   const sourceSpans = block.provenance.sourceSpans ?? [];
   const basedOnBlocks: ContentBlockReference[] = block.provenance.origin === "model"
     ? block.provenance.basedOnBlockIds.map((id) => {
@@ -767,30 +1138,126 @@ function TextbookContentBlockSection({
   return (
     <section
       id={textbookBlockDomId(block, sourceIndex)}
-      className={`course-reader__content-block course-reader__anchored-section ${isTextbook ? "is-textbook" : "is-model"}`}
+      className={[
+        "course-reader__content-block",
+        "course-reader__anchored-section",
+        semanticCard ? "is-semantic-card" : "is-flow",
+        `is-kind-${block.kind}`,
+        viewMode !== "learning" ? (isTextbook ? "is-textbook" : "is-model") : "",
+      ].filter(Boolean).join(" ")}
       data-content-kind={block.kind}
+      data-learning-depth={block.depth}
     >
       <header className="course-reader__content-block-head">
         <div>
-          <span className={`course-reader__provenance-badge ${isTextbook ? "is-textbook" : "is-model"}`}>
-            {isTextbook ? "教材内容" : "模型扩展"}
-          </span>
-          {block.provenance.origin === "textbook" && (
+          {semanticCard && (
+            <span className="course-reader__kind-badge">{textbookContentBlockKindLabel(block.kind)}</span>
+          )}
+          {block.depth && block.depth !== "core" && (
+            <span className="course-reader__depth-badge">{formatLearningDepth(block.depth)}</span>
+          )}
+          {viewMode !== "learning" && (
+            <span className={`course-reader__provenance-badge ${isTextbook ? "is-textbook" : "is-model"}`}>
+              {isTextbook ? "教材依据" : "课程补充"}
+            </span>
+          )}
+          {viewMode === "audit" && block.provenance.origin === "textbook" && (
             <span className="course-reader__representation-badge">
               {block.provenance.representation === "quote" ? "教材原文引用" : "教材内容转述"}
             </span>
           )}
-          <span className="course-reader__kind-badge">{textbookContentBlockKindLabel(block.kind)}</span>
+          {viewMode === "audit" && !semanticCard && (
+            <span className="course-reader__kind-badge">{textbookContentBlockKindLabel(block.kind)}</span>
+          )}
         </div>
-        <h2>{title}</h2>
+        <Heading>{title}</Heading>
       </header>
-      <RichText content={normalizeTextbookMarkdown(block.markdown)} className="course-reader__content-block-markdown" />
-      {(sourceSpans.length > 0 || basedOnBlocks.length > 0) && (
+      <RichText
+        content={exerciseContent?.prompt ?? normalizedMarkdown}
+        className="course-reader__content-block-markdown"
+      />
+      {exerciseContent?.reference && (
+        <details className="course-reader__exercise-reference">
+          <summary>
+            <span>查看参考思路</span>
+            <ChevronDown aria-hidden="true" size={15} />
+          </summary>
+          <RichText content={exerciseContent.reference} />
+        </details>
+      )}
+      {viewMode !== "learning" && (sourceSpans.length > 0 || basedOnBlocks.length > 0) && (
         <ContentProvenanceDisclosure
           sourceSpans={sourceSpans}
           basedOnBlocks={basedOnBlocks}
           isTextbook={isTextbook}
+          showTechnical={viewMode === "audit"}
         />
+      )}
+    </section>
+  );
+}
+
+function LearningAssetSection({
+  asset,
+  courseId,
+  pointTitle,
+  viewMode,
+  onAvailabilityChange,
+}: {
+  asset: TextbookLearningAsset;
+  courseId: string;
+  pointTitle: string;
+  viewMode: TextbookReaderView;
+  onAvailabilityChange: (availability: AnimationAvailability) => void;
+}) {
+  const sectionId = learningAssetDomId(asset);
+  if (asset.type === "quantization-lab") {
+    const preset = isRecord(asset.config?.preset)
+      ? asset.config?.preset as QuantizationLabPreset
+      : undefined;
+    return (
+      <div id={sectionId} className="course-reader__learning-asset course-reader__anchored-section">
+        <QuantizationLab
+          asset={{
+            ...(asset.title ? { title: asset.title } : {}),
+            ...(asset.learningPurpose ? { learningPurpose: asset.learningPurpose } : {}),
+            ...(preset ? { config: { preset } } : {}),
+          }}
+        />
+        {viewMode === "audit" && asset.grounding && (
+          <p className="course-reader__asset-grounding">
+            学习资产依据：{asset.grounding.basedOnBlockIds.join("、")}
+          </p>
+        )}
+      </div>
+    );
+  }
+  if (asset.animationType) {
+    return (
+      <CourseAnimationFrame
+        courseId={courseId}
+        animationType={asset.animationType}
+        pointTitle={pointTitle}
+        sectionId={sectionId}
+        heading={asset.title ?? learningAssetTypeLabel(asset.type)}
+        suggestion={asset.learningPurpose ?? asset.caption ?? asset.fallback?.markdown}
+        onAvailabilityChange={onAvailabilityChange}
+      />
+    );
+  }
+  return (
+    <section id={sectionId} className="course-reader__learning-asset-card course-reader__anchored-section">
+      <header>
+        <span><Sparkles aria-hidden="true" size={14} />{learningAssetTypeLabel(asset.type)}</span>
+        <h3>{asset.title ?? "学习活动"}</h3>
+      </header>
+      {asset.learningPurpose && <RichText content={asset.learningPurpose} />}
+      {asset.fallback?.markdown && <RichText content={asset.fallback.markdown} />}
+      {asset.caption && <RichText content={asset.caption} />}
+      {viewMode === "audit" && asset.grounding && (
+        <p className="course-reader__asset-grounding">
+          学习资产依据：{asset.grounding.basedOnBlockIds.join("、")}
+        </p>
       )}
     </section>
   );
@@ -800,10 +1267,12 @@ function ContentProvenanceDisclosure({
   sourceSpans,
   basedOnBlocks,
   isTextbook,
+  showTechnical,
 }: {
   sourceSpans: ForestSourceSpan[];
   basedOnBlocks: ContentBlockReference[];
   isTextbook: boolean;
+  showTechnical: boolean;
 }) {
   const sourceCountLabel = [
     sourceSpans.length > 0 ? `${sourceSpans.length} 处教材定位` : "",
@@ -850,7 +1319,7 @@ function ContentProvenanceDisclosure({
               <li key={`${span.materialId}-${span.lineStart}-${span.lineEnd}-${index}`}>
                 <strong>{textbookSourceHeading(span)}</strong>
                 <span>{textbookSourceLocator(span)}</span>
-                <SourceTechnicalDetails span={span} />
+                {showTechnical && <SourceTechnicalDetails span={span} />}
               </li>
             ))}
           </ol>
@@ -985,12 +1454,16 @@ function LegacyReadingArticle({
   const scrollToSection = (section: ArticleSection) => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const target = document.getElementById(section.id);
-    if (!target) return;
+    const root = scrollRootRef.current;
+    if (!target || !root) return;
     target.tabIndex = -1;
     if (!target.hasAttribute("aria-label")) target.setAttribute("aria-label", section.label);
-    target.scrollIntoView({
+    root.scrollTo({
+      top: Math.max(
+        0,
+        root.scrollTop + target.getBoundingClientRect().top - root.getBoundingClientRect().top - 72,
+      ),
       behavior: reducedMotion ? "auto" : "smooth",
-      block: "start",
     });
     setActiveSectionId(section.id);
     window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
@@ -1217,12 +1690,16 @@ function CourseAnimationFrame({
   animationType,
   pointTitle,
   suggestion,
+  sectionId = "section-animation",
+  heading = "交互演示",
   onAvailabilityChange,
 }: {
   courseId: string;
   animationType: string;
   pointTitle: string;
   suggestion?: string;
+  sectionId?: string;
+  heading?: string;
   onAvailabilityChange: (availability: AnimationAvailability) => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -1295,15 +1772,15 @@ function CourseAnimationFrame({
   if (status === "unavailable") return null;
   if (status === "checking") {
     return (
-      <section id="section-animation" className="course-reader__animation course-reader__animation--loading course-reader__anchored-section" aria-busy="true">
+      <section id={sectionId} className="course-reader__animation course-reader__animation--loading course-reader__anchored-section" aria-busy="true">
         <PlayCircle aria-hidden="true" size={18} />
-        <span>正在检查交互演示…</span>
+        <span>正在检查{heading}…</span>
       </section>
     );
   }
   if (status === "error") {
     return (
-      <section id="section-animation" className="course-reader__animation course-reader__animation--error course-reader__anchored-section" role="status">
+      <section id={sectionId} className="course-reader__animation course-reader__animation--error course-reader__anchored-section" role="status">
         <AlertTriangle aria-hidden="true" size={18} />
         <div>
           <strong>交互演示暂时无法加载</strong>
@@ -1319,9 +1796,9 @@ function CourseAnimationFrame({
 
   const source = `${courseApi}/animations/player?type=${encodeURIComponent(animationType)}&attempt=${attempt}`;
   return (
-    <figure id="section-animation" className={`course-reader__animation course-reader__anchored-section ${status === "loading" ? "is-runtime-loading" : ""}`} aria-label={`${pointTitle}交互演示`}>
+    <figure id={sectionId} className={`course-reader__animation course-reader__anchored-section ${status === "loading" ? "is-runtime-loading" : ""}`} aria-label={`${pointTitle}${heading}`}>
       <div className="course-reader__animation-head">
-        <span><PlayCircle aria-hidden="true" size={15} />交互演示</span>
+        <span><PlayCircle aria-hidden="true" size={15} />{heading}</span>
         {status === "loading" && <small><Loader2 aria-hidden="true" size={13} />正在启动</small>}
         {status === "ready" && <small><CheckCircle2 aria-hidden="true" size={13} />可以操作</small>}
       </div>
@@ -1483,6 +1960,88 @@ function normalizeComparableText(value: string): string {
 function textbookBlockDomId(block: TextbookContentBlock, sourceIndex: number): string {
   const safeId = block.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
   return `section-textbook-content-${sourceIndex}-${safeId || "block"}`;
+}
+
+function textbookModuleDomId(module: TextbookReadingModule, moduleIndex: number): string {
+  const safeId = module.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `section-learning-module-${moduleIndex}-${safeId || "module"}`;
+}
+
+function learningAssetDomId(asset: TextbookLearningAsset): string {
+  const safeId = asset.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `section-learning-asset-${safeId || "asset"}`;
+}
+
+function learningBlockTitle(block: TextbookContentBlock): string {
+  const title = block.title ?? textbookContentBlockKindLabel(block.kind);
+  return title.replace(/^(?:模型补充|教材补充|教材内容)[：:]\s*/u, "") || title;
+}
+
+function isSemanticCardKind(kind: TextbookContentBlockKind): boolean {
+  return new Set<TextbookContentBlockKind>([
+    "definition",
+    "example",
+    "worked-example",
+    "warning",
+    "misconception",
+    "exercise",
+    "summary",
+  ]).has(kind);
+}
+
+function readerViewDescription(view: TextbookReaderView): string {
+  const descriptions: Record<TextbookReaderView, string> = {
+    learning: "按教学模块连续阅读",
+    comparison: "显示教材依据与课程补充",
+    audit: "展开可核验的来源信息",
+  };
+  return descriptions[view];
+}
+
+function formatAdaptationLevel(level: NonNullable<TextbookLearningDesign["adaptationLevel"]>): string {
+  const labels: Record<NonNullable<TextbookLearningDesign["adaptationLevel"]>, string> = {
+    faithful: "忠实编排",
+    balanced: "平衡重编",
+    "teaching-first": "教学优先重编",
+  };
+  return labels[level];
+}
+
+function formatLearningDepth(depth: TextbookLearningDepth): string {
+  const labels: Record<TextbookLearningDepth, string> = {
+    core: "核心",
+    support: "拓展理解",
+    advanced: "进阶",
+  };
+  return labels[depth];
+}
+
+function formatLearningModuleRole(role: string): string {
+  const labels: Record<string, string> = {
+    orientation: "问题导入",
+    "mental-model": "心智模型",
+    explanation: "理解",
+    formalization: "正式模型",
+    "worked-example": "例题推演",
+    application: "应用",
+    decision: "设计取舍",
+    diagnosis: "诊断与纠错",
+    assessment: "练习",
+    closure: "总结与衔接",
+  };
+  return labels[role] ?? role;
+}
+
+function learningAssetTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    animation: "动画演示",
+    "interactive-simulation": "交互模拟",
+    "quantization-lab": "量化互动实验",
+    "step-diagram": "分步图解",
+    figure: "图示",
+    exercise: "互动练习",
+  };
+  return labels[type] ?? "学习活动";
 }
 
 function formatPointOrigin(origin: NonNullable<ForestPoint["origin"]>): string {

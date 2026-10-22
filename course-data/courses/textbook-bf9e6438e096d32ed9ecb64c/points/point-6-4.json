@@ -1,0 +1,503 @@
+{
+  "id": "point-6-4",
+  "title": "单位、类型与数值精度校验",
+  "shortSummary": "校验单位、数据类型与数值精度，防止量纲错误和舍入误差污染下游统计与模型计算。",
+  "keyTerms": [
+    "单位校验",
+    "数据类型",
+    "数值精度",
+    "量纲",
+    "舍入",
+    "序列化"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.84,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的单位白名单、类型约束、三层舍入与跨层契约事实，按“症状—假设—证据—定位—修复”重排叙述，补充诊断分支、检查顺序与可离线完成的形成性练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "diagnose-unit-type-precision",
+          "text": "给定一条时序记录及其上下文，判断问题是单位符号、量纲、类型语义还是数值精度，并指出支持判断的证据。"
+        },
+        {
+          "id": "apply-precision-contract",
+          "text": "按存储保真、计算保真、展示舍入和跨层不可变换原则，写出可执行的校验、修复与审计方案。"
+        }
+      ],
+      "misconceptions": [
+        "`°C` 与 `Cel` 物理等价，因此网关应当放行这种写法差异。",
+        "数值经过双精度存储后，展示位数可以随意截断而不影响下游聚合。",
+        "先逐点舍入再求平均，与先求平均再展示舍入，结果必然相同。",
+        "边缘把数值乘以 10 转成整数传输、云端再除回，是无损的带宽优化。",
+        "`Infinity` 或 `NaN` 应按超量程记 `OUT_OF_RANGE` 即可。"
+      ],
+      "modules": [
+        {
+          "id": "symptom-and-scope",
+          "title": "症状与校验范围",
+          "role": "orientation",
+          "description": "先把单位、类型、精度三类问题放在同一条记录上，明确本点要诊断什么。",
+          "outcomeRefs": [
+            "diagnose-unit-type-precision"
+          ],
+          "order": 0
+        },
+        {
+          "id": "unit-dimension",
+          "title": "单位符号与量纲防御",
+          "role": "diagnosis",
+          "description": "从白名单精确匹配出发，区分符号不匹配与数值-单位组合错误。",
+          "outcomeRefs": [
+            "diagnose-unit-type-precision",
+            "apply-precision-contract"
+          ],
+          "order": 1
+        },
+        {
+          "id": "type-representation",
+          "title": "类型语义与物理量表示",
+          "role": "diagnosis",
+          "description": "检查原始码换算、状态量离散性和浮点有效位数。",
+          "outcomeRefs": [
+            "diagnose-unit-type-precision",
+            "apply-precision-contract"
+          ],
+          "order": 2
+        },
+        {
+          "id": "precision-rounding",
+          "title": "精度与舍入定位",
+          "role": "worked-example",
+          "description": "用存储保真、计算保真、展示舍入三层策略定位舍入顺序造成的偏差。",
+          "outcomeRefs": [
+            "diagnose-unit-type-precision",
+            "apply-precision-contract"
+          ],
+          "order": 3
+        },
+        {
+          "id": "contract-quality",
+          "title": "跨层契约与质量码修复",
+          "role": "repair",
+          "description": "按层级责任定位违规变换，并把精度异常映射到正确的质量码。",
+          "outcomeRefs": [
+            "diagnose-unit-type-precision",
+            "apply-precision-contract"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "diagnose-unit-type-precision",
+          "apply-precision-contract"
+        ],
+        "method": "完成一次端到端记录诊断：判断问题类型、写出修复动作，并用聚合或位级检查验证修复后不再漂移。",
+        "successCriteria": [
+          "能分别指出单位、类型、精度三类问题的首要证据",
+          "修复动作落到具体责任层，且不引入隐式数值变换",
+          "聚合示例只在最终展示边界舍入一次"
+        ],
+        "summaryBlockId": "model-repair-playbook",
+        "nextPointId": "point-6-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-scope",
+        "moduleId": "symptom-and-scope",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材的校验范围",
+        "markdown": "教材把**单位、类型与数值精度**放在同一节里，意味着一条记录的物理含义要同时通过这三道检查才算可信。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000211"
+              ],
+              "headingPath": [
+                "数据质量规则与质量账本",
+                "单位、类型与数值精度校验"
+              ],
+              "lineStart": 3741,
+              "lineEnd": 3742,
+              "assetRefs": [],
+              "excerptSha256": "cc2b2ff2c4c2f60bcde253048689b620d45ae7acd2829a06ff648072fcae3f95"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-unit-whitelist",
+        "moduleId": "unit-dimension",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "单位一致性：白名单精确匹配",
+        "markdown": "单位错误在工业物联网中最隐蔽，代价也最高：同一物理量会有 `Cel`、`°C`、`degC`、`Celsius` 等多种写法，电流也会有 `A`、`mA`、`ampere`。更危险的是量纲混淆——把 mA 的数值当成 A 写入，下游所有负载分析和异常检测都会失去意义。\n\n澄湾案例在原始事实表对 `unit` 采用严格枚举：`temperature → Cel`、`relative_humidity → %RH`、`door_state → 1`、`compressor_current → A`。白名单由**边缘网关在首次校验**执行，不在白名单内的记录直接拒绝，并标记 `quality_code = MANUAL_REVIEW`。\n\n| metric | allowed_unit | 量纲说明 |\n|:---|:---|:---|\n| temperature | Cel | 热力学温度，摄氏度标度 |\n| relative_humidity | %RH | 相对湿度百分比，无量纲比值的百分数形式 |\n| door_state | 1 | 二元状态编码，无量纲 |\n| compressor_current | A | 电流，国际单位制基本导出单位 |\n\n核心机制是**符号级精确匹配**，不做模糊兼容。`°C` 与 `Cel` 物理等价，但符号不一致同样拒绝；固件要换符号，走配置管理更新白名单，而不是在网关里放宽匹配。\n\n白名单只能证明符号合法。若 `compressor_current` 的 `value = 5`、`unit = 'A'`，而实际应为 mA，数值与单位共同构成一个“看起来合法”的千倍偏差；这类错误要靠第 6.3 节的范围规则与变化率规则交叉验证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000212"
+              ],
+              "headingPath": [
+                "数据质量规则与质量账本",
+                "单位、类型与数值精度校验",
+                "单位一致性校验：从符号匹配到量纲防御"
+              ],
+              "lineStart": 3743,
+              "lineEnd": 3761,
+              "assetRefs": [],
+              "excerptSha256": "02affec30bdc4f9bde528138a3ed90026aabbb21db0ff3275fd6eb7db65ead42"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-unit-diagnosis-branches",
+        "moduleId": "unit-dimension",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "诊断分支：符号不匹配还是量纲错误",
+        "markdown": "白名单通过只说明符号合法，不代表数值与单位匹配。把单位类问题拆成两个分支：\n\n| 症状 | 需要区分的假设 | 首选证据 | 定位动作 |\n|:---|:---|:---|:---|\n| 数值量级差约 1000 倍 | 符号合法但实际单位是 mA | 记录 `unit` 值与额定工况量级 | 查端侧换算与设备配置，按白名单拒绝 |\n| 符号不同但物理等价 | `°C`/`Cel` 写法差异 | 网关白名单版本与固件版本 | 走配置管理统一符号，不做模糊兼容 |\n| 符号与量级都正常却物理荒谬 | 数值-单位组合错误 | 与第 6.3 节范围、变化率规则交叉 | 触发人工复核并保留审计轨迹 |\n\n判断顺序建议先看符号是否在枚举内，再看数值是否落在该 `metric` 的合理量级。两步都过，仍要在范围规则里做第三道交叉验证——单靠单位白名单抓不到“符号正确、数值错位”的错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scope",
+            "textbook-unit-whitelist"
+          ]
+        }
+      },
+      {
+        "id": "textbook-type-representation",
+        "moduleId": "type-representation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "类型系统与物理量表示",
+        "markdown": "`value` 字段存的是**已完成 ADC 换算的物理量**，不是 ADC 原始码。PostgreSQL 推荐 `DOUBLE PRECISION`（IEEE 754 双精度）：尾数 53 位，约对应 15–16 位十进制有效数字。对案例温度（约 -30 至 10 °C）来说，浮点相对舍入误差远低于传感器自身的测量不确定度；对 0.1 A 量级的待机电流与 10 A 额定电流混存的场景，相对精度仍够用，但低端的绝对精度要单独关注。\n\n端侧换算公式为\n\n$$V_{\\text{phys}} = (D - D_{\\text{offset}}) \\cdot \\frac{V_{\\text{fullscale}}}{2^n - 1} \\cdot \\frac{1}{S}$$\n\n其中 $D$ 为 ADC 码值，$D_{\\text{offset}}$ 为零点偏移码，$V_{\\text{fullscale}}$ 为满量程电压，$n$ 为 ADC 位数，$S$ 为灵敏度（V/物理单位）。换算必须在端侧完成一次，边缘层与云平台不得重复执行。\n\n类型校验还有语义一面：`door_state` 的 `value` 必须是整数 0 或 1，出现 `0.0`、`1.0` 或带小数就标记 `MANUAL_REVIEW`。门的“半开”在物理上存在，但不在本系统的二元编码语义中；要表示中间态，应变更 `metric` 定义，而不是放宽类型约束。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000213"
+              ],
+              "headingPath": [
+                "数据质量规则与质量账本",
+                "单位、类型与数值精度校验",
+                "类型系统与物理量表示"
+              ],
+              "lineStart": 3762,
+              "lineEnd": 3773,
+              "assetRefs": [],
+              "excerptSha256": "3c65f18dba0f9eb10558ac13aed2be143b27bfe48dd256824ddfc70af8f64b70"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-type-check-sequence",
+        "moduleId": "type-representation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "类型与表示的检查顺序",
+        "markdown": "拿到一条记录，按下面的顺序做类型与表示检查，任一步失败就先停在原地，不要继续算：\n\n1. **是否原始码**：`value` 是否仍是 ADC 码？是则说明端侧换算没做，退回端侧，不要在边缘或云端补算。\n2. **状态量是否整数**：`door_state` 必须是 0 或 1；出现小数即判类型语义不符，标 `MANUAL_REVIEW`。\n3. **是否有限**：`Infinity`、`NaN` 直接拒绝，不进入原始事实表。\n4. **精度是否够用**：双精度约 15–16 位十进制有效数字；若同一 `metric` 同时覆盖 0.1 与 10 的量级，单独评估低端的绝对精度，必要时在契约中写明允许误差下限。\n5. **类型是否冻结**：把字段类型写进数据契约，后续任何降精度变换都视为契约变更，而不是查询优化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-representation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-precision-rounding",
+        "moduleId": "precision-rounding",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "三层舍入策略与均值示例",
+        "markdown": "假设端侧换算得到 -18.234567 °C。原始事实表保留完整精度，下游展示与聚合则要明确舍入规则。工程上采用**存储保真、计算保真、展示舍入**的三层策略：\n\n- **存储层**：`value` 写入原始双精度值，不截断；\n- **计算层**：`AVG`、`STDDEV` 等在数据库引擎内使用双精度中间结果；\n- **展示层**：按业务语义舍入——温度 1 位小数、湿度 1 位小数、电流 3 位小数。\n\n舍入方法必须显式声明。IEEE 754 默认的“银行家舍入”向偶数舍入，统计上无偏，但与工程人员直觉的四舍五入不同；监测界面建议统一用远离零舍入（`ROUND_HALF_UP`），避免运维人员因规则差异误判。\n\n精度损失的典型故障：连续 120 点、30 秒间隔的温度采样（1 小时窗口）。若先逐点舍入到 1 位小数再求平均，与先求平均再舍入，结果可能相差约 0.05 °C；对冷链温控，这点差距可能正好跨过告警阈值。正确写法是先保精度聚合、后展示舍入：\n\n```sql\n-- 先保精度聚合，后展示舍入\nSELECT\n    time_bucket('1 hour', event_time) AS bucket,\n    ROUND(AVG(value)::numeric, 1) AS temp_avg_display,\n    AVG(value) AS temp_avg_full  -- 保留用于后续计算\nFROM cold_chain.raw_fact\nWHERE device_id = 'Z1-TEMP-01'\n  AND metric = 'temperature'\n  AND event_time >= '2024-01-15T00:00:00Z'\n  AND event_time < '2024-01-15T01:00:00Z'\n  AND quality_code = 'GOOD'\nGROUP BY bucket;\n```\n\n注意 `AVG` 的输入过滤：只纳入 `quality_code = 'GOOD'`，分母是有效样本数而不是固定的 120。窗口内被排除的 `OUT_OF_RANGE` 或 `CLOCK_SUSPECT` 记录，要单独进入质量账本审计。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000214"
+              ],
+              "headingPath": [
+                "数据质量规则与质量账本",
+                "单位、类型与数值精度校验",
+                "数值精度与舍入策略"
+              ],
+              "lineStart": 3774,
+              "lineEnd": 3804,
+              "assetRefs": [],
+              "excerptSha256": "255ce945e9d8e6872a29a729cfe23a4b3522ab81f5672774b9d3301ec2b832b6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rounding-order-example",
+        "moduleId": "precision-rounding",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "舍入顺序与舍入规则算例",
+        "markdown": "先看两种舍入在边界上的差别：-18.25 保留 1 位小数时，银行家舍入向偶数取 -18.2，远离零舍入取 -18.3。展示口径不统一，运维看到的数就会差一个末位。\n\n再看舍入顺序。取三个点 -18.24、-18.24、-18.28：\n\n- 先逐点舍入：-18.2、-18.2、-18.3，平均 -18.2333，展示为 -18.2；\n- 先求平均：-18.2533，展示舍入为 -18.3。\n\n同一批数据，展示结果差 0.1 °C。教材的 120 点案例给出约 0.05 °C 的差异量级，这里换成 3 个点只是为了把偏差放大到肉眼可见，机制相同。\n\n可执行规则只有一条：**聚合全程使用未舍入的输入，只在最终展示边界舍入一次**；同时先按质量码过滤，再进入聚合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-precision-rounding"
+          ]
+        }
+      },
+      {
+        "id": "textbook-layer-contract",
+        "moduleId": "contract-quality",
+        "depth": "support",
+        "kind": "warning",
+        "title": "跨层级精度契约与反例",
+        "markdown": "端侧、边缘、云平台三层的精度责任必须写清：端侧换算精度不低于标定证书声明的扩展不确定度；边缘在传输与缓存中不做任何数值变换；云平台保证持久化与查询返回的位级一致性。\n\n常见反例一：边缘网关为“节省带宽”把温度乘以 10 转成整数传输，云端再除回。这破坏了原始事实契约，引入额外的整数量化误差，也让 `unit` 字段变成谎言——传输时的数值已经不代表 `Cel`。\n\n常见反例二：云平台为“优化查询”建物化视图时把 `value` 转成 `REAL`（单精度，24 位尾数，约 7 位十进制有效数字）。-18.234567 会被截成约 -18.23457，在百万级记录聚合中可能累积成系统性偏差。物化视图的字段类型必须与原始事实表一致，或者显式声明为派生字段且不得覆盖原始记录。\n\n可验证的检查方法是位级一致性审计：对指定 `device_id`、`sequence_no` 的记录，分别从端侧日志、边缘缓存、云平台持久化三层抽取 `value`，比较双精度位模式（例如 `double_to_raw_bits` 类函数）。任何差异都说明层级责任被违反；该审计不依赖业务语义，是纯粹的工程契约验证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000215"
+              ],
+              "headingPath": [
+                "数据质量规则与质量账本",
+                "单位、类型与数值精度校验",
+                "跨层级精度契约与反例"
+              ],
+              "lineStart": 3805,
+              "lineEnd": 3814,
+              "assetRefs": [],
+              "excerptSha256": "8bb4990b1fbc9d5e18ff8643ff8f39880b850cb71dec190d9d98a4f8cdb022f1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-qualitycode-linkage",
+        "moduleId": "contract-quality",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "精度异常与质量码的联动",
+        "markdown": "数值异常不一定是量程问题。若端侧换算溢出产生 `Infinity` 或 `NaN`，那是**精度崩溃**，应标记 `quality_code = MANUAL_REVIEW`，而不是 `OUT_OF_RANGE`——后者只用于有限数值超出配置量程。\n\nPostgreSQL 的 `DOUBLE PRECISION` 接受 `Infinity` 和 `NaN` 是双刃剑：写入不中断，但会污染聚合——`AVG` 含 `Infinity` 返回 `Infinity`，含 `NaN` 返回 `NaN`。建议在边缘网关前置过滤，拒绝任何非有限数值进入原始事实表；若必须在平台层兜底，用 `CHECK` 约束显式排除：\n\n```sql\nALTER TABLE cold_chain.raw_fact\nADD CONSTRAINT chk_value_finite\nCHECK (value <> 'Infinity'::float8\n   AND value <> '-Infinity'::float8\n   AND value <> 'NaN'::float8);\n```\n\n该约束与第 6.3 节的范围约束互补：`chk_value_finite` 保证数值可计算，`OUT_OF_RANGE` 判定保证数值在物理合理区间内，两者共同构成数值质量的完整防线。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000216"
+              ],
+              "headingPath": [
+                "数据质量规则与质量账本",
+                "单位、类型与数值精度校验",
+                "精度与质量码的联动规则"
+              ],
+              "lineStart": 3815,
+              "lineEnd": 3830,
+              "assetRefs": [],
+              "excerptSha256": "5d543f4f5e25a8675fae2cd1caae063a78df6cc034e04cf8178ce2e615f62bf1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-repair-playbook",
+        "moduleId": "contract-quality",
+        "depth": "core",
+        "kind": "summary",
+        "title": "修复决策表与下一步",
+        "markdown": "把前面的证据链收成一张修复表：\n\n| 症状 | 修复动作 | 责任层 |\n|:---|:---|:---|\n| 单位符号不在白名单 | 改设备配置或固件版本，更新白名单；不做模糊兼容 | 端侧、边缘 |\n| 数值量级差千倍 | 查换算系数与单位字段，拒绝并标 `MANUAL_REVIEW` | 端侧、边缘 |\n| 状态量出现小数 | 修端侧编码，或变更 `metric` 定义 | 端侧、建模 |\n| 出现 `Infinity` 或 `NaN` | 边缘前置拒绝，平台层 `CHECK` 兜底 | 边缘、云 |\n| 跨层数值位不一致 | 定位违反“不做变换”的那一层并回滚 | 边缘、云 |\n| 聚合与展示对不上 | 统一为“全精度聚合、最后一次舍入”，并核对过滤口径 | 云、展示 |\n\n修复的优先级与第 6.3 节的质量码一致：能定位到具体层就先修实现，定位不到再进人工复核，并保留审计轨迹。\n\n本点只保证**单条记录**在单位、类型和精度上可信。下一步要回答的是：当同一物理量由多支传感器同时观测时，它们之间的差异该由谁负责——这进入跨传感器一致性与冗余校验。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layer-contract",
+            "textbook-qualitycode-linkage"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "rounding-order-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-rounding-order-example",
+        "moduleId": "precision-rounding",
+        "depth": "core",
+        "title": "选择正确的聚合与展示流程",
+        "outcomeRefs": [
+          "apply-precision-contract"
+        ],
+        "learningPurpose": "检查学习者能否把“全精度聚合、最后一次舍入”的契约应用到具体记录上，并识别其他做法的精度风险。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-precision-rounding"
+          ]
+        },
+        "config": {
+          "questionType": "single-choice",
+          "prompt": "同一小时内三个温度点 -18.24、-18.24、-18.28（单位 Cel，quality_code 均为 GOOD）。哪条聚合与展示流程符合教材的精度契约？",
+          "options": [
+            {
+              "id": "a",
+              "text": "先逐点舍入到 1 位小数，再求平均并直接展示。"
+            },
+            {
+              "id": "b",
+              "text": "用未舍入值求平均，只在展示时舍入到 1 位小数。"
+            },
+            {
+              "id": "c",
+              "text": "先乘以 10 转成整数传输，云端除回后求平均。"
+            },
+            {
+              "id": "d",
+              "text": "把字段改成单精度浮点以加快聚合，再舍入展示。"
+            }
+          ],
+          "correctOptionId": "b",
+          "explanation": "全精度聚合、最后一次舍入；逐点先舍入会改变结果，整数缩放传输和降为单精度都破坏原始事实契约。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若无法交互，请写出你会采用的聚合流程，并说明另外三种做法为什么会改变结果。参考答案：用未舍入的 GOOD 样本求平均，只在展示边界按 1 位小数舍入一次；逐点舍入、×10 整数缩放传输和降精度存储都会引入额外误差。"
+        }
+      }
+    ]
+  },
+  "subtitle": "数据质量规则与质量账本",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [
+    "point-6-3"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000211"
+      ],
+      "headingPath": [
+        "数据质量规则与质量账本",
+        "单位、类型与数值精度校验"
+      ],
+      "lineStart": 3741,
+      "lineEnd": 3742,
+      "assetRefs": [],
+      "excerptSha256": "cc2b2ff2c4c2f60bcde253048689b620d45ae7acd2829a06ff648072fcae3f95"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000212"
+      ],
+      "headingPath": [
+        "数据质量规则与质量账本",
+        "单位、类型与数值精度校验",
+        "单位一致性校验：从符号匹配到量纲防御"
+      ],
+      "lineStart": 3743,
+      "lineEnd": 3761,
+      "assetRefs": [],
+      "excerptSha256": "02affec30bdc4f9bde528138a3ed90026aabbb21db0ff3275fd6eb7db65ead42"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000213"
+      ],
+      "headingPath": [
+        "数据质量规则与质量账本",
+        "单位、类型与数值精度校验",
+        "类型系统与物理量表示"
+      ],
+      "lineStart": 3762,
+      "lineEnd": 3773,
+      "assetRefs": [],
+      "excerptSha256": "3c65f18dba0f9eb10558ac13aed2be143b27bfe48dd256824ddfc70af8f64b70"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000214"
+      ],
+      "headingPath": [
+        "数据质量规则与质量账本",
+        "单位、类型与数值精度校验",
+        "数值精度与舍入策略"
+      ],
+      "lineStart": 3774,
+      "lineEnd": 3804,
+      "assetRefs": [],
+      "excerptSha256": "255ce945e9d8e6872a29a729cfe23a4b3522ab81f5672774b9d3301ec2b832b6"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000215"
+      ],
+      "headingPath": [
+        "数据质量规则与质量账本",
+        "单位、类型与数值精度校验",
+        "跨层级精度契约与反例"
+      ],
+      "lineStart": 3805,
+      "lineEnd": 3814,
+      "assetRefs": [],
+      "excerptSha256": "8bb4990b1fbc9d5e18ff8643ff8f39880b850cb71dec190d9d98a4f8cdb022f1"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000216"
+      ],
+      "headingPath": [
+        "数据质量规则与质量账本",
+        "单位、类型与数值精度校验",
+        "精度与质量码的联动规则"
+      ],
+      "lineStart": 3815,
+      "lineEnd": 3830,
+      "assetRefs": [],
+      "excerptSha256": "5d543f4f5e25a8675fae2cd1caae063a78df6cc034e04cf8178ce2e615f62bf1"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2587,
+    1890
+  ],
+  "scale": 0.91
+}

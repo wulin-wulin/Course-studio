@@ -1,0 +1,506 @@
+{
+  "id": "point-3-3",
+  "title": "时钟偏移、漂移及其校正",
+  "shortSummary": "解释时钟偏移与漂移的来源，估计偏差量并选择步进校正或渐进校正以避免时间序列跳变。",
+  "keyTerms": [
+    "时钟偏移",
+    "时钟漂移",
+    "步进校正",
+    "渐进校正",
+    "偏差估计",
+    "时间跳变"
+  ],
+  "animationType": "clockDriftCorrection",
+  "animationSuggestion": "并排显示同一组参数下的两条偏移曲线：步进在触发时刻垂直跳变，event_time 出现回退标记；渐进按指数收敛到容差带。允许切换漂移率与触发阈值，重播回到相同初始条件。",
+  "difficulty": "中等",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-3-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的公式、数值、阈值与数据契约边界，按变量定义、测量假设、推导、算例与参数实验重排讲解顺序，补充单位换算表、校正决策表和故障排查顺序，不改变教材结论。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-offset-drift",
+          "text": "能区分时钟偏移（瞬态读数差）与时钟漂移（频率偏差），并用公式换算指定漂移在一段时间内造成的累积偏移。"
+        },
+        {
+          "id": "select-correction",
+          "text": "能依据偏差估计的置信度和数据契约边界，为给定采集场景选择步进校正或渐进校正，并说明其对 event_time 与窗口聚合的影响。"
+        }
+      ],
+      "misconceptions": [
+        "把时钟漂移当成一次性读数误差，忽略它会持续积分成新的偏移。",
+        "认为校正时可以直接改写已持久化的 event_time 或原始 quality_code。",
+        "用单次往返报文测得的偏移直接当作漂移，把网络排队时延误判为时钟频率偏差。"
+      ],
+      "modules": [
+        {
+          "id": "offset-drift-model",
+          "title": "偏移与漂移：定义与量纲",
+          "role": "concept-model",
+          "description": "先建立状态量与速率量，再把 ppm 换算成可感知的时间预算。",
+          "outcomeRefs": [
+            "explain-offset-drift"
+          ],
+          "order": 0
+        },
+        {
+          "id": "offset-drift-estimation",
+          "title": "双向测量与漂移估计",
+          "role": "quantification",
+          "description": "在对称时延假设下推导偏移与漂移估计，并讨论观测窗口对精度的影响。",
+          "outcomeRefs": [
+            "explain-offset-drift"
+          ],
+          "order": 1
+        },
+        {
+          "id": "correction-and-contract",
+          "title": "步进/渐进校正与契约边界",
+          "role": "decision",
+          "description": "比较两种校正动作对时间序列的影响，并给出可执行的取舍规则。",
+          "outcomeRefs": [
+            "select-correction"
+          ],
+          "order": 2
+        },
+        {
+          "id": "compensated-windows",
+          "title": "云平台补偿与窗口聚合",
+          "role": "application",
+          "description": "把补偿量限制在分析层，验证窗口边界处的记录归属。",
+          "outcomeRefs": [
+            "select-correction"
+          ],
+          "order": 3
+        },
+        {
+          "id": "fault-triage",
+          "title": "故障诊断与可验证检查",
+          "role": "diagnosis",
+          "description": "按症状、证据与判定规则定位三类典型故障，并给出排查顺序。",
+          "outcomeRefs": [
+            "explain-offset-drift",
+            "select-correction"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-offset-drift",
+          "select-correction"
+        ],
+        "method": "先判定当前是偏移超限还是漂移估计低置信，再按契约选择校正方式，并说明该动作对 event_time 与窗口聚合的影响。",
+        "successCriteria": [
+          "能写出偏移与漂移的定义式并给出一致单位",
+          "能说明步进校正导致 event_time 回退的机制",
+          "能为给定场景选出校正方式并对应到至少一个可验证检查项"
+        ],
+        "summaryBlockId": "model-triage",
+        "nextPointId": "point-3-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-scope",
+        "moduleId": "offset-drift-model",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节的问题与变量",
+        "markdown": "设备本地时钟与参考时钟之间同时存在两种偏离：同一瞬间的**读数差**，以及频率上的**固定偏差**。教材把前者称为时钟偏移（clock offset），后者称为时钟漂移（clock drift），并要求先分清两者再讨论校正。\n\n本节沿一条可计算的链路推进：先定义变量与单位，再用双向报文估计偏移、用多次测量估计漂移，最后依据数据契约选择步进校正或渐进校正。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000092"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "时钟偏移、漂移及其校正"
+              ],
+              "lineStart": 1692,
+              "lineEnd": 1693,
+              "assetRefs": [],
+              "excerptSha256": "ad88ea9abc722ad70e417bc141c3795bc8a5fa82cd9179f79f59027be0666c5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-separate",
+        "moduleId": "offset-drift-model",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么必须把两个量分开",
+        "markdown": "可以用手表来区分：偏移是此刻读数比标准时间快 3 秒，一次拨回就能消除；漂移是这块表每天固定走快 4 秒，即使拨回，误差仍会按同样速率重新长出来。\n\n工程含义是：只测偏移而不估漂移，无法预测下一次超标时间；只估漂移而不测偏移，无法判断当前是否需要立刻干预。前者是状态量，后者是速率量，校正策略必须同时使用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-scope"
+          ]
+        }
+      },
+      {
+        "id": "tb-physical-sources",
+        "moduleId": "offset-drift-model",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：偏移、漂移与累积误差",
+        "markdown": "时钟偏移（clock offset）指两个独立时钟在同一瞬间的读数差值：\n\n$$\\theta(t) = T_{\\text{local}}(t) - T_{\\text{ref}}(t)$$\n\n其中 $T_{\\text{local}}$ 为设备本地时钟，$T_{\\text{ref}}$ 为参考时钟，$t$ 为客观时间。偏移是瞬态量，单位通常为毫秒或微秒。\n\n时钟漂移（clock drift）指本地频率相对参考频率的偏差：\n\n$$\\delta = \\frac{f_{\\text{local}} - f_{\\text{ref}}}{f_{\\text{ref}}}$$\n\n漂移无量纲，工程上用 ppm 表示。典型晶振漂移为 10–100 ppm，温补晶振（TCXO）约 $10^{-7}$，恒温晶振（OCXO）可达 $10^{-9}$。漂移本身不直接产生时间误差，但经积分形成累积偏移：\n\n$$\\theta(t) = \\theta(t_0) + \\int_{t_0}^{t} \\delta(\\tau)\\,d\\tau$$\n\n教材算例：Z1-TEMP-01 采用 20 ppm 晶振，无同步运行 24 小时，理论累积偏移为\n\n$$24 \\times 3600 \\times 20 \\times 10^{-6}\\,\\text{s} = 1.728\\,\\text{s}$$\n\n该值已超过 30 秒采样周期的 5%，会造成跨设备时序对齐的显著错位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000093"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "时钟偏移、漂移及其校正",
+                "时钟偏移与漂移的物理来源"
+              ],
+              "lineStart": 1694,
+              "lineEnd": 1715,
+              "assetRefs": [],
+              "excerptSha256": "dab00bbe7751d7282860db4be0ba6cad4982b6a2fd852f620c0b298f70200986"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-drift-budget",
+        "moduleId": "offset-drift-model",
+        "depth": "support",
+        "kind": "table",
+        "title": "参数实验：把 ppm 换成时间预算",
+        "markdown": "把漂移换算成可感知的时间预算，可以直接判断同步周期是否够用：\n\n| 漂移 | 每秒累积 | 每小时累积 | 每天累积 |\n|---|---|---|---|\n| 1 ppm | 1 µs | 3.6 ms | 86.4 ms |\n| 10 ppm | 10 µs | 36 ms | 864 ms |\n| 20 ppm | 20 µs | 72 ms | 1.728 s |\n\n表中 20 ppm 一行与教材 24 小时算例一致。若同步周期为 300 秒，20 ppm 在单个周期内只累积约 6 ms，远小于常见的百毫秒级阈值；这说明同步周期的选择要同时看漂移大小和允许误差，而不是只看漂移数值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-physical-sources"
+          ]
+        }
+      },
+      {
+        "id": "tb-detect-estimate",
+        "moduleId": "offset-drift-estimation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：偏移检测与漂移估计",
+        "markdown": "偏移检测依赖双向报文交换。设网关发送时刻为 $t_1$（参考时钟），设备接收时刻 $t_2$（本地时钟），设备回复时刻 $t_3$（本地时钟），网关接收时刻 $t_4$（参考时钟）。在上下行传播时延对称的假设下：\n\n$$\\theta = \\frac{(t_2 - t_1) + (t_3 - t_4)}{2}, \\quad d = \\frac{(t_4 - t_1) - (t_3 - t_2)}{2}$$\n\n其中 $d$ 为单程传播时延估计。实际工程中对称假设常不成立，因此需要多次采样取中位数或剔除异常值。\n\n漂移估计至少需要两次偏移测量：\n\n$$\\hat{\\delta} = \\frac{\\theta_2 - \\theta_1}{t^{(2)} - t^{(1)}}$$\n\n教材案例每 300 秒查询一次，连续 12 次构成 1 小时观测窗口，偏移序列从 +120 ms 增至 +208 ms：\n\n| 采样序号 | 偏移 $\\theta_i$ | 与首点差 |\n|---|---|---|\n| 0 | +120 ms | 0 |\n| 4 | +152 ms | +32 ms |\n| 8 | +184 ms | +64 ms |\n| 11 | +208 ms | +88 ms |\n\n线性回归得 $\\hat{\\delta} \\approx 8.89 \\times 10^{-6}$（约 8.9 ppm）。该估计的置信度受网络抖动制约：若单次查询的 $d$ 标准差超过 5 ms，1 小时窗口的漂移估计不确定度将显著增大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "时钟偏移、漂移及其校正",
+                "偏移检测与漂移估计的工程方法"
+              ],
+              "lineStart": 1716,
+              "lineEnd": 1738,
+              "assetRefs": [],
+              "excerptSha256": "cda119208690a1cbe1d9107276f67790a0e7bc69c8eb96c4fe317dcbd856190a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-estimate-uncertainty",
+        "moduleId": "offset-drift-estimation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：观测窗口如何决定漂移估计精度",
+        "markdown": "漂移估计是偏移变化量除以观测时长，因此测量噪声会被窗口长度放大或压缩。若某次偏移测量的不确定度为 $10\\,\\text{ms}$：\n\n- 在 600 秒的窗口内，换算到漂移约为 $10\\,\\text{ms} / 600\\,\\text{s} \\approx 1.7 \\times 10^{-5}$，即约 17 ppm；\n- 在 3600 秒的窗口内，同一噪声只对应约 $2.8 \\times 10^{-6}$，即约 2.8 ppm。\n\n所以教材强调单次查询时延 $d$ 的标准差会直接影响置信度：噪声大时，正确动作是扩大观测窗口或丢弃本周期估计，而不是把单次查询结果当成确定的漂移值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-detect-estimate"
+          ]
+        }
+      },
+      {
+        "id": "tb-correction-contract",
+        "moduleId": "correction-and-contract",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：步进、渐进与数据契约",
+        "markdown": "校正分为即时步进（step）与渐进调整（slew）。步进直接改写时钟读数，可能使 event_time 回退，出现 sequence_no 递增而时间递减的异常；渐进调整微调频率使本地时钟逐渐收敛，不会时间倒流，但收敛期间存在残余偏移。\n\n端侧在采样完成时写入 event_time 与 sequence_no，该时刻的本地时钟即成为不可变更的原始事实。网关校正时不得覆写已持久化的 event_time 或 quality_code。教材给出的处置顺序是：\n\n1. 向设备发起时间同步，调整其后续采样的本地时钟基准；\n2. 对本次及此前已缓存的记录保留原始 event_time；\n3. 转发至云平台时附加派生字段 `clock_compensation_ms`，记录网关估计的偏移量；\n4. 原始 quality_code 保持 GOOD，CLOCK_SUSPECT 只作为描述补偿状态的派生质量标记。\n\n```\nfunction forward_record(record, estimated_offset):\n    if abs(estimated_offset) > 200 ms:\n        record.clock_compensation_ms = estimated_offset\n        record.quality_code = GOOD        # 强制保留原始值\n    else:\n        record.clock_compensation_ms = 0\n    send_to_cloud(record)\n```\n\n案例配置的偏移阈值为 200 ms。这一设计把“原始观测时刻”与“事后可信时刻”分成两个语义层，避免派生处理污染事实表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000095"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "时钟偏移、漂移及其校正",
+                "校正策略与数据契约边界"
+              ],
+              "lineStart": 1739,
+              "lineEnd": 1764,
+              "assetRefs": [],
+              "excerptSha256": "00d85b7365032767cf2577f0d8397b64083a7540dee776e3cad46edd41893dc9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-step-vs-slew",
+        "moduleId": "correction-and-contract",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "决策表：什么时候允许步进",
+        "markdown": "| 判据 | 步进校正 | 渐进校正 |\n|---|---|---|\n| 时间跳变 | 读数瞬时前跳或回退 | 无倒流 |\n| 收敛速度 | 立即消除偏移 | 取决于时间常数与残余偏移 |\n| 对 event_time 序列的影响 | 可能产生倒序或重复时间戳 | 序列保持单调 |\n| 适用情境 | 设备离线、初次上电、无在线消费者比对 | 在线连续采集，下游依赖序列单调 |\n\n取舍规则：连续采集且下游按 event_time 做窗口聚合时，优先渐进校正；只有设备离线、偏移量远大于可接受误差且当前没有在线消费者时，才允许步进，并把跳变量写入派生审计字段。两类动作都不改写已持久化的 event_time。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-correction-contract"
+          ]
+        }
+      },
+      {
+        "id": "tb-cloud-window",
+        "moduleId": "compensated-windows",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：补偿后时间与窗口聚合",
+        "markdown": "云平台接收带 `clock_compensation_ms` 的记录后，可在分析阶段计算补偿后的事件时间：\n\n$$T_{\\text{adjusted}} = T_{\\text{event}} - \\frac{\\text{clock\\_compensation\\_ms}}{1000}\\,\\text{s}$$\n\n该调整仅用于时序对齐与窗口聚合，不写入原始事实表。\n\n教材算例：Z1-TEMP-01 某小时的 120 条温度记录中，前 40 条补偿量为 0，后 80 条因网关同步动作为 +150 ms。若直接按原始 event_time 划分 `[00:00:00, 01:00:00)` 窗口，最后一条记录原始 event_time 为 00:59:59.850，补偿后为 00:59:59.700，仍在窗口内；若补偿量为负，则需检查记录是否滑入下一窗口。\n\n```sql\nWITH compensated AS (\n    SELECT\n        device_id,\n        event_time,\n        event_time - INTERVAL '1 ms' * clock_compensation_ms AS adjusted_time,\n        value,\n        quality_code\n    FROM cold_chain_raw\n    WHERE device_id = 'Z1-TEMP-01'\n      AND metric = 'temperature'\n      AND event_time >= '2024-01-15 00:00:00'::timestamptz\n      AND event_time <  '2024-01-15 01:00:00'::timestamptz\n)\nSELECT\n    time_bucket('5 minutes', adjusted_time) AS window_start,\n    AVG(value) AS avg_temp,\n    COUNT(*) AS point_count\nFROM compensated\nWHERE quality_code = 'GOOD'\nGROUP BY window_start\nORDER BY window_start;\n```\n\n窗口函数 `time_bucket` 作用于补偿后的 `adjusted_time`，过滤条件仍使用原始 `quality_code`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000096"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "时钟偏移、漂移及其校正",
+                "云平台端的漂移补偿与窗口计算"
+              ],
+              "lineStart": 1765,
+              "lineEnd": 1801,
+              "assetRefs": [],
+              "excerptSha256": "cf4475666154c1e76e75c34d9db1ab640514196c6b2102a8349a58f1acdf2558"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-fault-checklist",
+        "moduleId": "fault-triage",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：三类故障与检查表",
+        "markdown": "教材列出三类可验证故障。\n\n**故障一：步进校正导致 event_time 回退。** 设备时钟突然后跳 2 秒时，可能出现 sequence_no 递增而时间递减。检查方法是对单 device_id + metric 验证：\n\n$$\\forall i: \\text{sequence\\_no}_i < \\text{sequence\\_no}_{i+1} \\Rightarrow \\text{event\\_time}_i \\le \\text{event\\_time}_{i+1} + \\epsilon$$\n\n其中 $\\epsilon$ 为允许的亚秒级抖动容限（案例配置 50 ms）。违反则写入派生异常表并标记 CLOCK_SUSPECT，但不覆盖原始 quality_code。\n\n**故障二：漂移估计混淆于网络抖动。** Wi-Fi 中继下往返时延呈长尾分布，单次样本可能把 100 ms 的排队时延误判为时钟漂移。检查方法是维护滑动窗口的偏移测量序列并计算 MAD；MAD 超过 30 ms 时判定该窗口漂移估计为低置信度，延长同步周期而非盲目补偿。\n\n**故障三：补偿量重复应用。** 两个分析作业先后用同一 `clock_compensation_ms` 调整时间，会造成过补偿。检查方法是在派生数据血缘中记录补偿版本号，同一记录只允许应用一次。\n\n| 检查项 | 输入 | 判定规则 | 异常处置 |\n|---|---|---|---|\n| 时间单调性 | sequence_no 排序后的 event_time | 相邻差值 ≥ −50 ms | 写入派生异常表，标记 CLOCK_SUSPECT |\n| 漂移估计置信度 | 1 小时内 12 次偏移样本 | MAD ≤ 30 ms | 超限则丢弃本周期估计 |\n| 补偿应用一致性 | clock_compensation_ms 与派生版本号 | 同一记录只应用一次 | 版本号冲突时阻断下游作业 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "时间基准与事件顺序",
+                "时钟偏移、漂移及其校正",
+                "常见故障与可验证检查"
+              ],
+              "lineStart": 1802,
+              "lineEnd": 1819,
+              "assetRefs": [],
+              "excerptSha256": "3ad723137d1aa2a03469540457b0284b538f1dda7b4ea8bbe276b1a029426a32"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-triage",
+        "moduleId": "fault-triage",
+        "depth": "support",
+        "kind": "summary",
+        "title": "排查顺序：先证伪，再定位，最后查重复应用",
+        "markdown": "三类故障各有先验症状，按下面的顺序排查可以避免在错误的层面修复：\n\n1. **先看序列是否仍单调**：按 sequence_no 排序后检查相邻 event_time 差值，出现倒序或重复时间戳说明发生过回退，问题在校正动作本身。\n2. **再看同步是否频繁触发**：统计偏移样本的 MAD，超过 30 ms 说明漂移估计被网络抖动污染，此时应延长同步周期，而不是加大补偿量。\n3. **最后看聚合结果是否整体平移**：若同一记录在不同作业里被调整两次，窗口均值会整体偏移一个固定量，用补偿版本号即可定位。\n\n这个顺序与教材检查表一一对应：时间单调性、漂移估计置信度、补偿应用一致性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cloud-window",
+            "tb-fault-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "offset-correction-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-step-vs-slew",
+        "moduleId": "correction-and-contract",
+        "depth": "core",
+        "title": "选择校正方式",
+        "outcomeRefs": [
+          "select-correction"
+        ],
+        "learningPurpose": "检查学习者能否把契约边界与序列单调性要求结合起来，为在线采集场景选出校正方式。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-correction-contract"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "某在线温度采集设备在运行中检测到偏移 +260 ms，下游正按 event_time 做 5 分钟窗口聚合，且不允许结果时间倒序。应选择哪种校正方式？",
+          "options": [
+            {
+              "id": "a",
+              "text": "立即步进回拨 260 ms，并同步改写已缓存记录的 event_time"
+            },
+            {
+              "id": "b",
+              "text": "渐进调整频率使时钟收敛，保留原始 event_time，并把补偿量写入派生字段"
+            },
+            {
+              "id": "c",
+              "text": "忽略偏移，等下次停机维护再处理"
+            }
+          ],
+          "correctOptionId": "b",
+          "explanation": "连续采集要求序列单调，且已持久化的 event_time 属于原始事实；渐进校正避免时间倒流，补偿量以派生字段记录，符合教材的契约边界。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "场景：在线采集设备偏移 +260 ms，下游按 event_time 做窗口聚合且不允许时间倒序。请选择校正方式，并说明为什么不能改写已持久化的 event_time。参考要点：连续采集优先渐进校正；原始 event_time 与 quality_code 不可覆写；补偿量写入 `clock_compensation_ms` 派生字段。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时间基准与事件顺序",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000092"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "时钟偏移、漂移及其校正"
+      ],
+      "lineStart": 1692,
+      "lineEnd": 1693,
+      "assetRefs": [],
+      "excerptSha256": "ad88ea9abc722ad70e417bc141c3795bc8a5fa82cd9179f79f59027be0666c5d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000093"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "时钟偏移、漂移及其校正",
+        "时钟偏移与漂移的物理来源"
+      ],
+      "lineStart": 1694,
+      "lineEnd": 1715,
+      "assetRefs": [],
+      "excerptSha256": "dab00bbe7751d7282860db4be0ba6cad4982b6a2fd852f620c0b298f70200986"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000094"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "时钟偏移、漂移及其校正",
+        "偏移检测与漂移估计的工程方法"
+      ],
+      "lineStart": 1716,
+      "lineEnd": 1738,
+      "assetRefs": [],
+      "excerptSha256": "cda119208690a1cbe1d9107276f67790a0e7bc69c8eb96c4fe317dcbd856190a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000095"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "时钟偏移、漂移及其校正",
+        "校正策略与数据契约边界"
+      ],
+      "lineStart": 1739,
+      "lineEnd": 1764,
+      "assetRefs": [],
+      "excerptSha256": "00d85b7365032767cf2577f0d8397b64083a7540dee776e3cad46edd41893dc9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000096"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "时钟偏移、漂移及其校正",
+        "云平台端的漂移补偿与窗口计算"
+      ],
+      "lineStart": 1765,
+      "lineEnd": 1801,
+      "assetRefs": [],
+      "excerptSha256": "cf4475666154c1e76e75c34d9db1ab640514196c6b2102a8349a58f1acdf2558"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000097"
+      ],
+      "headingPath": [
+        "时间基准与事件顺序",
+        "时钟偏移、漂移及其校正",
+        "常见故障与可验证检查"
+      ],
+      "lineStart": 1802,
+      "lineEnd": 1819,
+      "assetRefs": [],
+      "excerptSha256": "3ad723137d1aa2a03469540457b0284b538f1dda7b4ea8bbe276b1a029426a32"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2441,
+    2376
+  ],
+  "scale": 0.98
+}
