@@ -79,6 +79,9 @@ export class Scene3D {
 
         // 3D 树
         this.highGroup = new THREE.Group(); this.scene.add(this.highGroup);
+        // 教材点与模型扩展点共用原有树形，仅以克制的树根光环区分来源。
+        // 单环表示教材原有，暖色双环表示模型扩展；旧课程不带 origin 时不绘制。
+        this.originMarkerGroup = new THREE.Group(); this.scene.add(this.originMarkerGroup);
         this.treeMeta = []; this._buildTrees();
 
         // Level sprites 层
@@ -386,6 +389,33 @@ export class Scene3D {
         return "#" + c.getHexString();
     }
 
+    _createOriginMarker(origin, importance) {
+        if (origin !== "textbook" && origin !== "llm-extension") return null;
+        const marker = new THREE.Group();
+        const radius = 58 * Math.max(0.72, Math.min(1.35, importance || 1));
+        const color = origin === "textbook" ? 0x2f7567 : 0xb7791f;
+        const addRing = (inner, outer, opacity) => {
+            const ring = new THREE.Mesh(
+                new THREE.RingGeometry(inner, outer, 40),
+                new THREE.MeshBasicMaterial({
+                    color,
+                    transparent: true,
+                    opacity,
+                    side: THREE.DoubleSide,
+                    depthWrite: false,
+                    polygonOffset: true,
+                    polygonOffsetFactor: -1,
+                }),
+            );
+            ring.renderOrder = 8;
+            marker.add(ring);
+        };
+        addRing(radius * 0.82, radius, origin === "textbook" ? 0.68 : 0.88);
+        if (origin === "llm-extension") addRing(radius * 0.62, radius * 0.69, 0.72);
+        marker.userData = { type: "tree", origin };
+        return marker;
+    }
+
     /* ============ 3D 树 ============ */
     _buildTrees() {
         const posMap = {};
@@ -406,14 +436,27 @@ export class Scene3D {
             tree.userData = { type: "tree", id: kp.id };
             tree.traverse(c => { if (c.isMesh) c.castShadow = true; });  // 投影到地面
             this.highGroup.add(tree);
+            const originMarker = this._createOriginMarker(kp.origin, imp);
+            if (originMarker) {
+                originMarker.position.set(wx, wy, 2);
+                originMarker.userData.id = kp.id;
+                this.originMarkerGroup.add(originMarker);
+            }
             const short = kp.name_zh.length > 8 ? kp.name_zh.slice(0, 8) + "…" : kp.name_zh;
             const lbl = document.createElement("div");
             lbl.textContent = short;
-            lbl.title = kp.name_zh;
+            const originLabel = kp.origin === "textbook"
+                ? "教材原有知识点"
+                : kp.origin === "llm-extension"
+                    ? "模型扩展知识点"
+                    : "";
+            lbl.title = originLabel ? `${kp.name_zh} · ${originLabel}` : kp.name_zh;
             lbl.className = "forest-tree-label";
+            if (kp.origin === "textbook") lbl.classList.add("is-origin-textbook");
+            if (kp.origin === "llm-extension") lbl.classList.add("is-origin-extension");
             lbl.style.display = "none";
             this._labelLayer.appendChild(lbl);
-            this.treeMeta.push({ id: kp.id, catId: kp.category_id, pos: [wx, wy], mesh: tree, seed, scale: imp, domainColor: color, importance: kp.importance || 0.5, label: lbl });
+            this.treeMeta.push({ id: kp.id, catId: kp.category_id, pos: [wx, wy], mesh: tree, originMarker, seed, scale: imp, domainColor: color, importance: kp.importance || 0.5, label: lbl });
         }
     }
 
@@ -577,7 +620,10 @@ export class Scene3D {
         // 树大小 = 视口宽度 × 5%
         const visW = s.r * 0.7;
         const sf = Math.max(0.02, Math.min(1.0, visW * 0.07 / 300));
-        for (const m of this.treeMeta) if (m.mesh) m.mesh.scale.set(sf, sf, sf);
+        for (const m of this.treeMeta) {
+            if (m.mesh) m.mesh.scale.set(sf, sf, sf);
+            if (m.originMarker) m.originMarker.scale.set(sf, sf, sf);
+        }
 
         // DOM 标签跟随相机投影
         this._updateLabelPositions();
@@ -671,6 +717,7 @@ export class Scene3D {
             const forcePath = pathMode && this._learningPathIdSet.has(m.id);
             const show = visible.has(m.id) || forcePath;
             m.mesh.visible = show;
+            if (m.originMarker) m.originMarker.visible = show;
             if (m.label) {
                 const showLabel = !pathMode && show && (m.id === this._hoverId || this._batchLabelIds.has(m.id));
                 m.label.style.display = showLabel ? "" : "none";
@@ -1036,7 +1083,7 @@ export class Scene3D {
         const rc = new THREE.Raycaster();
         rc.setFromCamera(new THREE.Vector2(mx, my), this.camera);
         // 先检测 3D 树
-        const treeHits = rc.intersectObjects([this.highGroup], true);
+        const treeHits = rc.intersectObjects([this.highGroup, this.originMarkerGroup], true);
         if (treeHits.length > 0) {
             let obj = treeHits[0].object;
             while (obj) { if (obj.userData && obj.userData.type === "tree") return obj.userData.id; obj = obj.parent; }

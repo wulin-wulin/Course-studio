@@ -1712,6 +1712,10 @@ class CourseReviewStore:
         )
         edge_payload = _edge_payload(points)
         prerequisites_sha256 = _hash_json(edge_payload)
+        prerequisite_pairs = {
+            frozenset((dependent_id, prerequisite_id))
+            for dependent_id, prerequisite_id in edge_payload
+        }
         review_audit_sha256 = _review_audit_sha256(graph)
         audit = (graph.get("generation") or {}).get("refinedPrerequisiteEdges") or []
         reasons = {
@@ -1722,6 +1726,7 @@ class CourseReviewStore:
             if isinstance(item, dict)
         }
         related_pair_ids: set[tuple[str, str]] = set()
+        related_by_id: dict[str, set[str]] = {}
         for point in points:
             point_id = str(point["id"])
             related = point.get("related")
@@ -1745,7 +1750,18 @@ class CourseReviewStore:
                         f"知识点 {point_id} 包含非法、重复、自引用或悬空的 related"
                     )
                 seen_related.add(related_id)
+                if frozenset((point_id, related_id)) in prerequisite_pairs:
+                    raise CourseReviewValidationError(
+                        f"{point_id} 与 {related_id} 同时存在 related 和 prerequisite"
+                    )
                 related_pair_ids.add(tuple(sorted((point_id, related_id))))
+            related_by_id[point_id] = seen_related
+        for point_id, related_ids in related_by_id.items():
+            for related_id in related_ids:
+                if point_id not in related_by_id[related_id]:
+                    raise CourseReviewValidationError(
+                        f"知识点 {point_id} 与 {related_id} 的 related 必须双向声明"
+                    )
         public_points = [{
             "id": str(point["id"]),
             "title": str(point["title"]),

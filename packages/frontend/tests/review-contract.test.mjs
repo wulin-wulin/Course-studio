@@ -14,7 +14,7 @@ before(async () => {
         'export * from "./src/features/reviews/types.ts";',
         'export * from "./src/features/reviews/resumeDelivery.ts";',
         'export * from "./src/features/courseCreation/setup.ts";',
-        'export { normalizeForestIndex } from "./src/course/forest/forestAdapter.ts";',
+        'export { buildCourseDirectory, buildCourseReadingOrder, buildSceneInputs, normalizeForestIndex } from "./src/course/forest/forestAdapter.ts";',
         'export * from "./src/utils/latestRequest.ts";',
         'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldPauseGenerationAfterAgentDone, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
       ].join("\n"),
@@ -133,6 +133,104 @@ test("course index parser preserves canonical cluster and point sequence edges",
     cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
     point: [{ fromId: "point-a", toId: "point-b" }],
   });
+});
+
+test("course reader follows explicit chapter and point order across chapter boundaries", () => {
+  const index = {
+    clusters: [
+      { id: "chapter-b", title: "第二章" },
+      { id: "chapter-a", title: "第一章" },
+    ],
+    points: [
+      { id: "b-2", title: "B2", clusterId: "chapter-b" },
+      { id: "a-2", title: "A2", clusterId: "chapter-a" },
+      { id: "b-1", title: "B1", clusterId: "chapter-b" },
+      { id: "a-1", title: "A1", clusterId: "chapter-a" },
+    ],
+    sequences: {
+      cluster: [{ fromId: "chapter-a", toId: "chapter-b" }],
+      point: [
+        { fromId: "a-1", toId: "a-2" },
+        { fromId: "b-1", toId: "b-2" },
+      ],
+    },
+  };
+
+  assert.deepEqual(
+    contracts.buildCourseReadingOrder(index).map((point) => point.id),
+    ["a-1", "a-2", "b-1", "b-2"],
+  );
+  assert.deepEqual(
+    contracts.buildCourseDirectory(index).map((group) => ({
+      cluster: group.cluster.id,
+      points: group.points.map((point) => point.id),
+    })),
+    [
+      { cluster: "chapter-a", points: ["a-1", "a-2"] },
+      { cluster: "chapter-b", points: ["b-1", "b-2"] },
+    ],
+  );
+});
+
+test("course reader keeps legacy source order and does not drop cyclic sequence items", () => {
+  const legacy = {
+    clusters: [{ id: "chapter", title: "章节" }],
+    points: [
+      { id: "one", title: "一", clusterId: "chapter" },
+      { id: "two", title: "二", clusterId: "chapter" },
+    ],
+  };
+  assert.deepEqual(
+    contracts.buildCourseReadingOrder(legacy).map((point) => point.id),
+    ["one", "two"],
+  );
+
+  const cyclic = {
+    ...legacy,
+    sequences: {
+      cluster: [],
+      point: [
+        { fromId: "one", toId: "two" },
+        { fromId: "two", toId: "one" },
+      ],
+    },
+  };
+  assert.deepEqual(
+    contracts.buildCourseReadingOrder(cyclic).map((point) => point.id),
+    ["one", "two"],
+  );
+});
+
+test("forest scene adapter preserves textbook point origins and legacy absence", () => {
+  const scene = contracts.buildSceneInputs({
+    clusters: [{ id: "cluster-a", title: "A", accent: "#2f7567" }],
+    points: [
+      {
+        id: "textbook-point",
+        title: "教材点",
+        clusterId: "cluster-a",
+        origin: "textbook",
+        pos: [100, 100],
+      },
+      {
+        id: "extension-point",
+        title: "扩展点",
+        clusterId: "cluster-a",
+        origin: "llm-extension",
+        pos: [200, 100],
+      },
+      {
+        id: "legacy-point",
+        title: "旧课程点",
+        clusterId: "cluster-a",
+        pos: [300, 100],
+      },
+    ],
+  });
+
+  assert.equal(scene.data.kpById["textbook-point"].origin, "textbook");
+  assert.equal(scene.data.kpById["extension-point"].origin, "llm-extension");
+  assert.equal(scene.data.kpById["legacy-point"].origin, undefined);
 });
 
 test("course index parser keeps old courses readable and filters malformed sequence edges", () => {
@@ -420,7 +518,10 @@ test("textbook course creation preserves identity and requires grounded content"
   assert.match(request.message, /material\.json/);
   assert.match(request.message, /full\.md/);
   assert.match(request.message, /不得只根据标题编写内容/);
-  assert.match(request.message, /origin、sourceSpans、modelEnriched/);
+  assert.match(request.message, /textbook-content\/2\.0/);
+  assert.match(request.message, /教材块记录 sourceSpans/);
+  assert.match(request.message, /模型补充块通过 basedOnBlockIds/);
+  assert.match(request.message, /顶层 sourceSpans\/modelEnriched 只在发布时由 blocks 派生/);
   assert.doesNotMatch(request.message, /不要求逐段还原教材正文/);
   assert.match(request.message, /不得重新聚类或改变已确认的章节归属/);
 });

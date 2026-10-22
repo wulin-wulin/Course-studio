@@ -47,6 +47,8 @@ generation/animation-requests/<point-id>.json
 ```
 
 一个小批次任务可以拥有 3–5 组上述文件，但不同任务的 ID 集合必须互斥。
+文件一旦分配给详情任务，主智能体不得用 `edit`/`write` 代替该任务修改它；需要返工时继续交给
+原 worker，或先结束旧所有权再创建拥有同一组文件的单一 repair task。
 
 ### 动画任务独占
 
@@ -88,9 +90,11 @@ src/animations/<Component>.css
 ## 并发策略
 
 - 先生成全部任务清单和文件所有权映射，再启动并发。
-- 并发上限服从当前平台限制；默认以 8 个任务一波为安全起点。
+- 第一波必须是合计 3–5 个知识点的 canary；只有这一波全部通过草稿校验，才扩大并发。
+- canary 通过后，并发上限服从当前平台限制；默认以 8 个任务一波为安全上限。
 - 同一依赖邻域可并行写详情，因为前置 ID 已冻结；不得根据尚未完成的正文发明新 ID。
-- 每波完成后先做逐文件结构校验，再启动下一波。
+- 每个任务返回后，主智能体立即调用 `validate-point-drafts`；失败时先让原任务按精确错误
+  就地修复。当前一波全部通过后，才启动下一波。
 - 子智能体失败不影响其他互斥任务；只重试失败任务。
 
 ## 详情任务输入
@@ -103,20 +107,38 @@ src/animations/<Component>.css
 4. 全量合法 prerequisite ID 与 `id → title` 注册表；
 5. 为本任务筛出的建议前置候选；
 6. 与负责知识点直接相关的来源记录；
-7. [data-contract.md](data-contract.md)；
-8. 本任务可写文件的绝对或相对路径；
-9. 禁止修改的共享文件列表。
+7. 完整的索引项 JSON，不得由主智能体手写省略字段的摘要；
+8. 教材模式下，从受信 `generation/manifest.json` 原样复制的本任务各点
+   `manifest.pointEvidence` 完整单项 JSON，尤其是完整、有序的 `sourceSpans`；
+9. session-local 的 [SKILL.md](SKILL.md)、[data-contract.md](data-contract.md)、
+   [animation-contract.md](animation-contract.md)、`schemas/point.schema.json` 和
+   `schemas/animation-request.schema.json` 的明确路径；教材模式还要提供
+   `schemas/textbook-content.schema.json`；
+10. 本任务可写文件的绝对或相对路径；
+11. 禁止修改的共享文件列表。
+
+任务提示必须明确要求子智能体先加载 `candidate-knowledge-point-generator` Skill，再完整读取
+上述合同/Schema（教材模式包含第五份内容块 Schema）；只给文件路径或转述部分字段都不算
+完成合同注入。子智能体没有
+`course_pipeline` 权限，正式校验由主智能体在每个任务返回后执行。
 
 教材 Markdown 模式还必须为每个任务提供点级证据包，而不是只给标题：
 
-- `origin` 与教材锚点；
-- 该点的 `sourceSpans`；
+- `origin` 与教材锚点；所有非教材点（`llm-extension` 或 `user`）必须提供同章教材
+  `anchor_point_id`；
+- 该点完整的 `manifest.pointEvidence` 单项 JSON；其中 `sourceSpans` 是 worker 唯一可写入
+  provenance 的 span 清单。教材原有点必须按受信 manifest 的既定顺序完整覆盖全部 section 及
+  正文行，所有非教材点必须使用受信 action 为 `anchor_point_id` 确定的非空证据子集；
 - span 对应的正文 section，以及必要的前后相邻 section；
 - section 的 heading path、行号、页码、资源引用和摘要哈希；
 - 哪些说明来自教材，哪些部分允许模型补充。
 
-长教材按 `material.json.chunks` 分批读取。详情任务不得自行扫描整本 Markdown，也不得把
-其他知识点的大段正文复制进当前上下文。
+manifest 声明 `contentContract: "textbook-content/2.0"` 时，扩展点也必须分配非空教材锚点
+span；该 span 对应的教材块只描述锚点上下文，扩展出来的新结论写入模型块。
+
+长教材按 `material.json.chunks` 分批读取。`chunk-*` ID 只用于定位读取批次，不是 canonical
+source span；详情任务不得用 chunk ID 替换 manifest 中的 `block-*` section ID，不得自行扫描
+整本 Markdown，也不得把其他知识点的大段正文复制进当前上下文。
 
 不要把其他数百个知识点的完整正文塞入任务；全量注册表只提供 ID、标题、摘要和难度。
 
@@ -138,14 +160,37 @@ src/animations/<Component>.css
 [来源记录]
 
 教材点级证据（仅教材 Markdown 模式）：
-[origin/sourceSpans/对应正文与相邻上下文]
+[manifest.pointEvidence 完整单项 JSON，包含 origin/sourceSpans]
+[sourceSpans 对应正文与相邻上下文]
 
 只允许写：
 [points 文件路径]
 [animation request 文件路径]
 
-必须遵循：
-[data-contract.md 的绝对路径]
+开始写文件前必须依次完成：
+1. 加载 `candidate-knowledge-point-generator` Skill。
+2. 完整读取下列 session-local 文件：
+   - [data-contract.md 的路径]
+   - [animation-contract.md 的路径]
+   - [point.schema.json 的路径]
+   - [textbook-content.schema.json 的路径，仅教材模式]
+   - [animation-request.schema.json 的路径]
+
+Schema 快速核对（不能替代读取原文件）：
+- 普通课程 v1 的 `keyTerms`、`principles`、`applications`、`misconceptions` 都是非空字符串数组，
+  `qa` 是至少两项的 `{ "q": string, "a": string }[]`；
+- 教材 v2 不写旧正文栏目，改用 `content.schema_version="textbook-content/2.0"` 和有序 blocks；
+- 教材块必须带 `quote|paraphrase` 与非空 spans，模型块必须用 `basedOnBlockIds` 向前引用并
+  追溯到教材块；
+- 模型块按依据就近插入：单锚点补充紧跟锚点，多锚点补充放在最后一个被引用块之后；不得把所有
+  模型块集中堆在全部教材块末尾；
+- 教材块中的 spans 按块顺序和数组顺序首次出现去重后，必须与上方
+  `manifest.pointEvidence.sourceSpans` 深度相等且顺序一致；不得自行生成或改用 `chunk-*` ID；
+- JSON 文件中的 LaTeX 反斜杠必须写成合法的 `\\`，例如运行时 `\delta` 写作 `"\\delta"`；
+  可优先用 `$...$`/`$$...$$`，但命令中的反斜杠仍要转义；
+- `difficulty` 只能是 `基础`、`中等`、`进阶`；
+- 动画请求 `needed: true` 时，`mechanism` 恰好包含 `inputs/changingState/transitionRule/terminalState/replayMode`，并包含 `suggestion`；
+- 动画请求 `needed: false` 时不得出现 `mechanism` 或 `suggestion`。
 
 任务：
 1. 为每个索引项生成一个完整 points JSON。
@@ -154,18 +199,37 @@ src/animations/<Component>.css
 4. 必填内容必须具体、可教学、非模板化；可选事实字段只在适用且可核实时生成。
 5. point 初稿写 animationType: "none"。
 6. 为每个 point 生成一个动画请求；只有真实动态机制才写 needed: true。
-7. 自检 JSON、文件名、字段、引用和事实后再结束。
-8. 教材模式下保留 origin/sourceSpans，并准确设置 modelEnriched；先覆盖证据中的教材内容，
-   再补充解释和例子，不得把模型补充伪装成教材原文。
+7. 写完后必须用 `read` 回读自己拥有的 point 和 animation request，检查 JSON 结构与 LaTeX
+   反斜杠的物理转义；未回读不得结束。
+8. 教材模式下按 `textbook-content/2.0` 写 blocks：教材块保留精确 spans，模型块显式引用
+   前面的教材上下文并按依据就近插入，不得集中堆到正文末尾。教材块 span 的有序去重并集必须精确等于注入的完整
+   `manifest.pointEvidence.sourceSpans`；模型块不得引入清单外 span。不要把未读正文交给模型块
+   补齐引用。不要在 point 顶层重复写 sourceSpans/modelEnriched；校验器会派生并与 pointEvidence
+   的证据计划核对。不得把模型补充伪装成教材原文。
 
 禁止修改 index、manifest、动画清单、注册文件和任何未授权路径。
+
+你返回后，主智能体会立即执行：
+`course_pipeline {"action":"validate-point-drafts","courseId":"[course-id]"}`。
+只有输出明确报告草稿校验通过、已校验知识点数和待生成数，任务才算验收；失败时主智能体会把
+完整原始校验错误（包括任何 JSON parse error）发回本任务，你必须只修复自己拥有的文件并重新
+等待验收；主智能体不会直接编辑这些文件。
 
 最终只报告：写入文件、使用的前置 ID、动画请求结论、仍有疑问的事实。
 ```
 
 ## 逐任务验收
 
-详情任务完成后，主智能体至少检查：
+每个详情任务返回后，主智能体必须立即调用：
+
+```text
+course_pipeline {"action":"validate-point-drafts","courseId":"<course-id>"}
+```
+
+该动作跳过尚未开始的 `{}` 占位，只对已经开始的 point/request 成对执行正式 Schema 和
+一致性校验，并报告已校验数与待生成数。校验失败时，把完整错误和原文件所有权发回同一任务，
+修复并重新校验；主智能体不得直接 `edit`/`write` 详情文件，任何 JSON parse error 也必须原样
+交回有该文件所有权的 worker。不得等整门课程完成后一次性汇总错误。草稿校验通过后，主智能体还至少检查：
 
 - 两个预期文件都已生成；
 - 文件内部 ID 与文件名、冻结索引一致；
@@ -182,7 +246,8 @@ src/animations/<Component>.css
 
 1. 第一次失败：把精确校验错误和原任务文件所有权发回同一子智能体。
 2. 第二次失败：缩小为一任务一点，并要求只修复列出的错误。
-3. 仍失败：主智能体接管该文件，不要扩大权限或让另一个并发任务覆盖它。
+3. 仍失败：结束原任务后创建一任务一点的 repair task，并转交同一文件所有权和全部原始错误；
+   主智能体不得直接编辑文件，也不得让两个任务同时拥有同一路径。
 4. 发现索引本身错误：暂停受影响任务，由主智能体串行修订索引和 manifest，再重新生成任务清单。
 
 不得用忽略校验、删除问题字段或把引用改为空数组来掩盖错误。
@@ -192,7 +257,7 @@ src/animations/<Component>.css
 逐任务校验不能替代全局复核。全部详情完成后检查：
 
 - 标题、英文名、缩写和别名的重复；
-- 不同点的 `coreIdea` 是否能清楚区分；
+- 普通点的 `coreIdea` 或教材点的 blocks 是否能清楚区分；
 - 摘要、难度和重要性是否使用统一尺度；
 - 前置关系是否为真正的学习依赖；
 - 是否存在环、孤立的高级点或缺失的基础点；
@@ -224,14 +289,15 @@ src/animations/<Component>.css
 [animation manifest 单项 JSON]
 
 引用它的知识点摘要：
-[绑定知识点的 title/coreIdea/principles]
+[绑定知识点的 title 与 v1 coreIdea/principles 或 v2 相关 content.blocks]
 
 只允许写：
 src/animations/[Component].tsx
 src/animations/[Component].css
 
-必须遵循：
-[animation-contract.md 的绝对路径]
+开始写文件前必须依次完成：
+1. 加载 `candidate-knowledge-point-generator` Skill。
+2. 完整读取 [animation-contract.md 的绝对路径]；只给路径或转述摘要不算读取合同。
 
 要求：
 1. 准确展示输入、关键中间状态、更新规则和终态/循环边界。
@@ -243,6 +309,10 @@ src/animations/[Component].css
 7. 不修改注册表、类型文件、points、manifest 或其他动画。
 
 完成后说明输入、变化状态、规则、终态和可自动复现的质量检查方式。
+
+你返回后，主智能体会立即执行：
+`course_pipeline {"action":"validate-animation-drafts","courseId":"[course-id]"}`。
+失败时主智能体会把原始校验错误发回本任务；你必须只修改自己拥有的 TSX/CSS 并等待重验。
 ```
 
 ## 动画任务源码检查
@@ -256,15 +326,20 @@ src/animations/[Component].css
 - effect 清理覆盖所有副作用；
 - 机制与清单中所有绑定点都一致。
 
-所有动画任务完成后，才由主智能体通过 `course_pipeline` 固定 action 构建注册层。本检查不创建人工审核凭据。
+第一个动画组件必须作为 canary，返回后立即执行 `validate-animation-drafts`；只有它通过后才启动其余组件。
+后续每个任务也在返回后立即校验，失败则交回原任务修复。该 action 跳过成对的 `{}` 占位，但拒绝只完成
+TSX/CSS 一侧，并对已开始组件执行完整源码契约检查。所有动画任务通过后，才由主智能体通过
+`course_pipeline` 固定 action 构建注册层。本检查不创建人工审核凭据。
 
 ## 最终串行步骤
 
 ```text
+course_pipeline: validate-point-drafts（每个详情任务返回后；只验收草稿）
 course_pipeline: validate-points
 course_pipeline: sync-index
 write animation-manifest
 animation component tasks
+course_pipeline: validate-animation-drafts（每个动画任务返回后；首个组件为 canary）
 course_pipeline: build-animation-registry
 course_pipeline: validate-all
 course_pipeline: publish（G6 图谱审核通过后，内部执行生产构建）

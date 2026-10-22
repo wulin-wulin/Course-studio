@@ -125,6 +125,16 @@ export function CourseForestViewport({
     return result;
   }, [index]);
 
+  const originCounts = useMemo(() => {
+    const result = { textbook: 0, extension: 0 };
+    for (const point of index?.points ?? []) {
+      if (point.origin === "textbook") result.textbook += 1;
+      if (point.origin === "llm-extension") result.extension += 1;
+    }
+    return result;
+  }, [index]);
+  const hasOriginLegend = originCounts.textbook + originCounts.extension > 0;
+
   const searchResults = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     if (!normalized || !index) return [];
@@ -141,6 +151,7 @@ export function CourseForestViewport({
     point: index?.sequences?.point.length ?? 0,
   }), [index]);
   const sequenceCount = sequenceCounts.cluster + sequenceCounts.point;
+  const hasForestData = Boolean(index && index.clusters.length > 0 && index.points.length > 0);
 
   useEffect(() => {
     if (sequenceCount === 0) setShowSequences(false);
@@ -244,7 +255,7 @@ export function CourseForestViewport({
         </button>
       </div>
 
-      {index && (
+      {index && hasForestData && (
         <ForestScene
           index={index}
           sceneRef={sceneRef}
@@ -255,6 +266,7 @@ export function CourseForestViewport({
 
       {isLoading && !index && <ForestLoading />}
       {loadError && !index && <ForestError message={loadError} onRetry={() => void loadIndex()} />}
+      {index && !hasForestData && <ForestEmpty index={index} />}
       {isRefreshing && index && (
         <div className="course-forest__syncing" role="status">
           <Loader2 aria-hidden="true" size={14} />
@@ -262,7 +274,7 @@ export function CourseForestViewport({
         </div>
       )}
 
-      {index && !legendHidden && (
+      {index && hasForestData && !legendHidden && (
         <aside className="course-forest__legend" aria-label="知识簇图例">
           <div className="course-forest__legend-head">
             <h2>知识簇</h2>
@@ -283,16 +295,33 @@ export function CourseForestViewport({
               </button>
             ))}
           </div>
+          {hasOriginLegend && (
+            <div className="course-forest__origin-legend" aria-label="知识点来源图例">
+              <strong>知识点来源</strong>
+              {originCounts.textbook > 0 && (
+                <span>
+                  <i className="is-textbook" aria-hidden="true" />
+                  教材原有 <small>{originCounts.textbook}</small>
+                </span>
+              )}
+              {originCounts.extension > 0 && (
+                <span>
+                  <i className="is-extension" aria-hidden="true" />
+                  模型扩展 <small>{originCounts.extension}</small>
+                </span>
+              )}
+            </div>
+          )}
         </aside>
       )}
 
-      {index && legendHidden && (
+      {index && hasForestData && legendHidden && (
         <button type="button" className="course-forest__legend-restore" onClick={() => setLegendHidden(false)}>
           显示知识簇
         </button>
       )}
 
-      {index && showSequences && sequenceCount > 0 && (
+      {index && hasForestData && showSequences && sequenceCount > 0 && (
         <aside className="course-forest__sequence-legend" aria-label="学习顺序图例">
           <strong>学习顺序</strong>
           {sequenceCounts.cluster > 0 && (
@@ -410,8 +439,19 @@ function ForestScene({
 function ForestLoading() {
   return (
     <div className="course-forest__state" role="status">
-      <Loader2 aria-hidden="true" size={26} />
+      <Loader2 aria-hidden="true" size={26} className="course-forest__spinner" />
       <span>正在加载知识森林…</span>
+    </div>
+  );
+}
+
+function ForestEmpty({ index }: { index: ForestIndex }) {
+  const missing = index.clusters.length === 0 ? "知识簇" : "知识点";
+  return (
+    <div className="course-forest__state" role="status">
+      <BookOpen aria-hidden="true" size={26} />
+      <strong>这门课程还没有可展示的知识森林</strong>
+      <span>课程索引中缺少{missing}，请重新生成或检查发布结果。</span>
     </div>
   );
 }

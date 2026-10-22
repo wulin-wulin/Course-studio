@@ -12,6 +12,7 @@ import {
   resolve,
   sep,
 } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import {
   isDirectRun,
   isRecord,
@@ -28,6 +29,7 @@ import {
   INDEX_POINT_KEYS,
   POINT_ORIGINS,
   SOURCE_ID_PATTERN,
+  TEXTBOOK_CONTENT_SCHEMA,
   checkAnimationManifest,
   checkAnimationRequest,
   checkExactKeys,
@@ -39,6 +41,9 @@ import {
   checkSourceSpans,
   checkStringArray,
   collectForbiddenFields,
+  derivePointModelEnriched,
+  derivePointSourceSpans,
+  isTextbookContentPoint,
 } from './lib/contracts.mjs';
 import {
   renderAnimationBlock,
@@ -46,7 +51,14 @@ import {
   renderCourseKnowledge,
 } from './build_animation_registry.mjs';
 
-const PHASES = new Set(['index', 'points', 'animations', 'all']);
+const PHASES = new Set([
+  'index',
+  'point-drafts',
+  'points',
+  'animation-drafts',
+  'animations',
+  'all',
+]);
 const SOURCE_TYPES = new Set([
   'official-standard',
   'curriculum',
@@ -429,9 +441,10 @@ function validateSubject(subject, errors) {
 
 function validateGeneration(generation, errors) {
   const label = 'generation/manifest.json.generation';
-  if (!checkExactKeys(
+  if (!checkObjectShape(
     generation,
     ['evidenceMode', 'generatedAt', 'pointCount'],
+    ['evidenceMode', 'generatedAt', 'pointCount', 'contentContract'],
     label,
     errors,
   )) {
@@ -443,6 +456,20 @@ function validateGeneration(generation, errors) {
   checkDateString(generation.generatedAt, `${label}.generatedAt`, errors);
   if (!Number.isInteger(generation.pointCount) || generation.pointCount < 1) {
     errors.push(`${label}.pointCount 必须是至少为 1 的整数`);
+  }
+  if (
+    'contentContract' in generation
+    && generation.contentContract !== TEXTBOOK_CONTENT_SCHEMA
+  ) {
+    errors.push(
+      `${label}.contentContract 必须是 "${TEXTBOOK_CONTENT_SCHEMA}"`,
+    );
+  }
+  if (
+    'contentContract' in generation
+    && generation.evidenceMode !== 'textbook-grounded'
+  ) {
+    errors.push(`${label}.contentContract 只能用于 textbook-grounded 模式`);
   }
 }
 
@@ -763,6 +790,9 @@ function validateGenerationManifest(
       }
     }
   } else if (mode === 'textbook-grounded') {
+    const usesTextbookContentV2 = (
+      manifest.generation?.contentContract === TEXTBOOK_CONTENT_SCHEMA
+    );
     const textbookSources = [...result.sourceById.values()].filter(
       (source) => source.type === 'textbook',
     );
@@ -775,11 +805,20 @@ function validateGenerationManifest(
       }
       if (!Array.isArray(evidence.sourceSpans)) {
         errors.push(`textbook-grounded 模式下 ${pointId} 必须声明 sourceSpans`);
-      } else if (evidence.origin === 'textbook' && evidence.sourceSpans.length < 1) {
-        errors.push(`教材知识点 ${pointId} 至少需要 1 个 sourceSpan`);
+      } else if (
+        (usesTextbookContentV2 || evidence.origin === 'textbook')
+        && evidence.sourceSpans.length < 1
+      ) {
+        errors.push(`${pointId} 至少需要 1 个教材 sourceSpan`);
       }
-      if (typeof evidence.modelEnriched !== 'boolean') {
-        errors.push(`textbook-grounded 模式下 ${pointId} 必须声明 modelEnriched`);
+      if (usesTextbookContentV2 && 'modelEnriched' in evidence) {
+        errors.push(
+          `${TEXTBOOK_CONTENT_SCHEMA} 模式下 ${pointId} 不应在 manifest 人工填写 modelEnriched`,
+        );
+      } else if (!usesTextbookContentV2 && evidence.modelEnriched !== true) {
+        errors.push(
+          `旧版 textbook-grounded 模式下 ${pointId}.modelEnriched 必须为 true`,
+        );
       }
       if (
         evidence.origin === 'textbook'
@@ -864,7 +903,16 @@ function compareArtifactSet(expectedIds, actualIds, missingMessage, extraMessage
   }
 }
 
-function loadPointAndRequestArtifacts(root, expectedIds, errors) {
+function isEmptyObjectPlaceholder(value) {
+  return isRecord(value) && Object.keys(value).length === 0;
+}
+
+function loadPointAndRequestArtifacts(
+  root,
+  expectedIds,
+  errors,
+  { allowPendingPlaceholders = false } = {},
+) {
   const pointsRoot = join(root, 'src/data/points');
   const requestsRoot = join(root, 'generation/animation-requests');
   const pointArtifacts = listJsonArtifacts(pointsRoot, errors);
@@ -881,6 +929,12 @@ function loadPointAndRequestArtifacts(root, expectedIds, errors) {
     }
     pointById.set(artifact.fileId, artifact.value);
     if (artifact.value === null) continue;
+    if (
+      allowPendingPlaceholders
+      && isEmptyObjectPlaceholder(artifact.value)
+    ) {
+      continue;
+    }
     if (!isRecord(artifact.value)) {
       errors.push(`${label} 顶层必须是对象`);
       continue;
@@ -924,6 +978,12 @@ function loadPointAndRequestArtifacts(root, expectedIds, errors) {
     }
     requestById.set(artifact.fileId, artifact.value);
     if (artifact.value === null) continue;
+    if (
+      allowPendingPlaceholders
+      && isEmptyObjectPlaceholder(artifact.value)
+    ) {
+      continue;
+    }
     checkAnimationRequest(artifact.value, label, errors);
     if (!isRecord(artifact.value)) continue;
     if (artifact.value.pointId !== artifact.fileId) {
@@ -953,12 +1013,64 @@ function loadPointAndRequestArtifacts(root, expectedIds, errors) {
     (id) => `动画请求没有对应知识点: ${id}.json`,
     errors,
   );
+
+  const pendingPointIds = new Set();
+  const completedPointIds = new Set();
+  let activePointArtifacts = pointArtifacts;
+  let activeRequestArtifacts = requestArtifacts;
+  if (allowPendingPlaceholders) {
+    const candidateIds = new Set([
+      ...universeIds,
+      ...pointById.keys(),
+      ...requestById.keys(),
+    ]);
+    for (const id of candidateIds) {
+      const pointIsPlaceholder = (
+        pointById.has(id)
+        && isEmptyObjectPlaceholder(pointById.get(id))
+      );
+      const requestIsPlaceholder = (
+        requestById.has(id)
+        && isEmptyObjectPlaceholder(requestById.get(id))
+      );
+      if (pointIsPlaceholder && requestIsPlaceholder) {
+        if (universeIds.has(id)) pendingPointIds.add(id);
+        continue;
+      }
+      if (pointIsPlaceholder !== requestIsPlaceholder) {
+        errors.push(
+          `知识点 ${id} 的详情与动画请求必须成对完成：`
+          + `详情${pointIsPlaceholder ? '仍为 {} 占位' : '已开始'}，`
+          + `动画请求${requestIsPlaceholder ? '仍为 {} 占位' : '已开始'}`,
+        );
+        continue;
+      }
+      if (
+        pointById.has(id)
+        && requestById.has(id)
+        && !isEmptyObjectPlaceholder(pointById.get(id))
+        && !isEmptyObjectPlaceholder(requestById.get(id))
+      ) {
+        completedPointIds.add(id);
+      }
+    }
+    activePointArtifacts = pointArtifacts.filter((artifact) => (
+      !isEmptyObjectPlaceholder(artifact.value)
+    ));
+    activeRequestArtifacts = requestArtifacts.filter((artifact) => (
+      !isEmptyObjectPlaceholder(artifact.value)
+    ));
+  }
   return {
-    pointArtifacts,
-    requestArtifacts,
+    pointArtifacts: activePointArtifacts,
+    requestArtifacts: activeRequestArtifacts,
     pointById,
     requestById,
     universeIds,
+    pendingPointIds,
+    completedPointIds,
+    pointFileCount: pointArtifacts.length,
+    requestFileCount: requestArtifacts.length,
   };
 }
 
@@ -1006,6 +1118,19 @@ function validatePointsStage(
     const label = `src/data/points/${artifact.filename}`;
     if (!isRecord(point)) continue;
 
+    const expectsTextbookContentV2 = (
+      indexContext.manifest?.generation?.evidenceMode === 'textbook-grounded'
+      && indexContext.manifest?.generation?.contentContract
+        === TEXTBOOK_CONTENT_SCHEMA
+    );
+    if (expectsTextbookContentV2 && !isTextbookContentPoint(point)) {
+      errors.push(`${label} 必须使用 ${TEXTBOOK_CONTENT_SCHEMA}`);
+    }
+    if (!expectsTextbookContentV2 && isTextbookContentPoint(point)) {
+      errors.push(
+        `${label} 使用了 ${TEXTBOOK_CONTENT_SCHEMA}，但 generation manifest 未声明对应教材内容契约`,
+      );
+    }
     checkPoint(point, label, errors);
     collectForbiddenFields(point, label, errors);
     if (requireDraftAnimations) {
@@ -1055,6 +1180,68 @@ function validatePointsStage(
     prerequisitesById,
     errors,
   );
+
+  validateTextbookPointDetails(indexContext, artifacts, errors);
+}
+
+function validateTextbookPointDetails(indexContext, artifacts, errors) {
+  const manifest = indexContext.manifest;
+  if (manifest?.generation?.evidenceMode !== 'textbook-grounded') return;
+  const usesTextbookContentV2 = (
+    manifest.generation?.contentContract === TEXTBOOK_CONTENT_SCHEMA
+  );
+
+  const evidenceByPointId = new Map(
+    Array.isArray(manifest.pointEvidence)
+      ? manifest.pointEvidence
+        .filter((evidence) => isRecord(evidence) && typeof evidence.pointId === 'string')
+        .map((evidence) => [evidence.pointId, evidence])
+      : [],
+  );
+  for (const artifact of artifacts.pointArtifacts) {
+    const point = artifact.value;
+    const evidence = evidenceByPointId.get(artifact.fileId);
+    if (!isRecord(point) || !isRecord(evidence)) continue;
+
+    if (usesTextbookContentV2) {
+      if (!isTextbookContentPoint(point)) {
+        errors.push(
+          `textbook-grounded ${TEXTBOOK_CONTENT_SCHEMA} 模式下知识点详情 ${artifact.fileId} 必须使用 content.blocks`,
+        );
+        continue;
+      }
+      if (point.origin !== evidence.origin) {
+        errors.push(
+          `textbook-grounded 模式下知识点详情 ${artifact.fileId}.origin 必须与 manifest.pointEvidence 一致`,
+        );
+      }
+      const sourceSpans = derivePointSourceSpans(point);
+      if (!isDeepStrictEqual(sourceSpans, evidence.sourceSpans)) {
+        errors.push(
+          `textbook-grounded 模式下知识点详情 ${artifact.fileId} 从 blocks 派生的 sourceSpans 必须与 manifest.pointEvidence 一致`,
+        );
+      }
+      if (!derivePointModelEnriched(point)) {
+        errors.push(
+          `textbook-grounded 模式下知识点详情 ${artifact.fileId} 至少需要 1 个模型补充块`,
+        );
+      }
+      continue;
+    }
+
+    if (point.modelEnriched !== true) {
+      errors.push(
+        `旧版 textbook-grounded 模式下知识点详情 ${artifact.fileId}.modelEnriched 必须为 true`,
+      );
+    }
+    for (const field of ['origin', 'sourceSpans', 'modelEnriched']) {
+      if (!isDeepStrictEqual(point[field], evidence[field])) {
+        errors.push(
+          `textbook-grounded 模式下知识点详情 ${artifact.fileId}.${field} 必须与 manifest.pointEvidence 一致`,
+        );
+      }
+    }
+  }
 }
 
 function buildBindingMaps(manifest) {
@@ -1105,6 +1292,10 @@ function readTextForValidation(path, errors) {
     errors.push(`无法读取文件: ${path}: ${error.message}`);
     return null;
   }
+}
+
+function isEmptyTextPlaceholder(value) {
+  return typeof value === 'string' && value.trim() === '{}';
 }
 
 function hasNamedDefaultExport(source, component) {
@@ -1271,8 +1462,13 @@ function validateAnimationDynamics(animation, source, css, tsxPath, errors) {
   }
 }
 
-function validateAnimationComponents(root, animations, errors) {
-  validateAnimationFileSet(root, animations, errors);
+function validateAnimationComponents(
+  root,
+  animations,
+  errors,
+  { validateFileSet = true } = {},
+) {
+  if (validateFileSet) validateAnimationFileSet(root, animations, errors);
   for (const animation of animations) {
     if (
       !isRecord(animation)
@@ -1373,11 +1569,24 @@ function validateGeneratedRegistry(root, animations, errors) {
   }
 }
 
-function validateAnimationsStage(root, artifacts, errors) {
+function validateAnimationsStage(
+  root,
+  artifacts,
+  errors,
+  {
+    allowPendingPlaceholders = false,
+    requirePointBindings = true,
+    requireRegistry = true,
+  } = {},
+) {
   const manifestPath = join(root, 'generation/animation-manifest.json');
   const manifest = readJsonForValidation(manifestPath, errors);
   if (manifest === null) {
-    return { animationTypes: [], manifest: null };
+    return {
+      animationTypes: [],
+      pendingAnimationTypes: [],
+      manifest: null,
+    };
   }
   checkAnimationManifest(
     manifest,
@@ -1417,40 +1626,92 @@ function validateAnimationsStage(root, artifacts, errors) {
     }
   }
 
-  for (const [id, point] of artifacts.pointById) {
-    if (!isRecord(point)) continue;
-    const binding = bindingByPointId.get(id);
-    if (binding) {
-      if (point.animationType !== binding.type) {
-        errors.push(
-          `points/${id}.json.animationType 应为 ${JSON.stringify(binding.type)}，实际为 ${JSON.stringify(point.animationType)}`,
-        );
-      }
-      if (point.animationSuggestion !== binding.suggestion) {
-        errors.push(
-          `points/${id}.json.animationSuggestion 必须与 manifest 绑定一致`,
-        );
-      }
-    } else {
-      if (point.animationType !== 'none') {
-        errors.push(
-          `未绑定动画的 points/${id}.json.animationType 必须为 "none"`,
-        );
-      }
-      if ('animationSuggestion' in point) {
-        errors.push(
-          `未绑定动画的 points/${id}.json 不应有 animationSuggestion`,
-        );
+  if (requirePointBindings) {
+    for (const [id, point] of artifacts.pointById) {
+      if (!isRecord(point)) continue;
+      const binding = bindingByPointId.get(id);
+      if (binding) {
+        if (point.animationType !== binding.type) {
+          errors.push(
+            `points/${id}.json.animationType 应为 ${JSON.stringify(binding.type)}，实际为 ${JSON.stringify(point.animationType)}`,
+          );
+        }
+        if (point.animationSuggestion !== binding.suggestion) {
+          errors.push(
+            `points/${id}.json.animationSuggestion 必须与 manifest 绑定一致`,
+          );
+        }
+      } else {
+        if (point.animationType !== 'none') {
+          errors.push(
+            `未绑定动画的 points/${id}.json.animationType 必须为 "none"`,
+          );
+        }
+        if ('animationSuggestion' in point) {
+          errors.push(
+            `未绑定动画的 points/${id}.json 不应有 animationSuggestion`,
+          );
+        }
       }
     }
   }
 
-  validateAnimationComponents(root, animations, errors);
-  validateGeneratedRegistry(root, animations, errors);
+  let completedAnimations = animations;
+  let pendingAnimations = [];
+  if (allowPendingPlaceholders) {
+    validateAnimationFileSet(root, animations, errors);
+    completedAnimations = [];
+    for (const animation of animations) {
+      if (
+        !isRecord(animation)
+        || typeof animation.component !== 'string'
+        || !COMPONENT_PATTERN.test(animation.component)
+      ) {
+        continue;
+      }
+      const component = animation.component;
+      const tsxPath = join(root, 'src/animations', `${component}.tsx`);
+      const cssPath = join(root, 'src/animations', `${component}.css`);
+      const source = readTextForValidation(tsxPath, errors);
+      const css = readTextForValidation(cssPath, errors);
+      if (source === null || css === null) continue;
+      const tsxIsPlaceholder = isEmptyTextPlaceholder(source);
+      const cssIsPlaceholder = isEmptyTextPlaceholder(css);
+      if (tsxIsPlaceholder && cssIsPlaceholder) {
+        pendingAnimations.push(animation);
+        continue;
+      }
+      if (tsxIsPlaceholder !== cssIsPlaceholder) {
+        errors.push(
+          `动画组件 ${component} 的 TSX 与 CSS 必须成对完成；`
+          + `当前 TSX ${tsxIsPlaceholder ? '仍为 {} 占位' : '已开始'}，`
+          + `CSS ${cssIsPlaceholder ? '仍为 {} 占位' : '已开始'}`,
+        );
+        continue;
+      }
+      completedAnimations.push(animation);
+    }
+    validateAnimationComponents(root, completedAnimations, errors, {
+      validateFileSet: false,
+    });
+  } else {
+    validateAnimationComponents(root, animations, errors);
+  }
+  if (requireRegistry) validateGeneratedRegistry(root, animations, errors);
   return {
     manifest,
     animationTypes: sortStrings(new Set(
-      animations
+      completedAnimations
+        .filter((animation) => (
+          isRecord(animation)
+          && typeof animation.type === 'string'
+          && ANIMATION_TYPE_PATTERN.test(animation.type)
+          && animation.type !== 'none'
+        ))
+        .map((animation) => animation.type),
+    )),
+    pendingAnimationTypes: sortStrings(new Set(
+      pendingAnimations
         .filter((animation) => (
           isRecord(animation)
           && typeof animation.type === 'string'
@@ -1498,7 +1759,7 @@ export function validateProject(projectRoot, options = {}) {
     orderedPoints: [],
   };
   let artifacts = null;
-  let animationResult = { animationTypes: [] };
+  let animationResult = { animationTypes: [], pendingAnimationTypes: [] };
   let outputIsSelfContained = true;
 
   try {
@@ -1518,30 +1779,52 @@ export function validateProject(projectRoot, options = {}) {
 
   if (
     outputIsSelfContained
-    && (phase === 'index' || phase === 'points' || phase === 'all')
+    && (
+      phase === 'index'
+      || phase === 'point-drafts'
+      || phase === 'points'
+      || phase === 'all'
+    )
   ) {
     indexContext = validateIndexStage(root, errors);
   }
   if (
     outputIsSelfContained
-    && (phase === 'points' || phase === 'all')
+    && (
+      phase === 'point-drafts'
+      || phase === 'points'
+      || phase === 'all'
+    )
   ) {
     const expectedIds = indexContext.hasPointArray
       ? new Set(indexContext.pointById.keys())
       : null;
-    artifacts = loadPointAndRequestArtifacts(root, expectedIds, errors);
+    artifacts = loadPointAndRequestArtifacts(root, expectedIds, errors, {
+      allowPendingPlaceholders: phase === 'point-drafts',
+    });
     validatePointsStage(indexContext, artifacts, errors, {
-      requireDraftAnimations: phase === 'points',
+      requireDraftAnimations: (
+        phase === 'point-drafts'
+        || phase === 'points'
+      ),
     });
   }
   if (
     outputIsSelfContained
-    && (phase === 'animations' || phase === 'all')
+    && (
+      phase === 'animation-drafts'
+      || phase === 'animations'
+      || phase === 'all'
+    )
   ) {
     if (artifacts === null) {
       artifacts = loadPointAndRequestArtifacts(root, null, errors);
     }
-    animationResult = validateAnimationsStage(root, artifacts, errors);
+    animationResult = validateAnimationsStage(root, artifacts, errors, {
+      allowPendingPlaceholders: phase === 'animation-drafts',
+      requirePointBindings: phase !== 'animation-drafts',
+      requireRegistry: phase !== 'animation-drafts',
+    });
   }
   if (
     outputIsSelfContained
@@ -1553,7 +1836,11 @@ export function validateProject(projectRoot, options = {}) {
 
   const uniqueErrors = [...new Set(errors)];
   const uniqueWarnings = [...new Set(warnings)];
-  const validatedPointIds = artifacts === null
+  const validatedPointIds = phase === 'point-drafts' && artifacts !== null
+    ? [...new Set(indexContext.orderedIds)].filter((id) => (
+      artifacts.completedPointIds.has(id)
+    ))
+    : artifacts === null
     ? [...new Set(indexContext.orderedIds)].filter((id) => (
       indexContext.pointById.has(id)
     ))
@@ -1564,6 +1851,11 @@ export function validateProject(projectRoot, options = {}) {
         ))
         : sortStrings(artifacts.pointById.keys())
     );
+  const pendingPointIds = phase === 'point-drafts' && artifacts !== null
+    ? [...new Set(indexContext.orderedIds)].filter((id) => (
+      artifacts.pendingPointIds.has(id)
+    ))
+    : [];
 
   return {
     root,
@@ -1571,12 +1863,22 @@ export function validateProject(projectRoot, options = {}) {
     errors: uniqueErrors,
     warnings: uniqueWarnings,
     validatedPointIds,
+    pendingPointIds,
+    validatedPoints: validatedPointIds.length,
+    pendingPoints: pendingPointIds.length,
     animationTypes: animationResult.animationTypes,
+    pendingAnimationTypes: animationResult.pendingAnimationTypes,
+    validatedAnimations: animationResult.animationTypes.length,
+    pendingAnimations: animationResult.pendingAnimationTypes.length,
     counts: {
       indexPoints: indexContext.pointById.size,
-      pointFiles: artifacts?.pointArtifacts.length ?? 0,
-      animationRequests: artifacts?.requestArtifacts.length ?? 0,
+      pointFiles: artifacts?.pointFileCount ?? 0,
+      animationRequests: artifacts?.requestFileCount ?? 0,
+      validatedPoints: validatedPointIds.length,
+      pendingPoints: pendingPointIds.length,
       animations: animationResult.animationTypes.length,
+      validatedAnimations: animationResult.animationTypes.length,
+      pendingAnimations: animationResult.pendingAnimationTypes.length,
     },
   };
 }
@@ -1614,16 +1916,18 @@ export function parseArgs(argv) {
     throw new Error('--root 为必填目录');
   }
   if (!PHASES.has(phase)) {
-    throw new Error('--phase 只能是 index/points/animations/all');
+    throw new Error('--phase 只能是 index/point-drafts/points/animation-drafts/animations/all');
   }
   return { help: false, root, phase };
 }
 
 function printUsage() {
   console.log(`用法:
-  node scripts/validate_output.mjs --root <output-root> [--phase index|points|animations|all]
+  node scripts/validate_output.mjs --root <output-root> [--phase index|point-drafts|points|animation-drafts|animations|all]
 
-默认执行 all。points 包含 index 阶段校验；all 还要求 index 六项元数据
+默认执行 all。point-drafts 跳过成对的 {} 占位并校验已开始批次；
+animation-drafts 跳过成对的 TSX/CSS {} 占位并校验已开始组件；
+points 包含 index 阶段校验；all 还要求 index 六项元数据
 与详情深度一致。`);
 }
 
@@ -1654,6 +1958,16 @@ function main() {
 
   for (const warning of result.warnings) {
     console.warn(`警告: ${warning}`);
+  }
+  if (result.phase === 'point-drafts') {
+    console.log(
+      `草稿批次：已校验 ${result.validatedPoints} 个知识点；待生成 ${result.pendingPoints} 个知识点`,
+    );
+  }
+  if (result.phase === 'animation-drafts') {
+    console.log(
+      `动画草稿批次：已校验 ${result.validatedAnimations} 个组件；待生成 ${result.pendingAnimations} 个组件`,
+    );
   }
   if (result.errors.length > 0) {
     console.error(`校验失败（${result.errors.length} 项）:`);

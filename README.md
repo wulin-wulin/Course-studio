@@ -66,6 +66,8 @@ OPENCODE_PROVIDER_BASE_URL=
 OPENCODE_TERMINAL_TIMEOUT_SECONDS=3600
 # 创建课程会生成大量内容和动画，使用独立的六小时主动处理上限
 COURSE_CREATE_TERMINAL_TIMEOUT_SECONDS=21600
+# OpenCode 1.18 不暴露工具参数流式进度；持续 pending 且 input/raw 为空超过该保守上限才中止
+OPENCODE_EMPTY_TOOL_CALL_TIMEOUT_SECONDS=600
 COURSE_DATA_DIR=course-data/courses
 # Docker only: host-side absolute path to generated/course_agent_sessions
 OPENCODE_COURSE_HOST_ROOT=

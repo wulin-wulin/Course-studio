@@ -11,10 +11,13 @@ const ACTION_NAMES = [
   "init-animations",
   "review-knowledge-points",
   "review-knowledge-graph",
+  "sync-textbook-manifest",
   "validate-textbook-outline",
   "validate-textbook-graph",
   "validate-index",
+  "validate-point-drafts",
   "validate-points",
+  "validate-animation-drafts",
   "validate-animations",
   "validate-all",
   "sync-index",
@@ -63,6 +66,10 @@ const ACTIONS: Record<Action, Invocation> = {
     script: "prepare-course-review.mjs",
     args: (courseId) => ["knowledge-graph", courseId],
   },
+  "sync-textbook-manifest": {
+    script: "validate-textbook-outline.mjs",
+    args: (courseId) => ["manifest", courseId],
+  },
   "validate-textbook-outline": {
     script: "validate-textbook-outline.mjs",
     args: (courseId) => ["outline", courseId],
@@ -72,7 +79,9 @@ const ACTIONS: Record<Action, Invocation> = {
     args: (courseId) => ["graph", courseId],
   },
   "validate-index": pipelineStep("validate-index"),
+  "validate-point-drafts": pipelineStep("validate-point-drafts"),
   "validate-points": pipelineStep("validate-points"),
+  "validate-animation-drafts": pipelineStep("validate-animation-drafts"),
   "validate-animations": pipelineStep("validate-animations"),
   "validate-all": pipelineStep("validate-all"),
   "sync-index": pipelineStep("sync-index"),
@@ -94,6 +103,7 @@ const ACTIONS: Record<Action, Invocation> = {
 
 const OUTLINE_ACTIONS = new Set<Action>([
   "init",
+  "sync-textbook-manifest",
   "validate-index",
   "validate-textbook-outline",
   "review-knowledge-points",
@@ -102,6 +112,8 @@ const CREATOR_ACTIONS = new Set<Action>(ACTION_NAMES)
 const AGENT_ACTIONS: Readonly<Record<string, ReadonlySet<Action>>> = {
   "course-outline-creator": OUTLINE_ACTIONS,
   "course-creator": CREATOR_ACTIONS,
+  "textbook-outline-creator": OUTLINE_ACTIONS,
+  "textbook-course-creator": CREATOR_ACTIONS,
 }
 
 function pipelineStep(action: string): Invocation {

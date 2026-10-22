@@ -40,6 +40,7 @@ export function buildSceneInputs(index: ForestIndex) {
       name_zh: point.title,
       category_id: point.clusterId,
       importance: point.importance ?? 0.5,
+      origin: point.origin,
     };
     kpById[point.id] = knowledgePoint;
     (kpsByCat[point.clusterId] ||= []).push(knowledgePoint);
@@ -77,6 +78,75 @@ export function buildSceneInputs(index: ForestIndex) {
       kpsByDom,
     },
   };
+}
+
+/**
+ * Builds the deterministic reading path used by the article reader.
+ *
+ * Published textbook courses carry two independent orderings: the chapter
+ * order and the point order inside each chapter. The Three.js view draws
+ * those edges, while this helper turns the same information into a linear
+ * previous/next path. Legacy courses without sequence data keep their
+ * original array order.
+ */
+export function buildCourseReadingOrder(index: ForestIndex) {
+  if (!index.sequences) return [...index.points];
+
+  const clusterOrder = stableTopologicalOrder(
+    index.clusters.map((cluster) => cluster.id),
+    index.sequences.cluster,
+  );
+  const pointsByCluster = new Map<string, typeof index.points>();
+  for (const point of index.points) {
+    const points = pointsByCluster.get(point.clusterId) ?? [];
+    points.push(point);
+    pointsByCluster.set(point.clusterId, points);
+  }
+
+  const ordered = clusterOrder.flatMap((clusterId) => {
+    const points = pointsByCluster.get(clusterId) ?? [];
+    const pointIds = new Set(points.map((point) => point.id));
+    const edges = index.sequences?.point.filter(
+      (edge) => pointIds.has(edge.fromId) && pointIds.has(edge.toId),
+    ) ?? [];
+    const order = stableTopologicalOrder(points.map((point) => point.id), edges);
+    const byId = new Map(points.map((point) => [point.id, point]));
+    return order.flatMap((id) => {
+      const point = byId.get(id);
+      return point ? [point] : [];
+    });
+  });
+
+  const orderedIds = new Set(ordered.map((point) => point.id));
+  return [...ordered, ...index.points.filter((point) => !orderedIds.has(point.id))];
+}
+
+/** Groups the linear reading path into a textbook-style course directory. */
+export function buildCourseDirectory(index: ForestIndex) {
+  const orderedPoints = buildCourseReadingOrder(index);
+  const clusterById = new Map(index.clusters.map((cluster) => [cluster.id, cluster]));
+  const orderedClusterIds: string[] = [];
+  const seenClusterIds = new Set<string>();
+
+  for (const point of orderedPoints) {
+    if (!clusterById.has(point.clusterId) || seenClusterIds.has(point.clusterId)) continue;
+    seenClusterIds.add(point.clusterId);
+    orderedClusterIds.push(point.clusterId);
+  }
+  for (const cluster of index.clusters) {
+    if (seenClusterIds.has(cluster.id)) continue;
+    seenClusterIds.add(cluster.id);
+    orderedClusterIds.push(cluster.id);
+  }
+
+  return orderedClusterIds.flatMap((clusterId) => {
+    const cluster = clusterById.get(clusterId);
+    if (!cluster) return [];
+    return [{
+      cluster,
+      points: orderedPoints.filter((point) => point.clusterId === clusterId),
+    }];
+  });
 }
 
 /**
@@ -211,6 +281,43 @@ function dedupeEdges(edges: ForestSequenceEdge[]) {
     seen.add(key);
     return true;
   });
+}
+
+function stableTopologicalOrder(ids: string[], edges: ForestSequenceEdge[]) {
+  const idSet = new Set(ids);
+  const position = new Map(ids.map((id, index) => [id, index]));
+  const outgoing = new Map(ids.map((id) => [id, [] as string[]]));
+  const indegree = new Map(ids.map((id) => [id, 0]));
+  const seenEdges = new Set<string>();
+
+  for (const edge of edges) {
+    if (!idSet.has(edge.fromId) || !idSet.has(edge.toId) || edge.fromId === edge.toId) continue;
+    const key = `${edge.fromId}\u0000${edge.toId}`;
+    if (seenEdges.has(key)) continue;
+    seenEdges.add(key);
+    outgoing.get(edge.fromId)?.push(edge.toId);
+    indegree.set(edge.toId, (indegree.get(edge.toId) ?? 0) + 1);
+  }
+
+  const ready = ids.filter((id) => indegree.get(id) === 0);
+  const result: string[] = [];
+  while (ready.length > 0) {
+    ready.sort((left, right) => (position.get(left) ?? 0) - (position.get(right) ?? 0));
+    const current = ready.shift();
+    if (!current) break;
+    result.push(current);
+    for (const target of outgoing.get(current) ?? []) {
+      const nextIndegree = (indegree.get(target) ?? 1) - 1;
+      indegree.set(target, nextIndegree);
+      if (nextIndegree === 0) ready.push(target);
+    }
+  }
+
+  // Sequence cycles should already be rejected before publication. Keeping
+  // unresolved items in source order makes the reader usable for old or
+  // partially migrated data instead of dropping points from navigation.
+  const resolved = new Set(result);
+  return [...result, ...ids.filter((id) => !resolved.has(id))];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
@@ -15,6 +17,17 @@ class _WebSocket:
 
     async def send_json(self, message: dict) -> None:
         self.messages.append(message)
+
+
+class _IdleGenerationObserver:
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def run(self, send) -> None:
+        await asyncio.Event().wait()
+
+    async def emit_if_changed(self, send) -> dict:
+        return {}
 
 
 def _review(
@@ -161,6 +174,87 @@ class AgentCourseReviewTest(unittest.IsolatedAsyncioTestCase):
         )
         course_store.commit_workspace.assert_not_called()
 
+    async def test_textbook_document_uses_restricted_outline_agent(self):
+        websocket = _WebSocket()
+        conversation_store = Mock()
+        conversation_store.get_opencode_session.return_value = "session-textbook-outline"
+        review_store = Mock()
+        review_store.resolved_knowledge_course_for_conversation.return_value = None
+        course_store = Mock()
+        prompt = AsyncMock(return_value=(True, "textbook outline ready"))
+        binding = SimpleNamespace(prompt_context=lambda: "bound textbook context")
+        document_id = "doc-0123456789abcdef01234567"
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = SimpleNamespace(path=Path(directory) / "courses")
+            bind = Mock(return_value=binding)
+            with (
+                patch.object(
+                    agent,
+                    "_pending_review_resume",
+                    new=AsyncMock(return_value=None),
+                ),
+                patch.object(
+                    agent,
+                    "_pending_review",
+                    new=AsyncMock(side_effect=[None, _review()]),
+                ),
+                patch.object(agent, "get_course_review_store", return_value=review_store),
+                patch.object(agent, "get_conversation_store", return_value=conversation_store),
+                patch.object(agent, "get_course_store", return_value=course_store),
+                patch.object(agent, "_resolve_opencode_model", return_value="model"),
+                patch.object(
+                    agent.model_config,
+                    "get_model",
+                    return_value=SimpleNamespace(
+                        base_url="http://model",
+                        api_key="key",
+                    ),
+                ),
+                patch.object(
+                    agent.opencode_provision,
+                    "ensure_course_creation_session_assets",
+                    return_value=workspace,
+                ),
+                patch.object(
+                    agent.opencode_provision,
+                    "host_course_creation_workspace_dir",
+                    return_value="workspace",
+                ),
+                patch.object(agent, "bind_textbook_workspace", new=bind),
+                patch.object(
+                    agent,
+                    "CourseGenerationObserver",
+                    new=_IdleGenerationObserver,
+                ),
+                patch.object(
+                    agent.opencode_client,
+                    "health",
+                    new=AsyncMock(return_value={}),
+                ),
+                patch.object(agent, "_run_opencode_prompt", new=prompt),
+            ):
+                await agent._run_agent_turn_opencode(
+                    websocket,
+                    {
+                        "message": "create from textbook",
+                        "conversation_id": "conversation-review",
+                        "mode": "agent",
+                        "workflow": "course-create",
+                        "textbook_document_id": document_id,
+                    },
+                    {"id": None},
+                )
+
+            bind.assert_called_once_with(Path(directory), document_id=document_id)
+
+        self.assertEqual(
+            prompt.await_args.kwargs["agent_name"],
+            "textbook-outline-creator",
+        )
+        self.assertIn("bound textbook context", prompt.await_args.kwargs["text"])
+        course_store.commit_workspace.assert_not_called()
+
     async def test_g2_resume_completes_only_after_g6_marker_exists(self):
         websocket = _WebSocket()
         conversation_store = Mock()
@@ -230,6 +324,94 @@ class AgentCourseReviewTest(unittest.IsolatedAsyncioTestCase):
                 "agent_done",
             ],
         )
+
+    async def test_textbook_binding_survives_g2_resume_agent_selection(self):
+        websocket = _WebSocket()
+        conversation_store = Mock()
+        conversation_store.get_opencode_session.return_value = "session-textbook-creator"
+        review_store = Mock()
+        canonical = _resume("knowledge-points")
+        review_store.get_resume.return_value = canonical
+        review_store.claim_resume.return_value = canonical
+        review_store.has_resolved_knowledge_review.return_value = True
+        completed = deepcopy(canonical)
+        completed["review"]["resume_pending"] = False
+        review_store.complete_resume.return_value = completed
+        review_store.pointer.side_effect = lambda resource: resource
+        course_store = Mock()
+        prompt = AsyncMock(return_value=(True, "textbook graph ready"))
+        binding = SimpleNamespace(prompt_context=lambda: "resumed textbook context")
+
+        with tempfile.TemporaryDirectory() as directory:
+            session_root = Path(directory)
+            (session_root / "textbook-binding.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+            workspace = SimpleNamespace(path=session_root / "courses")
+            bind = Mock(return_value=binding)
+            with (
+                patch.object(
+                    agent,
+                    "_pending_review",
+                    new=AsyncMock(
+                        side_effect=[None, _review("knowledge-graph")],
+                    ),
+                ),
+                patch.object(agent, "get_course_review_store", return_value=review_store),
+                patch.object(agent, "get_conversation_store", return_value=conversation_store),
+                patch.object(agent, "get_course_store", return_value=course_store),
+                patch.object(agent, "_resolve_opencode_model", return_value="model"),
+                patch.object(
+                    agent.model_config,
+                    "get_model",
+                    return_value=SimpleNamespace(
+                        base_url="http://model",
+                        api_key="key",
+                    ),
+                ),
+                patch.object(
+                    agent.opencode_provision,
+                    "ensure_course_creation_session_assets",
+                    return_value=workspace,
+                ),
+                patch.object(
+                    agent.opencode_provision,
+                    "host_course_creation_workspace_dir",
+                    return_value="workspace",
+                ),
+                patch.object(agent, "bind_textbook_workspace", new=bind),
+                patch.object(
+                    agent,
+                    "CourseGenerationObserver",
+                    new=_IdleGenerationObserver,
+                ),
+                patch.object(
+                    agent.opencode_client,
+                    "health",
+                    new=AsyncMock(return_value={}),
+                ),
+                patch.object(agent, "_run_opencode_prompt", new=prompt),
+            ):
+                await agent._run_agent_turn_opencode(
+                    websocket,
+                    {
+                        "review_resume_id": "review-points",
+                        "conversation_id": "conversation-review",
+                        "mode": "agent",
+                        "workflow": "course-create",
+                    },
+                    {"id": None},
+                )
+
+            bind.assert_called_once_with(session_root, document_id=None)
+
+        self.assertEqual(
+            prompt.await_args.kwargs["agent_name"],
+            "textbook-course-creator",
+        )
+        self.assertIn("resumed textbook context", prompt.await_args.kwargs["text"])
+        review_store.complete_resume.assert_called_once()
 
     async def test_g6_resume_commits_before_consuming_resume_outbox(self):
         timeline: list[str] = []

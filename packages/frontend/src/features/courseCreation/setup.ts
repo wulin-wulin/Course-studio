@@ -119,7 +119,7 @@ export function buildPdfCourseCreationMessage(filename: string): string {
     `教材文件：${filename}。`,
     "读取后端绑定的教材结构、material.json 和 full.md，完整识别并保留教材中的“章节 → 知识点”结构与原有阅读顺序。",
     "生成每个知识点的正文时，必须阅读 full.md 中对应的教材内容，并以 material.json 中可定位的正文证据为基础；不得只根据标题编写内容。",
-    "可以使用 LLM 丰富教材知识点并补充缺失知识点，但必须保留 origin、sourceSpans、modelEnriched 等溯源信息，模型补充内容不得伪装成教材原文。",
+    "必须使用 LLM 丰富每个教材知识点和受控扩展点。canonical point 使用 textbook-content/2.0 的有序 content.blocks：教材块记录 sourceSpans，模型补充块通过 basedOnBlockIds 追溯到前序教材依据；顶层 sourceSpans/modelEnriched 只在发布时由 blocks 派生，模型补充内容不得伪装成教材原文。",
     "结构确认后，扩展知识点必须归入合适的教材章节，后续不得重新聚类或改变已确认的章节归属。",
     "如果还需要目标受众、难度等信息，再通过问题卡片向我确认。",
   ].join("");

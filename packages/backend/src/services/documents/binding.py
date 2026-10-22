@@ -54,8 +54,10 @@ class TextbookBinding:
                 f"只读正文材料索引：{self.input_material_path}\n"
                 f"只读规范化 Markdown：{self.input_markdown_path}\n"
                 "生成每个教材知识点内容时，必须先按 material.point_sources 和 sections/chunks "
-                "读取对应 Markdown 行范围；正文输出使用 origin/sourceSpans/modelEnriched "
-                "区分教材依据和模型扩充。\n"
+                "读取对应 Markdown 行范围；generation 声明 textbook-content/2.0，正文输出使用 "
+                "content.blocks 分开保存教材块与模型块。教材点和受控扩展点都必须有非空教材 "
+                "source span 和模型补充；模型块用 basedOnBlockIds 引用前面的教材上下文，"
+                "不得在 point 顶层重复写 sourceSpans/modelEnriched。\n"
             )
         return (
             "教材模式已由后端绑定。\n"

@@ -77,10 +77,22 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       assert.deepEqual(calls.at(-1).argv.slice(-2), ["knowledge-points", "demo-course"])
 
       await definition.execute(
+        { action: "sync-textbook-manifest", courseId: "demo-course" },
+        context("course-outline-creator"),
+      )
+      assert.deepEqual(calls.at(-1).argv.slice(-2), ["manifest", "demo-course"])
+
+      await definition.execute(
         { action: "validate-textbook-outline", courseId: "demo-course" },
         context("course-outline-creator"),
       )
       assert.deepEqual(calls.at(-1).argv.slice(-2), ["outline", "demo-course"])
+
+      await definition.execute(
+        { action: "sync-textbook-manifest", courseId: "demo-course" },
+        context("textbook-outline-creator"),
+      )
+      assert.deepEqual(calls.at(-1).argv.slice(-2), ["manifest", "demo-course"])
 
       for (const action of ["init-points", "review-knowledge-graph", "publish"]) {
         await assert.rejects(
@@ -88,13 +100,19 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
           /无权执行/,
         )
       }
-      await assert.rejects(
-        definition.execute(
-          { action: "validate-index", courseId: "demo-course" },
-          context("course-content-worker"),
-        ),
-        /无权执行/,
-      )
+      for (const action of [
+        "validate-index",
+        "validate-point-drafts",
+        "validate-animation-drafts",
+      ]) {
+        await assert.rejects(
+          definition.execute(
+            { action, courseId: "demo-course" },
+            context("course-content-worker"),
+          ),
+          /无权执行/,
+        )
+      }
       await assert.rejects(
         definition.execute({ action: "init", courseId: "../escape" }, context("course-creator")),
         /参数不合法/,
@@ -102,7 +120,10 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
 
       const creatorCases = [
         ["init-points", "init-course-pipeline.mjs", ["demo-course", "--stage", "points"]],
+        ["validate-point-drafts", "run-course-pipeline-step.mjs", ["validate-point-drafts", "demo-course"]],
+        ["validate-animation-drafts", "run-course-pipeline-step.mjs", ["validate-animation-drafts", "demo-course"]],
         ["review-knowledge-graph", "prepare-course-review.mjs", ["knowledge-graph", "demo-course"]],
+        ["sync-textbook-manifest", "validate-textbook-outline.mjs", ["manifest", "demo-course"]],
         ["assemble-graph-check", "run-course-pipeline-step.mjs", ["assemble-graph-check", "demo-course"]],
         ["validate-textbook-graph", "validate-textbook-outline.mjs", ["graph", "demo-course"]],
         ["publish", "publish-course-pipeline.mjs", ["demo-course"]],
@@ -113,6 +134,12 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
         assert.deepEqual(calls.at(-1).argv.slice(2), trailingArgs)
         assert.equal("shell" in calls.at(-1).options, false)
       }
+
+      await definition.execute(
+        { action: "publish", courseId: "demo-course" },
+        context("textbook-course-creator"),
+      )
+      assert.equal(path.basename(calls.at(-1).argv[1]), "publish-course-pipeline.mjs")
     `);
 
     const result = spawnSync(process.execPath, ["--experimental-strip-types", harness], {

@@ -48,6 +48,60 @@ export type ForestSourceSpan = {
   excerptSha256: string;
 };
 
+export const TEXTBOOK_CONTENT_V2_SCHEMA = "textbook-content/2.0" as const;
+
+export type TextbookContentBlockKind =
+  | "definition"
+  | "explanation"
+  | "mechanism"
+  | "procedure"
+  | "formula"
+  | "example"
+  | "worked-example"
+  | "comparison"
+  | "application"
+  | "code"
+  | "table"
+  | "figure"
+  | "warning"
+  | "misconception"
+  | "exercise"
+  | "summary"
+  | "note"
+  | "other";
+
+/** A block grounded directly in one or more locations in the bound textbook. */
+export type TextbookContentTextbookProvenance = {
+  origin: "textbook";
+  representation: "quote" | "paraphrase";
+  sourceSpans: ForestSourceSpan[];
+};
+
+/** Model-authored teaching material that expands earlier blocks in this point. */
+export type TextbookContentModelProvenance = {
+  origin: "model";
+  basedOnBlockIds: string[];
+  sourceSpans?: ForestSourceSpan[];
+};
+
+export type TextbookContentBlockProvenance =
+  | TextbookContentTextbookProvenance
+  | TextbookContentModelProvenance;
+
+export type TextbookContentBlock = {
+  id: string;
+  kind: TextbookContentBlockKind;
+  title?: string;
+  markdown: string;
+  provenance: TextbookContentBlockProvenance;
+};
+
+/** Ordered, provenance-aware teaching content used by textbook-grounded courses. */
+export type TextbookPointContentV2 = {
+  schema_version: typeof TEXTBOOK_CONTENT_V2_SCHEMA;
+  blocks: TextbookContentBlock[];
+};
+
 export type ForestIndex = {
   clusters: ForestCluster[];
   points: ForestPoint[];
@@ -105,6 +159,8 @@ export type CoursePointDetail = ForestPoint & {
     q: string;
     a: string;
   }>;
+  /** Present on provenance-aware textbook courses. Legacy fields remain readable. */
+  content?: TextbookPointContentV2;
 };
 
 export type CourseDataChangedDetail = {

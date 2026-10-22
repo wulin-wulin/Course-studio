@@ -36,7 +36,14 @@ function contentPaths(courseId) {
 }
 
 const ACTIONS = new Map([
-  ...["index", "points", "animations", "all"].map((phase) => [
+  ...[
+    "index",
+    "point-drafts",
+    "points",
+    "animation-drafts",
+    "animations",
+    "all",
+  ].map((phase) => [
     `validate-${phase}`,
     {
       script: [...CONTENT_SCRIPT_ROOT, "validate_output.mjs"],

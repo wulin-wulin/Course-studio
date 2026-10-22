@@ -728,6 +728,29 @@ class CourseReviewStoreTest(unittest.TestCase):
             )
         self.assertEqual(graph_path.read_bytes(), original)
 
+    def test_graph_snapshot_rejects_asymmetric_related(self):
+        self.approve_identity()
+        self.fixture.write_graph(related={"alpha": ["gamma"]})
+
+        with self.assertRaisesRegex(
+            CourseReviewValidationError,
+            "related 必须双向声明",
+        ):
+            self.store.pending_for_conversation(CONVERSATION_ID)
+
+    def test_graph_snapshot_rejects_related_prerequisite_conflict(self):
+        self.approve_identity()
+        self.fixture.write_graph(
+            prerequisites={"gamma": ["alpha"]},
+            related={"alpha": ["gamma"], "gamma": ["alpha"]},
+        )
+
+        with self.assertRaisesRegex(
+            CourseReviewValidationError,
+            "同时存在 related 和 prerequisite",
+        ):
+            self.store.pending_for_conversation(CONVERSATION_ID)
+
     def test_graph_cycle_and_unknown_cluster_are_rejected(self):
         resource = self.pending_graph(
             prerequisites={"beta": ["alpha"]},

@@ -54,6 +54,36 @@ _COURSE_PIPELINE_TOOL_SOURCE = (
 )
 _SHARED_OPENCODE_NODE_MODULES = _PROJECT_ROOT / ".opencode" / "node_modules"
 
+# These custom OpenAI-compatible providers have no Models.dev metadata for
+# OpenCode to consult. Declare the verified Kimi K2 window explicitly so
+# automatic compaction has a real input budget instead of ``context: 0``.
+_KIMI_256K_MODEL_IDS = frozenset({
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2-0905-preview",
+    "kimi-k2-turbo-preview",
+})
+_KIMI_256K_LIMIT = {"context": 262_144, "output": 32_768}
+_COMPACTION = {
+    "auto": True,
+    "keep": {"tokens": 15_000},
+    "buffer": 20_000,
+    # OpenCode 1.18.x uses this deprecated name for ``buffer``. Keeping the
+    # values equal makes the config effective before and after an upgrade.
+    "reserved": 20_000,
+}
+
+
+def _model_capabilities(model_id: str) -> dict:
+    capabilities = {
+        "attachment": True,
+        "tool_call": True,
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+    }
+    if model_id in _KIMI_256K_MODEL_IDS:
+        capabilities["limit"] = dict(_KIMI_256K_LIMIT)
+    return capabilities
+
 
 def _seed_session_opencode_runtime(session_root: Path) -> bool:
     """Seed a normal session dependency tree with filesystem hard links.
@@ -124,17 +154,19 @@ def _seed_session_opencode_runtime(session_root: Path) -> bool:
         return False
 
 
-def _course_outline_creator_permission() -> dict:
+def _course_outline_creator_permission(*, allow_manifest: bool = True) -> dict:
     """Machine gate for G0-G2: only the identity-bearing outline may change."""
 
+    edit = {
+        "**": "deny",
+        "**/pipeline/*/course-content/src/data/course.json": "allow",
+        "**/pipeline/*/course-content/src/data/index.json": "allow",
+        "**/pipeline/*/textbook-outline.json": "allow",
+    }
+    if allow_manifest:
+        edit["**/pipeline/*/course-content/generation/manifest.json"] = "allow"
     return {
-        "edit": {
-            "**": "deny",
-            "**/pipeline/*/course-content/src/data/course.json": "allow",
-            "**/pipeline/*/course-content/src/data/index.json": "allow",
-            "**/pipeline/*/course-content/generation/manifest.json": "allow",
-            "**/pipeline/*/textbook-outline.json": "allow",
-        },
+        "edit": edit,
         "skill": {
             "*": "deny",
             "candidate-knowledge-point-generator": "allow",
@@ -151,19 +183,21 @@ def _course_outline_creator_permission() -> dict:
     }
 
 
-def _course_creator_permission() -> dict:
+def _course_creator_permission(*, allow_manifest: bool = True) -> dict:
     """Permissions granted only to the isolated course creation agent."""
 
+    edit = {
+        "**": "deny",
+        "**/pipeline/*/course-content/src/data/course.json": "allow",
+        "**/pipeline/*/course-content/src/data/index.json": "allow",
+        "**/pipeline/*/course-content/generation/animation-manifest.json": "allow",
+        "**/pipeline/*/clustered-graph.json": "allow",
+        "**/pipeline/*/textbook-outline.json": "allow",
+    }
+    if allow_manifest:
+        edit["**/pipeline/*/course-content/generation/manifest.json"] = "allow"
     return {
-        "edit": {
-            "**": "deny",
-            "**/pipeline/*/course-content/src/data/course.json": "allow",
-            "**/pipeline/*/course-content/src/data/index.json": "allow",
-            "**/pipeline/*/course-content/generation/manifest.json": "allow",
-            "**/pipeline/*/course-content/generation/animation-manifest.json": "allow",
-            "**/pipeline/*/clustered-graph.json": "allow",
-            "**/pipeline/*/textbook-outline.json": "allow",
-        },
+        "edit": edit,
         "skill": {
             "*": "deny",
             "candidate-knowledge-point-generator": "allow",
@@ -230,13 +264,7 @@ def build_root_config() -> dict:
         model.id: {
             "npm": "@ai-sdk/openai-compatible",
             "options": {"baseURL": model.base_url, "apiKey": model.api_key},
-            "models": {
-                model.id: {
-                    "attachment": True,
-                    "tool_call": True,
-                    "modalities": {"input": ["text", "image"], "output": ["text"]},
-                }
-            },
+            "models": {model.id: _model_capabilities(model.id)},
         }
         for model in models
     }
@@ -244,6 +272,12 @@ def build_root_config() -> dict:
         "$schema": "https://opencode.ai/config.json",
         "provider": providers,
         "model": f"{default_model}/{default_model}",
+        "compaction": {
+            "auto": _COMPACTION["auto"],
+            "keep": dict(_COMPACTION["keep"]),
+            "buffer": _COMPACTION["buffer"],
+            "reserved": _COMPACTION["reserved"],
+        },
         "permission": {
             "edit": {
                 "**": "deny",
@@ -268,6 +302,16 @@ def build_root_config() -> dict:
                 "description": "在知识点审核通过后生成课程详情、动画与图谱并发布",
                 "mode": "primary",
                 "permission": _course_creator_permission(),
+            },
+            "textbook-outline-creator": {
+                "description": "Generate and validate a textbook-grounded outline, stopping at G2 review.",
+                "mode": "primary",
+                "permission": _course_outline_creator_permission(allow_manifest=False),
+            },
+            "textbook-course-creator": {
+                "description": "Continue a textbook-grounded course after G2 review and publish it.",
+                "mode": "primary",
+                "permission": _course_creator_permission(allow_manifest=False),
             },
             "course-content-worker": {
                 "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",

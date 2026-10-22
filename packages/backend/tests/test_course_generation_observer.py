@@ -41,6 +41,47 @@ def _complete_point(point_id: str, title: str, importance: float) -> dict:
     }
 
 
+def _complete_textbook_point(point_id: str, title: str, importance: float) -> dict:
+    return {
+        **_index_point(point_id, title, importance),
+        "origin": "textbook",
+        "animationType": "none",
+        "prerequisites": [],
+        "content": {
+            "schema_version": "textbook-content/2.0",
+            "blocks": [
+                {
+                    "id": "textbook-explanation",
+                    "kind": "explanation",
+                    "markdown": f"教材对{title}的完整讲解。",
+                    "provenance": {
+                        "origin": "textbook",
+                        "representation": "paraphrase",
+                        "sourceSpans": [{
+                            "materialId": "material-1",
+                            "blockIds": [f"{point_id}-section"],
+                            "headingPath": ["第一章", title],
+                            "lineStart": 10,
+                            "lineEnd": 20,
+                            "assetRefs": [],
+                            "excerptSha256": "a" * 64,
+                        }],
+                    },
+                },
+                {
+                    "id": "model-example",
+                    "kind": "worked-example",
+                    "markdown": f"模型为{title}补充的例题。",
+                    "provenance": {
+                        "origin": "model",
+                        "basedOnBlockIds": ["textbook-explanation"],
+                    },
+                },
+            ],
+        },
+    }
+
+
 class CourseGenerationSnapshotTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -160,6 +201,92 @@ class CourseGenerationSnapshotTest(unittest.TestCase):
         published = self.snapshot(published=True)
         self.assertEqual(published["gate"], "G7")
         self.assertTrue(published["published"])
+
+    def test_textbook_v2_point_and_thin_graph_progression(self):
+        self.write_course_and_index()
+        _write(self.content / "generation/manifest.json", {
+            "schema_version": "course-content-generation/1.0",
+            "subject": {"id": "demo-course"},
+            "generation": {
+                "pointCount": 2,
+                "contentContract": "textbook-content/2.0",
+            },
+            "sources": [],
+            "pointEvidence": [
+                {"pointId": "first-point"},
+                {"pointId": "second-point"},
+            ],
+            "reviewQueue": [],
+        })
+        first = _complete_textbook_point("first-point", "第一知识点", 0.9)
+        second = _complete_textbook_point("second-point", "第二知识点", 0.7)
+        _write(self.data / "points/first-point.json", first)
+        _write(self.data / "points/second-point.json", second)
+
+        content = self.snapshot()
+        self.assertEqual(content["gate"], "G3")
+        self.assertEqual(
+            [point["complete"] for point in content["points"]],
+            [True, True],
+        )
+
+        _write(self.content / "generation/animation-manifest.json", {
+            "schema_version": "course-content-animations/1.0",
+            "animations": [],
+        })
+        for path in (
+            self.content / "src/data/courseKnowledge.ts",
+            self.content / "src/components/AnimationBlock.tsx",
+            self.content / "src/components/AnimationBlock.css",
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("generated", encoding="utf-8")
+
+        _write(self.pipeline / "clustered-graph.json", {
+            "schema_version": "clustered-graph/3.0",
+            "subject": {"id": "demo-course"},
+            "generation": {
+                "sourceCourseId": "demo-course",
+                "pointCount": 2,
+                "clusterCount": 1,
+            },
+            "clusters": [{
+                "id": "fundamentals",
+                "title": "基础知识",
+                "subtitle": "从基础开始",
+                "description": "课程的基础知识簇。",
+                "order": 1,
+            }],
+            "sequences": {
+                "cluster": [],
+                "point": [{"fromId": "first-point", "toId": "second-point"}],
+            },
+            "points": [
+                {
+                    "id": first["id"],
+                    "title": first["title"],
+                    "origin": "textbook",
+                    "clusterIds": ["fundamentals"],
+                    "role": "trunk",
+                    "prerequisites": [],
+                    "related": [],
+                },
+                {
+                    "id": second["id"],
+                    "title": second["title"],
+                    "origin": "textbook",
+                    "clusterIds": ["fundamentals"],
+                    "role": "leaf",
+                    "prerequisites": [],
+                    "related": [],
+                },
+            ],
+        })
+
+        graph = self.snapshot()
+        self.assertEqual(graph["gate"], "G6")
+        self.assertEqual(graph["points"][0]["clusterId"], "fundamentals")
+        self.assertEqual(self.snapshot(published=True)["gate"], "G7")
 
 
 class CourseGenerationObserverTest(unittest.IsolatedAsyncioTestCase):

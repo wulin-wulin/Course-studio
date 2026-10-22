@@ -23,6 +23,124 @@ def _load_script_config_module():
 
 
 class CourseReviewProvisionTest(unittest.TestCase):
+    def test_content_worker_contract_is_explicit_and_mirror_stays_in_sync(self):
+        canonical = (
+            provision._PROJECT_ROOT
+            / "skills"
+            / "candidate-knowledge-point-generator"
+        )
+        mirror = (
+            provision._PROJECT_ROOT
+            / "skills"
+            / "knowledge-cluster-builder"
+            / "candidate-knowledge-point-generator"
+        )
+        canonical_files = sorted(
+            path.relative_to(canonical)
+            for path in canonical.rglob("*")
+            if path.is_file()
+        )
+        mirror_files = sorted(
+            path.relative_to(mirror)
+            for path in mirror.rglob("*")
+            if path.is_file()
+        )
+        self.assertEqual(canonical_files, mirror_files)
+        for relative_path in canonical_files:
+            with self.subTest(relative_path=str(relative_path)):
+                self.assertEqual(
+                    (canonical / relative_path).read_bytes(),
+                    (mirror / relative_path).read_bytes(),
+                )
+
+        orchestration = (canonical / "orchestration.md").read_text(
+            encoding="utf-8"
+        )
+        for required_contract in (
+            "加载 `candidate-knowledge-point-generator` Skill",
+            "data-contract.md 的路径",
+            "animation-contract.md 的路径",
+            "point.schema.json 的路径",
+            "animation-request.schema.json 的路径",
+            'course_pipeline {"action":"validate-point-drafts"',
+            "合计 3–5 个知识点的 canary",
+            'course_pipeline {"action":"validate-animation-drafts"',
+            "第一个动画组件必须作为 canary",
+        ):
+            self.assertIn(required_contract, orchestration)
+
+        creator_prompt = provision._COURSE_CREATOR_PROMPT_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'course_pipeline {"action":"validate-point-drafts"',
+            creator_prompt,
+        )
+        self.assertIn(
+            'course_pipeline {"action":"sync-textbook-manifest"',
+            creator_prompt,
+        )
+        self.assertIn("不得用 `write` 手写", creator_prompt)
+        self.assertIn("当前一波全部通过后", creator_prompt)
+        self.assertIn(
+            'course_pipeline {"action":"validate-animation-drafts"',
+            creator_prompt,
+        )
+        self.assertIn("第一个动画组件作为 canary", creator_prompt)
+
+    def test_textbook_worker_handoff_contract_guards_spans_json_and_ownership(self):
+        project_root = provision._PROJECT_ROOT
+        candidate_root = (
+            project_root / "skills" / "candidate-knowledge-point-generator"
+        )
+        candidate_skill = (candidate_root / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        orchestration = (candidate_root / "orchestration.md").read_text(
+            encoding="utf-8"
+        )
+        data_contract = (candidate_root / "data-contract.md").read_text(
+            encoding="utf-8"
+        )
+        pipeline_skill = (
+            project_root / "skills" / "knowledge-pipeline-orchestrator" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        creator_prompt = provision._COURSE_CREATOR_PROMPT_PATH.read_text(
+            encoding="utf-8"
+        )
+
+        for source in (
+            creator_prompt,
+            candidate_skill,
+            orchestration,
+            data_contract,
+            pipeline_skill,
+        ):
+            with self.subTest(contract="trusted point evidence"):
+                self.assertIn("manifest.pointEvidence", source)
+            with self.subTest(contract="chunk ids are not provenance"):
+                self.assertIn("chunk-*", source)
+                self.assertIn("block-*", source)
+            with self.subTest(contract="latex JSON escaping"):
+                self.assertIn("LaTeX", source)
+                self.assertIn("\\\\delta", source)
+            with self.subTest(contract="worker readback"):
+                self.assertIn("`read`", source)
+
+        self.assertIn(
+            "`manifest.pointEvidence.sourceSpans` 深度相等且顺序一致",
+            candidate_skill,
+        )
+        self.assertIn(
+            "`manifest.pointEvidence.sourceSpans` 深度相等且顺序一致",
+            orchestration,
+        )
+        self.assertIn("JSON parse error", orchestration)
+        self.assertIn("同所有权 repair task", data_contract)
+        self.assertIn("父 Agent 不得直接使用 `edit`/`write`", creator_prompt)
+        self.assertIn("主智能体不得用 `edit`/`write`", pipeline_skill)
+        self.assertNotIn("主智能体接管该文件", orchestration)
+
     def test_creation_workspace_installs_review_runner_but_not_shadow_tool(self):
         with tempfile.TemporaryDirectory() as directory:
             session_root = Path(directory) / "conversation-1"
@@ -175,12 +293,16 @@ class CourseReviewProvisionTest(unittest.TestCase):
         self.assertEqual(config["permission"]["bash"], "deny")
         self.assertEqual(config["permission"]["course_pipeline"], "deny")
 
-        outline = config["agent"]["course-outline-creator"]["permission"]
-        creator = config["agent"]["course-creator"]["permission"]
-        self.assertEqual(outline["bash"], "deny")
-        self.assertEqual(outline["course_pipeline"], "allow")
-        self.assertEqual(creator["bash"], "deny")
-        self.assertEqual(creator["course_pipeline"], "allow")
+        for name in (
+            "course-outline-creator",
+            "course-creator",
+            "textbook-outline-creator",
+            "textbook-course-creator",
+        ):
+            configured = config["agent"][name]
+            self.assertEqual(configured["mode"], "primary")
+            self.assertEqual(configured["permission"]["bash"], "deny")
+            self.assertEqual(configured["permission"]["course_pipeline"], "allow")
 
         for name in ("course-content-worker", "course-animation-worker"):
             permission = config["agent"][name]["permission"]
@@ -197,6 +319,71 @@ class CourseReviewProvisionTest(unittest.TestCase):
 
         self.assertEqual(programmatic["permission"], launcher.PERMISSION)
         self.assertEqual(programmatic["agent"], launcher._course_agents())
+
+    def test_launcher_and_programmatic_model_budgets_match(self):
+        launcher = _load_script_config_module()
+        kimi_model_ids = (
+            "kimi-k2.5",
+            "kimi-k2.6",
+            "kimi-k2-0905-preview",
+            "kimi-k2-turbo-preview",
+        )
+        model_ids = (*kimi_model_ids, "custom-model")
+        models = [
+            provision.model_config.ModelDef(
+                id=model_id,
+                name=model_id,
+                base_url="https://model.example/v1",
+                api_key="test-key",
+            )
+            for model_id in model_ids
+        ]
+        launcher_models = [
+            {
+                "id": model.id,
+                "base_url": model.base_url,
+                "api_key": model.api_key,
+            }
+            for model in models
+        ]
+
+        with (
+            patch.object(provision.model_config, "load_models", return_value=models),
+            patch.object(
+                provision.model_config,
+                "default_model_id",
+                return_value="kimi-k2.6",
+            ),
+        ):
+            programmatic = provision.build_root_config()
+        generated = launcher._build_config(launcher_models, "kimi-k2.6")
+
+        expected_compaction = {
+            "auto": True,
+            "keep": {"tokens": 15_000},
+            "buffer": 20_000,
+            "reserved": 20_000,
+        }
+        expected_limit = {"context": 262_144, "output": 32_768}
+        self.assertEqual(programmatic["compaction"], expected_compaction)
+        self.assertEqual(generated["compaction"], expected_compaction)
+        for model_id in kimi_model_ids:
+            self.assertEqual(
+                programmatic["provider"][model_id]["models"][model_id]["limit"],
+                expected_limit,
+            )
+            self.assertEqual(
+                generated["provider"][model_id]["models"][model_id]["limit"],
+                expected_limit,
+            )
+        self.assertNotIn(
+            "limit",
+            programmatic["provider"]["custom-model"]["models"]["custom-model"],
+        )
+        self.assertNotIn(
+            "limit",
+            generated["provider"]["custom-model"]["models"]["custom-model"],
+        )
 
     def test_outline_creator_cannot_generate_details_or_graph(self):
         permission = provision.build_root_config()["agent"][
@@ -222,6 +409,10 @@ class CourseReviewProvisionTest(unittest.TestCase):
         animation = config["agent"]["course-animation-worker"]["permission"]["edit"]
 
         self.assertNotIn("**/pipeline/*/course-content/**", creator)
+        self.assertEqual(
+            creator["**/pipeline/*/course-content/generation/manifest.json"],
+            "allow",
+        )
         self.assertNotIn(
             "**/pipeline/*/course-content/src/data/points/*.json",
             creator,
@@ -234,6 +425,30 @@ class CourseReviewProvisionTest(unittest.TestCase):
             animation["**/pipeline/*/course-content/src/animations/*.tsx"],
             "allow",
         )
+
+    def test_textbook_creators_cannot_replace_trusted_manifest(self):
+        config = provision.build_root_config()
+        manifest_pattern = (
+            "**/pipeline/*/course-content/generation/manifest.json"
+        )
+
+        self.assertEqual(
+            config["agent"]["course-outline-creator"]["permission"]["edit"][
+                manifest_pattern
+            ],
+            "allow",
+        )
+        self.assertEqual(
+            config["agent"]["course-creator"]["permission"]["edit"][
+                manifest_pattern
+            ],
+            "allow",
+        )
+        for name in ("textbook-outline-creator", "textbook-course-creator"):
+            self.assertNotIn(
+                manifest_pattern,
+                config["agent"][name]["permission"]["edit"],
+            )
 
 
 if __name__ == "__main__":

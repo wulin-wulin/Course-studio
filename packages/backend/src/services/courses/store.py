@@ -38,6 +38,47 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_JSON_BYTES = 8 * 1024 * 1024
 _ANIMATION_RUNTIME_SCHEMA = "course-animation-runtime/1.0"
 _ANIMATION_ASSET_FILES = frozenset({"manifest.json", "runtime.js", "runtime.css"})
+_TEXTBOOK_CONTENT_SCHEMA = "textbook-content/2.0"
+_TEXTBOOK_BLOCK_KINDS = frozenset(
+    {
+        "definition",
+        "explanation",
+        "mechanism",
+        "procedure",
+        "formula",
+        "example",
+        "worked-example",
+        "comparison",
+        "application",
+        "code",
+        "table",
+        "figure",
+        "warning",
+        "misconception",
+        "exercise",
+        "summary",
+        "note",
+        "other",
+    }
+)
+_LEGACY_POINT_CONTENT_FIELDS = frozenset(
+    {
+        "coreIdea",
+        "principles",
+        "formula",
+        "comparisons",
+        "applications",
+        "aliases",
+        "intuition",
+        "misconceptions",
+        "history",
+        "yearIntroduced",
+        "prosCons",
+        "qa",
+        "visualType",
+        "visualSuggestion",
+    }
+)
 _POINT_META_FIELDS = (
     "id",
     "title",
@@ -56,6 +97,469 @@ _DEFAULT_COLORS = (
     ("#2563eb", "#dbeafe", "#1e3a8a"),
     ("#be185d", "#fce7f3", "#831843"),
 )
+
+
+def _is_textbook_content_point(point: Any) -> bool:
+    return (
+        isinstance(point, dict)
+        and isinstance(point.get("content"), dict)
+        and point["content"].get("schema_version") == _TEXTBOOK_CONTENT_SCHEMA
+    )
+
+
+def _validate_textbook_source_spans(
+    value: Any,
+    label: str,
+    *,
+    require_non_empty: bool,
+) -> list[str]:
+    """Validate the complete sourceSpan contract used by textbook-content/2.0."""
+
+    errors: list[str] = []
+    if not isinstance(value, list):
+        return [f"{label} 必须是数组"]
+    if require_non_empty and not value:
+        errors.append(f"{label} 至少需要一个来源定位")
+
+    required_keys = {
+        "materialId",
+        "blockIds",
+        "headingPath",
+        "lineStart",
+        "lineEnd",
+        "assetRefs",
+        "excerptSha256",
+    }
+    allowed_keys = required_keys | {"page"}
+    for index, span in enumerate(value):
+        span_label = f"{label}[{index}]"
+        if not isinstance(span, dict):
+            errors.append(f"{span_label} 必须是对象")
+            continue
+
+        missing = sorted(required_keys - set(span))
+        extra = sorted(set(span) - allowed_keys)
+        if missing:
+            errors.append(f"{span_label} 缺少字段：{', '.join(missing)}")
+        if extra:
+            errors.append(f"{span_label} 包含未知字段：{', '.join(extra)}")
+
+        material_id = span.get("materialId")
+        if not isinstance(material_id, str) or not material_id.strip():
+            errors.append(f"{span_label}.materialId 必须是非空字符串")
+
+        for field_name, minimum in (("blockIds", 1), ("headingPath", 1), ("assetRefs", 0)):
+            items = span.get(field_name)
+            if (
+                not isinstance(items, list)
+                or len(items) < minimum
+                or any(not isinstance(item, str) or not item.strip() for item in items)
+            ):
+                requirement = (
+                    f"至少包含 {minimum} 项非空字符串的数组"
+                    if minimum
+                    else "非空字符串数组"
+                )
+                errors.append(f"{span_label}.{field_name} 必须是{requirement}")
+                continue
+            if field_name in {"blockIds", "assetRefs"} and len(set(items)) != len(items):
+                errors.append(f"{span_label}.{field_name} 不允许重复项")
+
+        line_start = span.get("lineStart")
+        line_end = span.get("lineEnd")
+        if not isinstance(line_start, int) or isinstance(line_start, bool) or line_start < 1:
+            errors.append(f"{span_label}.lineStart 必须是正整数")
+        if (
+            not isinstance(line_end, int)
+            or isinstance(line_end, bool)
+            or line_end < 1
+            or not isinstance(line_start, int)
+            or isinstance(line_start, bool)
+            or line_end < line_start
+        ):
+            errors.append(f"{span_label}.lineEnd 必须是不小于 lineStart 的正整数")
+
+        if "page" in span:
+            page = span.get("page")
+            if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+                errors.append(f"{span_label}.page 必须是正整数")
+
+        excerpt_sha256 = span.get("excerptSha256")
+        if not isinstance(excerpt_sha256, str) or not _SHA256_RE.fullmatch(excerpt_sha256):
+            errors.append(f"{span_label}.excerptSha256 必须是小写 SHA-256")
+
+    return errors
+
+
+def _is_markdown_escaped(value: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and value[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _markdown_lines(value: str) -> Iterable[tuple[int, int, str]]:
+    """Yield CRLF, LF, and CR lines with their original offsets."""
+
+    start = 0
+    while start < len(value):
+        end = start
+        while end < len(value) and value[end] not in {"\r", "\n"}:
+            end += 1
+        if end < len(value):
+            end += 1
+            if value[end - 1] == "\r" and end < len(value) and value[end] == "\n":
+                end += 1
+        yield start, end, value[start:end]
+        start = end
+
+
+def _markdown_fence_run(line: str) -> tuple[str, str] | None:
+    body = line
+    if body.endswith("\r\n"):
+        body = body[:-2]
+    elif body.endswith(("\r", "\n")):
+        body = body[:-1]
+    match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", body)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _mask_markdown_code(value: str) -> str:
+    """Mask CommonMark-style fenced and inline code at stable offsets."""
+
+    masked = list(value)
+    fence: str | None = None
+    for start, end, line in _markdown_lines(value):
+        run = _markdown_fence_run(line)
+        marker, suffix = run if run else (None, None)
+        closes_fence = bool(
+            fence
+            and marker
+            and marker[0] == fence[0]
+            and len(marker) >= len(fence)
+            and suffix is not None
+            and not suffix.strip(" \t")
+        )
+        opens_fence = bool(
+            fence is None
+            and marker
+            and suffix is not None
+            and (marker[0] == "~" or "`" not in suffix)
+        )
+        if fence is not None or opens_fence:
+            for index in range(start, end):
+                if masked[index] not in {"\n", "\r"}:
+                    masked[index] = " "
+        if opens_fence:
+            fence = marker
+        elif closes_fence:
+            fence = None
+
+    without_fences = "".join(masked)
+    index = 0
+    while index < len(without_fences):
+        if without_fences[index] != "`" or _is_markdown_escaped(
+            without_fences, index
+        ):
+            index += 1
+            continue
+        run_end = index + 1
+        while run_end < len(without_fences) and without_fences[run_end] == "`":
+            run_end += 1
+        marker_length = run_end - index
+        search = run_end
+        close = -1
+        while search < len(without_fences):
+            candidate = without_fences.find("`", search)
+            if candidate < 0:
+                break
+            close_end = candidate + 1
+            while (
+                close_end < len(without_fences)
+                and without_fences[close_end] == "`"
+            ):
+                close_end += 1
+            if close_end - candidate == marker_length:
+                close = candidate
+                break
+            search = close_end
+        if close < 0:
+            index = run_end
+            continue
+        close_end = close + marker_length
+        for cursor in range(index, close_end):
+            if masked[cursor] not in {"\n", "\r"}:
+                masked[cursor] = " "
+        index = close_end
+    return "".join(masked)
+
+
+def _find_unescaped(value: str, needle: str, start: int) -> int:
+    cursor = start
+    while cursor < len(value):
+        found = value.find(needle, cursor)
+        if found < 0 or not _is_markdown_escaped(value, found):
+            return found
+        cursor = found + len(needle)
+    return -1
+
+
+def _mask_legacy_math(value: str, opening: str, closing: str) -> str:
+    masked = list(value)
+    cursor = 0
+    while cursor < len(value):
+        start = _find_unescaped(value, opening, cursor)
+        if start < 0:
+            break
+        end = _find_unescaped(value, closing, start + len(opening))
+        if end < 0:
+            cursor = start + len(opening)
+            continue
+        for index in range(start, end + len(closing)):
+            if masked[index] not in {"\n", "\r"}:
+                masked[index] = " "
+        cursor = end + len(closing)
+    return "".join(masked)
+
+
+def _mask_dollar_math(value: str) -> str:
+    """Mask the equal-length dollar runs used by remark-math."""
+
+    masked = list(value)
+    cursor = 0
+    while cursor < len(value):
+        start = value.find("$", cursor)
+        if start < 0:
+            break
+        run_end = start + 1
+        while run_end < len(value) and value[run_end] == "$":
+            run_end += 1
+        marker_length = run_end - start
+        if _is_markdown_escaped(value, start):
+            cursor = run_end
+            continue
+
+        search = run_end
+        close = -1
+        while search < len(value):
+            candidate = value.find("$", search)
+            if candidate < 0:
+                break
+            close_end = candidate + 1
+            while close_end < len(value) and value[close_end] == "$":
+                close_end += 1
+            if close_end - candidate == marker_length:
+                close = candidate
+                break
+            search = close_end
+        if close < 0:
+            cursor = run_end
+            continue
+        close_end = close + marker_length
+        for index in range(start, close_end):
+            if masked[index] not in {"\n", "\r"}:
+                masked[index] = " "
+        cursor = close_end
+    return "".join(masked)
+
+
+def _markdown_prose(value: str) -> str:
+    prose = _mask_markdown_code(value)
+    # Keep legacy \(...\) and \[...\] readable while new generation uses
+    # the canonical $...$ and $$...$$ delimiters.
+    for opening, closing in ((r"\[", r"\]"), (r"\(", r"\)")):
+        prose = _mask_legacy_math(prose, opening, closing)
+    return _mask_dollar_math(prose)
+
+
+def _validate_textbook_markdown(value: str, label: str) -> list[str]:
+    errors: list[str] = []
+    visible_text = _mask_markdown_code(value)
+    if re.search(r"(?:\\r)?\\n(?:\\r)?\\n", visible_text):
+        errors.append(f"{label} 不得用可见的字面量 \\n\\n 代替真实段落换行")
+    if re.search(r"\\+[A-Za-z]+", _markdown_prose(value)):
+        errors.append(f"{label} 的 LaTeX 命令必须放在数学分隔符内")
+    return errors
+
+
+def _validate_textbook_content_point(point: dict[str, Any], label: str) -> list[str]:
+    """Validate the published representation of a textbook-content/2.0 point."""
+
+    errors: list[str] = []
+    legacy_fields = sorted(_LEGACY_POINT_CONTENT_FIELDS.intersection(point))
+    if legacy_fields:
+        errors.append(f"{label}: v2 正文不允许同时保存旧字段：{', '.join(legacy_fields)}")
+    if point.get("origin") not in {"textbook", "llm-extension", "user"}:
+        errors.append(f"{label}: origin 必须是 textbook/llm-extension/user")
+
+    content = point.get("content")
+    if not isinstance(content, dict):
+        return [*errors, f"{label}: content 必须是对象"]
+    if set(content) != {"schema_version", "blocks"}:
+        errors.append(f"{label}: content 必须严格包含 schema_version/blocks")
+    if content.get("schema_version") != _TEXTBOOK_CONTENT_SCHEMA:
+        errors.append(f"{label}: content.schema_version 必须是 {_TEXTBOOK_CONTENT_SCHEMA}")
+    blocks = content.get("blocks")
+    if not isinstance(blocks, list):
+        return [*errors, f"{label}: content.blocks 必须是数组"]
+
+    seen_ids: set[str] = set()
+    block_index_by_id: dict[str, int] = {}
+    grounded_by_id: dict[str, bool] = {}
+    derived_source_spans: list[dict[str, Any]] = []
+    seen_source_spans: set[str] = set()
+    textbook_blocks = 0
+    model_blocks = 0
+    required_block_keys = {"id", "kind", "markdown", "provenance"}
+    allowed_block_keys = required_block_keys | {"title"}
+    for index, block in enumerate(blocks):
+        block_label = f"{label}: content.blocks[{index}]"
+        if not isinstance(block, dict):
+            errors.append(f"{block_label} 必须是对象")
+            continue
+        missing_block_keys = sorted(required_block_keys - set(block))
+        extra_block_keys = sorted(set(block) - allowed_block_keys)
+        if missing_block_keys:
+            errors.append(f"{block_label} 缺少字段：{', '.join(missing_block_keys)}")
+        if extra_block_keys:
+            errors.append(f"{block_label} 包含未知字段：{', '.join(extra_block_keys)}")
+        block_id = block.get("id")
+        if not isinstance(block_id, str) or not _ID_RE.fullmatch(block_id):
+            errors.append(f"{block_label}.id 必须为 kebab-case")
+        elif block_id in seen_ids:
+            errors.append(f"{block_label}.id 重复：{block_id}")
+        else:
+            seen_ids.add(block_id)
+            block_index_by_id[block_id] = index
+        if block.get("kind") not in _TEXTBOOK_BLOCK_KINDS:
+            errors.append(f"{block_label}.kind 不是允许的教材内容块类型")
+        if "title" in block and (
+            not isinstance(block.get("title"), str) or not block["title"].strip()
+        ):
+            errors.append(f"{block_label}.title 必须是非空字符串")
+        if not isinstance(block.get("markdown"), str) or not block["markdown"].strip():
+            errors.append(f"{block_label}.markdown 必须是非空字符串")
+        else:
+            errors.extend(
+                _validate_textbook_markdown(block["markdown"], f"{block_label}.markdown")
+            )
+        provenance = block.get("provenance")
+        if not isinstance(provenance, dict):
+            errors.append(f"{block_label}.provenance 必须是对象")
+            continue
+
+        origin = provenance.get("origin")
+        block_spans = provenance.get("sourceSpans")
+        if isinstance(block_spans, list):
+            for span in block_spans:
+                if not isinstance(span, dict):
+                    continue
+                span_key = json.dumps(
+                    span,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if span_key not in seen_source_spans:
+                    seen_source_spans.add(span_key)
+                    derived_source_spans.append(span)
+        if origin == "textbook":
+            textbook_blocks += 1
+            required_provenance_keys = {"origin", "representation", "sourceSpans"}
+            missing = sorted(required_provenance_keys - set(provenance))
+            extra = sorted(set(provenance) - required_provenance_keys)
+            if missing:
+                errors.append(f"{block_label}.provenance 缺少字段：{', '.join(missing)}")
+            if extra:
+                errors.append(f"{block_label}.provenance 包含未知字段：{', '.join(extra)}")
+            if provenance.get("representation") not in {"quote", "paraphrase"}:
+                errors.append(f"{block_label}.provenance.representation 必须是 quote/paraphrase")
+            spans = provenance.get("sourceSpans")
+            errors.extend(
+                _validate_textbook_source_spans(
+                    spans,
+                    f"{block_label}.provenance.sourceSpans",
+                    require_non_empty=True,
+                )
+            )
+            if isinstance(block_id, str):
+                grounded_by_id[block_id] = True
+        elif origin == "model":
+            model_blocks += 1
+            required_provenance_keys = {"origin", "basedOnBlockIds"}
+            allowed_provenance_keys = required_provenance_keys | {"sourceSpans"}
+            missing = sorted(required_provenance_keys - set(provenance))
+            extra = sorted(set(provenance) - allowed_provenance_keys)
+            if missing:
+                errors.append(f"{block_label}.provenance 缺少字段：{', '.join(missing)}")
+            if extra:
+                errors.append(f"{block_label}.provenance 包含未知字段：{', '.join(extra)}")
+            based_on = provenance.get("basedOnBlockIds")
+            grounded = False
+            if (
+                not isinstance(based_on, list)
+                or not based_on
+                or any(not isinstance(item, str) or not _ID_RE.fullmatch(item) for item in based_on)
+                or len(set(based_on)) != len(based_on)
+            ):
+                errors.append(
+                    f"{block_label}.provenance.basedOnBlockIds "
+                    "必须是非空、不重复的 kebab-case 字符串数组"
+                )
+            else:
+                references_are_valid = True
+                referenced_indexes: list[int] = []
+                for referenced_id in based_on:
+                    if referenced_id not in seen_ids or referenced_id == block_id:
+                        references_are_valid = False
+                        errors.append(f"{block_label} 只能引用排在当前块之前的 block：{referenced_id}")
+                    else:
+                        referenced_indexes.append(block_index_by_id[referenced_id])
+                        if grounded_by_id.get(referenced_id):
+                            grounded = True
+                if references_are_valid and referenced_indexes:
+                    last_reference_index = max(referenced_indexes)
+                    crosses_textbook_block = any(
+                        isinstance(candidate, dict)
+                        and isinstance(candidate.get("provenance"), dict)
+                        and candidate["provenance"].get("origin") == "textbook"
+                        for candidate in blocks[last_reference_index + 1 : index]
+                    )
+                    if crosses_textbook_block:
+                        errors.append(
+                            f"{block_label} 必须紧跟最后一个直接依据，不能跨过后续教材块"
+                        )
+            if not grounded:
+                errors.append(f"{block_label} 必须追溯到至少一个教材块")
+            if "sourceSpans" in provenance:
+                errors.extend(
+                    _validate_textbook_source_spans(
+                        provenance.get("sourceSpans"),
+                        f"{block_label}.provenance.sourceSpans",
+                        require_non_empty=False,
+                    )
+                )
+            if isinstance(block_id, str):
+                grounded_by_id[block_id] = grounded
+        else:
+            errors.append(f"{block_label}.provenance.origin 必须是 textbook/model")
+
+    if textbook_blocks < 1:
+        errors.append(f"{label}: content.blocks 至少需要一个教材块")
+    if model_blocks < 1:
+        errors.append(f"{label}: content.blocks 至少需要一个模型补充块")
+    if "sourceSpans" in point and point["sourceSpans"] != derived_source_spans:
+        errors.append(f"{label}: 顶层 sourceSpans 必须与 content.blocks 派生值一致")
+    if "modelEnriched" in point and (
+        not isinstance(point["modelEnriched"], bool)
+        or point["modelEnriched"] != (model_blocks > 0)
+    ):
+        errors.append(f"{label}: 顶层 modelEnriched 必须与 content.blocks 派生值一致")
+    return errors
 
 
 class CourseDataError(RuntimeError):
@@ -485,7 +989,18 @@ class CourseStore:
                         message = f"{prefix}: 知识点 {pid} 的前置引用不存在：{prerequisite}"
                         (result.errors if strict_details else result.warnings).append(message)
 
-            if strict_details:
+            # ``strict_details=False`` exists so historical courses with
+            # incomplete legacy fields remain readable.  A point that carries
+            # the versioned ``content`` envelope is different: its declared
+            # contract must never be reduced to a best-effort warning merely
+            # because the caller is using the legacy-compatible validation
+            # mode.  Checking for the key (rather than only a valid schema
+            # value) also reports a damaged or downgraded v2 envelope.
+            if "content" in detail:
+                result.errors.extend(
+                    _validate_textbook_content_point(detail, f"{prefix}: 知识点 {pid}")
+                )
+            elif strict_details:
                 if not isinstance(detail.get("coreIdea"), str) or not detail["coreIdea"].strip():
                     result.errors.append(f"{prefix}: 知识点 {pid} 缺少非空 coreIdea")
                 for content_field in ("principles", "applications"):
@@ -931,9 +1446,10 @@ class CourseStore:
         result.setdefault("keyTerms", [])
         result.setdefault("pos", [0, 0])
         result.setdefault("scale", 1.0)
-        result.setdefault("coreIdea", "")
-        result.setdefault("principles", [])
-        result.setdefault("applications", [])
+        if not _is_textbook_content_point(result):
+            result.setdefault("coreIdea", "")
+            result.setdefault("principles", [])
+            result.setdefault("applications", [])
         result.setdefault("prerequisites", [])
         # Explicitly reference the local variable so static type checkers know
         # that the ID validation above is intentional.
@@ -948,6 +1464,7 @@ class CourseStore:
         points: dict[str, dict[str, Any]],
         *,
         strict_point_ids: Iterable[str] = (),
+        strict_textbook_content_ids: Iterable[str] = (),
         require_complete_points: bool = False,
         strict_prerequisites: bool = False,
         allowed_legacy_metadata_mismatches: dict[str, set[str]] | None = None,
@@ -959,6 +1476,8 @@ class CourseStore:
             course_id, course, index, points, strict_details=False
         )
         strict_ids = set(strict_point_ids)
+        strict_textbook_ids = set(strict_textbook_content_ids)
+        strict_ids.update(strict_textbook_ids)
         if strict_ids:
             index_by_id = {
                 item.get("id"): item
@@ -994,7 +1513,17 @@ class CourseStore:
                                 validation.errors.append(
                                     f"课程 {course_id}: 知识点 {point_id} 的前置引用不存在：{prerequisite}"
                                 )
-                if require_complete_points:
+                is_textbook_content = _is_textbook_content_point(detail)
+                if point_id in strict_textbook_ids and not is_textbook_content:
+                    validation.errors.append(
+                        f"课程 {course_id}: 知识点 {point_id} 已使用 {_TEXTBOOK_CONTENT_SCHEMA}，"
+                        "修改后不允许降级或移除 v2 content"
+                    )
+                # Versioned content envelopes were already validated by
+                # ``_validate_course_objects`` even in legacy-compatible mode.
+                # This branch only supplies the completeness checks that have
+                # no declared schema for legacy points.
+                if not is_textbook_content and require_complete_points:
                     if not isinstance(detail.get("coreIdea"), str) or not detail["coreIdea"].strip():
                         validation.errors.append(f"课程 {course_id}: 知识点 {point_id} 缺少非空 coreIdea")
                     for content_field in ("principles", "applications"):
@@ -1153,6 +1682,7 @@ class CourseStore:
             current = points.get(point_id)
             if current is None:
                 raise CourseNotFoundError(f"知识点不存在：{point_id}")
+            was_textbook_content = _is_textbook_content_point(current)
             if "id" in patch and patch["id"] != point_id:
                 raise CourseDataError("知识点 id 不可修改，以免破坏前置关系")
             current = _deepcopy_json(current)
@@ -1173,6 +1703,11 @@ class CourseStore:
                 index,
                 points,
                 strict_point_ids={point_id},
+                strict_textbook_content_ids=(
+                    {point_id}
+                    if was_textbook_content or _is_textbook_content_point(current)
+                    else set()
+                ),
                 strict_prerequisites="prerequisites" in patch,
             )
             self._write_package(course_id, course, index, points)
@@ -1449,6 +1984,12 @@ class CourseStore:
 
             for point_id in sorted(changed_ids & set(after_points)):
                 is_new = point_id not in before_points
+                was_textbook_content = _is_textbook_content_point(
+                    before_points.get(point_id)
+                )
+                is_textbook_content = _is_textbook_content_point(
+                    after_points[point_id]
+                )
                 prerequisites_changed = (
                     is_new
                     or before_points.get(point_id, {}).get("prerequisites")
@@ -1476,6 +2017,11 @@ class CourseStore:
                         after_index,
                         after_points,
                         strict_point_ids={point_id},
+                        strict_textbook_content_ids=(
+                            {point_id}
+                            if was_textbook_content or is_textbook_content
+                            else set()
+                        ),
                         require_complete_points=is_new,
                         strict_prerequisites=prerequisites_changed,
                         allowed_legacy_metadata_mismatches={point_id: legacy_mismatches},

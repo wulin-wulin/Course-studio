@@ -74,14 +74,57 @@ export type KnowledgePointProsCons = {
   cons: string[];
 };
 
-export type KnowledgePoint = {
+export type ForestSourceSpan = {
+  materialId: string;
+  blockIds: string[];
+  headingPath: string[];
+  lineStart: number;
+  lineEnd: number;
+  page?: number;
+  assetRefs: string[];
+  excerptSha256: string;
+};
+
+export type TextbookContentBlockKind =
+  | 'definition' | 'explanation' | 'mechanism' | 'procedure'
+  | 'formula' | 'example' | 'worked-example' | 'comparison'
+  | 'application' | 'code' | 'table' | 'figure' | 'warning'
+  | 'misconception' | 'exercise' | 'summary' | 'note' | 'other';
+
+export type TextbookContentBlock = {
+  id: string;
+  kind: TextbookContentBlockKind;
+  title?: string;
+  markdown: string;
+  provenance:
+    | {
+        origin: 'textbook';
+        representation: 'quote' | 'paraphrase';
+        sourceSpans: ForestSourceSpan[];
+      }
+    | {
+        origin: 'model';
+        basedOnBlockIds: string[];
+        sourceSpans?: ForestSourceSpan[];
+      };
+};
+
+export type KnowledgePointBase = {
   id: string;
   title: string;
   shortSummary: string;
+  keyTerms: string[];
+  animationType: AnimationType;
+  animationSuggestion?: string;
+  difficulty: Difficulty;
+  importance: number;
+  prerequisites: string[];
+};
+
+export type LegacyKnowledgePoint = KnowledgePointBase & {
   coreIdea: string;
   principles: string[];
   formula?: string;
-  keyTerms: string[];
   comparisons?: string[];
   applications: string[];
   aliases: string[];
@@ -93,12 +136,20 @@ export type KnowledgePoint = {
   qa: KnowledgePointQa[];
   visualType?: VisualType;
   visualSuggestion?: string;
-  animationType: AnimationType;
-  animationSuggestion?: string;
-  difficulty: Difficulty;
-  importance: number;
-  prerequisites: string[];
+  origin?: 'textbook' | 'llm-extension' | 'user';
+  sourceSpans?: ForestSourceSpan[];
+  modelEnriched?: boolean;
 };
+
+export type TextbookKnowledgePoint = KnowledgePointBase & {
+  origin: 'textbook' | 'llm-extension' | 'user';
+  content: {
+    schema_version: 'textbook-content/2.0';
+    blocks: TextbookContentBlock[];
+  };
+};
+
+export type KnowledgePoint = LegacyKnowledgePoint | TextbookKnowledgePoint;
 `;
 }
 

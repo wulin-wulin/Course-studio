@@ -37,6 +37,21 @@ _POINT_REQUIRED = {
     "importance",
     "prerequisites",
 }
+_TEXTBOOK_POINT_REQUIRED = {
+    "id",
+    "title",
+    "shortSummary",
+    "keyTerms",
+    "animationType",
+    "difficulty",
+    "importance",
+    "prerequisites",
+    "origin",
+    "content",
+}
+_TEXTBOOK_CONTENT_SCHEMA = "textbook-content/2.0"
+_LEGACY_GRAPH_SCHEMA = "clustered-graph/2.0"
+_THIN_GRAPH_SCHEMA = "clustered-graph/3.0"
 
 JsonCache = dict[Path, tuple[int, int, dict[str, Any]]]
 SnapshotSender = Callable[[dict[str, Any]], Awaitable[None]]
@@ -174,6 +189,12 @@ def _valid_generation_manifest(value: dict[str, Any] | None, points: list[dict[s
 
 
 def _valid_point(value: dict[str, Any] | None, expected: dict[str, Any]) -> bool:
+    if (
+        value
+        and isinstance(value.get("content"), dict)
+        and value["content"].get("schema_version") == _TEXTBOOK_CONTENT_SCHEMA
+    ):
+        return _valid_textbook_point(value, expected)
     if not value or not _POINT_REQUIRED.issubset(value):
         return False
     if value.get("id") != expected["id"] or value.get("title") != expected["title"]:
@@ -208,6 +229,89 @@ def _valid_point(value: dict[str, Any] | None, expected: dict[str, Any]) -> bool
         isinstance(item, dict) and _text(item.get("q")) and _text(item.get("a"))
         for item in value["qa"]
     )
+
+
+def _valid_textbook_point(value: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Recognize a complete v2 draft without duplicating the final validator.
+
+    The observer only decides whether a worker has produced a usable draft for
+    progress reporting. The pipeline validators remain responsible for the
+    exhaustive schema, source-span, and coverage checks.
+    """
+
+    if not _TEXTBOOK_POINT_REQUIRED.issubset(value):
+        return False
+    if value.get("id") != expected["id"] or value.get("title") != expected["title"]:
+        return False
+    if (
+        len(_text(value.get("shortSummary"))) < 30
+        or not isinstance(value.get("keyTerms"), list)
+        or len(value["keyTerms"]) < 2
+        or not all(_text(term) for term in value["keyTerms"])
+        or not isinstance(value.get("prerequisites"), list)
+        or value.get("origin") not in {"textbook", "llm-extension", "user"}
+        or not _text(value.get("animationType"))
+        or not _text(value.get("difficulty"))
+        or not isinstance(value.get("importance"), (int, float))
+        or isinstance(value.get("importance"), bool)
+    ):
+        return False
+
+    content = value["content"]
+    blocks = content.get("blocks")
+    if not isinstance(blocks, list) or len(blocks) < 2:
+        return False
+
+    seen_ids: set[str] = set()
+    grounded_by_id: dict[str, bool] = {}
+    textbook_blocks = 0
+    model_blocks = 0
+    for block in blocks:
+        if not isinstance(block, dict):
+            return False
+        block_id = _safe_id(block.get("id"))
+        provenance = block.get("provenance")
+        if (
+            not block_id
+            or block_id in seen_ids
+            or not _text(block.get("kind"))
+            or not _text(block.get("markdown"))
+            or not isinstance(provenance, dict)
+        ):
+            return False
+        seen_ids.add(block_id)
+        origin = provenance.get("origin")
+        if origin == "textbook":
+            spans = provenance.get("sourceSpans")
+            if (
+                provenance.get("representation") not in {"quote", "paraphrase"}
+                or not isinstance(spans, list)
+                or not spans
+            ):
+                return False
+            textbook_blocks += 1
+            grounded_by_id[block_id] = True
+        elif origin == "model":
+            based_on = provenance.get("basedOnBlockIds")
+            if (
+                not isinstance(based_on, list)
+                or not based_on
+                or not all(
+                    isinstance(source_id, str)
+                    and source_id in grounded_by_id
+                    for source_id in based_on
+                )
+            ):
+                return False
+            model_blocks += 1
+            grounded_by_id[block_id] = any(
+                grounded_by_id[source_id] for source_id in based_on
+            )
+            if not grounded_by_id[block_id]:
+                return False
+        else:
+            return False
+    return textbook_blocks > 0 and model_blocks > 0
 
 
 def _valid_animation_manifest(value: dict[str, Any] | None) -> list[str] | None:
@@ -257,7 +361,10 @@ def _valid_graph(
 ) -> tuple[list[dict[str, Any]], dict[str, str]] | None:
     if (
         not value
-        or value.get("schema_version") != "clustered-graph/2.0"
+        or value.get("schema_version") not in {
+            _LEGACY_GRAPH_SCHEMA,
+            _THIN_GRAPH_SCHEMA,
+        }
         or not isinstance(value.get("subject"), dict)
         or _safe_id(value["subject"].get("id")) != course_id
         or not isinstance(value.get("generation"), dict)
@@ -302,9 +409,20 @@ def _valid_graph(
         item["id"] for item in indexed_points
     ]:
         return None
+    uses_thin_graph = value["schema_version"] == _THIN_GRAPH_SCHEMA
     assignments: dict[str, str] = {}
     for item, expected in zip(graph_points, indexed_points, strict=True):
-        if not isinstance(item, dict) or not _valid_point(item, expected):
+        if not isinstance(item, dict):
+            return None
+        if uses_thin_graph:
+            if (
+                item.get("id") != expected["id"]
+                or item.get("title") != expected["title"]
+                or item.get("origin") not in {"textbook", "llm-extension", "user"}
+                or not isinstance(item.get("prerequisites"), list)
+            ):
+                return None
+        elif not _valid_point(item, expected):
             return None
         cluster_list = item.get("clusterIds")
         normalized_clusters = (

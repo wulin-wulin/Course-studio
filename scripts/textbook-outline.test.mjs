@@ -259,7 +259,7 @@ function markdownFixture(root) {
         9,
         14,
       )],
-      modelEnriched: false,
+      modelEnriched: true,
     }],
   ]);
   const outlinePoints = outline.chapters.flatMap((chapter) => chapter.points);
@@ -332,6 +332,72 @@ function markdownFixture(root) {
   };
 }
 
+function upgradeMarkdownFixtureToTextbookContentV2(context) {
+  const manifest = readJson(context.manifestPath);
+  manifest.generation.contentContract = "textbook-content/2.0";
+  const anchorSpans = structuredClone(manifest.pointEvidence[0].sourceSpans);
+  const contentById = new Map();
+  for (const evidence of manifest.pointEvidence) {
+    if (evidence.sourceSpans.length === 0) {
+      evidence.sourceSpans = structuredClone(anchorSpans);
+    }
+    delete evidence.modelEnriched;
+    const content = {
+      schema_version: "textbook-content/2.0",
+      blocks: [
+        {
+          id: "textbook-context",
+          kind: "explanation",
+          title: evidence.origin === "textbook" ? "教材说明" : "教材锚点上下文",
+          markdown: evidence.origin === "textbook"
+            ? `教材对 ${evidence.title} 给出了定义与范围。`
+            : `教材中的 Alpha 是扩展 ${evidence.title} 的上下文锚点。`,
+          provenance: {
+            origin: "textbook",
+            representation: "paraphrase",
+            sourceSpans: structuredClone(evidence.sourceSpans),
+          },
+        },
+        {
+          id: "model-example",
+          kind: "example",
+          title: "模型补充示例",
+          markdown: `根据教材上下文补充 ${evidence.title} 的新示例。`,
+          provenance: {
+            origin: "model",
+            basedOnBlockIds: ["textbook-context"],
+          },
+        },
+      ],
+    };
+    contentById.set(evidence.pointId, content);
+  }
+  writeJson(context.manifestPath, manifest);
+
+  for (const evidence of manifest.pointEvidence) {
+    const pointPath = path.join(context.pointsRoot, `${evidence.pointId}.json`);
+    const point = readJson(pointPath);
+    delete point.sourceSpans;
+    delete point.modelEnriched;
+    point.content = structuredClone(contentById.get(evidence.pointId));
+    writeJson(pointPath, point);
+  }
+
+  const graph = readJson(context.graphPath);
+  graph.schema_version = "clustered-graph/3.0";
+  graph.points = graph.points.map((point) => ({
+    id: point.id,
+    title: point.title,
+    origin: manifest.pointEvidence.find((item) => item.pointId === point.id).origin,
+    clusterIds: point.clusterIds,
+    role: point.role,
+    prerequisites: point.prerequisites ?? [],
+    related: point.related ?? [],
+  }));
+  writeJson(context.graphPath, graph);
+  return context;
+}
+
 function run(root, mode, courseId) {
   return spawnSync(process.execPath, [SCRIPT, mode, courseId], {
     cwd: root,
@@ -385,6 +451,114 @@ test("validates Markdown material, grounded provenance, point details, and seque
     assert.equal(outlineResult.status, 0, outlineResult.stderr);
     const graphResult = run(root, "graph", courseId);
     assert.equal(graphResult.status, 0, graphResult.stderr);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("validates textbook-content/2.0 block spans against the bound Markdown", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "textbook-outline-content-v2-"));
+  try {
+    const context = upgradeMarkdownFixtureToTextbookContentV2(markdownFixture(root));
+    const outlineResult = run(root, "outline", context.courseId);
+    assert.equal(outlineResult.status, 0, outlineResult.stderr);
+    const graphResult = run(root, "graph", context.courseId);
+    assert.equal(graphResult.status, 0, graphResult.stderr);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a textbook-content/2.0 block span whose digest drifts from full.md", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "textbook-outline-content-v2-"));
+  try {
+    const context = upgradeMarkdownFixtureToTextbookContentV2(markdownFixture(root));
+    const pointPath = path.join(context.pointsRoot, "alpha.json");
+    const point = readJson(pointPath);
+    point.content.blocks[0].provenance.sourceSpans[0].excerptSha256 = "f".repeat(64);
+    writeJson(pointPath, point);
+    const result = run(root, "graph", context.courseId);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /excerptSha256 与 full\.md 对应行不一致/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a textbook-content/2.0 evidence plan that omits mapped textbook sections", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "textbook-outline-content-v2-coverage-"));
+  try {
+    const context = upgradeMarkdownFixtureToTextbookContentV2(markdownFixture(root));
+    const manifest = readJson(context.manifestPath);
+    const span = manifest.pointEvidence[0].sourceSpans[0];
+    span.blockIds = ["block-000001"];
+    span.lineStart = 3;
+    span.lineEnd = 5;
+    const lines = fs.readFileSync(path.join(context.documentRoot, "full.md"), "utf8").split("\n");
+    span.excerptSha256 = sha256(markdownSlice(lines, span.lineStart, span.lineEnd));
+    writeJson(context.manifestPath, manifest);
+
+    const result = run(root, "outline", context.courseId);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /必须按 material\.point_sources 顺序完整覆盖.*section_ids/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a textbook-content/2.0 evidence plan that cites but only partially reads a section", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "textbook-outline-content-v2-lines-"));
+  try {
+    const context = upgradeMarkdownFixtureToTextbookContentV2(markdownFixture(root));
+    const manifest = readJson(context.manifestPath);
+    const span = manifest.pointEvidence[0].sourceSpans[0];
+    span.lineEnd = 7;
+    const lines = fs.readFileSync(path.join(context.documentRoot, "full.md"), "utf8").split("\n");
+    span.excerptSha256 = sha256(markdownSlice(lines, span.lineStart, span.lineEnd));
+    writeJson(context.manifestPath, manifest);
+
+    const result = run(root, "outline", context.courseId);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /未完整覆盖教材知识点 alpha 的 section block-000002 正文行/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("requires full textbook coverage in textbook blocks rather than model-only citations", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "textbook-outline-content-v2-blocks-"));
+  try {
+    const context = upgradeMarkdownFixtureToTextbookContentV2(markdownFixture(root));
+    const lines = fs.readFileSync(path.join(context.documentRoot, "full.md"), "utf8").split("\n");
+    const combined = readJson(context.manifestPath).pointEvidence[0].sourceSpans[0];
+    const first = {
+      ...structuredClone(combined),
+      blockIds: ["block-000001"],
+      lineStart: 3,
+      lineEnd: 5,
+      excerptSha256: sha256(markdownSlice(lines, 3, 5)),
+    };
+    const second = {
+      ...structuredClone(combined),
+      blockIds: ["block-000002"],
+      headingPath: ["第一章", "Alpha"],
+      lineStart: 6,
+      lineEnd: 8,
+      excerptSha256: sha256(markdownSlice(lines, 6, 8)),
+    };
+
+    const manifest = readJson(context.manifestPath);
+    manifest.pointEvidence[0].sourceSpans = [first, second];
+    writeJson(context.manifestPath, manifest);
+    const pointPath = path.join(context.pointsRoot, "alpha.json");
+    const point = readJson(pointPath);
+    point.content.blocks[0].provenance.sourceSpans = [first];
+    point.content.blocks[1].provenance.sourceSpans = [second];
+    writeJson(pointPath, point);
+
+    const result = run(root, "graph", context.courseId);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /教材内容块\s+必须按 material\.point_sources 顺序完整覆盖/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -542,6 +716,20 @@ for (const testCase of [
     pattern: /pointEvidence\[0\]\.origin/,
   },
   {
+    name: "rejects a textbook point without model enrichment",
+    mutate(manifest) {
+      manifest.pointEvidence[0].modelEnriched = false;
+    },
+    pattern: /pointEvidence\[0\]\.modelEnriched 必须为 true/,
+  },
+  {
+    name: "rejects an LLM extension point without model enrichment",
+    mutate(manifest) {
+      manifest.pointEvidence[1].modelEnriched = false;
+    },
+    pattern: /pointEvidence\[1\]\.modelEnriched 必须为 true/,
+  },
+  {
     name: "rejects a textbook point without a textbook sourceRef",
     mutate(manifest) {
       manifest.pointEvidence[0].sourceRefs = [];
@@ -631,6 +819,16 @@ for (const testCase of [
       writeJson(pointPath, point);
     },
     pattern: /知识点详情 alpha 的 sourceSpans 与 manifest 不一致/,
+  },
+  {
+    name: "rejects a point detail without the model enrichment declared by the manifest",
+    mutate(context) {
+      const pointPath = path.join(context.pointsRoot, "alpha.json");
+      const point = readJson(pointPath);
+      point.modelEnriched = false;
+      writeJson(pointPath, point);
+    },
+    pattern: /知识点详情 alpha 的 modelEnriched 与 manifest 不一致/,
   },
   {
     name: "rejects a graph without adjacent chapter sequence coverage",

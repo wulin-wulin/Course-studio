@@ -93,12 +93,12 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
         ]
 
     @staticmethod
-    def _source_span(
+    def _source_spans(
         *,
         outline: dict,
         material: dict,
         point: dict,
-    ) -> dict:
+    ) -> list[dict]:
         source = next(
             item
             for item in material["point_sources"]
@@ -108,26 +108,22 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
             section["id"]: section
             for section in material["sections"]
         }
-        section = next(
-            (
-                sections[section_id]
-                for section_id in source["section_ids"]
-                if sections[section_id]["title"] == point["title"]
-            ),
-            sections[source["section_ids"][0]],
-        )
-        span = {
-            "materialId": outline["document_id"],
-            "blockIds": [section["id"]],
-            "headingPath": list(section["heading_path"]),
-            "lineStart": section["line_start"],
-            "lineEnd": section["line_end"],
-            "assetRefs": list(section["asset_refs"]),
-            "excerptSha256": section["sha256"],
-        }
-        if section.get("page") is not None:
-            span["page"] = section["page"]
-        return span
+        spans = []
+        for section_id in source["section_ids"]:
+            section = sections[section_id]
+            span = {
+                "materialId": outline["document_id"],
+                "blockIds": [section["id"]],
+                "headingPath": list(section["heading_path"]),
+                "lineStart": section["line_start"],
+                "lineEnd": section["line_end"],
+                "assetRefs": list(section["asset_refs"]),
+                "excerptSha256": section["sha256"],
+            }
+            if section.get("page") is not None:
+                span["page"] = section["page"]
+            spans.append(span)
+        return spans
 
     def _write_index_stage(
         self,
@@ -166,12 +162,11 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
                 "confidence": 0.95,
                 "scopeStatus": "core",
                 "origin": point["origin"],
-                "sourceSpans": [self._source_span(
+                "sourceSpans": self._source_spans(
                     outline=outline,
                     material=material,
                     point=point,
-                )],
-                "modelEnriched": True,
+                ),
             })
 
         subject = {
@@ -213,6 +208,7 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
                 "subject": subject,
                 "generation": {
                     "evidenceMode": "textbook-grounded",
+                    "contentContract": "textbook-content/2.0",
                     "generatedAt": GENERATED_AT,
                     "pointCount": len(index_points),
                 },
@@ -249,32 +245,40 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
             point_evidence = evidence_by_id[point_id]
             detail = {
                 **deepcopy(index_point),
-                "coreIdea": (
-                    f"以教材中的{outline_point['title']}为事实基础，再补充可操作的判断步骤和使用边界。"
-                ),
-                "principles": [
-                    f"先从教材原文定位{outline_point['title']}的定义与条件。",
-                    f"再用可复核示例扩充{outline_point['title']}的应用边界。",
-                ],
-                "applications": [f"在传感器数据处理流程中应用{outline_point['title']}。"],
-                "aliases": [],
-                "intuition": f"把{outline_point['title']}理解为一项可以逐步检查的数据处理规则。",
-                "misconceptions": [f"不能脱离教材证据任意改写{outline_point['title']}的适用范围。"],
-                "qa": [
-                    {
-                        "q": f"{outline_point['title']}的教材依据在哪里？",
-                        "a": "可以通过 sourceSpans 中的 Markdown 行号和摘要定位。",
-                    },
-                    {
-                        "q": f"如何扩充{outline_point['title']}的学习内容？",
-                        "a": "保留教材事实，并补充边界、步骤和可复核示例。",
-                    },
-                ],
                 "animationType": "none",
                 "prerequisites": [],
                 "origin": point_evidence["origin"],
-                "sourceSpans": deepcopy(point_evidence["sourceSpans"]),
-                "modelEnriched": point_evidence["modelEnriched"],
+                "content": {
+                    "schema_version": "textbook-content/2.0",
+                    "blocks": [
+                        {
+                            "id": "textbook-source",
+                            "kind": "explanation",
+                            "title": "教材说明",
+                            "markdown": (
+                                f"教材给出了{outline_point['title']}的定义、条件和适用范围。"
+                            ),
+                            "provenance": {
+                                "origin": "textbook",
+                                "representation": "paraphrase",
+                                "sourceSpans": deepcopy(point_evidence["sourceSpans"]),
+                            },
+                        },
+                        {
+                            "id": "model-enrichment",
+                            "kind": "worked-example",
+                            "title": "补充应用示例",
+                            "markdown": (
+                                f"根据教材内容，补充一个在传感器数据处理流程中应用"
+                                f"{outline_point['title']}的可检查示例。"
+                            ),
+                            "provenance": {
+                                "origin": "model",
+                                "basedOnBlockIds": ["textbook-source"],
+                            },
+                        },
+                    ],
+                },
             }
             detail_by_id[point_id] = detail
             _write_json(
@@ -322,13 +326,16 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
         for chapter in outline["chapters"]:
             for point_index, outline_point in enumerate(chapter["points"]):
                 graph_points.append({
-                    **deepcopy(detail_by_id[outline_point["id"]]),
+                    "id": outline_point["id"],
+                    "title": outline_point["title"],
+                    "origin": outline_point["origin"],
                     "clusterIds": [chapter["id"]],
                     "role": "trunk" if point_index == 0 else "leaf",
+                    "prerequisites": [],
                     "related": [],
                 })
         graph = {
-            "schema_version": "clustered-graph/2.0",
+            "schema_version": "clustered-graph/3.0",
             "subject": deepcopy(subject),
             "generation": {
                 "generatedAt": GENERATED_AT,
@@ -527,6 +534,14 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
             self.assertEqual(detail["origin"], "textbook")
             self.assertEqual(detail["sourceSpans"], item["sourceSpans"])
             self.assertTrue(detail["modelEnriched"])
+            self.assertEqual(
+                detail["content"]["schema_version"],
+                "textbook-content/2.0",
+            )
+            self.assertEqual(
+                [block["provenance"]["origin"] for block in detail["content"]["blocks"]],
+                ["textbook", "model"],
+            )
 
 
 if __name__ == "__main__":

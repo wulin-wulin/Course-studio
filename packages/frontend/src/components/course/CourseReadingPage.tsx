@@ -24,7 +24,19 @@ import type {
   ForestCluster,
   ForestIndex,
   ForestPoint,
+  ForestSourceSpan,
+  TextbookContentBlock,
+  TextbookPointContentV2,
 } from "@/course/forest/types";
+import { buildCourseDirectory, normalizeForestIndex } from "@/course/forest/forestAdapter";
+import {
+  normalizeTextbookMarkdown,
+  normalizeTextbookContentV2,
+  textbookContentBlockKindLabel,
+  textbookSourceHeading,
+  textbookSourceLocator,
+  textbookSourceTechnicalDetails,
+} from "@/course/forest/textbookContent";
 import { MarkdownContent } from "../chat/MarkdownContent";
 import "./courseReading.css";
 
@@ -40,6 +52,12 @@ type CourseReadingPageProps = {
 type ArticleSection = {
   id: string;
   label: string;
+};
+
+type ContentBlockReference = {
+  id: string;
+  label: string;
+  domId?: string;
 };
 
 type AnimationAvailability = "checking" | "available" | "unavailable";
@@ -60,6 +78,7 @@ export function CourseReadingPage({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDockOpen, setIsDockOpen] = useState(() => window.innerWidth >= 1600);
+  const [expandedDirectoryClusterId, setExpandedDirectoryClusterId] = useState<string | null>(null);
   const [layoutMode, setLayoutMode] = useState<ReaderLayoutMode>(() => readerLayoutMode(window.innerWidth));
   const readerRef = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
@@ -230,18 +249,33 @@ export function CourseReadingPage({
     const clusterId = activePoint?.clusterId ?? routeClusterId;
     return index?.clusters.find((item) => item.id === clusterId) ?? null;
   }, [activePoint?.clusterId, index, routeClusterId]);
-  const clusterPoints = useMemo(
-    () => index?.points.filter((item) => item.clusterId === activeCluster?.id) ?? [],
-    [activeCluster?.id, index],
+  const courseDirectoryGroups = useMemo(
+    () => index ? buildCourseDirectory(index) : [],
+    [index],
   );
+  const orderedCoursePoints = useMemo(
+    () => courseDirectoryGroups.flatMap((group) => group.points),
+    [courseDirectoryGroups],
+  );
+  const clusterPoints = useMemo(
+    () => orderedCoursePoints.filter((item) => item.clusterId === activeCluster?.id),
+    [activeCluster?.id, orderedCoursePoints],
+  );
+  const usesCourseSequence = Boolean(index?.sequences);
+  const navigationPoints = usesCourseSequence ? orderedCoursePoints : clusterPoints;
+
+  useEffect(() => {
+    if (!usesCourseSequence || !activeCluster?.id) return;
+    setExpandedDirectoryClusterId(activeCluster.id);
+  }, [activeCluster?.id, usesCourseSequence]);
   const pointPosition = useMemo(() => {
-    const current = clusterPoints.findIndex((item) => item.id === pointId);
+    const current = navigationPoints.findIndex((item) => item.id === pointId);
     return {
-      previous: current > 0 ? clusterPoints[current - 1] ?? null : null,
-      next: current >= 0 && current < clusterPoints.length - 1 ? clusterPoints[current + 1] ?? null : null,
-      inCluster: current + 1,
+      previous: current > 0 ? navigationPoints[current - 1] ?? null : null,
+      next: current >= 0 && current < navigationPoints.length - 1 ? navigationPoints[current + 1] ?? null : null,
+      current: current + 1,
     };
-  }, [clusterPoints, pointId]);
+  }, [navigationPoints, pointId]);
 
   const accent = activeCluster?.accent ?? "#2f7567";
   const soft = activeCluster?.soft ?? "#e8f0e8";
@@ -308,8 +342,9 @@ export function CourseReadingPage({
               allPoints={index.points}
               previous={pointPosition.previous}
               next={pointPosition.next}
-              positionInCluster={pointPosition.inCluster}
-              clusterTotal={clusterPoints.length}
+              positionInCluster={pointPosition.current}
+              clusterTotal={navigationPoints.length}
+              usesCourseSequence={usesCourseSequence}
               headingRef={headingRef}
               scrollRootRef={mainRef}
               onOpenPoint={onOpenPoint}
@@ -332,7 +367,7 @@ export function CourseReadingPage({
         ref={dockRef}
         id="course-cluster-directory"
         className="course-reader__dock"
-        aria-label="当前知识簇目录"
+        aria-label={usesCourseSequence ? "课程学习目录" : "当前知识簇目录"}
         role={isDockOverlayOpen ? "dialog" : undefined}
         aria-modal={isDockOverlayOpen ? true : undefined}
       >
@@ -340,46 +375,98 @@ export function CourseReadingPage({
           <>
             <div className="course-reader__dock-head">
               <div>
-                <span>本知识簇</span>
-                <strong>{activeCluster?.title ?? "章节目录"}</strong>
-                <small>{clusterPoints.length} 个知识点</small>
+                <span>{usesCourseSequence ? "完整课程目录" : "本知识簇"}</span>
+                <strong>{usesCourseSequence ? course.title : activeCluster?.title ?? "章节目录"}</strong>
+                <small>
+                  {usesCourseSequence
+                    ? `${courseDirectoryGroups.length} 个知识簇 · ${orderedCoursePoints.length} 个知识点`
+                    : `${clusterPoints.length} 个知识点`}
+                </small>
               </div>
               <button
                 ref={dockCloseButtonRef}
                 type="button"
                 onClick={() => setDock(false)}
-                aria-label="收起本知识簇目录"
+                aria-label={usesCourseSequence ? "收起课程目录" : "收起本知识簇目录"}
                 aria-controls="course-cluster-directory"
                 aria-expanded="true"
-                title="收起本知识簇目录"
+                title={usesCourseSequence ? "收起课程目录" : "收起本知识簇目录"}
               >
                 <PanelRightClose aria-hidden="true" size={17} />
               </button>
             </div>
 
-            <ol ref={dockListRef} className="course-reader__dock-list">
-              {clusterPoints.map((item, itemIndex) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className={item.id === pointId ? "is-current" : ""}
-                    aria-current={item.id === pointId ? "page" : undefined}
-                    onClick={() => {
-                      if (isDockOverlayOpen) setDock(false, false);
-                      onOpenPoint(item);
-                    }}
-                  >
-                    <span>{String(itemIndex + 1).padStart(2, "0")}</span>
-                    <strong>{item.title}</strong>
-                  </button>
-                </li>
-              ))}
-            </ol>
+            {usesCourseSequence ? (
+              <ol ref={dockListRef} className="course-reader__dock-list course-reader__dock-list--course">
+                {courseDirectoryGroups.map((group, groupIndex) => {
+                  const isExpanded = expandedDirectoryClusterId === group.cluster.id;
+                  return (
+                    <li key={group.cluster.id} className="course-reader__dock-cluster">
+                      <button
+                        type="button"
+                        className={`course-reader__dock-cluster-toggle${group.cluster.id === activeCluster?.id ? " is-current-cluster" : ""}`}
+                        aria-expanded={isExpanded}
+                        aria-controls={`course-directory-${groupIndex}`}
+                        onClick={() => setExpandedDirectoryClusterId(isExpanded ? null : group.cluster.id)}
+                      >
+                        <i style={{ backgroundColor: group.cluster.accent }} aria-hidden="true" />
+                        <span>
+                          <small>知识簇 {String(groupIndex + 1).padStart(2, "0")}</small>
+                          <strong>{group.cluster.title}</strong>
+                        </span>
+                        <em>{group.points.length}</em>
+                        <ChevronDown aria-hidden="true" size={14} />
+                      </button>
+                      {isExpanded && (
+                        <ol id={`course-directory-${groupIndex}`}>
+                          {group.points.map((item, itemIndex) => (
+                            <li key={item.id}>
+                              <button
+                                type="button"
+                                className={item.id === pointId ? "is-current" : ""}
+                                aria-current={item.id === pointId ? "page" : undefined}
+                                onClick={() => {
+                                  if (isDockOverlayOpen) setDock(false, false);
+                                  onOpenPoint(item);
+                                }}
+                              >
+                                <span>{String(itemIndex + 1).padStart(2, "0")}</span>
+                                <strong>{item.title}</strong>
+                                {item.origin === "llm-extension" && <small>模型扩展</small>}
+                              </button>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <ol ref={dockListRef} className="course-reader__dock-list">
+                {clusterPoints.map((item, itemIndex) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={item.id === pointId ? "is-current" : ""}
+                      aria-current={item.id === pointId ? "page" : undefined}
+                      onClick={() => {
+                        if (isDockOverlayOpen) setDock(false, false);
+                        onOpenPoint(item);
+                      }}
+                    >
+                      <span>{String(itemIndex + 1).padStart(2, "0")}</span>
+                      <strong>{item.title}</strong>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
 
             <div className="course-reader__dock-foot">
               <button type="button" onClick={onBackToForest}>
                 <ChevronLeft aria-hidden="true" size={15} />
-                切换知识簇
+                {usesCourseSequence ? "返回知识森林" : "切换知识簇"}
               </button>
               <button type="button" onClick={onBackToCatalog}>
                 <Home aria-hidden="true" size={15} />
@@ -393,10 +480,10 @@ export function CourseReadingPage({
             type="button"
             className="course-reader__dock-expand"
             onClick={() => setDock(true)}
-            aria-label="展开本知识簇目录"
+            aria-label={usesCourseSequence ? "展开课程目录" : "展开本知识簇目录"}
             aria-controls="course-cluster-directory"
             aria-expanded="false"
-            title="展开本知识簇目录"
+            title={usesCourseSequence ? "展开课程目录" : "展开本知识簇目录"}
           >
             <PanelRightOpen aria-hidden="true" size={17} />
             <span>目录</span>
@@ -407,19 +494,7 @@ export function CourseReadingPage({
   );
 }
 
-function ReadingArticle({
-  point,
-  cluster,
-  course,
-  allPoints,
-  previous,
-  next,
-  positionInCluster,
-  clusterTotal,
-  headingRef,
-  scrollRootRef,
-  onOpenPoint,
-}: {
+type ReadingArticleProps = {
   point: CoursePointDetail;
   cluster: ForestCluster | null;
   course: CourseMeta;
@@ -428,10 +503,394 @@ function ReadingArticle({
   next: ForestPoint | null;
   positionInCluster: number;
   clusterTotal: number;
+  usesCourseSequence: boolean;
   headingRef: RefObject<HTMLHeadingElement | null>;
   scrollRootRef: RefObject<HTMLDivElement | null>;
   onOpenPoint: (point: ForestPoint) => void;
+};
+
+function ReadingArticle(props: ReadingArticleProps) {
+  const textbookContent = useMemo(
+    () => normalizeTextbookContentV2(props.point.content),
+    [props.point.content],
+  );
+  return textbookContent
+    ? <TextbookReadingArticle {...props} content={textbookContent} />
+    : <LegacyReadingArticle {...props} />;
+}
+
+function TextbookReadingArticle({
+  point,
+  content,
+  cluster,
+  course,
+  allPoints,
+  previous,
+  next,
+  positionInCluster,
+  clusterTotal,
+  usesCourseSequence,
+  headingRef,
+  scrollRootRef,
+  onOpenPoint,
+}: ReadingArticleProps & { content: TextbookPointContentV2 }) {
+  const [showModelEnrichment, setShowModelEnrichment] = useState(true);
+  const hasDeclaredAnimation = Boolean(point.animationType && point.animationType !== "none");
+  const [animationAvailability, setAnimationAvailability] = useState<AnimationAvailability>(
+    hasDeclaredAnimation ? "checking" : "unavailable",
+  );
+  const orderedBlocks = useMemo(
+    () => content.blocks
+      .map((block, sourceIndex) => ({ block, sourceIndex }))
+      .filter(({ block }) => showModelEnrichment || block.provenance.origin !== "model"),
+    [content.blocks, showModelEnrichment],
+  );
+  const textbookBlockCount = content.blocks.filter((block) => block.provenance.origin === "textbook").length;
+  const modelBlockCount = content.blocks.length - textbookBlockCount;
+  const sections = useMemo<ArticleSection[]>(
+    () => orderedBlocks.map(({ block, sourceIndex }) => ({
+      id: textbookBlockDomId(block, sourceIndex),
+      label: block.title ?? textbookContentBlockKindLabel(block.kind),
+    })),
+    [orderedBlocks],
+  );
+  const [activeSectionId, setActiveSectionId] = useState(sections[0]?.id ?? "");
+
+  useEffect(() => {
+    setAnimationAvailability(hasDeclaredAnimation ? "checking" : "unavailable");
+  }, [hasDeclaredAnimation, point.id]);
+
+  useEffect(() => {
+    setActiveSectionId(sections[0]?.id ?? "");
+    const root = scrollRootRef.current;
+    if (!root || sections.length === 0) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const rootTop = root.getBoundingClientRect().top;
+      let current = sections[0]?.id ?? "";
+      for (const section of sections) {
+        const element = document.getElementById(section.id);
+        if (!element) continue;
+        if (element.getBoundingClientRect().top - rootTop <= 180) current = section.id;
+        else break;
+      }
+      setActiveSectionId(current);
+    };
+    const onScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(update);
+    };
+    update();
+    root.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [point.id, scrollRootRef, sections]);
+
+  const scrollToSection = (section: ArticleSection) => {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const target = document.getElementById(section.id);
+    if (!target) return;
+    target.tabIndex = -1;
+    if (!target.hasAttribute("aria-label")) target.setAttribute("aria-label", section.label);
+    target.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "start",
+    });
+    setActiveSectionId(section.id);
+    window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  };
+
+  const expressionTags = [
+    point.difficulty || null,
+    point.kind ? formatPointKind(point.kind) : null,
+    animationAvailability === "available" ? "交互演示" : null,
+  ].filter((tag): tag is string => Boolean(tag));
+
+  return (
+    <article className="course-reader__article course-reader__article--textbook">
+      <PointNavigation
+        clusterTitle={cluster?.title ?? course.title}
+        previous={previous}
+        next={next}
+        position={positionInCluster}
+        total={clusterTotal}
+        usesCourseSequence={usesCourseSequence}
+        onOpenPoint={onOpenPoint}
+      />
+
+      <header className="course-reader__heading">
+        <div className="course-reader__tags">
+          <span>{cluster?.title ?? course.title}</span>
+          {point.subtitle && point.subtitle !== cluster?.title && <span>{point.subtitle}</span>}
+          {point.origin && <span>{formatPointOrigin(point.origin)}</span>}
+          {expressionTags.map((tag) => <span key={tag}>{tag}</span>)}
+        </div>
+        <h1 ref={headingRef} id="course-point-title" tabIndex={-1}>{point.title}</h1>
+        {point.shortSummary && <RichText content={point.shortSummary} className="course-reader__summary" />}
+        <div className="course-reader__heading-meta" aria-label="知识点学习信息">
+          <span>{usesCourseSequence ? "学习路径" : "本簇"}第 {Math.max(positionInCluster, 1)} / {clusterTotal || 1} 点</span>
+          <span>教材正文 {textbookBlockCount} 节</span>
+          {modelBlockCount > 0 && <span>扩展讲解 {modelBlockCount} 节</span>}
+        </div>
+      </header>
+
+      <section className="course-reader__content-controls" aria-label="正文来源显示设置">
+        <div className="course-reader__provenance-legend" aria-label="内容来源图例">
+          <span className="course-reader__provenance-badge is-textbook">教材内容</span>
+          {modelBlockCount > 0 && (
+            <span className="course-reader__provenance-badge is-model">模型扩展</span>
+          )}
+        </div>
+        {modelBlockCount > 0 && (
+          <button
+            type="button"
+            className="course-reader__enrichment-toggle"
+            aria-pressed={showModelEnrichment}
+            onClick={() => setShowModelEnrichment((current) => !current)}
+          >
+            <span aria-hidden="true" className="course-reader__toggle-track"><span /></span>
+            <span>{showModelEnrichment ? "模型扩展已显示" : "模型扩展已隐藏"}</span>
+          </button>
+        )}
+      </section>
+
+      {sections.length > 1 && (
+        <nav className="course-reader__article-toc" aria-label="本文内容目录">
+          <span><ListTree aria-hidden="true" size={14} />本文内容</span>
+          <div>
+            {sections.map((section) => (
+              <button
+                type="button"
+                key={section.id}
+                className={activeSectionId === section.id ? "is-current" : ""}
+                aria-current={activeSectionId === section.id ? "location" : undefined}
+                onClick={() => scrollToSection(section)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      )}
+
+      <div className="course-reader__content-blocks">
+        {orderedBlocks.map(({ block, sourceIndex }) => (
+          <TextbookContentBlockSection
+            key={block.id}
+            block={block}
+            sourceIndex={sourceIndex}
+            allBlocks={content.blocks}
+          />
+        ))}
+        {orderedBlocks.length === 0 && content.blocks.length > 0 && (
+          <div className="course-reader__content-empty" role="status">
+            当前知识点只有模型扩展内容。打开“模型扩展”即可继续阅读。
+          </div>
+        )}
+        {content.blocks.length === 0 && (
+          <div className="course-reader__content-empty" role="status">
+            该知识点暂时没有可展示的教材正文，请返回知识森林选择其他知识点或重新生成内容。
+          </div>
+        )}
+      </div>
+
+      <div className="course-reader__reference-grid course-reader__reference-grid--textbook">
+        {(point.keyTerms?.length ?? 0) > 0 && <TagSection title="关键词" items={point.keyTerms ?? []} />}
+        {(point.prerequisites?.length ?? 0) > 0 && (
+          <ReferenceSection
+            title="前置知识"
+            references={point.prerequisites ?? []}
+            allPoints={allPoints}
+            onOpenPoint={onOpenPoint}
+          />
+        )}
+        {(point.related?.length ?? 0) > 0 && (
+          <ReferenceSection
+            title="相关知识"
+            references={point.related ?? []}
+            allPoints={allPoints}
+            onOpenPoint={onOpenPoint}
+          />
+        )}
+      </div>
+
+      {hasDeclaredAnimation && point.animationType && (
+        <CourseAnimationFrame
+          courseId={course.id}
+          animationType={point.animationType}
+          pointTitle={point.title}
+          suggestion={point.animationSuggestion}
+          onAvailabilityChange={setAnimationAvailability}
+        />
+      )}
+
+      <PointNavigation
+        clusterTitle={cluster?.title ?? course.title}
+        previous={previous}
+        next={next}
+        position={positionInCluster}
+        total={clusterTotal}
+        usesCourseSequence={usesCourseSequence}
+        onOpenPoint={onOpenPoint}
+        footer
+      />
+    </article>
+  );
+}
+
+function TextbookContentBlockSection({
+  block,
+  sourceIndex,
+  allBlocks,
+}: {
+  block: TextbookContentBlock;
+  sourceIndex: number;
+  allBlocks: TextbookContentBlock[];
 }) {
+  const isTextbook = block.provenance.origin === "textbook";
+  const title = block.title ?? textbookContentBlockKindLabel(block.kind);
+  const sourceSpans = block.provenance.sourceSpans ?? [];
+  const basedOnBlocks: ContentBlockReference[] = block.provenance.origin === "model"
+    ? block.provenance.basedOnBlockIds.map((id) => {
+        const sourceIndex = allBlocks.findIndex((candidate) => candidate.id === id);
+        const source = sourceIndex >= 0 ? allBlocks[sourceIndex] : undefined;
+        return {
+          id,
+          label: source?.title ?? (source ? textbookContentBlockKindLabel(source.kind) : `未找到的依据块：${id}`),
+          ...(source ? { domId: textbookBlockDomId(source, sourceIndex) } : {}),
+        };
+      })
+    : [];
+  return (
+    <section
+      id={textbookBlockDomId(block, sourceIndex)}
+      className={`course-reader__content-block course-reader__anchored-section ${isTextbook ? "is-textbook" : "is-model"}`}
+      data-content-kind={block.kind}
+    >
+      <header className="course-reader__content-block-head">
+        <div>
+          <span className={`course-reader__provenance-badge ${isTextbook ? "is-textbook" : "is-model"}`}>
+            {isTextbook ? "教材内容" : "模型扩展"}
+          </span>
+          {block.provenance.origin === "textbook" && (
+            <span className="course-reader__representation-badge">
+              {block.provenance.representation === "quote" ? "教材原文引用" : "教材内容转述"}
+            </span>
+          )}
+          <span className="course-reader__kind-badge">{textbookContentBlockKindLabel(block.kind)}</span>
+        </div>
+        <h2>{title}</h2>
+      </header>
+      <RichText content={normalizeTextbookMarkdown(block.markdown)} className="course-reader__content-block-markdown" />
+      {(sourceSpans.length > 0 || basedOnBlocks.length > 0) && (
+        <ContentProvenanceDisclosure
+          sourceSpans={sourceSpans}
+          basedOnBlocks={basedOnBlocks}
+          isTextbook={isTextbook}
+        />
+      )}
+    </section>
+  );
+}
+
+function ContentProvenanceDisclosure({
+  sourceSpans,
+  basedOnBlocks,
+  isTextbook,
+}: {
+  sourceSpans: ForestSourceSpan[];
+  basedOnBlocks: ContentBlockReference[];
+  isTextbook: boolean;
+}) {
+  const sourceCountLabel = [
+    sourceSpans.length > 0 ? `${sourceSpans.length} 处教材定位` : "",
+    basedOnBlocks.length > 0 ? `${basedOnBlocks.length} 个依据块` : "",
+  ].filter(Boolean).join(" · ");
+
+  const jumpToBlock = (domId: string) => {
+    const target = document.getElementById(domId);
+    if (!target) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.tabIndex = -1;
+    target.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+    window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  };
+
+  return (
+    <details className="course-reader__source-disclosure">
+      <summary>
+        <span>{isTextbook ? "查看教材来源定位" : "查看模型扩展依据"}</span>
+        <small>{sourceCountLabel}</small>
+        <ChevronDown aria-hidden="true" size={15} />
+      </summary>
+      <div>
+        {basedOnBlocks.length > 0 && (
+          <div className="course-reader__based-on-blocks">
+            <strong>扩展内容基于以下教材内容</strong>
+            <div>
+              {basedOnBlocks.map((source) => source.domId ? (
+                <button
+                  type="button"
+                  key={source.id}
+                  onClick={() => jumpToBlock(source.domId!)}
+                  title="跳转到对应教材依据"
+                >
+                  {source.label}
+                </button>
+              ) : <span key={source.id}>{source.label}</span>)}
+            </div>
+          </div>
+        )}
+        {sourceSpans.length > 0 && (
+          <ol className="course-reader__source-list">
+            {sourceSpans.map((span, index) => (
+              <li key={`${span.materialId}-${span.lineStart}-${span.lineEnd}-${index}`}>
+                <strong>{textbookSourceHeading(span)}</strong>
+                <span>{textbookSourceLocator(span)}</span>
+                <SourceTechnicalDetails span={span} />
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function SourceTechnicalDetails({ span }: { span: ForestSourceSpan }) {
+  const details = textbookSourceTechnicalDetails(span);
+  return (
+    <details className="course-reader__source-technical">
+      <summary>技术校验信息</summary>
+      <dl>
+        <div><dt>材料 ID</dt><dd><code>{details.materialId}</code></dd></div>
+        <div><dt>原文块</dt><dd><code>{details.blockIds.join("、")}</code></dd></div>
+        {details.assetRefs.length > 0 && (
+          <div><dt>资源</dt><dd><code>{details.assetRefs.join("、")}</code></dd></div>
+        )}
+        <div><dt>内容 SHA-256</dt><dd><code>{details.excerptSha256}</code></dd></div>
+      </dl>
+    </details>
+  );
+}
+
+function LegacyReadingArticle({
+  point,
+  cluster,
+  course,
+  allPoints,
+  previous,
+  next,
+  positionInCluster,
+  clusterTotal,
+  usesCourseSequence,
+  headingRef,
+  scrollRootRef,
+  onOpenPoint,
+}: ReadingArticleProps) {
   const hasDeclaredAnimation = Boolean(point.animationType && point.animationType !== "none");
   const [animationAvailability, setAnimationAvailability] = useState<AnimationAvailability>(
     hasDeclaredAnimation ? "checking" : "unavailable",
@@ -545,6 +1004,7 @@ function ReadingArticle({
         next={next}
         position={positionInCluster}
         total={clusterTotal}
+        usesCourseSequence={usesCourseSequence}
         onOpenPoint={onOpenPoint}
       />
 
@@ -558,7 +1018,7 @@ function ReadingArticle({
         <h1 ref={headingRef} id="course-point-title" tabIndex={-1}>{point.title}</h1>
         {point.shortSummary && <RichText content={point.shortSummary} className="course-reader__summary" />}
         <div className="course-reader__heading-meta" aria-label="知识点学习信息">
-          <span>本簇第 {Math.max(positionInCluster, 1)} / {clusterTotal || 1} 点</span>
+          <span>{usesCourseSequence ? "学习路径" : "本簇"}第 {Math.max(positionInCluster, 1)} / {clusterTotal || 1} 点</span>
           {typeof point.importance === "number" && (
             <span>学习权重 {Math.round(Math.min(1, Math.max(0, point.importance)) * 100)}%</span>
           )}
@@ -704,6 +1164,7 @@ function ReadingArticle({
         next={next}
         position={positionInCluster}
         total={clusterTotal}
+        usesCourseSequence={usesCourseSequence}
         onOpenPoint={onOpenPoint}
         footer
       />
@@ -717,6 +1178,7 @@ function PointNavigation({
   next,
   position,
   total,
+  usesCourseSequence,
   onOpenPoint,
   footer = false,
 }: {
@@ -725,6 +1187,7 @@ function PointNavigation({
   next: ForestPoint | null;
   position: number;
   total: number;
+  usesCourseSequence: boolean;
   onOpenPoint: (point: ForestPoint) => void;
   footer?: boolean;
 }) {
@@ -732,11 +1195,17 @@ function PointNavigation({
     <nav className={`course-reader__point-nav ${footer ? "course-reader__point-nav--footer" : ""}`} aria-label={footer ? "继续学习" : "知识点推进"}>
       <button type="button" disabled={!previous} onClick={() => previous && onOpenPoint(previous)}>
         <ChevronLeft aria-hidden="true" size={17} />
-        <span><small>上一个</small><strong>{previous?.title ?? "已是本簇第一点"}</strong></span>
+        <span>
+          <small>上一个</small>
+          <strong>{previous?.title ?? (usesCourseSequence ? "已是学习路径起点" : "已是本簇第一点")}</strong>
+        </span>
       </button>
-      <span>{clusterTitle} · {Math.max(position, 1)}/{total || 1}</span>
+      <span>{usesCourseSequence ? "课程学习路径" : clusterTitle} · {Math.max(position, 1)}/{total || 1}</span>
       <button type="button" disabled={!next} onClick={() => next && onOpenPoint(next)}>
-        <span><small>下一个</small><strong>{next?.title ?? "已是本簇最后一点"}</strong></span>
+        <span>
+          <small>下一个</small>
+          <strong>{next?.title ?? (usesCourseSequence ? "已是学习路径终点" : "已是本簇最后一点")}</strong>
+        </span>
         <ChevronRight aria-hidden="true" size={17} />
       </button>
     </nav>
@@ -1011,6 +1480,20 @@ function normalizeComparableText(value: string): string {
   return value.replace(/\s+/g, "").replace(/[。；;，,]/g, "").toLowerCase();
 }
 
+function textbookBlockDomId(block: TextbookContentBlock, sourceIndex: number): string {
+  const safeId = block.id.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `section-textbook-content-${sourceIndex}-${safeId || "block"}`;
+}
+
+function formatPointOrigin(origin: NonNullable<ForestPoint["origin"]>): string {
+  const labels: Record<NonNullable<ForestPoint["origin"]>, string> = {
+    textbook: "教材知识点",
+    "llm-extension": "模型扩展知识点",
+    user: "用户添加知识点",
+  };
+  return labels[origin];
+}
+
 function formatPointKind(kind: string): string {
   const labels: Record<string, string> = {
     concept: "概念",
@@ -1049,9 +1532,7 @@ function readerLayoutMode(width: number): ReaderLayoutMode {
 }
 
 function unwrapForestIndex(payload: unknown): ForestIndex | null {
-  const candidate = isRecord(payload) && "index" in payload ? payload.index : payload;
-  if (!isRecord(candidate) || !Array.isArray(candidate.clusters) || !Array.isArray(candidate.points)) return null;
-  return candidate as unknown as ForestIndex;
+  return normalizeForestIndex(payload);
 }
 
 function unwrapPointDetail(payload: unknown): CoursePointDetail | null {

@@ -5,7 +5,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeAtomicWriteJson } from '../../../candidate-knowledge-point-generator/scripts/lib/safe-write.mjs';
 
+const LEGACY_GRAPH_SCHEMA = 'clustered-graph/2.0';
+const THIN_GRAPH_SCHEMA = 'clustered-graph/3.0';
+const TEXTBOOK_CONTENT_SCHEMA = 'textbook-content/2.0';
 const RELATION_FIELDS = ['clusterIds', 'role', 'related'];
+const THIN_POINT_FIELDS = [
+  'id',
+  'title',
+  'origin',
+  'clusterIds',
+  'role',
+  'prerequisites',
+  'related',
+];
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -72,6 +84,20 @@ export function assembleGraphPoints(contentRootInput, graphFileInput, { write = 
   if (!Array.isArray(graph.points)) throw new Error('聚类图 points 必须是数组');
   if (!Array.isArray(graph.clusters)) throw new Error('聚类图 clusters 必须是数组');
   if (!isRecord(graph.generation)) throw new Error('聚类图 generation 必须是对象');
+  if (![LEGACY_GRAPH_SCHEMA, THIN_GRAPH_SCHEMA].includes(graph.schema_version)) {
+    throw new Error(
+      `聚类图 schema_version 必须是 ${LEGACY_GRAPH_SCHEMA} 或 ${THIN_GRAPH_SCHEMA}`,
+    );
+  }
+  const usesThinGraph = graph.schema_version === THIN_GRAPH_SCHEMA;
+  if (
+    usesThinGraph
+    && manifest.generation?.contentContract !== TEXTBOOK_CONTENT_SCHEMA
+  ) {
+    throw new Error(
+      `${THIN_GRAPH_SCHEMA} 只用于 ${TEXTBOOK_CONTENT_SCHEMA} 内容包`,
+    );
+  }
 
   const indexIds = assertUniqueIds(index.points, 'index.points');
   const overlayIds = assertUniqueIds(graph.points, 'graph.points');
@@ -100,7 +126,9 @@ export function assembleGraphPoints(contentRootInput, graphFileInput, { write = 
 
   const assembledPoints = sourcePoints.map((source) => {
     const overlay = overlayById.get(source.id);
-    const allowedKeys = new Set([...Object.keys(source), ...RELATION_FIELDS]);
+    const allowedKeys = usesThinGraph
+      ? new Set(THIN_POINT_FIELDS)
+      : new Set([...Object.keys(source), ...RELATION_FIELDS]);
     const unknownKeys = Object.keys(overlay).filter((key) => !allowedKeys.has(key));
     if (unknownKeys.length > 0) {
       problems.push(`${source.id} 含契约外字段: ${unknownKeys.join(', ')}`);
@@ -110,17 +138,33 @@ export function assembleGraphPoints(contentRootInput, graphFileInput, { write = 
       if (!hasOwn(overlay, key)) problems.push(`${source.id} 缺少关系字段 ${key}`);
     }
 
-    for (const key of Object.keys(source)) {
+    for (const key of usesThinGraph ? ['title', 'origin'] : Object.keys(source)) {
       if (key === 'prerequisites' || !hasOwn(overlay, key)) continue;
-      if (!equal(source[key], overlay[key])) {
-        restoredContentFields.push(`${source.id}.${key}`);
+      if (!equal(source[key], overlay[key])) restoredContentFields.push(`${source.id}.${key}`);
+    }
+
+    if (usesThinGraph) {
+      if (typeof source.title !== 'string' || source.title.trim() === '') {
+        problems.push(`${source.id} 的 canonical point 缺少 title`);
       }
+      if (!['textbook', 'llm-extension', 'user'].includes(source.origin)) {
+        problems.push(`${source.id} 的 canonical point 缺少合法 origin`);
+      }
+      return {
+        id: source.id,
+        title: source.title,
+        origin: source.origin,
+        clusterIds: overlay.clusterIds,
+        role: overlay.role,
+        prerequisites: hasOwn(overlay, 'prerequisites')
+          ? overlay.prerequisites
+          : source.prerequisites,
+        related: overlay.related,
+      };
     }
 
     const assembled = { ...source };
-    if (hasOwn(overlay, 'prerequisites')) {
-      assembled.prerequisites = overlay.prerequisites;
-    }
+    if (hasOwn(overlay, 'prerequisites')) assembled.prerequisites = overlay.prerequisites;
     for (const key of RELATION_FIELDS) assembled[key] = overlay[key];
     return assembled;
   });
@@ -128,7 +172,9 @@ export function assembleGraphPoints(contentRootInput, graphFileInput, { write = 
   if (problems.length > 0) {
     throw new Error(
       `无法机械装配 clustered-graph points：\n- ${problems.join('\n- ')}\n`
-      + '只在图草稿中填写 id/prerequisites/clusterIds/role/related；正文和 subject 由本脚本从上游补齐。',
+      + (usesThinGraph
+        ? `图草稿只允许 ${THIN_POINT_FIELDS.join('/')}；title/origin 从 canonical point 恢复。`
+        : '只在图草稿中填写 id/prerequisites/clusterIds/role/related；正文和 subject 由本脚本从上游补齐。'),
     );
   }
 
@@ -156,6 +202,8 @@ export function assembleGraphPoints(contentRootInput, graphFileInput, { write = 
     clusters: graph.clusters.length,
     restoredContentFields: restoredContentFields.length,
     restoredSubject: !equal(graph.subject, manifest.subject),
+    schemaVersion: graph.schema_version,
+    thinGraph: usesThinGraph,
   };
 }
 
@@ -186,14 +234,16 @@ async function main() {
       ? {
         ...result,
         ok: false,
-        message: 'graph.points 尚未由上游完整对象机械装配，请先不带 --check 运行本命令',
+        message: result.thinGraph
+          ? 'graph.points 尚未机械规范化为薄关系点，请先不带 --check 运行本命令'
+          : 'graph.points 尚未由上游完整对象机械装配，请先不带 --check 运行本命令',
       }
       : result;
     if (options.asJson) console.log(JSON.stringify(checked, null, 2));
     else if (!checked.ok) console.error(`❌ ${checked.message}`);
     else {
       console.log(
-        `✅ 图 points ${result.changed ? '已机械装配' : '已是完整对象'}：`
+        `✅ 图 points ${result.changed ? '已机械装配' : (result.thinGraph ? '已是规范薄关系点' : '已是完整对象')}：`
         + `${result.points} 个知识点，${result.clusters} 个簇，`
         + `恢复 ${result.restoredContentFields} 个被改写正文。`,
       );
