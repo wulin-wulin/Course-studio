@@ -1,0 +1,574 @@
+{
+  "id": "point-2-5",
+  "title": "采样抖动、丢样与突发上报",
+  "shortSummary": "分析采样抖动、丢样与突发上报对时间序列的影响，并设计缓冲、时间补偿与上报节流策略。",
+  "keyTerms": [
+    "采样抖动",
+    "丢样",
+    "突发上报",
+    "缓冲",
+    "时间补偿",
+    "节流"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-2-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的抖动模型、阈值配置、缺口算法与缓冲公式，围绕“症状—假设—证据—定位—修复”重排讲解顺序，补充数值算例、参数实验和检查清单，不改变原始事实的不可变性边界。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "diagnose-anomalies",
+          "text": "依据时间与序列号两类证据区分采样抖动、丢样与突发上报，并给出有优先级的根因判断。"
+        },
+        {
+          "id": "design-buffer-throttle",
+          "text": "按最坏突发估算边缘缓冲容量，并说明时间补偿与上报节流分别作用在哪一层、不能改动什么。"
+        }
+      ],
+      "misconceptions": [
+        "用 ingest_time 的间隔反推端侧采样抖动，忽略网络与队列延迟。",
+        "把门磁的 60 秒心跳当成固定频率采样，进而认为整分钟门状态未变化。",
+        "直接用 sequence_no 的缺口数计算丢样率，不区分合法接续与重复投递。",
+        "通过四舍五入改写 event_time 来完成抖动补偿。"
+      ],
+      "modules": [
+        {
+          "id": "symptom-and-vocabulary",
+          "title": "症状清单：三类时间轴偏差",
+          "role": "context",
+          "description": "先把抖动、丢样、突发归纳为同一条时间轴上的不同症状，明确本节诊断对象。",
+          "outcomeRefs": [
+            "diagnose-anomalies"
+          ],
+          "order": 0
+        },
+        {
+          "id": "jitter-quantify",
+          "title": "抖动的来源与两个量化指标",
+          "role": "mechanism",
+          "description": "从实际采样时刻偏移出发，区分周期抖动与累积抖动，并对应到频谱影响和 CLOCK_SUSPECT 规则。",
+          "outcomeRefs": [
+            "diagnose-anomalies"
+          ],
+          "order": 1
+        },
+        {
+          "id": "loss-gap-analysis",
+          "title": "丢样识别与缺口宽度",
+          "role": "evidence",
+          "description": "用 sequence_no 连续性定位缺口，并用时间维度证据区分端侧漏采、缓存溢出与时钟回退。",
+          "outcomeRefs": [
+            "diagnose-anomalies"
+          ],
+          "order": 2
+        },
+        {
+          "id": "burst-buffer",
+          "title": "突发上报与按最坏情况定容",
+          "role": "design",
+          "description": "分析事件驱动上报的聚类特征，推导最坏突发下的缓冲容量并讨论节流边界。",
+          "outcomeRefs": [
+            "design-buffer-throttle"
+          ],
+          "order": 3
+        },
+        {
+          "id": "joint-diagnosis",
+          "title": "双维度联合诊断与修复顺序",
+          "role": "integration",
+          "description": "把时间与序列号证据合并成时间—序列号视图，定位耦合故障并排出修复优先级。",
+          "outcomeRefs": [
+            "diagnose-anomalies",
+            "design-buffer-throttle"
+          ],
+          "order": 4
+        },
+        {
+          "id": "misconceptions-and-acceptance",
+          "title": "误区排查与注入式验收",
+          "role": "verification",
+          "description": "用四个常见误区和人工异常注入方法检验诊断逻辑是否可靠。",
+          "outcomeRefs": [
+            "diagnose-anomalies",
+            "design-buffer-throttle"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "diagnose-anomalies",
+          "design-buffer-throttle"
+        ],
+        "method": "完成两道选择题和一次缓冲容量计算，并写出根因判断与修复顺序。",
+        "successCriteria": [
+          "能把抖动指标、缺口宽度和突发密度分别归位到正确的检测维度",
+          "能按公式算出最坏突发所需缓冲并说明参数变化的方向",
+          "能指出时间补偿与节流各自所在的层，且不改写原始 event_time"
+        ],
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-2-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-symptom-overview",
+        "moduleId": "symptom-and-vocabulary",
+        "depth": "core",
+        "kind": "definition",
+        "title": "本节诊断的三类时间轴偏差",
+        "markdown": "本节处理同一类工程问题的三种表现：采样抖动是实际采样时刻相对理想周期时刻的随机偏移；丢样是预期采样时刻没有产生有效记录；突发上报是事件驱动流量在短时间内密集到达。\n\n三者都会让时间序列“看起来不对”，但证据不同：抖动体现在时刻偏差，丢样体现在序列号缺口，突发体现在到达密度的聚类性。诊断时先分清症状，再选择对应的检测维度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000067"
+              ],
+              "headingPath": [
+                "测量原理与采样设计",
+                "采样抖动、丢样与突发上报"
+              ],
+              "lineStart": 1213,
+              "lineEnd": 1214,
+              "assetRefs": [],
+              "excerptSha256": "628ee60e7fdc1dbd726af994bfa2faf892e0821945cd2121ef0b59e2cfb692bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-jitter",
+        "moduleId": "jitter-quantify",
+        "depth": "core",
+        "kind": "formula",
+        "title": "抖动模型、相位噪声与两类指标",
+        "markdown": "采样抖动（Jitter）指实际采样时刻相对于理想周期时刻的随机偏移。理想采样时刻为 $t_k = k \\cdot T_s$，实际时刻为 $t_k' = t_k + \\delta_k$，其中 $\\delta_k$ 为抖动量。\n\n抖动对频率分析的影响可用相位噪声模型理解。对理想正弦信号 $x(t) = A\\sin(2\\pi f_0 t)$，受抖动影响的采样值近似为：\n\n$$x(t_k') \\approx A\\sin(2\\pi f_0 kT_s) + A \\cdot 2\\pi f_0 \\delta_k \\cdot \\cos(2\\pi f_0 kT_s)$$\n\n第二项是抖动引入的等效噪声，其功率谱密度与 $f_0^2 \\cdot \\sigma_\\delta^2$ 成正比。冷链温度通道 $f_0$ 通常低于 $0.01\\,\\text{Hz}$，抖动噪声功率极低；但压缩机电流通道 $T_s = 5\\,\\text{s}$，若用于频域特征提取，$\\sigma_\\delta > 50\\,\\text{ms}$ 就会显著抬高高频本底。\n\n工程上区分两类指标：\n\n| 指标 | 定义 | 适用场景 | 本节案例配置 |\n|:---|:---|:---|:---|\n| 周期抖动 | 相邻实际采样间隔与标称周期之差 $\\Delta T_k = t_{k+1}' - t_k' - T_s$ | 评估时钟源短期稳定性 | 温度通道要求 $\\lvert \\Delta T_k \\rvert < 200\\,\\text{ms}$ |\n| 累积抖动 | 实际时刻与理想时刻的最大绝对偏差 $\\max_k \\lvert \\delta_k \\rvert$ | 评估长期时钟漂移 | 全通道要求 $\\max \\lvert \\delta_k \\rvert < 500\\,\\text{ms}$ |\n\n周期抖动过大会导致频谱泄漏，累积抖动超标会破坏多传感器时间对齐。边缘网关转发前应校验：若 $\\lvert \\text{event\\_time} - \\text{expected\\_time} \\rvert > 500\\,\\text{ms}$，标记 quality_code = CLOCK_SUSPECT，但不得修改 event_time 本身。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "测量原理与采样设计",
+                "采样抖动、丢样与突发上报",
+                "采样抖动的来源与量化"
+              ],
+              "lineStart": 1215,
+              "lineEnd": 1233,
+              "assetRefs": [],
+              "excerptSha256": "fade83d958d55452086936af50b131ccb53d35a6cde84b214dec1dfae495138d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-jitter-numeric",
+        "moduleId": "jitter-quantify",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：周期抖动超限但未触发 CLOCK_SUSPECT",
+        "markdown": "设温度通道标称 $T_s = 30\\,\\text{s}$，连续三个实际采样时刻为 $0.000\\,\\text{s}$、$30.180\\,\\text{s}$、$59.910\\,\\text{s}$。\n\n先算周期抖动：相邻间隔为 $30.180\\,\\text{s}$ 和 $29.730\\,\\text{s}$，所以 $\\Delta T_1 = +180\\,\\text{ms}$，$\\Delta T_2 = -270\\,\\text{ms}$。其中 $\\lvert \\Delta T_2 \\rvert = 270\\,\\text{ms} > 200\\,\\text{ms}$，温度通道的周期抖动要求已被突破，频域分析可能出现泄漏。\n\n再算累积抖动：相对理想时刻的偏差为 $\\delta_1 = +180\\,\\text{ms}$，$\\delta_2 = -90\\,\\text{ms}$，最大绝对偏差 $180\\,\\text{ms} < 500\\,\\text{ms}$。\n\n两个结论必须分开：该记录不会因时间偏差被标记 CLOCK_SUSPECT，因为质量码规则看的是累积抖动阈值；但周期抖动已经超限，做频谱特征时应降权或先检查调度。把“未触发质量码”误读为“抖动无害”，是诊断中最常见的越界推断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-jitter"
+          ]
+        }
+      },
+      {
+        "id": "tb-sample-loss",
+        "moduleId": "loss-gap-analysis",
+        "depth": "core",
+        "kind": "table",
+        "title": "用序列号连续性识别缺口",
+        "markdown": "丢样（Sample Loss）指某设备在预期采样时刻未产生有效记录。由于 sequence_no 在同一 device_id 与 metric 组合内严格递增，丢样可通过序列号连续性检测。\n\nZ2-TEMP-01 在某一运行窗口内收到：\n\n| sequence_no | event_time | 状态 |\n|:---|:---|:---|\n| 1420 | 2024-01-15 08:00:00 | 正常 |\n| 1421 | 2024-01-15 08:00:30 | 正常 |\n| 1423 | 2024-01-15 08:01:30 | 正常 |\n| 1424 | 2024-01-15 08:02:00 | 正常 |\n\nsequence_no = 1422 缺失，对应 08:01:00 的理想采样点。缺口宽度 $G = 1423 - 1421 - 1 = 1$。检测时按 sequence_no 排序，比较“上一条序号 + 1”与“实际下一条序号”，差值即缺口宽度，再与允许的最大序号间隔（本节案例取 2）比较，得到 CRITICAL_LOSS 或 TOLERABLE_GAP。\n\n```\nfunction detect_gaps(records, max_expected_gap):\n    gaps = []\n    for i from 1 to len(records)-1:\n        expected_next = records[i-1].sequence_no + 1\n        actual_next = records[i].sequence_no\n        if actual_next > expected_next:\n            gap_width = actual_next - expected_next\n            flag = gap_width > max_expected_gap ? \"CRITICAL_LOSS\" : \"TOLERABLE_GAP\"\n            gaps.append({start_seq: expected_next, width: gap_width, flag: flag})\n    return gaps\n```\n\n需区分三种丢样根因：端侧 MCU 未执行采样（如看门狗复位）、采样成功但边缘缓存溢出导致丢弃、网络传输失败。端侧 sequence_no 在重启后不得归零，因此即使设备复位，缺口检测仍有效。若连续出现序号跳变且伴随 CLOCK_SUSPECT，应优先排查 RTC 电池失效导致的时钟回退：此时 event_time 可能非单调，但 sequence_no 仍递增。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000069"
+              ],
+              "headingPath": [
+                "测量原理与采样设计",
+                "采样抖动、丢样与突发上报",
+                "丢样的识别与缺口分析"
+              ],
+              "lineStart": 1234,
+              "lineEnd": 1274,
+              "assetRefs": [],
+              "excerptSha256": "571dd4b49be06cee9cf46e63c57417d94f45088c624b2ea9a494ef04d97e0916"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-diagnosis",
+        "moduleId": "loss-gap-analysis",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "诊断案例：一个缺口，两条证据",
+        "markdown": "情境：序列 1420、1421、1423、1424 中缺 1422，且 08:01:30 那条记录的 event_time 比期望时刻晚 $600\\,\\text{ms}$。\n\n按故障诊断顺序推进：\n\n1. 症状：出现 1 个缺口，同时存在时间偏移。\n2. 假设 A：端侧 MCU 漏采。假设 B：RTC 回退导致时刻偏移和缺口一并出现。\n3. 证据：缺口宽度 $G = 1$，小于允许间隔 2，属于 TOLERABLE_GAP；时间偏差 $600\\,\\text{ms} > 500\\,\\text{ms}$，应标 CLOCK_SUSPECT；缺口前后 sequence_no 连续递增，没有 DUPLICATE。\n4. 定位：若只是端侧漏采，不应伴随时刻整体偏移；而时钟回退会让 event_time 非单调、sequence_no 仍递增，与证据吻合，优先判为 B。\n5. 修复：保留原始 event_time 和 sequence_no，仅写质量码；在派生层插入 value = null、quality_code = MISSING 的占位；对下游声明该窗口存在缺口，不重排、不猜测原值。\n\n关键取舍：缺口宽度只回答“缺了几条”，时间证据才回答“为什么缺”。单看任一维度都会误判。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-jitter",
+            "tb-sample-loss"
+          ]
+        }
+      },
+      {
+        "id": "tb-burst-buffer",
+        "moduleId": "burst-buffer",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "突发上报的聚类性与缓冲容量公式",
+        "markdown": "门磁传感器 Z1-DOOR-01 采用事件驱动上报：门状态变化时立即发送，并附加每 60 秒心跳。这与温湿度的固定周期采样形成本质差异。突发上报的到达过程无法用泊松过程近似，因为状态变化往往由人工操作触发，具有聚类性。\n\n工程挑战在于边缘缓存的瞬时压力。假设 Z3 区在装卸货期间 10 秒内发生 5 次门开关，每次上报还附带心跳机制产生的并发包，网关必须在缓存溢出前完成转发。缓存容量应基于最坏情况而非平均速率：\n\n$$B_{\\min} = N_{\\text{zone}} \\cdot N_{\\text{dev\\_per\\_zone}} \\cdot S_{\\text{pkt}} \\cdot \\frac{T_{\\text{burst}}}{T_{\\text{min\\_interarrival}}} \\cdot \\alpha$$\n\n其中 $N_{\\text{zone}} = 4$，$N_{\\text{dev\\_per\\_zone}} = 1$，$S_{\\text{pkt}} \\approx 256\\,\\text{B}$，$T_{\\text{burst}} = 10\\,\\text{s}$，$T_{\\text{min\\_interarrival}}$ 取门磁去抖后的最小间隔 $500\\,\\text{ms}$，$\\alpha = 2$。代入得 $B_{\\min} \\approx 4 \\times 1 \\times 256 \\times 20 \\times 2 = 40.96\\,\\text{KB}$。\n\n边缘层转发时应保持原始记录的 event_time 与 sequence_no 不变，不得为平滑流量而合并或重排。若云平台接入服务在持久化前检测到同一 sequence_no 的重复投递，则后续记录标记 quality_code = DUPLICATE，首条保持 GOOD。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000070"
+              ],
+              "headingPath": [
+                "测量原理与采样设计",
+                "采样抖动、丢样与突发上报",
+                "突发上报的时序特征与缓存设计"
+              ],
+              "lineStart": 1275,
+              "lineEnd": 1286,
+              "assetRefs": [],
+              "excerptSha256": "b00913645e490e2ec4082b286c612cac8a06ee7f7542dfddd3f52610d33a6c3b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-burst-experiment",
+        "moduleId": "burst-buffer",
+        "depth": "support",
+        "kind": "formula",
+        "title": "参数实验：去抖间隔与安全系数如何改变容量",
+        "markdown": "沿用 $B_{\\min}$ 公式和案例参数 $N_{\\text{zone}} = 4$、$N_{\\text{dev\\_per\\_zone}} = 1$、$S_{\\text{pkt}} = 256\\,\\text{B}$、$T_{\\text{burst}} = 10\\,\\text{s}$、$\\alpha = 2$。\n\n- 去抖后最小间隔为 $500\\,\\text{ms}$ 时，$T_{\\text{burst}} / T_{\\text{min\\_interarrival}} = 20$，$B_{\\min} = 40.96\\,\\text{KB}$。\n- 若把最小间隔收紧到 $250\\,\\text{ms}$，比值变为 40，$B_{\\min}$ 翻倍为 $81.92\\,\\text{KB}$。\n- 若同时把安全系数从 2 降到 1.5，$B_{\\min}$ 回落到 $61.44\\,\\text{KB}$。\n\n可见缓冲容量由最坏到达密度与安全裕度共同决定，平均速率只能解释常态占用。容量不足时的正确降级顺序是：先按先进先出落盘，保留 event_time 与 sequence_no；再对低价值记录标记后丢弃并计数；最后把丢弃计数暴露为可观测指标。\n\n上报节流作用在发送批次、发送频率和心跳合并上，不能改变采样时刻与事件时间，也不能把多条不同 sequence_no 的记录压成一条。节流是传输层的手段，时间补偿是分析层的手段，两者都不触碰原始事实。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-burst-buffer"
+          ]
+        }
+      },
+      {
+        "id": "tb-joint-detection",
+        "moduleId": "joint-diagnosis",
+        "depth": "core",
+        "kind": "code",
+        "title": "时间—序列号双维度联合检测",
+        "markdown": "实际运行中三类异常可能耦合出现。典型故障模式：边缘网关时钟漂移导致缓存定时器抖动，门磁突发上报堆积，进而触发缓存淘汰造成丢样。联合检测需要建立时间与序列号双维度视图。\n\n以 Z4 区 1 小时窗口为例，温度期望点数 $N = \\lfloor 3600 / 30 \\rfloor = 120$。实际接收记录 115 条，其中 sequence_no 连续但 3 条标记 CLOCK_SUSPECT，另有 2 处缺口（gap_width 各为 1）。下游对齐处理分为四类：有效物理样本 112 条；时钟可疑样本 3 条保留但降低分析权重；缺口占位 2 条，插入 value = null、quality_code = MISSING；总序列长度 117 条，与 120 的差值由首尾边界未对齐解释。\n\nSQL 在左闭右开窗口 $[\\text{win\\_start}, \\text{win\\_end})$ 内按质量码统计，并用序号范围减实际不同序号数得到总缺口宽度：\n\n```sql\nWITH expected_bounds AS (\n    SELECT '2024-01-15 08:00:00'::timestamptz AS win_start,\n           '2024-01-15 09:00:00'::timestamptz AS win_end\n), temp_records AS (\n    SELECT * FROM cold_chain_raw\n    WHERE device_id = 'Z4-TEMP-01' AND metric = 'temperature'\n      AND event_time >= (SELECT win_start FROM expected_bounds)\n      AND event_time <  (SELECT win_end FROM expected_bounds)\n)\nSELECT\n    COUNT(*) FILTER (WHERE quality_code = 'GOOD') AS good_count,\n    COUNT(*) FILTER (WHERE quality_code = 'CLOCK_SUSPECT') AS suspect_count,\n    COUNT(*) FILTER (WHERE quality_code = 'DUPLICATE') AS dup_count,\n    MAX(sequence_no) - MIN(sequence_no) + 1\n        - COUNT(DISTINCT sequence_no) AS gap_width_total\nFROM temp_records;\n```\n\n窗口为左闭右开，与固定数据契约一致。缺失总数不必等于期望点数与实收数之差，因为首尾边界可能截断半个采样周期，这一差值必须在报告里单独解释。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "测量原理与采样设计",
+                "采样抖动、丢样与突发上报",
+                "抖动、丢样与突发的联合检测"
+              ],
+              "lineStart": 1287,
+              "lineEnd": 1325,
+              "assetRefs": [],
+              "excerptSha256": "af3a151927bf3b1a1e4c202a9a9003c71ae12ef6edea72ced797f78f1e176cff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-joint-root-cause",
+        "moduleId": "joint-diagnosis",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "耦合故障的定位与修复优先级",
+        "markdown": "把 Z4 窗口的证据按诊断顺序摊开：\n\n- 症状：期望 120 条，实收 115 条；3 条 CLOCK_SUSPECT；2 处 gap_width 为 1 的缺口。\n- 假设 A：端侧偶发漏采。假设 B：网关时钟漂移引起定时器抖动，突发流量堆积后缓存淘汰。\n- 证据：时钟可疑记录集中在缺口之前的若干分钟；缺口两侧 sequence_no 连续，没有 DUPLICATE；同一时段门磁上报密集。\n- 定位：A 能解释缺口但解释不了时刻偏移与聚类时间关系；B 能同时解释两类症状，故根因取 B。\n- 修复顺序：先修时钟（授时校准、渐进校正，避免时间跳变），再按最坏突发扩缓冲或加上报节流，最后为既有缺口补 MISSING 占位并向模型与看板声明不可插值区间。\n\n时间补偿在这一步的正确形态是：在派生层用期望采样网格和容差窗口对齐，把超差样本降权而非移动。任何把 $\\delta_k$ 直接减回 event_time 的做法都会破坏原始事实的不可变性。修复顺序也不能反：只扩缓冲会缓解丢样，却留下时钟继续漂移。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sample-loss",
+            "tb-burst-buffer",
+            "tb-joint-detection"
+          ]
+        }
+      },
+      {
+        "id": "tb-misconceptions",
+        "moduleId": "misconceptions-and-acceptance",
+        "depth": "core",
+        "kind": "warning",
+        "title": "四个常见误区与对应的验证方法",
+        "markdown": "**误区一：以 ingest_time 间隔推断采样抖动。** ingest_time 包含网络传输与队列延迟，与 event_time 之差可能达数秒，不能反推端侧采样时刻精度。验证方法：在测试台架直接抓取 MCU GPIO 触发信号，与 RTC 输出比对。\n\n**误区二：将门磁心跳视为固定频率采样。** 心跳是保活机制，event_time 为发送时刻而非状态观测时刻；若 60 秒内无状态变化，心跳仅证明通信链路存活，不表示门状态在整分钟内恒定不变。验证方法：对比心跳记录与前后状态变化记录的 door_state 值，连续相同值不构成状态未变化的证据。\n\n**误区三：用 sequence_no 缺口直接计算丢样率。** 缺口可能由设备重启后 sequence_no 接续（合法）或重复投递去重后显现（DUPLICATE 已标记）导致。验证方法：结合 gap_width 与对应时间窗口内的 DUPLICATE 计数综合判断。\n\n**误区四：抖动补偿通过 event_time 四舍五入。** 改写 event_time 违反固定数据契约，且会伪造采样时刻。正确做法：在派生分析层建立容忍窗口，原始事实表永久保留原始 event_time。\n\n工程验收时，建议注入已知模式的人工异常：通过调试指令令 Z2-TEMP-01 跳过特定 sequence_no，验证缺口检测灵敏度；或人为制造 $300\\,\\text{ms}$ 的 RTC 偏移，验证 CLOCK_SUSPECT 触发阈值。所有测试注入点需在运维文档中登记，避免与真实故障混淆。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "测量原理与采样设计",
+                "采样抖动、丢样与突发上报",
+                "常见误区与验证方法"
+              ],
+              "lineStart": 1326,
+              "lineEnd": 1337,
+              "assetRefs": [],
+              "excerptSha256": "e07c6c9d1abf9e606640aebdb397c50d0d6ee18a49a5035ee61055b74742cea7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "misconceptions-and-acceptance",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：一张可执行的检查表",
+        "markdown": "排查任何时间序列缺口前，依次确认：\n\n1. 用的是 event_time 还是 ingest_time，两者相差多少。\n2. 缺口是按 sequence_no 算出的宽度，还是按行数估的。\n3. 缺口前后是否有 CLOCK_SUSPECT 或 DUPLICATE。\n4. 同窗口是否出现门磁等事件流的突发聚集，缓存是否接近上限。\n5. 修复动作落在哪一层：时钟校准、缓冲扩容、上报节流、派生层占位，是否都没有改写原始事实。\n\n本点把单通道的三类偏差讲成一套诊断证据链；下一点 point-2-6 将把这些约束放进多传感器采样方案，在量程、频率、同步与资源之间做系统级评审。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-misconceptions",
+            "model-joint-root-cause"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "timing-anomaly-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-loss-diagnosis",
+        "moduleId": "loss-gap-analysis",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-anomalies"
+        ],
+        "learningPurpose": "检查学习者能否把缺口宽度与时间偏差两条证据合并成根因判断，而不是只看序列号。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-jitter",
+            "tb-sample-loss"
+          ]
+        },
+        "config": {
+          "questions": [
+            {
+              "prompt": "某窗口期望 120 条，实收 115 条，其中 3 条 CLOCK_SUSPECT，2 处 gap_width 为 1 的缺口，且缺口前出现门磁上报聚集。最合理的首选假设是？",
+              "options": [
+                "端侧 MCU 连续漏采",
+                "网关时钟漂移叠加缓存淘汰",
+                "云端存储丢失了 5 条记录",
+                "采样频率设置过低"
+              ],
+              "answerIndex": 1,
+              "explanation": "时刻偏移与缺口在时间上相邻，且突发流量解释缓存压力，三条证据同时指向时钟漂移叠加淘汰；单解释缺口会漏掉 CLOCK_SUSPECT。"
+            },
+            {
+              "prompt": "发现某条记录 event_time 比期望晚 600 ms，正确的补偿方式是？",
+              "options": [
+                "把 event_time 改回期望时刻",
+                "删除该记录",
+                "标记 CLOCK_SUSPECT 并在派生层按容差窗口处理",
+                "用相邻记录的时间覆盖它"
+              ],
+              "answerIndex": 2,
+              "explanation": "原始事实不可变；补偿属于派生分析层，质量码用于向下游说明可信度。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "书面作答：给出一个同时包含缺口与时间偏移的窗口，写出你的两个假设、支持或否定各假设的证据，以及不改写 event_time 的修复方案。"
+        }
+      },
+      {
+        "id": "buffer-sizing-drill",
+        "type": "formative-check",
+        "anchorBlockId": "model-burst-experiment",
+        "moduleId": "burst-buffer",
+        "depth": "support",
+        "outcomeRefs": [
+          "design-buffer-throttle"
+        ],
+        "learningPurpose": "检查学习者能否按最坏突发参数计算缓冲，并判断参数变化时容量的变化方向。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-burst-buffer"
+          ]
+        },
+        "config": {
+          "questions": [
+            {
+              "prompt": "沿用案例参数，仅把去抖后最小间隔从 500 ms 改为 250 ms，所需缓冲约为？",
+              "options": [
+                "20.48 KB",
+                "40.96 KB",
+                "81.92 KB",
+                "163.84 KB"
+              ],
+              "answerIndex": 2,
+              "explanation": "比值由 20 变为 40，容量在 40.96 KB 基础上翻倍。"
+            },
+            {
+              "prompt": "下列哪项属于上报节流允许的动作？",
+              "options": [
+                "合并不同 sequence_no 的记录以减小包量",
+                "降低心跳发送频率与批次大小",
+                "把 event_time 取整到整分钟",
+                "丢弃低价值记录后不计数"
+              ],
+              "answerIndex": 1,
+              "explanation": "节流只作用于传输批次与频率；合并序号、改写时间、静默丢弃都破坏了可追溯性。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用 $B_{\\min}$ 公式自行代入 $T_{\\text{burst}} = 10\\,\\text{s}$、去抖间隔 500 ms、$\\alpha = 2$ 复算一次，并写出若间隔减半、安全系数不变的容量结果。"
+        }
+      }
+    ]
+  },
+  "subtitle": "测量原理与采样设计",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "branch",
+  "related": [
+    "point-2-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000067"
+      ],
+      "headingPath": [
+        "测量原理与采样设计",
+        "采样抖动、丢样与突发上报"
+      ],
+      "lineStart": 1213,
+      "lineEnd": 1214,
+      "assetRefs": [],
+      "excerptSha256": "628ee60e7fdc1dbd726af994bfa2faf892e0821945cd2121ef0b59e2cfb692bf"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000068"
+      ],
+      "headingPath": [
+        "测量原理与采样设计",
+        "采样抖动、丢样与突发上报",
+        "采样抖动的来源与量化"
+      ],
+      "lineStart": 1215,
+      "lineEnd": 1233,
+      "assetRefs": [],
+      "excerptSha256": "fade83d958d55452086936af50b131ccb53d35a6cde84b214dec1dfae495138d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000069"
+      ],
+      "headingPath": [
+        "测量原理与采样设计",
+        "采样抖动、丢样与突发上报",
+        "丢样的识别与缺口分析"
+      ],
+      "lineStart": 1234,
+      "lineEnd": 1274,
+      "assetRefs": [],
+      "excerptSha256": "571dd4b49be06cee9cf46e63c57417d94f45088c624b2ea9a494ef04d97e0916"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000070"
+      ],
+      "headingPath": [
+        "测量原理与采样设计",
+        "采样抖动、丢样与突发上报",
+        "突发上报的时序特征与缓存设计"
+      ],
+      "lineStart": 1275,
+      "lineEnd": 1286,
+      "assetRefs": [],
+      "excerptSha256": "b00913645e490e2ec4082b286c612cac8a06ee7f7542dfddd3f52610d33a6c3b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000071"
+      ],
+      "headingPath": [
+        "测量原理与采样设计",
+        "采样抖动、丢样与突发上报",
+        "抖动、丢样与突发的联合检测"
+      ],
+      "lineStart": 1287,
+      "lineEnd": 1325,
+      "assetRefs": [],
+      "excerptSha256": "af3a151927bf3b1a1e4c202a9a9003c71ae12ef6edea72ced797f78f1e176cff"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000072"
+      ],
+      "headingPath": [
+        "测量原理与采样设计",
+        "采样抖动、丢样与突发上报",
+        "常见误区与验证方法"
+      ],
+      "lineStart": 1326,
+      "lineEnd": 1337,
+      "assetRefs": [],
+      "excerptSha256": "e07c6c9d1abf9e606640aebdb397c50d0d6ee18a49a5035ee61055b74742cea7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1534,
+    2418
+  ],
+  "scale": 0.92
+}

@@ -1,0 +1,580 @@
+{
+  "id": "point-1-2",
+  "title": "端、边、云的系统分层与数据流",
+  "shortSummary": "以数据主权边界与算力可用性划分端边云三层，并估算采样速率、带宽、边缘预处理与断网续传需求。",
+  "keyTerms": [
+    "端边云",
+    "边缘网关",
+    "数据主权",
+    "带宽估算",
+    "断网续传",
+    "最终一致性"
+  ],
+  "animationType": "edgeBufferResume",
+  "animationSuggestion": "用三段式时间轴展示在线直传、断网积压、恢复补发去重：缓冲占用条随采样增长并在容量线处显示丢弃，云端累计点数在补发阶段追赶，重播可复用同一条断网时序。",
+  "difficulty": "基础",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-1-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-explanation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三层定义、字段责任与案例数值，把分层从部署图改写为失效域判断，并把带宽与缓冲估算整理成可复算的算例；所有新增表格与练习只做教材数据的重组与换算。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "o-layer-boundary",
+          "text": "依据数据主权边界与算力可用性判断一个组件属于端、边还是云，并说明掉电与断网时各层的数据责任。"
+        },
+        {
+          "id": "o-capacity-plan",
+          "text": "根据采样周期、载荷大小与状态变化频次估算上行速率和断网缓冲容量，并说明为何必须按 P99 而不是均值设计。"
+        }
+      ],
+      "misconceptions": [
+        "把地理距离当作端边云的分界，认为放在车间里的服务器一定是边层、放到远端机房就一定是云层。",
+        "认为边缘网关可以在转发时补写 ingest_time，方便下游把到达时间对齐。",
+        "用每小时平均点数采购带宽与缓冲容量，把门磁状态变化次数当成固定常量。"
+      ],
+      "modules": [
+        {
+          "id": "m-layer-boundary",
+          "title": "三层分界与失效域",
+          "role": "concept-framing",
+          "description": "先建立端边云的判据，再解释为什么分界不是地理距离。",
+          "outcomeRefs": [
+            "o-layer-boundary"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-data-and-responsibility",
+          "title": "各层数据形态与字段责任",
+          "role": "contract-explanation",
+          "description": "对照各层产出的数据形态，明确 event_time、ingest_time 与质量码由谁产生、谁不得改写。",
+          "outcomeRefs": [
+            "o-layer-boundary"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-rate-budget",
+          "title": "采样速率与带宽估算",
+          "role": "quantitative-worked-example",
+          "description": "用案例采样配置复算每小时点数与上行速率。",
+          "outcomeRefs": [
+            "o-capacity-plan"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-edge-preprocessing",
+          "title": "边缘预处理与降采样契约",
+          "role": "procedure",
+          "description": "区分有状态与无状态边缘计算，并规定派生记录的标注与质量门槛。",
+          "outcomeRefs": [
+            "o-capacity-plan"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-cloud-ingest",
+          "title": "云端接入与缺口估算的边界",
+          "role": "warning",
+          "description": "认识云端最终判定面对的故障形态，并说明缺口公式的适用前提。",
+          "outcomeRefs": [
+            "o-layer-boundary"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-resilience-and-check",
+          "title": "断网续传、最终一致性与容量校验",
+          "role": "summary-and-check",
+          "description": "把缓冲容量、去重与 P99 设计串成可执行的检查清单。",
+          "outcomeRefs": [
+            "o-layer-boundary",
+            "o-capacity-plan"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-layer-boundary",
+          "o-capacity-plan"
+        ],
+        "method": "完成一次分层判断与一次容量复算，并指出估算中必须使用 P99 的理由。",
+        "successCriteria": [
+          "分层结论能引用数据主权边界或算力可用性，而不是地理距离",
+          "速率与缓冲容量的计算步骤、单位换算可被复核",
+          "能指出把状态变化次数当作固定常量会带来的后果"
+        ],
+        "summaryBlockId": "model-decision-checklist",
+        "nextPointId": "point-1-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-layer-definition",
+        "moduleId": "m-layer-boundary",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：三层及其分界依据",
+        "markdown": "教材把工业物联网时序数据系统分为端（Device）、边（Edge）、云（Cloud）三层：端层是直接嵌入物理环境的传感器、执行器与微型控制器，负责把模拟量转换为数字观测；边层是部署在厂区或园区的网关与边缘服务器，承担协议转换、本地聚合与流式预处理；云层是远程数据中心或托管服务，提供持久存储、批量分析与全局调度。\n\n三层的分界**不以地理距离衡量，而以数据主权边界与计算资源可用性划分**：\n\n- 端层在掉电后丢失未发送的数据；\n- 边层在断网后维持本地闭环；\n- 云层在恢复连接后完成最终一致性收敛。\n\n在澄湾冷链示范仓，端层是四温区共 16 台终端，每区配置温度传感器 `Z{{区号}}-TEMP-01`、湿度传感器 `Z{{区号}}-HUM-01`、门磁 `Z{{区号}}-DOOR-01`、压缩机电流互感器 `Z{{区号}}-COMP-01`；所有终端通过 RS-485 或 LoRa 接入边层网关，网关再以 4G VPN 或光纤接入云平台的 TimescaleDB 集群。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流"
+              ],
+              "lineStart": 217,
+              "lineEnd": 218,
+              "assetRefs": [],
+              "excerptSha256": "3a807b74074c6eab3866c833e724a3fe8d67064fd301d300b39fde75de8dc4b5"
+            },
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流",
+                "端、边、云的三层架构定义"
+              ],
+              "lineStart": 219,
+              "lineEnd": 224,
+              "assetRefs": [],
+              "excerptSha256": "8d9f160a731f2fad5bd7fe9900c7e2e926dc8d51153c78006e9002fb8715b849"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-domain",
+        "moduleId": "m-layer-boundary",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把三层读成三个失效域",
+        "markdown": "如果只记架构图，分层在实际判断时很容易退化成“服务器放在哪里”。更可操作的读法是把它当作三个**失效域**：掉电或断网时，谁先丢数据、谁还能继续闭环、谁负责最终补齐。\n\n| 判断问题 | 端层 | 边层 | 云层 |\n|:---|:---|:---|:---|\n| 掉电后最先失去什么 | 未发送的观测 | 本地缓冲中尚未转发的部分 | 已持久化的数据通常不受影响 |\n| 断网时还能做什么 | 本地采集与保护动作 | 继续采集、聚合与本地闭环 | 保留历史与全局视图，但收不到新数据 |\n| 谁负责补齐 | 不负责 | 缓存并在恢复后补发 | 去重、定序并收敛到最终一致 |\n\n所以“主机放在车间”并不自动等于边层：判断依据是它是否持有数据的最终处置权、以及它在断网时能否独立闭环。反之，一台放在园区机房却只做转发的设备，其数据责任仍偏向传输通道。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layer-definition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-data-transform",
+        "moduleId": "m-data-and-responsibility",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材正文：各层数据形态与转换规则",
+        "markdown": "端层输出的原始帧通常是设备私有协议，包含设备地址、功能码、已换算到工程单位的物理量与循环冗余校验（CRC）。边层网关完成协议解封，把载荷规范化为统一 JSON，校验物理量与 `unit` 的对应关系，并保留终端为每条观测写入的 `event_time` 与单调递增的 `sequence_no`。\n\n时间字段的责任划分是这一层的核心：`event_time` 取终端完成采样并打标的时刻，`ingest_time` 由云平台接入服务在首次持久接收时赋时，**边缘网关不得写入或覆盖 `ingest_time`**。\n\n云端在持久化前按优先级从高到低做最终质量判定，确保 `quality_code` 不被后续条件覆盖：\n\n```text\n1. event_time 超前可信时间 60 秒以上  -> CLOCK_SUSPECT\n2. 按 device_id + metric + sequence_no 判重  -> DUPLICATE\n3. event_time 落后于 watermark - allowed_lateness  -> LATE\n4. value 超出该 metric 的量程  -> OUT_OF_RANGE\n5. 其余  -> GOOD\n```\n\n其中判重依赖云层的去重状态表，`watermark` 由事件时间窗口与允许迟到量共同决定。`ingest_time` 只在到达云层接入服务后才存在，因此边层预检只能检查自己已经拥有的字段，去重、迟到与量程的最终判定统一由云层在首次持久化前完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流",
+                "各层数据形态与转换规则"
+              ],
+              "lineStart": 225,
+              "lineEnd": 253,
+              "assetRefs": [],
+              "excerptSha256": "01ebf2bd3822be57631674bd5ba8a97c91b9fb07c12f9700c351c1a200751664"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-field-ownership",
+        "moduleId": "m-data-and-responsibility",
+        "depth": "core",
+        "kind": "table",
+        "title": "把字段责任整理成一张表",
+        "markdown": "字段责任一旦含糊，最常见的后果不是报错，而是同一批数据在边层和云层出现两个互不承认的时间。按上文规则可以整理出：\n\n| 字段 | 谁产生 | 下游能否改写 | 改写的后果 |\n|:---|:---|:---|:---|\n| `event_time` | 终端采样完成时打标 | 不能 | 事件顺序与窗口归属被篡改 |\n| `sequence_no` | 终端逐条递增 | 不能（除设备自身重置） | 去重与缺口判断同时失效 |\n| `unit` | 终端换算为物理量后给定 | 边层只校验对应关系 | 量纲错误被下游继承 |\n| `ingest_time` | 云端接入服务首次持久接收 | 边层不得写入或覆盖 | 无法再区分“采集晚”与“传输晚” |\n| `quality_code` | 云端按优先级最终判定 | 上游只能预检 | 冲突结论无法收敛 |\n\n值得注意的是，优先级顺序本身就是一种契约：一旦某条记录先被判为 `CLOCK_SUSPECT`，后面的重复、迟到、量程条件都不再改写它。这样同一份输入无论重放多少次，都会得到同一个质量码。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-data-transform"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rate-table",
+        "moduleId": "m-rate-budget",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材正文：数据流速率与带宽估算",
+        "markdown": "案例的采样周期固定为：温湿度每 30 秒、压缩机电流每 5 秒、门磁为状态变化时上报叠加每 60 秒心跳。单温区理论数据速率如下表。\n\n| 设备类型 | 单点周期 | 单温区每小时点数 | 四温区每小时点数 |\n|:---|:---|:---|:---|\n| 温度 | 30 s | 120 | 480 |\n| 湿度 | 30 s | 120 | 480 |\n| 压缩机电流 | 5 s | 720 | 2,880 |\n| 门磁 | 60 s 心跳 + 状态变化 | 60 + 变化次数（案例假设 4 次） | 256 |\n\n门磁每小时记录数是 **60 + 状态变化次数**，而状态变化次数取决于仓门实际操作频次，**不可作为固定常量纳入带宽合约**。按案例假设的 4 次变化估算，四温区门磁合计 256 点/小时；全仓原始数据量约为 4,096 点/小时，以 JSON 载荷平均 200 字节计，原始上行速率约 0.22 KiB/s，远低于 4G 链路容量。但突发状态变化可能在秒级窗口内产生 4 条并发上报，边层网关需配置 10 条/秒的本地缓冲队列以避免尾丢。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000014"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流",
+                "数据流速率与带宽估算"
+              ],
+              "lineStart": 254,
+              "lineEnd": 266,
+              "assetRefs": [],
+              "excerptSha256": "0c0580dfbe746a35ccd6f9530551fb403cef47fdc76fd2a5727932b5d564db43"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rate-worked-example",
+        "moduleId": "m-rate-budget",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "复算一遍：从点数到字节率",
+        "markdown": "先算每小时点数，再乘单条载荷，最后除时间。三步都写清单位，结论才可复核。\n\n$$R_{\\text{hour}} = 4096 \\times 200\\,\\text{B} = 819{,}200\\,\\text{B/h}$$\n\n$$R_{\\text{sec}} = \\frac{819{,}200}{3600} \\approx 227.6\\,\\text{B/s} \\approx 0.22\\,\\text{KiB/s}$$\n\n注意 0.22 KiB/s 是**平均**上行速率，它回答的是“链路长期够不够”，不回答“某一秒会不会排队”。后者由并发与缓冲决定：案例中 4 条并发上报对应 10 条/秒的本地队列，余量约 2.5 倍。\n\n再做一次结构分解会有额外发现：压缩机电流每小时 2,880 点，占 4,096 点的约 70%。也就是说，想降低上行负担，先动 5 秒周期的电流序列比先动 30 秒的温湿度更有效；这与后文“对电流做滑动平均、对温湿度做降采样”的分工是一致的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rate-table"
+          ]
+        }
+      },
+      {
+        "id": "textbook-edge-aggregation",
+        "moduleId": "m-edge-preprocessing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材正文：边缘预处理与窗口聚合",
+        "markdown": "边层承担两类计算：**有状态流处理**与**无状态批量压缩**。有状态处理指对压缩机电流做滑动平均以抑制电磁噪声；无状态压缩指对温湿度做 5 分钟降采样以减少云存储写入。降采样必须在边层明确标注为派生数据，**不得覆盖原始 `sequence_no` 序列**。\n\n以温度为例，边层 5 分钟均值聚合的期望点数为 `floor(300 / 30) = 10` 点。聚合后写入云层的派生记录需新增 `aggregation_window_start`、`aggregation_window_end`、`sample_count` 字段，并明确说明这些字段不属于原始事实表契约。若窗口内有效样本不足 50%（即少于 5 点），派生记录的 `quality_code` 应标为 `MANUAL_REVIEW`，而不是继承原始点的 `GOOD`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000015"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流",
+                "边缘预处理与窗口聚合"
+              ],
+              "lineStart": 267,
+              "lineEnd": 272,
+              "assetRefs": [],
+              "excerptSha256": "186b7575e4a98d0338cc9fa1333a7dedade640271c4175a1ecb154623d23dc79"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aggregation-exercise",
+        "moduleId": "m-edge-preprocessing",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "换一个采样周期，门槛怎么变",
+        "markdown": "把上面的规则当成公式用：期望点数由窗口长度除以采样周期后向下取整，有效样本门槛是期望点数的一半。\n\n| 采样周期 | 5 分钟窗口期望点数 | 50% 门槛（少于则 `MANUAL_REVIEW`） |\n|:---|:---|:---|\n| 15 s | 20 | 10 |\n| 30 s（教材案例） | 10 | 5 |\n| 60 s | 5 | 3 |\n\n边界要小心：5 点的 50% 是 2.5，样本数只能是整数，因此 2 点应判为不足，3 点才达到门槛。请试着回答：若某窗口 `sample_count = 2`，能否把派生记录标成 `GOOD`？\n\n参考答案：不能。按“少于 5 点即不足 50%”的原规则，2 点低于门槛，应标 `MANUAL_REVIEW`；同时 `sample_count`、窗口起止时间必须随记录一起写入，否则下游无法判断这个均值代表多长的时间跨度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-edge-aggregation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cloud-gap",
+        "moduleId": "m-cloud-ingest",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材正文：云端接入的故障形态与缺口估算",
+        "markdown": "云层接入服务在持久化前完成最终质量判定。常见故障情形包括：终端时钟漂移导致 `event_time` 超前、网络分区恢复后批量补发导致 `sequence_no` 乱序到达、固件缺陷或持久化状态损坏导致 `sequence_no` 违规重置。\n\n下面的 SQL 展示在 TimescaleDB 2.x 中检测**连续序列假设成立时**的缺口估算，适用于新部署设备且 `sequence_no` 从已知起点初始化的场景：\n\n```sql\nWITH seq_span AS (\n    SELECT\n        device_id,\n        metric,\n        MAX(sequence_no) - MIN(sequence_no) + 1 AS expected_count,\n        COUNT(*) FILTER (WHERE quality_code <> 'DUPLICATE') AS actual_unique\n    FROM coldchain.raw_telemetry\n    WHERE device_id = 'Z1-TEMP-01'\n      AND metric = 'temperature'\n      AND event_time >= '2024-01-15T08:00:00Z'\n      AND event_time < '2024-01-15T09:00:00Z'\n    GROUP BY device_id, metric\n)\nSELECT\n    device_id,\n    metric,\n    expected_count,\n    actual_unique,\n    expected_count - actual_unique AS gap_estimate\nFROM seq_span;\n```\n\n该查询的 `gap_estimate` 存在三项适用边界：其一，若设备重启导致 `sequence_no` 跳跃或归零，公式失效；其二，`DUPLICATE` 记录需显式过滤，否则 `actual_unique` 虚高导致缺口低估；其三，窗口边界处的 `MIN(sequence_no)` 未必对应周期起点，此时 `expected_count` 不反映真实期望点数。生产环境应改用 LEFT JOIN 生成期望序列再计算缺口，上述 SQL 仅作为连续序列假设下的示意简化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000016"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流",
+                "云层接入与质量码最终判定"
+              ],
+              "lineStart": 273,
+              "lineEnd": 301,
+              "assetRefs": [],
+              "excerptSha256": "45b93d9718b18b491a9fe3b8e7148757f60371b34d5c48203cfc5565d8e9c732"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gap-misconception",
+        "moduleId": "m-cloud-ingest",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解：缺口公式可以直接推广",
+        "markdown": "**误解**：`gap_estimate` 是一条通用的完整性指标，任何设备、任何时段都能直接拿来用。\n\n**纠正**：它只在“连续序列假设”成立时有效——设备新部署、`sequence_no` 从已知起点连续递增、期间没有重启与归零。一旦设备重启，`MAX - MIN + 1` 就不再是期望点数，算出的缺口既可能虚高也可能虚低。\n\n另一个相关误解是把**乱序当成丢失**。批量补发会让 `sequence_no` 乱序到达，但只要记录最终都到齐，去重后并不构成缺口；反过来说，缺口查询若不过滤 `DUPLICATE`，`actual_unique` 虚高，真实缺口反而被低估。工程上应把“是否缺失”和“何时到达”分开判断：缺失看序列与期望网格，到达看 `ingest_time` 与延迟指标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cloud-gap"
+          ]
+        }
+      },
+      {
+        "id": "textbook-resume-consistency",
+        "moduleId": "m-resilience-and-check",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材正文：断网续传与最终一致性",
+        "markdown": "边层在断网期间将数据写入本地环形缓冲区。按照“每小时 4 次门磁状态变化”的案例基线，四温区全量数据 24 小时约为 98,304 点，以 500 字节/条计需约 46.9 MiB（49.2 MB）存储；**这只是基线估算，不能称为最坏场景**。生产容量应使用实测每小时记录数的 P99、最长计划断网时间和安全余量重新计算。\n\n续传时云层接入服务按 (`device_id`, `metric`, `sequence_no`) 组合去重；补发记录只有在其 `event_time` 已落后于当前水位线、超过允许迟到范围时才标记为 `LATE`，单纯的 `ingest_time - event_time` 增大不能自动证明设备时钟可疑。\n\n反例警示：某工程团队将门磁心跳与状态变化合并为“每小时固定 64 条”进行带宽采购，忽视状态变化的随机性，导致促销季仓门频繁启闭时边层缓冲区溢出。可验证的检查方法为：连续 7 天统计每小时门磁实际记录数的 P99 分位数，将带宽合约与缓冲容量按 P99 而非均值设计。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000017"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "端、边、云的系统分层与数据流",
+                "断网续传与最终一致性"
+              ],
+              "lineStart": 302,
+              "lineEnd": 307,
+              "assetRefs": [],
+              "excerptSha256": "08326f1138d6f0f04d12e3185f0e13f8f790b106f9bd0b8bc7d894df2f3eaac6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-buffer-arithmetic",
+        "moduleId": "m-resilience-and-check",
+        "depth": "core",
+        "kind": "warning",
+        "title": "缓冲容量：先复算基线，再换成 P99",
+        "markdown": "把教材的基线数字复算一遍：\n\n$$98{,}304 \\times 500\\,\\text{B} = 49{,}152{,}000\\,\\text{B} \\approx 46.9\\,\\text{MiB}$$\n\n这个结果的含义是“按案例假设的 4 次门磁变化、断网 24 小时”，它对应的是**基线**而不是上限。若做到 P99 时每小时记录数是均值的 3 倍，同为 24 小时的缓冲需求就接近 140 MiB，原本够用的环形缓冲会直接溢出。\n\n因此容量设计要写清三件事：用哪一天的 P99、按多长时间断网、还留多少安全余量。此外还要写明溢出策略——是丢最旧的点还是丢最新的点。丢最旧会损失断网早期的数据，丢最新会损失恢复前的数据，两种选择对后续缺口统计和告警复盘的影响完全不同，必须在契约里说清而不是留给实现默认。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-resume-consistency",
+            "textbook-rate-table"
+          ]
+        }
+      },
+      {
+        "id": "model-decision-checklist",
+        "moduleId": "m-resilience-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "上线前的四个判断",
+        "markdown": "把本节内容压缩成四个可以逐条回答的问题：\n\n1. **这个组件属于哪一层？** 看它在掉电与断网时能保住什么、能独立完成什么，而不是看机柜在哪里。\n2. **这个字段由谁写、谁能改？** `event_time` 与 `sequence_no` 来自终端，`ingest_time` 由云端首次持久接收时赋时，`quality_code` 由云端按优先级最终判定。\n3. **上行与缓冲够不够？** 用采样周期算出每小时点数，乘单条载荷得到字节率；缓冲容量再乘断网时长，并按 P99 而不是均值放大。\n4. **断网恢复后会不会重或乱？** 续传按 (`device_id`, `metric`, `sequence_no`) 去重，`event_time` 落后水位线超过允许迟到范围才标 `LATE`，其余交由最终一致性收敛。\n\n这四个问题分别对应分层判据、字段责任、容量估算与恢复语义；任一问题答不上来，说明该组件的数据契约还没有真正闭合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layer-definition",
+            "textbook-data-transform",
+            "textbook-rate-table",
+            "textbook-edge-aggregation",
+            "textbook-cloud-gap",
+            "textbook-resume-consistency"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "layer-capacity-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-decision-checklist",
+        "moduleId": "m-resilience-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "o-layer-boundary",
+          "o-capacity-plan"
+        ],
+        "learningPurpose": "检查学习者能否把分层判据与 P99 容量规则迁移到一个真实的采购失误场景。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-layer-definition",
+            "textbook-rate-table",
+            "textbook-resume-consistency"
+          ]
+        },
+        "config": {
+          "question": "某仓把门磁“每小时固定 64 条”写进 4G 带宽与边层缓冲容量，促销季出现边层缓冲溢出、部分门磁记录丢失并被标记为缺口。最应优先改动的是哪一项？",
+          "options": [
+            {
+              "id": "a",
+              "text": "提高云端接入服务的写入并发，让补发更快"
+            },
+            {
+              "id": "b",
+              "text": "连续 7 天统计每小时门磁记录数的 P99，并按 P99 重算带宽与缓冲容量"
+            },
+            {
+              "id": "c",
+              "text": "把 LATE 判定阈值调大，避免补发记录被标为迟到"
+            }
+          ],
+          "correctOptionId": "b",
+          "explanation": "问题根源是把随机的状态变化次数当成固定常量，导致带宽与缓冲按均值设计。P99 重算能同时修正合约与容量；提高写入并发不改变边层容量，调整 LATE 阈值只影响标注，不会减少丢失。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "**自测题**：某仓按“门磁每小时固定 64 条”采购带宽与缓冲，促销季边层缓冲溢出并丢点。请指出根因，并给出两条可验证的修正动作。\n\n**参考**：根因是把随机状态变化次数当作常量、按均值设计容量。修正一是连续 7 天统计每小时记录数的 P99，按 P99 重设带宽与缓冲；修正二是把断网时长、安全余量与溢出丢点策略写进契约，并用一次模拟断网验证缓冲确实不溢出。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时序数据系统与工程全景",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000011"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流"
+      ],
+      "lineStart": 217,
+      "lineEnd": 218,
+      "assetRefs": [],
+      "excerptSha256": "3a807b74074c6eab3866c833e724a3fe8d67064fd301d300b39fde75de8dc4b5"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000012"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流",
+        "端、边、云的三层架构定义"
+      ],
+      "lineStart": 219,
+      "lineEnd": 224,
+      "assetRefs": [],
+      "excerptSha256": "8d9f160a731f2fad5bd7fe9900c7e2e926dc8d51153c78006e9002fb8715b849"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000013"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流",
+        "各层数据形态与转换规则"
+      ],
+      "lineStart": 225,
+      "lineEnd": 253,
+      "assetRefs": [],
+      "excerptSha256": "01ebf2bd3822be57631674bd5ba8a97c91b9fb07c12f9700c351c1a200751664"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000014"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流",
+        "数据流速率与带宽估算"
+      ],
+      "lineStart": 254,
+      "lineEnd": 266,
+      "assetRefs": [],
+      "excerptSha256": "0c0580dfbe746a35ccd6f9530551fb403cef47fdc76fd2a5727932b5d564db43"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000015"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流",
+        "边缘预处理与窗口聚合"
+      ],
+      "lineStart": 267,
+      "lineEnd": 272,
+      "assetRefs": [],
+      "excerptSha256": "186b7575e4a98d0338cc9fa1333a7dedade640271c4175a1ecb154623d23dc79"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000016"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流",
+        "云层接入与质量码最终判定"
+      ],
+      "lineStart": 273,
+      "lineEnd": 301,
+      "assetRefs": [],
+      "excerptSha256": "45b93d9718b18b491a9fe3b8e7148757f60371b34d5c48203cfc5565d8e9c732"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000017"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "端、边、云的系统分层与数据流",
+        "断网续传与最终一致性"
+      ],
+      "lineStart": 302,
+      "lineEnd": 307,
+      "assetRefs": [],
+      "excerptSha256": "08326f1138d6f0f04d12e3185f0e13f8f790b106f9bd0b8bc7d894df2f3eaac6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    842,
+    2756
+  ],
+  "scale": 1.25
+}

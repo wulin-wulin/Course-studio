@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # validating dozens of points and animations. Keep its hard ceiling
     # separate so ordinary chat/edit turns still fail fast when wedged.
     course_create_terminal_timeout_seconds: float = 21600.0
+    # OpenCode 1.18 keeps required-input tools pending/empty while the model is
+    # streaming their arguments and does not publish argument deltas. Keep this
+    # ceiling conservative so large writes can finish before declaring a stall.
+    opencode_empty_tool_call_timeout_seconds: float = 600.0
     # Course data is intentionally outside the frontend bundle.  It is the
     # canonical JSON package directory used by both the HTTP API and future
     # course-management skills.

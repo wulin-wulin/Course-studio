@@ -66,6 +66,8 @@ OPENCODE_PROVIDER_BASE_URL=
 OPENCODE_TERMINAL_TIMEOUT_SECONDS=3600
 # 创建课程会生成大量内容和动画，使用独立的六小时主动处理上限
 COURSE_CREATE_TERMINAL_TIMEOUT_SECONDS=21600
+# OpenCode 1.18 不暴露工具参数流式进度；持续 pending 且 input/raw 为空超过该保守上限才中止
+OPENCODE_EMPTY_TOOL_CALL_TIMEOUT_SECONDS=600
 COURSE_DATA_DIR=course-data/courses
 # Docker only: host-side absolute path to generated/course_agent_sessions
 OPENCODE_COURSE_HOST_ROOT=
@@ -75,7 +77,9 @@ BACKEND_PORT=8000
 # Comma-separated local frontend origins permitted to call the API.
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 VITE_API_URL=http://127.0.0.1:8000
-VITE_WS_URL=ws://127.0.0.1:8000
+# Optional: only set this when the browser must bypass the frontend /api proxy.
+# The URL must be reachable by the browser, including browsers on other devices.
+# VITE_WS_URL=wss://course.example.com
 
 # 教材 PDF 导入（可选；下面是默认值）
 # 上传的原始 PDF 和解析纲要保存在 generated/document_library，

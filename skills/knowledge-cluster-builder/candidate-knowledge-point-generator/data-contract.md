@@ -32,6 +32,24 @@ generated/<course-id>-course-content/
 
 JSON 使用 UTF-8、双引号、2 空格缩进、文件末尾换行，不含注释和尾随逗号。
 
+JSON 字符串中的 LaTeX 反斜杠必须按 JSON 语法在物理文件中写成 `\\`。例如，下列是文件中
+可解析且能还原预期 LaTeX 的写法：
+
+```json
+{
+  "formula": "\\delta = \\frac{x}{2}",
+  "markdown": "行内公式使用 $x + \\delta$；块公式使用 $$\\delta = \\frac{x}{2}$$。"
+}
+```
+
+不得在文件中写 `"\delta"`、`"\(x\)"` 或单反斜杠的 `"\frac"`；前两者会让 JSON 无法解析，
+后者还可能被解析为控制字符并静默破坏公式。Markdown 正文的公式分隔符必须统一为行内
+`$...$` 或块级 `$$...$$`；不得生成 `\(...\)`、`\[...\]` 或脱离公式分隔符的 LaTeX 命令，
+因为课程渲染器不会把这些形式识别为公式。段落之间写真实换行；不得输出可见的字面量 `\n\n`。
+LaTeX 命令本身仍必须双写反斜杠。worker 写完 point 与 animation request 后
+必须用 `read` 回读物理文件并检查转义；校验返回的任何 JSON parse error 必须原样交回拥有该文件
+的 worker 或同所有权 repair task，主智能体不得直接改写该文件。
+
 输出根目录必须由本中间包独占，不得直接使用已有应用或仓库根目录。全包不允许符号链接和契约外遗留 JSON；需要接入现有项目时，先在独立目录完成构建与校验，再复制明确的运行时产物。
 
 ## 标识符
@@ -96,7 +114,11 @@ JSON 使用 UTF-8、双引号、2 空格缩进、文件末尾换行，不含注�
 
 ## `src/data/points/<id>.json`
 
-### 必填字段
+`point.schema.json` 是兼容联合契约。普通 `researched/model-only` 课程继续使用下面的栏目式
+v1；`textbook-grounded` 且 manifest 声明 `contentContract: "textbook-content/2.0"` 时，必须使用
+后文的教材内容块 v2。两种格式不能混写。
+
+### 普通课程 v1 必填字段
 
 | 字段 | 类型 | 规则 |
 |---|---|---|
@@ -195,6 +217,175 @@ importance
 prerequisites
 ```
 
+### 教材课程 `textbook-content/2.0`
+
+教材详情保留索引 6 项、`animationType`、`prerequisites`，并新增顶层 `origin` 和 `content`。
+正文由 outcome-first 的 `content.learningDesign`、有序 `content.blocks` 和可选的
+`content.learningAssets` 组成；不得再写 `coreIdea/principles/formula/comparisons/applications/
+aliases/intuition/misconceptions/history/yearIntroduced/prosCons/qa/visualType/visualSuggestion`，也不在
+顶层持久化 `sourceSpans/modelEnriched`。
+
+`learningDesign.adaptationLevel` 只使用 `faithful|balanced|teaching-first`，省略时按 `balanced`
+解释，新生成内容应显式写出。默认 balanced 允许围绕学习目标重排教学顺序、压缩重复，增加类比、
+案例、练习、动画和跨段桥接。教材约束事实、定义、公式、数值、适用条件、边界与完整覆盖；模型
+内容与教材冲突时必须修正。不要规定教材/模型 token 百分比，用动作边界、覆盖和冲突校验控制尺度，
+并继续用每个 block 的 provenance 审计事实来源。
+
+- `faithful`：保留教材术语和主要讲解顺序，只做去重、澄清、局部桥接与必要检查；
+- `balanced`：围绕学习成果重排讲解，补足直觉、例题、迁移活动和反馈，作为新内容默认档；
+- `teaching-first`：可按学习任务重建叙事，合并或拆分教材讲解，并把教材段落移动到最有助于理解的
+  模块中，但仍须完整覆盖证据范围并遵守相同事实边界。
+
+正文采用“通用学习骨架 + 知识类型模板”，通常按复杂度使用 4–7 个 modules，不把某个样例的栏目
+复制到整门课程。outcomes 由阅读页顶部统一呈现，blocks 不再重复完整目标列表。`estimatedMinutes`
+按正文阅读、公式与表格理解、互动活动和练习作答的总负担估算。
+
+`primaryPattern` 记录真正采用的类型化教学模式：概念解释围绕定义、边界和正反例；定量机理围绕
+变量、单位、假设、推导、算例和参数实验；操作流程围绕前置条件、步骤、分支、错误恢复和检查表；
+比较决策围绕统一维度、取舍规则和适用情境；故障诊断围绕症状、假设、证据、定位和修复；案例分析
+围绕情境、决策、证据、结果、反思和迁移。不能只修改 `primaryPattern` 名称而复用同一套固定正文。
+
+```json
+{
+  "id": "linked-list",
+  "title": "链表",
+  "shortSummary": "由节点及链接关系组成、支持动态插入和删除的线性数据结构。",
+  "keyTerms": ["节点", "链接", "线性结构"],
+  "animationType": "none",
+  "difficulty": "基础",
+  "importance": 0.82,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-example-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材定义与边界，围绕迁移目标补充直觉、例题和检查题。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {"id": "explain-linked-list", "text": "解释链表的节点与链接关系。"},
+        {"id": "apply-linked-list", "text": "判断新情境是否适合使用链表。"}
+      ],
+      "misconceptions": ["把节点在内存中连续排列当作链表的必要条件。"],
+      "modules": [
+        {
+          "id": "concept-and-transfer",
+          "title": "定义、直觉与迁移",
+          "role": "worked-example",
+          "outcomeRefs": ["explain-linked-list", "apply-linked-list"],
+          "order": 0
+        }
+      ],
+      "completion": {
+        "outcomeRefs": ["explain-linked-list", "apply-linked-list"],
+        "method": "完成迁移判断并说明依据。",
+        "successCriteria": ["结论正确", "能引用定义中的判断条件"]
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-definition",
+        "moduleId": "concept-and-transfer",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义",
+        "markdown": "链表由一组通过链接关系组织的节点构成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-example",
+              "blockIds": ["section-12"],
+              "headingPath": ["第三章 线性结构", "3.2 链表"],
+              "lineStart": 418,
+              "lineEnd": 431,
+              "page": 67,
+              "assetRefs": [],
+              "excerptSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-intuition",
+        "moduleId": "concept-and-transfer",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉",
+        "markdown": "可以把节点想成通过挂钩连接的车厢。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": ["textbook-definition"]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "linked-list-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-intuition",
+        "moduleId": "concept-and-transfer",
+        "depth": "core",
+        "outcomeRefs": ["apply-linked-list"],
+        "learningPurpose": "检查学习者能否把教材定义迁移到新情境。",
+        "grounding": {"basedOnBlockIds": ["textbook-definition"]},
+        "config": {"attempts": 2},
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断该情境是否适合链表，并写出教材定义中的依据。"
+        }
+      }
+    ]
+  }
+}
+```
+
+允许的 `kind`：
+
+```text
+definition | explanation | mechanism | procedure | formula | example
+worked-example | comparison | application | code | table | figure | warning
+misconception | exercise | summary | note | other
+```
+
+块数组就是阅读顺序，块 ID 在点内唯一。教材块必须声明 `representation: quote|paraphrase` 和
+至少一个精确 `sourceSpan`。模型块必须用非空 `basedOnBlockIds` 引用同一点中排在它前面的块，
+并最终追溯到至少一个教材块；可选 `sourceSpans` 仅表示额外 grounding。每个教材点和受控扩展点
+都至少有一个教材上下文块和一个模型补充块。受控扩展点的教材块只描述锚点或上下文，新增结论
+必须写在模型块中。
+
+`learningDesign` 出现时内部计划必须完整：outcome 和 module ID 在点内唯一，module 的
+`outcomeRefs` 不能悬空且合计覆盖全部 outcomes；每个 module 至少有一个 block。每个 block 的
+`moduleId` 必须命中 module，`depth` 只能是 `core|support|advanced`。`completion` 可用
+`outcomeRefs/method/successCriteria` 描述达成标准，也可用 `exerciseBlockId/summaryBlockId/nextPointId`
+连接正文与下一知识点；块引用必须命中当前点。`nextPointId` 可省略；一旦声明，必须命中本课程
+`index.points[]` 中紧随当前点的稳定 ID，末点必须省略。
+
+`learningAssets` 每项必须声明唯一 `id`、类型、`anchorBlockId`、非空 `outcomeRefs`、
+`learningPurpose`、`grounding.basedOnBlockIds` 和可用 `fallback`。grounding 只能引用 anchor 之前或
+自身、且最终可追溯到教材的 block。类型自有数据放入 `config` 对象；fallback 至少声明
+`type|mode` 之一，并提供 `blockId|markdown|caption|content` 之一。
+
+模型补充按依据就近插入。只引用一个块时，放在该块之后；引用多个块时，放在最后一个被引用块
+之后。允许同一锚点连续跟随多个补充块，但不得先排列全部教材块，再把所有模型块集中堆到末尾。
+这样隐藏模型补充后仍能得到连续教材正文，显示补充时也能看清它解释的是哪一段。
+
+每个块的 `markdown` 使用标准 Markdown 与 remark-math 语法：行内公式写 `$...$`，块公式写
+`$$...$$`。不要输出 `\(...\)`、`\[...\]`、未包裹的 LaTeX 命令或可见的字面量 `\n\n`；
+代码围栏和行内代码中的反斜杠示例不受此规则影响。
+
+教材模式 worker 的 span 唯一事实源是主智能体注入的完整 `manifest.pointEvidence` 单项 JSON。
+把所有教材块的 `provenance.sourceSpans` 按块顺序、数组顺序连接并按首次出现去重后，结果必须与
+该单项的 `sourceSpans` 深度相等且顺序一致。不得自行重建 span，不得用 `material.json.chunks`
+中的 `chunk-*` ID 替换受信 manifest 里的 `block-*` section ID；chunk 只用于分批读取正文。模型块
+不得引入该清单之外的新 span。
+
+`modelEnriched` 从是否存在模型块派生；点级 `sourceSpans` 从全部块的 span 按首次出现顺序去重
+派生。它们不是 canonical v2 文件中的人工字段；发布器可以在最终课程详情顶层暴露这两个派生值
+供旧读取端兼容，但后端会校验它们必须与 blocks 一致。
+
 ## `generation/manifest.json`
 
 该文件保存生成过程信息，不进入课程运行时数据：
@@ -241,6 +432,33 @@ prerequisites
 `scopeStatus` 只允许 `core`、`boundary`、`needs-review`。`reviewQueue` 的问题类型只允许 `scope-ambiguity`、`granularity`、`synonym`、`naming`、`insufficient-evidence`。复核项可以用 `pointId` 关联已纳入索引的知识点；所有 `boundary`、`needs-review` 或置信度低于 `0.5` 的点都必须至少有一个关联复核项。
 
 `researched` 模式至少 3 个 locator 不重复的独立来源并覆盖至少 2 种来源类型，每个点至少 1 个 `sourceRefs`。`model-only` 模式来源和 `sourceRefs` 为空，`confidence` 不高于 `0.6`。
+
+教材 Markdown 新生成模式使用 `evidenceMode: "textbook-grounded"`，并在 `generation` 中声明
+`contentContract: "textbook-content/2.0"`。`sources` 至少包含一个 `type: "textbook"` 的来源，
+locator 指向会话内绑定的 material/full.md 相对路径。`pointEvidence` 增加以下两个必填字段：
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `origin` | string | `textbook`、`llm-extension` 或 `user` |
+| `sourceSpans` | object[] | 教材点和扩展点都至少一项，作为 G3 点级证据计划 |
+
+每个 source span 严格包含 `materialId`、`blockIds`、`headingPath`、`lineStart`、
+`lineEnd`、`assetRefs`、`excerptSha256`，有页码时可增加 `page`。行号与哈希定位原始
+Markdown 证据；不要把整段教材正文复制进 manifest。
+
+G3 派发任务时，主智能体必须原样注入与该 point 对应的完整 `pointEvidence` 单项 JSON，不能只给
+manifest 路径、口头摘要或从 material chunk 推导的新 spans。worker 可以依据 chunk 读取 span 所指
+正文，但写入教材块的 span 对象只能来自注入单项的 `sourceSpans`。
+
+教材原有点的 `sourceSpans` 按 `material.point_sources.section_ids` 的既定顺序完整覆盖所有
+section 及其正文行；只引用标题、只选择代表段落或打乱顺序均无效。所有非教材点
+（`llm-extension` 或 `user`）必须提供同章教材 `anchor_point_id`，并使用对应教材点内的非空
+相关子集，不得引用其他知识点的正文。详情中所有教材块
+合计保持同样的完整覆盖；模型块不能代替教材块补登记遗漏的教材范围。
+
+v2 point 详情的顶层 `origin` 必须与 pointEvidence 一致；从 `content.blocks` 派生的 spans 必须
+与 pointEvidence 的计划一致。manifest 不写 `modelEnriched`，校验器在 G3 从模型块派生它。
+没有 `contentContract` 的既有教材课程仍按旧格式读取，迁移前不得与 v2 混写。
 
 ## `generation/animation-requests/<id>.json`
 

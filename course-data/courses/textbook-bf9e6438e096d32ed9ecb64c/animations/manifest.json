@@ -1,0 +1,197 @@
+{
+  "schema_version": "course-animation-runtime/1.0",
+  "source_schema_version": "course-content-animations/1.0",
+  "format": "sandboxed-iframe",
+  "animations": [
+    {
+      "type": "observationPipeline",
+      "component": "ObservationPipeline",
+      "title": "观测链路与检测时延",
+      "mechanism": {
+        "inputs": "一次物理温度变化、30 秒采样周期、各阶段的处理耗时",
+        "changingState": "观测所处的链路阶段、已生成的 event_time 与 ingest_time、累计时延",
+        "transitionRule": "物理变化发生后，只有到达下一个采样边界才被采样；随后依次完成传感器响应、ADC 与工程单位换算、赋 event_time、传输、持久化并赋 ingest_time，时间只增不减",
+        "terminalState": "记录持久化完成，得到 event_time 早于 ingest_time 的原始观测记录，并显示采样等待与传输时延的分解",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-1",
+          "suggestion": "用一条温度观测沿六个阶段推进，标出采样边界、event_time、ingest_time 以及最坏检测时延的组成，并支持重播同一条轨迹。"
+        }
+      ]
+    },
+    {
+      "type": "edgeBufferResume",
+      "component": "EdgeBufferResume",
+      "title": "断网积压与恢复补发",
+      "mechanism": {
+        "inputs": "固定采样周期的终端产出、边层环形缓冲容量，以及 4G 链路的在线/断网状态序列",
+        "changingState": "链路连通状态、边层缓冲区占用点数、云端已持久化并去重后的点数",
+        "transitionRule": "在线时每个新点直接上行并由云端按 device_id + metric + sequence_no 去重后持久化；断网时新点追加到边层环形缓冲，超出容量则按既定策略丢弃；恢复连接后按序补发，云端只接受未出现过的 sequence_no",
+        "terminalState": "缓冲排空，且云端点数等于实际产生的点数，系统进入最终一致状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-2",
+          "suggestion": "用三段式时间轴展示在线直传、断网积压、恢复补发去重：缓冲占用条随采样增长并在容量线处显示丢弃，云端累计点数在补发阶段追赶，重播可复用同一条断网时序。"
+        }
+      ]
+    },
+    {
+      "type": "sequenceGapCheck",
+      "component": "SequenceGapCheck",
+      "title": "序列号缺口与质量码判定",
+      "mechanism": {
+        "inputs": "上一条成功持久化记录的 sequence_no_prev、当前到达记录的 sequence_no_cur，以及 value 与 event_time 是否与上一条相同",
+        "changingState": "校验判定结果、缺口长度 gap_len 与写入的质量码",
+        "transitionRule": "比较 cur 与 prev：相等判 DUPLICATE；小于 prev 判 MANUAL_REVIEW；大于 prev+1 时按 gap_len = cur - prev - 1 记缺口；等于 prev+1 判连续",
+        "terminalState": "当前记录获得最终质量码并结束本次校验，流程停在等待下一条记录的状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-3",
+          "suggestion": "按记录到达顺序逐步显示 sequence_no_prev 与 sequence_no_cur 的比较、四个分支路径和 gap_len 计算，末端标出质量码；提供重播回到同一组示例序列。"
+        }
+      ]
+    },
+    {
+      "type": "samplingAliasing",
+      "component": "SamplingAliasing",
+      "title": "采样与频率混叠",
+      "mechanism": {
+        "inputs": "连续信号频率 f0、采样频率 fs 与采样周期 Ts",
+        "changingState": "采样时刻在连续波形上的位置、逐点形成的采样序列，以及由折叠公式算出的表观频率",
+        "transitionRule": "每经过 Ts 在 x(t) 上取一点形成 x[n]；当 f0 > fs/2 时，表观频率按 f_alias = |f0 - k*fs| 折叠进 [0, fs/2]",
+        "terminalState": "覆盖若干个完整周期后采样序列稳定，画面同时显示真实频率与表观频率；点击重播回到相同初始频率和采样相位",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-3",
+          "suggestion": "上方面板显示连续正弦波形与等间隔采样点，采样游标按 Ts 前进并逐点落下，下方同步画出采样序列；提供 f0 与 fs 两个滑块，当 f0 越过 fs/2 时用虚线标出折叠后的表观波形，并显示折叠频率与表观周期，让学习者看到两个不同物理频率产生同一条采样序列。"
+        }
+      ]
+    },
+    {
+      "type": "clockDriftCorrection",
+      "component": "ClockDriftCorrection",
+      "title": "时钟偏移漂移与校正",
+      "mechanism": {
+        "inputs": "初始偏移、漂移率（ppm）、校正触发阈值与渐进校正的时间常数",
+        "changingState": "本地时钟相对参考时钟的偏移曲线，以及由该曲线推导的 event_time 序列是否保持单调",
+        "transitionRule": "未校正时偏移按漂移率线性累积；步进在触发时刻把偏移直接置零并造成一次读数跳变；渐进按固定时间常数成比例削减残余偏移",
+        "terminalState": "偏移进入容差带并保持，或到达设定的观测时长",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-3",
+          "suggestion": "并排显示同一组参数下的两条偏移曲线：步进在触发时刻垂直跳变，event_time 出现回退标记；渐进按指数收敛到容差带。允许切换漂移率与触发阈值，重播回到相同初始条件。"
+        }
+      ]
+    },
+    {
+      "type": "watermarkWindows",
+      "component": "WatermarkWindows",
+      "title": "水位线与窗口闭合",
+      "mechanism": {
+        "inputs": "一组按到达顺序给出的记录（含 event_time）、30 秒采样周期、1 小时左闭右开窗口，以及允许乱序裕量 T_maxDelay = 60 秒",
+        "changingState": "已观测最大 event_time、单调推进的水位线 W、各活跃窗口的缓冲点数与窗口状态（打开或闭合）",
+        "transitionRule": "每到达一条记录，更新已观测最大 event_time 并按 W = 最大 event_time - T_maxDelay 推进水位线；W 越过窗口右边界时计算并关闭窗口；event_time ≤ W 的记录不进入窗口，转入迟到旁路",
+        "terminalState": "记录序列处理完毕，所有右边界不大于最终水位线的窗口都已闭合并输出结果，剩余迟到记录停在旁路通道",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-6",
+          "suggestion": "按到达顺序逐条推入记录，在时间轴上同步展示已观测最大 event_time 与水位线的推进，标出窗口闭合瞬间，并把迟到记录滑入侧输出通道；支持重播同一乱序序列以对比每次判定。"
+        }
+      ]
+    },
+    {
+      "type": "acquisitionStateMachine",
+      "component": "AcquisitionStateMachine",
+      "title": "采集循环状态机",
+      "mechanism": {
+        "inputs": "上电初始状态、已持久化的 sequence_no、定时器与中断事件、网络可用性",
+        "changingState": "当前状态、环形缓冲占用与最旧记录、重试次数与下次重试时刻",
+        "transitionRule": "INIT 加载配置与持久化序列号后进入 SAMPLING；采样成功进入 BUFFERING；字段校验通过且写入缓冲后进入 TRANSMIT；收到应用层确认回到 SAMPLING；发送失败时记录留在缓冲、状态不转移，并按退避间隔重试；校验或硬件失败分别回到 SAMPLING 或进入 SAMPLING_DEGRADED",
+        "terminalState": "收到应用层确认后回到 SAMPLING，形成一次可重复的采集循环边界",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-1",
+          "suggestion": "逐步高亮当前状态、触发事件与转移边，同步显示缓冲占用和重试次数；连续失败时让退避间隔按次递增，并在校验失败分支标明记录被丢弃且写入诊断日志。重播回到 INIT 的相同初始条件，便于比较不同故障下的卡点。"
+        }
+      ]
+    },
+    {
+      "type": "retryBackoffBuffer",
+      "component": "RetryBackoffBuffer",
+      "title": "缓冲占用与退避重试",
+      "mechanism": {
+        "inputs": "断网时长、采样周期、环形缓冲容量 4096 条、T_base=1 s、T_cap=60 s、N_max=5、抖动随机种子",
+        "changingState": "写指针与读指针位置、缓冲占用率、当前重试次数 n 及其等待区间、待确认记录队列、是否转 DEAD_LETTER",
+        "transitionRule": "采样时写指针推进，确认送达时读指针推进，写指针追上读指针时覆盖最旧记录；失败后以 T_n = min(T_cap, T_base × 2^n) 为基准，再在 [0, T_n) 内均匀抽取实际等待；门磁事件进入不可覆盖的优先队列，恢复后先排空",
+        "terminalState": "链路恢复后缓冲排空且重试成功；或第 5 次重试仍失败，记录标记 DEAD_LETTER 转存本地 SQLite",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-5",
+          "suggestion": "按时序展示断网期间写指针推进和占用率上升、每次失败后从抖动区间抽取下一次等待、恢复后按序排空缓冲，并用旁注标出占用率超过 0.8 的告警与第 5 次失败转 DEAD_LETTER 的分支。"
+        }
+      ]
+    },
+    {
+      "type": "slidingWindowStats",
+      "component": "SlidingWindowStats",
+      "title": "滑动窗口滚动统计",
+      "mechanism": {
+        "inputs": "一条按时间排序的温度序列、锚定时间 t0、窗口宽度 W 与步长 S",
+        "changingState": "窗口左右边界、窗口内 GOOD 样本集合、有效计数 n_good、均值与样本标准差",
+        "transitionRule": "每步把窗口平移到 [t0+kS, t0+kS+W)，滑出旧样本并加入新样本，再按增量公式或重算更新统计量；n_good<2 时不显示标准差",
+        "terminalState": "窗口右端到达序列末尾，或演示完一个完整窗口周期后停止并显示最终统计量",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-8-1",
+          "suggestion": "用时间轴上的可移动半开区间显示窗口边界，逐步标出进入与滑出的样本，并同步更新均值、n_good 与标准差；冷启动阶段显式标注样本不足和空值。"
+        }
+      ]
+    },
+    {
+      "type": "alarmLifecycle",
+      "component": "AlarmLifecycle",
+      "title": "告警生命周期状态机",
+      "mechanism": {
+        "inputs": "按 event_time 排列的采样值序列、阈值 8 °C 与连续两点规则、确认操作、quality_code（含 CLOCK_SUSPECT）以及关闭操作",
+        "changingState": "告警状态（触发、确认、恢复、关闭）、触发侧与恢复侧的连续计数器、各时间戳与停留时长",
+        "transitionRule": "连续两点越限进入触发态；确认写入 ack_time 且不阻塞恢复；连续两点回限进入恢复态（未确认时保留未确认标记）；只有恢复态可关闭并冻结记录；参与判定的记录若带 LATE 或 CLOCK_SUSPECT 则按规则跳过或标注",
+        "terminalState": "告警被关闭并冻结为审计记录，或在超时未确认时保持触发态并触发并行的升级通知",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-10-4",
+          "suggestion": "沿时间轴推进示例告警：逐步显示每个采样点的越限/回限判定与连续计数，标注确认、恢复、关闭的发生时刻，并允许切换「先确认后恢复」「先恢复后补确认」「时钟异常导致恢复挂起」三条分支。"
+        }
+      ]
+    }
+  ],
+  "assets": {
+    "runtime.js": {
+      "bytes": 311270,
+      "sha256": "bac3f971826fcce31ec8f1faaa2b97731bd49658d2398146a75c89e5dd4e2940"
+    },
+    "runtime.css": {
+      "bytes": 56405,
+      "sha256": "d19aa1a5ad57d0d7c54e3bb06e7502b3f7e0ae180317abbda3957a92c4de3f45"
+    }
+  }
+}

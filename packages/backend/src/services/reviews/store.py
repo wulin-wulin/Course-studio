@@ -450,6 +450,72 @@ def _graph_clusters(graph: dict[str, Any]) -> tuple[list[dict[str, Any]], set[st
     return normalized, cluster_ids
 
 
+def _sequence_review_payload(
+    graph: dict[str, Any],
+    *,
+    cluster_ids: set[str],
+    point_ids: set[str],
+) -> dict[str, list[dict[str, str]]] | None:
+    """Validate and normalize optional reading-order edges for review hashing.
+
+    Legacy graphs may omit ``sequences``. Once the field exists, its complete
+    cluster/point contract is part of the G6 approval so changing a displayed
+    reading order cannot reuse an older graph receipt.
+    """
+
+    if "sequences" not in graph:
+        return None
+    sequences = graph.get("sequences")
+    if not isinstance(sequences, dict) or set(sequences) != {"cluster", "point"}:
+        raise CourseReviewValidationError(
+            "graph.sequences 必须严格包含 cluster 和 point 数组"
+        )
+
+    normalized: dict[str, list[dict[str, str]]] = {}
+    for scope, allowed_ids in (("cluster", cluster_ids), ("point", point_ids)):
+        raw_edges = sequences.get(scope)
+        if not isinstance(raw_edges, list):
+            raise CourseReviewValidationError(
+                f"graph.sequences.{scope} 必须是数组"
+            )
+        edges: list[dict[str, str]] = []
+        edge_pairs: set[tuple[str, str]] = set()
+        for index, raw_edge in enumerate(raw_edges):
+            if not isinstance(raw_edge, dict) or set(raw_edge) != {"fromId", "toId"}:
+                raise CourseReviewValidationError(
+                    f"graph.sequences.{scope}[{index}] 必须严格包含 fromId/toId"
+                )
+            from_id = raw_edge.get("fromId")
+            to_id = raw_edge.get("toId")
+            if not isinstance(from_id, str) or not isinstance(to_id, str):
+                raise CourseReviewValidationError(
+                    f"graph.sequences.{scope}[{index}] 的 fromId/toId 必须是字符串"
+                )
+            pair = (from_id, to_id)
+            if from_id == to_id:
+                raise CourseReviewValidationError(
+                    f"graph.sequences.{scope}[{index}] 不允许自环"
+                )
+            if from_id not in allowed_ids or to_id not in allowed_ids:
+                raise CourseReviewValidationError(
+                    f"graph.sequences.{scope}[{index}] 包含悬空引用"
+                )
+            if pair in edge_pairs:
+                raise CourseReviewValidationError(
+                    f"graph.sequences.{scope}[{index}] 与已有顺序边重复"
+                )
+            edge_pairs.add(pair)
+            edges.append({"fromId": from_id, "toId": to_id})
+        cycle = _cycle_path(list(allowed_ids), edge_pairs)
+        if cycle:
+            raise CourseReviewValidationError(
+                f"graph.sequences.{scope} 形成环：" + " -> ".join(cycle),
+                details=cycle,
+            )
+        normalized[scope] = edges
+    return normalized
+
+
 def _normalized_review_audit(value: Any) -> list[dict[str, str]]:
     if not isinstance(value, list):
         raise CourseReviewValidationError("refinedPrerequisiteEdges 必须是数组")
@@ -1628,15 +1694,28 @@ class CourseReviewStore:
         clusters, cluster_ids = _graph_clusters(graph)
         _assert_textbook_graph_alignment(source, points, clusters)
         cluster_assignments = _cluster_payload(points, cluster_ids)
+        point_ids = {str(point["id"]) for point in points}
+        sequence_payload = _sequence_review_payload(
+            graph,
+            cluster_ids=cluster_ids,
+            point_ids=point_ids,
+        )
+        cluster_review_payload: dict[str, Any] = {
+            "clusters": clusters,
+            "assignments": cluster_assignments,
+        }
+        if sequence_payload is not None:
+            cluster_review_payload["sequences"] = sequence_payload
         clusters_sha256 = _hash_json(
-            {
-                "clusters": clusters,
-                "assignments": cluster_assignments,
-            },
+            cluster_review_payload,
             sort_keys=True,
         )
         edge_payload = _edge_payload(points)
         prerequisites_sha256 = _hash_json(edge_payload)
+        prerequisite_pairs = {
+            frozenset((dependent_id, prerequisite_id))
+            for dependent_id, prerequisite_id in edge_payload
+        }
         review_audit_sha256 = _review_audit_sha256(graph)
         audit = (graph.get("generation") or {}).get("refinedPrerequisiteEdges") or []
         reasons = {
@@ -1646,8 +1725,8 @@ class CourseReviewStore:
             for item in audit
             if isinstance(item, dict)
         }
-        point_ids = {str(point["id"]) for point in points}
         related_pair_ids: set[tuple[str, str]] = set()
+        related_by_id: dict[str, set[str]] = {}
         for point in points:
             point_id = str(point["id"])
             related = point.get("related")
@@ -1671,7 +1750,18 @@ class CourseReviewStore:
                         f"知识点 {point_id} 包含非法、重复、自引用或悬空的 related"
                     )
                 seen_related.add(related_id)
+                if frozenset((point_id, related_id)) in prerequisite_pairs:
+                    raise CourseReviewValidationError(
+                        f"{point_id} 与 {related_id} 同时存在 related 和 prerequisite"
+                    )
                 related_pair_ids.add(tuple(sorted((point_id, related_id))))
+            related_by_id[point_id] = seen_related
+        for point_id, related_ids in related_by_id.items():
+            for related_id in related_ids:
+                if point_id not in related_by_id[related_id]:
+                    raise CourseReviewValidationError(
+                        f"知识点 {point_id} 与 {related_id} 的 related 必须双向声明"
+                    )
         public_points = [{
             "id": str(point["id"]),
             "title": str(point["title"]),
@@ -1722,6 +1812,11 @@ class CourseReviewStore:
             "edges": edges,
             "related_pairs": related_pairs,
             "broken_cycle_edges": public_broken,
+            **(
+                {"sequences": deepcopy(sequence_payload)}
+                if sequence_payload is not None
+                else {}
+            ),
         }
         # The optimistic-lock hash covers every graph field that can affect the
         # review or validation outcome. Approval hashes remain the narrower,
@@ -2561,11 +2656,19 @@ class CourseReviewStore:
         approval = deepcopy(approval)
         approval["identity_sha256"] = _hash_json(_identity_payload(graph_points))
         clusters, cluster_ids = _graph_clusters(graph)
+        sequence_payload = _sequence_review_payload(
+            graph,
+            cluster_ids=cluster_ids,
+            point_ids={str(point["id"]) for point in graph_points},
+        )
+        cluster_review_payload: dict[str, Any] = {
+            "clusters": clusters,
+            "assignments": _cluster_payload(graph_points, cluster_ids),
+        }
+        if sequence_payload is not None:
+            cluster_review_payload["sequences"] = sequence_payload
         approval["clusters_sha256"] = _hash_json(
-            {
-                "clusters": clusters,
-                "assignments": _cluster_payload(graph_points, cluster_ids),
-            },
+            cluster_review_payload,
             sort_keys=True,
         )
         approval["prerequisites_sha256"] = _hash_json(_edge_payload(graph_points))

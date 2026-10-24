@@ -1,0 +1,499 @@
+{
+  "id": "point-11-5",
+  "title": "重构误差与序列异常",
+  "shortSummary": "用重构误差识别序列模式破坏，解释窗口长度、模型容量与误报之间的权衡。",
+  "keyTerms": [
+    "重构误差",
+    "序列异常",
+    "自编码器",
+    "窗口长度",
+    "模型容量",
+    "误报"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-11-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的重构误差定义、公式、边界与案例参数，按“变量—误差—阈值—时延—容量”的定量链路重排，补充算例、参数实验和部署检查表，不改变任何数值与适用条件。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-reconstruction-error",
+          "text": "解释重构误差的核心假设、正常训练边界，以及序列异常中重构与预测的分工。"
+        },
+        {
+          "id": "tune-detection-tradeoffs",
+          "text": "针对窗口长度、隐维度和阈值，权衡检测时延、模型容量与误报并给出配置依据。"
+        }
+      ],
+      "misconceptions": [
+        "把重构误差低直接等同于数据正常，忽略训练集混入异常或换季新正常模式造成的偏移。",
+        "认为隐维度越大越好；容量过大会退化为恒等映射，使异常也能被重建。",
+        "用固定阈值长期运行且不修正缺失点的分母，导致误报或漏报。"
+      ],
+      "modules": [
+        {
+          "id": "frame-and-boundary",
+          "title": "问题定位与适用边界",
+          "role": "concept-boundary",
+          "description": "先明确本节在异常检测方法中的位置，再把核心假设转成部署前的边界检查。",
+          "outcomeRefs": [
+            "explain-reconstruction-error"
+          ],
+          "order": 0
+        },
+        {
+          "id": "error-mechanics",
+          "title": "重构误差的定量计算",
+          "role": "quantitative-core",
+          "description": "从变量与归一化开始，推导 MSE、加权合成和分位数阈值，并用算例核对判定。",
+          "outcomeRefs": [
+            "explain-reconstruction-error",
+            "tune-detection-tradeoffs"
+          ],
+          "order": 1
+        },
+        {
+          "id": "sequence-vs-prediction",
+          "title": "序列异常与预测误差的取舍",
+          "role": "comparison",
+          "description": "用统一维度比较重构与预测误差，并把窗口长度作为可实验的参数。",
+          "outcomeRefs": [
+            "explain-reconstruction-error",
+            "tune-detection-tradeoffs"
+          ],
+          "order": 2
+        },
+        {
+          "id": "capacity-and-pitfalls",
+          "title": "容量、缺失与阈值维护",
+          "role": "parameter-experiment",
+          "description": "通过隐维度、有效分母与阈值更新三个变量，分析误报和漏报的来源。",
+          "outcomeRefs": [
+            "tune-detection-tradeoffs"
+          ],
+          "order": 3
+        },
+        {
+          "id": "deployment-and-bridge",
+          "title": "部署示例与向下一节的桥接",
+          "role": "application-bridge",
+          "description": "把参数、阈值和告警规则放进具体部署示例，并衔接模型组合。",
+          "outcomeRefs": [
+            "explain-reconstruction-error",
+            "tune-detection-tradeoffs"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-reconstruction-error",
+          "tune-detection-tradeoffs"
+        ],
+        "method": "完成一次窗口长度与阈值的配置判断，并解释对时延和误报的影响。",
+        "successCriteria": [
+          "能指出训练集、归一化与离散状态三条边界",
+          "能写出加权重构误差并正确比较分位数阈值",
+          "能说明增大窗口或隐维度的收益与代价"
+        ],
+        "summaryBlockId": "model-deployment-checklist",
+        "nextPointId": "point-11-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-scope",
+        "moduleId": "frame-and-boundary",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节主题",
+        "markdown": "本节讨论**重构误差与序列异常**，属于“异常检测方法”的一部分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000403"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "重构误差与序列异常"
+              ],
+              "lineStart": 7556,
+              "lineEnd": 7557,
+              "assetRefs": [],
+              "excerptSha256": "a99963053ada478cb1ed77d73f9ccfe5449a76a96e32a4b989603ee41bd77705"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-core-assumption",
+        "moduleId": "frame-and-boundary",
+        "depth": "core",
+        "kind": "definition",
+        "title": "核心假设与适用边界",
+        "markdown": "重构误差方法的核心假设是：正常数据在低维或压缩表示下能够被高效重建，而异常模式偏离训练分布，重建结果与原始输入差异显著。该方法不依赖标签，属于无监督框架，适合温度、湿度等连续变量的隐性异常，例如制冷剂微漏造成的温升斜率渐变，或传感器老化引起的基线漂移。\n\n适用边界有三点：\n\n1. 训练集须以正常工况为主；混入异常会让模型学到异常模式，降低区分度。\n2. 对“未见过的正常模式”同样敏感，例如换季时外部环境温度大幅变化可能触发误报。\n3. 门磁状态 `door_state` 是离散量（0/1），不宜直接输入基于数值重构的模型，应单独编码为嵌入向量或采用独立检测通道。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000404"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "重构误差与序列异常",
+                "重构误差的基本思想与适用边界"
+              ],
+              "lineStart": 7558,
+              "lineEnd": 7563,
+              "assetRefs": [],
+              "excerptSha256": "367bbb069327b36c4be8709dae06f9e6b55baa4653a29974b497ba1fa9071572"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundary-checklist",
+        "moduleId": "frame-and-boundary",
+        "depth": "support",
+        "kind": "warning",
+        "title": "边界自检：三个先决问题",
+        "markdown": "把教材边界转成部署前的三个检查问题：\n\n- 训练窗口是否只包含正常工况，且已排除人工标注的异常时段？\n- 近期是否出现训练期未覆盖的正常模式，例如换季或负载切换？\n- 参与重建的变量是否都是连续量？门磁等离散状态是否走独立通道？\n\n任何一项答“否”，都应在调参前先修正数据或拆分通道。否则后续对阈值和容量的调整只是在补偿错误的假设。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-core-assumption"
+          ]
+        }
+      },
+      {
+        "id": "tb-autoencoder-formula",
+        "moduleId": "error-mechanics",
+        "depth": "core",
+        "kind": "formula",
+        "title": "序列自编码器与误差、阈值计算",
+        "markdown": "工业物联网场景常用序列自编码器处理时序依赖。编码器把输入序列压缩为隐状态，解码器据此重建原始序列。设归一化后的温度序列片段为 $\\mathbf{x}=(x_1,\\dots,x_T)$，编码器输出隐向量 $\\mathbf{z}\\in\\mathbb{R}^d$，解码器生成重建序列 $\\hat{\\mathbf{x}}=(\\hat{x}_1,\\dots,\\hat{x}_T)$。\n\n重构误差采用均方误差逐点计算：\n\n$$\\mathcal{L}(\\mathbf{x},\\hat{\\mathbf{x}})=\\frac{1}{T}\\sum_{t=1}^{T}(x_t-\\hat{x}_t)^2$$\n\n多变量场景，例如同时建模 Z1 区的温度和相对湿度，需对各变量独立归一化后拼接为二维序列，误差可加权求和。案例配置：温度均值 $\\mu_T=-18.5$、标准差 $\\sigma_T=2.3$（单位 Cel），湿度均值 $\\mu_H=72.0$、标准差 $\\sigma_H=8.5$（单位 %RH），权重 $w_T=0.6$、$w_H=0.4$。\n\n阈值判定通常采用训练集重构误差的统计分位。设训练集 $N$ 个正常片段的误差为 $\\{e_1,\\dots,e_N\\}$，取 95% 分位数 $Q_{0.95}$ 为阈值：当 $\\mathcal{L}>Q_{0.95}$ 时判为异常（flag=1），否则判为正常（flag=0）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000405"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "重构误差与序列异常",
+                "自编码器架构与误差计算"
+              ],
+              "lineStart": 7564,
+              "lineEnd": 7581,
+              "assetRefs": [],
+              "excerptSha256": "682d2ba3071576a9caa64f937701f5d721956986b09c0d24dfa75d7a618f7919"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-threshold-worked-example",
+        "moduleId": "error-mechanics",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：加权重构误差与阈值判定",
+        "markdown": "设某 120 点窗口中，温度与湿度两个变量各自归一化后的逐点均方误差分别为 $e_T=0.80$、$e_H=1.50$。按案例权重合成：\n\n$$\\mathcal{L}=w_T e_T+w_H e_H=0.6\\times0.80+0.4\\times1.50=1.08$$\n\n若训练集正常片段的 $Q_{0.95}=1.00$，则该窗口判定为异常。注意三点：\n\n- 误差在归一化空间计算，量纲已消除，不能把 $1.08$ 直接读成“1.08 摄氏度”。\n- 权重会改变判定：若把权重改为 $w_T=0.4$、$w_H=0.6$，$\\mathcal{L}=0.4\\times0.80+0.6\\times1.50=1.22$，同一窗口更容易触发。\n- 阈值来自正常片段分布，而不是固定的经验常数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-autoencoder-formula"
+          ]
+        }
+      },
+      {
+        "id": "tb-recon-vs-prediction",
+        "moduleId": "sequence-vs-prediction",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "重构误差与预测误差的对比",
+        "markdown": "重构误差关注“能否重建过去”，预测误差关注“能否预测未来”。二者对比如下：\n\n| 维度 | 重构误差 | 预测误差 |\n|:---|:---|:---|\n| 信息利用 | 双向上下文（全序列） | 单向历史（因果约束） |\n| 时延特性 | 需完整序列后计算，固有延迟 $T\\times$ 采样周期 | 逐点滚动，延迟为一个采样周期 |\n| 适用异常 | 模式畸变、周期破坏 | 突变点、趋势转折 |\n| 计算成本 | 一次前向传播处理整段 | 每步均需前向传播 |\n\n案例中，压缩机电流每 5 秒采样，适合预测误差实现快速响应；温湿度每 30 秒采样，两种方法的时延差异相对可控。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000406"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "重构误差与序列异常",
+                "序列异常与预测误差扩展"
+              ],
+              "lineStart": 7582,
+              "lineEnd": 7619,
+              "assetRefs": [],
+              "excerptSha256": "bc5c540851063b2375a554900017d71cadc2171349a85ff5f045b7cf501b0165"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-window-experiment",
+        "moduleId": "sequence-vs-prediction",
+        "depth": "support",
+        "kind": "table",
+        "title": "参数实验：窗口长度与时延、误报的权衡",
+        "markdown": "把窗口长度 $T$ 作为可调变量，在 30 秒采样下比较：\n\n| $T$ | 覆盖时长 | 重构误差的固有延迟 | 主要风险 |\n|:---|:---|:---|:---|\n| 30 | 15 分钟 | 约 15 分钟 | 上下文少，正常波动易被判为异常，误报多 |\n| 120 | 60 分钟 | 约 60 分钟 | 能覆盖完整周期，案例采用 |\n| 360 | 180 分钟 | 约 180 分钟 | 能捕捉长周期，但告警更晚，短时故障可能被平均掉 |\n\n实验时固定隐维度、阈值分位数和评估集，只改变 $T$，记录召回率、误报数与检测延迟。三者不可能同时最优。若故障发展缓慢、可容忍小时级延迟，优先增大 $T$；若需要分钟级响应，应改用逐点滚动的预测误差。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-recon-vs-prediction"
+          ]
+        }
+      },
+      {
+        "id": "tb-pitfalls",
+        "moduleId": "capacity-and-pitfalls",
+        "depth": "core",
+        "kind": "warning",
+        "title": "工程实现中的关键陷阱",
+        "markdown": "**训练—检测分布偏移**：冬季拟合的分布可能覆盖不了夏季高负荷工况。检查方法是按月滑动计算训练集与近期数据隐空间聚类中心的距离，若超过训练集内最大类间距离的一半，触发模型重训练告警。\n\n**序列对齐与缺失处理**：`quality_code=MISSING` 只出现在派生对齐序列，不可直接输入网络。预处理可采用前向填充或掩码注意力，并在误差计算时忽略填充位置。若一段含 2 个缺失点，有效样本数 $T_{\\text{eff}}=T-2$，分母须相应调整：\n\n$$\\mathcal{L}_{\\text{eff}}=\\frac{1}{T_{\\text{eff}}}\\sum_{t\\in\\text{valid}}(x_t-\\hat{x}_t)^2$$\n\n**阈值静态化**：固定 $Q_{0.95}$ 在设备老化过程中会逐渐失效。建议维护误差分布的指数加权移动直方图，每周更新阈值，更新权重 $\\lambda=0.3$。\n\n**隐状态维度选择**：$d$ 过小会形成信息瓶颈，正常模式重建失真；$d$ 过大则模型退化为恒等映射，异常与正常的误差接近。经验法则取输入维度（$T$ 乘以变量数）的 1/8 至 1/4，并通过验证集上正常样本重构误差的 90% 分位数与异常样本的 10% 分位数之间间隔最大化来确定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000407"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "重构误差与序列异常",
+                "工程实现中的关键陷阱"
+              ],
+              "lineStart": 7620,
+              "lineEnd": 7633,
+              "assetRefs": [],
+              "excerptSha256": "2e604a1a3e57a5a2086cab244a227e96da959beef893f7c09d16edb25427c9c9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-capacity-experiment",
+        "moduleId": "capacity-and-pitfalls",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "容量、缺失与阈值维护的实验设计",
+        "markdown": "隐维度与阈值维护需要放在同一张实验表里比较。\n\n**容量实验**：固定 $T$、训练窗口和阈值分位数，只改变 $d$。$d$ 太小会形成信息瓶颈，正常样本也产生高误差；$d$ 太大则模型接近恒等映射，异常也能被重建，异常与正常的误差差距缩小。教材给出以输入维度的 1/8 至 1/4 作为起点，并用验证集上正常样本误差 90% 分位数与异常样本 10% 分位数之间的间隔最大化来定值；案例最终取 $d=16$，说明这个比例只是搜索起点。\n\n**缺失实验**：同一 $T=120$ 的窗口含 2 个缺失点时，分母应改为 $T_{\\text{eff}}=118$。若仍除以 120，填充位置会把误差人为压低，异常更容易漏检。\n\n**阈值维护**：固定 $Q_{0.95}$ 会随设备老化失效。以 $\\lambda=0.3$ 的指数加权方式每周更新误差直方图，并记录每次阈值变更，才能区分模型退化与阈值漂移。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pitfalls"
+          ]
+        }
+      },
+      {
+        "id": "tb-deployment-example",
+        "moduleId": "deployment-and-bridge",
+        "depth": "core",
+        "kind": "application",
+        "title": "部署示例与混合检测",
+        "markdown": "以 Z2 区温度监测为例：序列长度 $T=120$（对应 1 小时、30 秒采样），隐维度 $d=16$，编码器与解码器均采用 2 层 LSTM。训练数据取连续 30 天经人工复核为正常的时段，并排除所有 `quality_code` 非 `GOOD` 的记录。\n\n检测流程是每小时滚动生成最新 120 点序列并计算重构误差；连续 3 个窗口都超过阈值才触发告警。这利用序列异常的持续性，抑制单点噪声导致的抖动误报。告警输出包含原始 `event_time` 区间、`device_id`、重构误差数值及隐空间最近邻的正常参考时段。\n\n与隔离森林衔接：重构误差对“分布内但结构破坏”的异常敏感，隔离森林对“分布外孤立点”敏感。可把重构误差作为初级筛选，对高误差样本再计算隔离路径长度，加权形成最终异常分数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000408"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "重构误差与序列异常",
+                "澄湾冷链示范仓的部署示例"
+              ],
+              "lineStart": 7634,
+              "lineEnd": 7641,
+              "assetRefs": [],
+              "excerptSha256": "cd35ec94236d49c5b4e2368200c7fc78cd196a5dad9508d9b7f30489d2987d6d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-deployment-checklist",
+        "moduleId": "deployment-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "部署检查表与下一节桥接",
+        "markdown": "上线前按顺序核对：\n\n1. 训练窗口只含正常工况，且 `quality_code` 均为 `GOOD`。\n2. 归一化参数（均值、标准差）与权重版本随模型一起登记。\n3. 阈值不是硬编码常数，能按周更新并留痕。\n4. 缺失点的分母已修正，填充位置不参与误差。\n5. 连续窗口确认逻辑（例如连续 3 个窗口超阈值）已配置，避免单点抖动。\n6. 告警携带时间区间、设备 ID、误差值和正常参考时段。\n\n下一节会把重构误差与隔离森林等检测器组合，并讨论离线评估、阈值校准与漂移监控；本节的误差分数将作为其中的一层输入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pitfalls",
+            "tb-deployment-example"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-window-and-threshold",
+        "type": "formative-check",
+        "anchorBlockId": "model-threshold-worked-example",
+        "moduleId": "error-mechanics",
+        "depth": "core",
+        "caption": "检查窗口长度与阈值来源对误报、时延的影响",
+        "outcomeRefs": [
+          "tune-detection-tradeoffs"
+        ],
+        "learningPurpose": "检查学习者能否在改变窗口长度或阈值来源时，判断误报与检测延迟的变化方向。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-autoencoder-formula",
+            "model-threshold-worked-example"
+          ]
+        },
+        "config": {
+          "question": "某温度序列把窗口长度从 120 点增加到 360 点，并继续使用训练集误差的 95% 分位数作为阈值。最可能出现什么变化？",
+          "options": [
+            "检测延迟缩短，但单点噪声更容易触发误报",
+            "检测延迟变长，短时故障可能被窗口平均掉",
+            "重构误差整体下降，异常与正常的区分度必然提高",
+            "阈值自动适配新窗口，误报与延迟都不变"
+          ],
+          "answerIndex": 1,
+          "explanation": "重构误差的固有延迟约为窗口长度乘以采样周期；窗口变长会看得更全，但告警更晚，短时故障容易被平均。固定分位数阈值也不会自动适配新窗口。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断：将窗口长度从 120 点增加到 360 点、阈值仍取训练集误差的 95% 分位数时，检测延迟与短时故障的可检出性会怎样变化？写出你的依据。参考要点：延迟约为 $T\\times$ 采样周期；窗口越长，短时故障越容易被平均掉。"
+        }
+      }
+    ]
+  },
+  "subtitle": "异常检测方法",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000403"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "重构误差与序列异常"
+      ],
+      "lineStart": 7556,
+      "lineEnd": 7557,
+      "assetRefs": [],
+      "excerptSha256": "a99963053ada478cb1ed77d73f9ccfe5449a76a96e32a4b989603ee41bd77705"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000404"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "重构误差与序列异常",
+        "重构误差的基本思想与适用边界"
+      ],
+      "lineStart": 7558,
+      "lineEnd": 7563,
+      "assetRefs": [],
+      "excerptSha256": "367bbb069327b36c4be8709dae06f9e6b55baa4653a29974b497ba1fa9071572"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000405"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "重构误差与序列异常",
+        "自编码器架构与误差计算"
+      ],
+      "lineStart": 7564,
+      "lineEnd": 7581,
+      "assetRefs": [],
+      "excerptSha256": "682d2ba3071576a9caa64f937701f5d721956986b09c0d24dfa75d7a618f7919"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000406"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "重构误差与序列异常",
+        "序列异常与预测误差扩展"
+      ],
+      "lineStart": 7582,
+      "lineEnd": 7619,
+      "assetRefs": [],
+      "excerptSha256": "bc5c540851063b2375a554900017d71cadc2171349a85ff5f045b7cf501b0165"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000407"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "重构误差与序列异常",
+        "工程实现中的关键陷阱"
+      ],
+      "lineStart": 7620,
+      "lineEnd": 7633,
+      "assetRefs": [],
+      "excerptSha256": "2e604a1a3e57a5a2086cab244a227e96da959beef893f7c09d16edb25427c9c9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000408"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "重构误差与序列异常",
+        "澄湾冷链示范仓的部署示例"
+      ],
+      "lineStart": 7634,
+      "lineEnd": 7641,
+      "assetRefs": [],
+      "excerptSha256": "cd35ec94236d49c5b4e2368200c7fc78cd196a5dad9508d9b7f30489d2987d6d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2302,
+    957
+  ],
+  "scale": 0.93
+}

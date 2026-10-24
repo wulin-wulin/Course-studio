@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// check-graph.mjs — clustered-graph/2.0 综合校验器（零依赖 Node ESM）
+// check-graph.mjs — clustered-graph/2.0 与 3.0 综合校验器（零依赖 Node ESM）
 //
 // 用法:  node check-graph.mjs <clustered-graph.json> [--json]
 // 退出码: 0 通过 | 1 校验失败 | 2 用法/读取错误
@@ -7,10 +7,11 @@
 // 校验分两类，都需要加载整张图后做交叉检查（JSON Schema 只能查单文件结构、查不了这些）：
 //   A. 引用完整性（与 DAG 无关的「外键」约束）：
 //      - schema_version 正确
-//      - point 必需字段齐全且没有契约外字段（防止把完整正文精简成关系摘要）
+//      - point 必需字段齐全且没有契约外字段（2.0 为完整点，3.0 为薄关系点）
 //      - 簇 / 点 id 的 kebab-case 规范与唯一性
 //      - clusterIds 非空、去重、每个都命中已声明的簇（首个为主簇）；role 合法
 //      - prerequisites / related 引用无悬空、无自环
+//      - related 必须对称，且同一对点不能同时声明 related 与 prerequisite
 //   B. 图性质（真正的 DAG）：
 //      - prerequisites 有向图无环（DFS 三色检测，定位环路径）
 //      - 通过后按 Kahn 拓扑排序输出学习顺序
@@ -23,18 +24,24 @@
 // 默认打印人类可读报告；加 --json 输出机器可读的 { ok, counts, findings } 供程序解析。
 
 import { readFileSync } from 'node:fs';
+import { sequenceCounts, validateSequences } from './sequence-contract.mjs';
 
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ROLES = ['trunk', 'branch', 'leaf'];
-const REQUIRED_POINT_FIELDS = [
+const GRAPH_SCHEMAS = new Set(['clustered-graph/2.0', 'clustered-graph/3.0']);
+const LEGACY_REQUIRED_POINT_FIELDS = [
   'id', 'title', 'shortSummary', 'coreIdea', 'principles', 'keyTerms',
   'applications', 'aliases', 'intuition', 'misconceptions', 'qa',
   'animationType', 'difficulty', 'importance', 'prerequisites',
   'clusterIds', 'role', 'related',
 ];
-const OPTIONAL_POINT_FIELDS = [
+const LEGACY_OPTIONAL_POINT_FIELDS = [
   'formula', 'comparisons', 'history', 'yearIntroduced', 'prosCons',
   'visualType', 'visualSuggestion', 'animationSuggestion',
+  'origin', 'sourceSpans', 'modelEnriched',
+];
+const THIN_POINT_FIELDS = [
+  'id', 'title', 'origin', 'clusterIds', 'role', 'prerequisites', 'related',
 ];
 
 const args = process.argv.slice(2);
@@ -90,9 +97,10 @@ function report() {
 }
 
 // —— 0. 顶层结构 ——
-if (data.schema_version !== 'clustered-graph/2.0') {
+if (!GRAPH_SCHEMAS.has(data.schema_version)) {
   add({ code: 'bad-schema-version', field: 'schema_version', value: data.schema_version,
-    message: `schema_version 应为 "clustered-graph/2.0"`, fix: '把 schema_version 设为 "clustered-graph/2.0"' });
+    message: 'schema_version 应为 "clustered-graph/2.0" 或 "clustered-graph/3.0"',
+    fix: '旧内容包使用 2.0；textbook-content/2.0 使用薄图 3.0' });
 }
 if (!Array.isArray(data.clusters)) {
   add({ code: 'clusters-not-array', field: 'clusters', message: 'clusters 缺失或不是数组', fix: '提供 clusters 数组' });
@@ -104,6 +112,13 @@ if (findings.length) report(); // 结构不完整时无法继续
 
 const clusters = data.clusters;
 const points = data.points;
+const usesThinGraph = data.schema_version === 'clustered-graph/3.0';
+const requiredPointFields = usesThinGraph
+  ? THIN_POINT_FIELDS
+  : LEGACY_REQUIRED_POINT_FIELDS;
+const allowedPointFields = new Set(usesThinGraph
+  ? THIN_POINT_FIELDS
+  : [...LEGACY_REQUIRED_POINT_FIELDS, ...LEGACY_OPTIONAL_POINT_FIELDS]);
 
 // —— A1. 簇 id：规范 + 唯一 ——
 const clusterIds = new Set();
@@ -141,21 +156,63 @@ points.forEach((p, i) => {
   pointIds.add(p.id);
 });
 
+const pointById = new Map(
+  points
+    .filter((point) => point && typeof point.id === 'string')
+    .map((point) => [point.id, point]),
+);
+const unorderedPairKey = (left, right) => (
+  left < right ? `${left}\u0000${right}` : `${right}\u0000${left}`
+);
+const prerequisitePairs = new Set();
+for (const point of points) {
+  if (!point || typeof point.id !== 'string') continue;
+  for (const prerequisite of Array.isArray(point.prerequisites)
+    ? point.prerequisites
+    : []) {
+    if (
+      typeof prerequisite === 'string'
+      && prerequisite !== point.id
+      && pointIds.has(prerequisite)
+    ) {
+      prerequisitePairs.add(unorderedPairKey(point.id, prerequisite));
+    }
+  }
+}
+const reportedRelationConflicts = new Set();
+const reportedAsymmetricRelations = new Set();
+
+for (const finding of validateSequences(data.sequences, { clusterIds, pointIds })) {
+  add(finding);
+}
+
 // —— A3. 簇归属 clusterIds、role、悬空引用、自环 ——
 points.forEach((p, i) => {
   if (!p || typeof p.id !== 'string') return;
-  const missingFields = REQUIRED_POINT_FIELDS.filter((key) => !(key in p));
+  const missingFields = requiredPointFields.filter((key) => !(key in p));
   if (missingFields.length > 0) {
     add({ code: 'point-missing-fields', pointId: p.id, pointIndex: i, field: 'points', value: missingFields,
       message: `知识点对象不完整，缺少字段: ${missingFields.join(', ')}`,
-      fix: '运行 assemble-graph-points.mjs，从上游 points/<id>.json 机械装配完整对象' });
+      fix: usesThinGraph
+        ? '运行 assemble-graph-points.mjs，从 canonical point 机械恢复 title/origin 并规范化薄关系点'
+        : '运行 assemble-graph-points.mjs，从上游 points/<id>.json 机械装配完整对象' });
   }
-  const allowedFields = new Set([...REQUIRED_POINT_FIELDS, ...OPTIONAL_POINT_FIELDS]);
-  const extraFields = Object.keys(p).filter((key) => !allowedFields.has(key));
+  const extraFields = Object.keys(p).filter((key) => !allowedPointFields.has(key));
   if (extraFields.length > 0) {
     add({ code: 'point-extra-fields', pointId: p.id, pointIndex: i, field: 'points', value: extraFields,
       message: `知识点对象含契约外字段: ${extraFields.join(', ')}`,
-      fix: '移除契约外字段；布局字段应留给 CKDS 发布阶段' });
+      fix: usesThinGraph
+        ? '移除正文与证据字段；3.0 图只保存身份和关系，正文留在 canonical point 文件'
+        : '移除契约外字段；布局字段应留给 CKDS 发布阶段' });
+  }
+  if (typeof p.title !== 'string' || p.title.trim() === '') {
+    add({ code: 'bad-point-title', pointId: p.id, pointIndex: i, field: 'title', value: p.title,
+      message: 'title 必须是非空字符串', fix: '从 canonical point 恢复冻结标题' });
+  }
+  if (usesThinGraph && !['textbook', 'llm-extension', 'user'].includes(p.origin)) {
+    add({ code: 'bad-point-origin', pointId: p.id, pointIndex: i, field: 'origin', value: p.origin,
+      message: '3.0 薄图的 origin 必须是 textbook、llm-extension 或 user',
+      fix: '从 canonical point 恢复冻结 origin' });
   }
   const cids = Array.isArray(p.clusterIds) ? p.clusterIds : null;
   if (!cids || cids.length === 0) {
@@ -180,6 +237,22 @@ points.forEach((p, i) => {
     add({ code: 'bad-role', pointId: p.id, pointIndex: i, field: 'role', value: p.role,
       message: `role 非法: ${JSON.stringify(p.role)}`, fix: '设为 trunk、branch 或 leaf 之一' });
   }
+  for (const field of ['prerequisites', 'related']) {
+    if (!Array.isArray(p[field])) {
+      add({ code: `bad-${field}`, pointId: p.id, pointIndex: i, field, value: p[field],
+        message: `${field} 必须是字符串 id 数组`, fix: `把 ${field} 改为数组；没有关系时使用 []` });
+      continue;
+    }
+    const values = p[field];
+    if (values.some((value) => typeof value !== 'string')) {
+      add({ code: `bad-${field}`, pointId: p.id, pointIndex: i, field, value: values,
+        message: `${field} 只能包含字符串 id`, fix: `移除 ${field} 中的非字符串值` });
+    }
+    if (new Set(values).size !== values.length) {
+      add({ code: `duplicate-${field}`, pointId: p.id, pointIndex: i, field, value: values,
+        message: `${field} 不允许重复 id`, fix: `对 ${field} 去重并保持首次出现顺序` });
+    }
+  }
   for (const pre of Array.isArray(p.prerequisites) ? p.prerequisites : []) {
     if (pre === p.id) {
       add({ code: 'self-loop-prerequisite', pointId: p.id, pointIndex: i, field: 'prerequisites', value: pre,
@@ -196,6 +269,24 @@ points.forEach((p, i) => {
     } else if (!pointIds.has(r)) {
       add({ code: 'dangling-related', pointId: p.id, pointIndex: i, field: 'related', value: r,
         message: `横向关联悬空（图中无此点）: ${r}`, fix: danglingFix(r, 'related') });
+    } else {
+      const pairKey = unorderedPairKey(p.id, r);
+      if (prerequisitePairs.has(pairKey) && !reportedRelationConflicts.has(pairKey)) {
+        reportedRelationConflicts.add(pairKey);
+        add({ code: 'related-prerequisite-conflict', pointId: p.id, pointIndex: i, field: 'related', value: r,
+          message: `${p.id} 与 ${r} 同时存在 related 和 prerequisite`,
+          fix: '若一方是另一方的学习前置，移除双方 related；否则移除 prerequisite 及对应审计边' });
+      }
+      const reverseRelated = pointById.get(r)?.related;
+      if (
+        (!Array.isArray(reverseRelated) || !reverseRelated.includes(p.id))
+        && !reportedAsymmetricRelations.has(pairKey)
+      ) {
+        reportedAsymmetricRelations.add(pairKey);
+        add({ code: 'related-not-symmetric', pointId: p.id, pointIndex: i, field: 'related', value: r,
+          message: `${p.id} related ${r} 未对称声明`,
+          fix: `在 ${r}.related 中加入 ${p.id}，或从 ${p.id}.related 移除 ${r}` });
+      }
     }
   }
 });
@@ -260,6 +351,7 @@ while (queue.length) {
 }
 
 const edgeCount = [...graph.values()].reduce((a, b) => a + b.length, 0);
+const sequenceStats = sequenceCounts(data.sequences);
 
 // 每簇按主簇 clusterIds[0] 归组；多簇点只计入主簇，另行报告其数量。
 const byCluster = new Map();
@@ -285,6 +377,7 @@ if (asJson) {
       points: points.length,
       clusters: clusters.length,
       prerequisiteEdges: edgeCount,
+      ...sequenceStats,
       multiClusterPoints,
     },
     learningOrder: order,

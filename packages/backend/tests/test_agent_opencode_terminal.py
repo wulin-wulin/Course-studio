@@ -25,7 +25,13 @@ def _event(event_type: str, properties: dict | None = None) -> dict:
 
 
 class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
-    async def _run_prompt(self, events, *, timeout: float = 1.0):
+    async def _run_prompt(
+        self,
+        events,
+        *,
+        timeout: float = 1.0,
+        empty_tool_timeout: float = 1.0,
+    ):
         websocket = _WebSocket()
         prompted = asyncio.Event()
 
@@ -52,6 +58,11 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
                 new=reject_permission,
             ),
             patch.object(agent.settings, "opencode_terminal_timeout_seconds", timeout),
+            patch.object(
+                agent.settings,
+                "opencode_empty_tool_call_timeout_seconds",
+                empty_tool_timeout,
+            ),
         ):
             result = await agent._run_opencode_prompt(
                 websocket=websocket,
@@ -242,12 +253,192 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
         ))
         abort.assert_awaited_once_with("session-1")
 
+    async def test_empty_required_tool_call_times_out_despite_heartbeats(self):
+        async def events():
+            pending_part = {
+                "type": "tool",
+                "id": "tool-empty-write",
+                "tool": "write",
+                "state": {
+                    "status": "pending",
+                    "input": {},
+                    "raw": "",
+                },
+            }
+            yield _event("message.part.updated", {"part": pending_part})
+            while True:
+                await asyncio.sleep(0.005)
+                yield {
+                    "directory": "workspace",
+                    "payload": {
+                        "type": "server.heartbeat",
+                        "properties": {},
+                    },
+                }
+                # Repeated snapshots of the same unchanged part are activity,
+                # not argument progress, and must not restart its deadline.
+                yield _event("message.part.updated", {"part": pending_part})
+
+        (ok, _), messages, abort = await self._run_prompt(
+            events,
+            timeout=1.0,
+            empty_tool_timeout=0.02,
+        )
+
+        self.assertFalse(ok)
+        self.assertTrue(any(
+            message["type"] == "agent_error"
+            and "tool-empty-write" in message["payload"]["message"]
+            and "没有生成任何调用参数" in message["payload"]["message"]
+            for message in messages
+        ))
+        abort.assert_awaited_once_with("session-1")
+
+    async def test_tool_argument_progress_disarms_empty_call_watchdog(self):
+        async def events():
+            yield _event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "tool-progressing-write",
+                        "tool": "write",
+                        "state": {
+                            "status": "pending",
+                            "input": {},
+                            "raw": "",
+                        },
+                    }
+                },
+            )
+            await asyncio.sleep(0.01)
+            yield _event(
+                "message.part.delta",
+                {
+                    "partID": "tool-progressing-write",
+                    "field": "raw",
+                    "delta": '{"filePath":',
+                },
+            )
+            await asyncio.sleep(0.03)
+            yield _event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "tool-progressing-write",
+                        "tool": "write",
+                        "state": {
+                            "status": "completed",
+                            "input": {
+                                "filePath": "course.json",
+                                "content": "{}",
+                            },
+                            "output": "ok",
+                        },
+                    }
+                },
+            )
+            yield _event("session.idle")
+
+        (ok, _), messages, abort = await self._run_prompt(
+            events,
+            timeout=1.0,
+            empty_tool_timeout=0.02,
+        )
+
+        self.assertTrue(ok)
+        self.assertFalse(any(message["type"] == "agent_error" for message in messages))
+        abort.assert_not_awaited()
+
+    async def test_optional_input_tool_is_not_subject_to_empty_call_watchdog(self):
+        async def events():
+            yield _event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "tool-list-default-directory",
+                        "tool": "list",
+                        "state": {
+                            "status": "pending",
+                            "input": {},
+                            "raw": "",
+                        },
+                    }
+                },
+            )
+            await asyncio.sleep(0.03)
+            yield _event("session.idle")
+
+        (ok, _), messages, abort = await self._run_prompt(
+            events,
+            timeout=1.0,
+            empty_tool_timeout=0.02,
+        )
+
+        self.assertTrue(ok)
+        self.assertFalse(any(message["type"] == "agent_error" for message in messages))
+        abort.assert_not_awaited()
+
+    async def test_child_session_empty_tool_does_not_arm_parent_watchdog(self):
+        async def events():
+            yield _event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "child-empty-write",
+                        "sessionID": "child-session-1",
+                        "tool": "write",
+                        "state": {
+                            "status": "pending",
+                            "input": {},
+                            "raw": "",
+                        },
+                    }
+                },
+            )
+            await asyncio.sleep(0.03)
+            yield _event("session.idle")
+
+        (ok, _), messages, abort = await self._run_prompt(
+            events,
+            timeout=1.0,
+            empty_tool_timeout=0.02,
+        )
+
+        self.assertTrue(ok)
+        self.assertFalse(any(message["type"] == "agent_error" for message in messages))
+        abort.assert_not_awaited()
+
     async def test_question_wait_time_does_not_consume_terminal_timeout(self):
         async def events():
+            yield _event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "tool-question",
+                        "callID": "question-call-1",
+                        "tool": "question",
+                        "state": {
+                            "status": "pending",
+                            "input": {},
+                            "raw": "",
+                        },
+                    }
+                },
+            )
+            await asyncio.sleep(0.005)
             yield _event(
                 "question.asked",
                 {
                     "id": "question-1",
+                    "tool": {
+                        "messageID": "message-1",
+                        "callID": "question-call-1",
+                    },
                     "questions": [
                         {
                             "header": "发布课程",
@@ -261,7 +452,11 @@ class AgentOpenCodeTerminalTest(unittest.IsolatedAsyncioTestCase):
             yield _event("question.replied", {"requestID": "question-1"})
             yield _event("session.idle")
 
-        (ok, _), _, abort = await self._run_prompt(events, timeout=0.02)
+        (ok, _), _, abort = await self._run_prompt(
+            events,
+            timeout=0.02,
+            empty_tool_timeout=0.02,
+        )
 
         self.assertTrue(ok)
         abort.assert_not_awaited()

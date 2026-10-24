@@ -34,7 +34,9 @@ import { getBackendWsUrl } from "@/utils/backendWs";
 import { LatestRequestGuard } from "@/utils/latestRequest";
 import {
   COURSE_GENERATION_RESUME_EVENT,
+  shouldCompleteCourseCreationAfterAgentDone,
   shouldPauseGenerationAfterAgentDone,
+  shouldRestoreCourseCreationWorkflow,
   useCourseGenerationStore,
 } from "@/course/generation/generationStore";
 import {
@@ -56,6 +58,7 @@ import {
 import {
   COURSE_CREATION_SETUP_QUESTION,
   prepareCourseCreationRequest,
+  prepareMarkdownCourseCreationRequest,
   preparePdfCourseCreationRequest,
 } from "@/features/courseCreation/setup";
 import { PdfCourseCreationForm } from "@/features/courseCreation/PdfCourseCreationForm";
@@ -86,6 +89,7 @@ type AgentRunStatus = {
 type ConnectionState = "connecting" | "connected" | "disconnected";
 type AgentWorkflow = "default" | "course-create";
 type CourseCreationSource = "topic" | "pdf";
+type TextbookUploadFormat = "all" | "markdown";
 
 type AgentQuestionOption = {
   label: string;
@@ -154,6 +158,7 @@ type HandlerCtx = {
   thinkingIdRef: RefObject<string | null>;
   modeRef: RefObject<ChatMode>;
   workflowRef: RefObject<AgentWorkflow>;
+  setWorkflow: Dispatch<SetStateAction<AgentWorkflow>>;
   setPendingQuestion: Dispatch<SetStateAction<AgentQuestionRequest | null>>;
   setPendingReview: Dispatch<SetStateAction<ReviewPointer | null>>;
   onOpenReviewRef: RefObject<AgentPanelProps["onOpenReview"]>;
@@ -238,6 +243,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const [courseCreationSetupError, setCourseCreationSetupError] = useState("");
   const [courseCreationSource, setCourseCreationSource] =
     useState<CourseCreationSource>("topic");
+  const [textbookUploadFormat, setTextbookUploadFormat] =
+    useState<TextbookUploadFormat>("all");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
   const [courseDeleteOpen, setCourseDeleteOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -364,6 +371,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
             thinkingIdRef,
             modeRef,
             workflowRef,
+            setWorkflow,
             setPendingQuestion,
             setPendingReview,
             onOpenReviewRef,
@@ -459,6 +467,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
     setWorkflow("default");
     workflowRef.current = "default";
     streamingIdRef.current = null;
@@ -502,6 +511,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
     setHistoryLoading(false);
     setWorkflow("default");
     workflowRef.current = "default";
@@ -545,9 +555,6 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       const conversation = await response.json() as ConversationDetail;
       if (!conversationRestoreGuardRef.current.isCurrent(request)) return null;
       const restoredMode: ChatMode = conversation.mode === "chat" ? "chat" : "agent";
-      const restoredWorkflow: AgentWorkflow = conversation.workflow === "course-create"
-        ? "course-create"
-        : "default";
       const restoredReview = parseReviewPointer(conversation.pending_review);
       const restoredResumePointer = parseReviewPointer(
         conversation.pending_review_resume,
@@ -558,10 +565,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       const restoredQuestion = parseAgentQuestionRequest(
         conversation.pending_question,
       );
+      const storedGeneration =
+        useCourseGenerationStore.getState().liveRuns[conversation.id];
+      const restoredWorkflow: AgentWorkflow = shouldRestoreCourseCreationWorkflow(
+        conversation.workflow,
+        storedGeneration,
+        Boolean(restoredReview || restoredResume || restoredQuestion),
+      )
+        ? "course-create"
+        : "default";
 
       setCourseCreationSetupOpen(false);
       setCourseCreationSetupError("");
       setCourseCreationSource("topic");
+      setTextbookUploadFormat("all");
       lastActiveConversationIdRef.current = conversation.id;
       setActiveConversation(conversation.id);
       setMode(restoredMode);
@@ -574,6 +591,14 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       setRunStatus(null);
       setPendingQuestion(restoredQuestion);
       setPendingReview(restoredReview);
+      if (restoredQuestion && !restoredReview) {
+        setIsRunning(true);
+        markLiveGenerationAwaitingQuestion(
+          conversation.id,
+          restoredQuestion.questions,
+        );
+        getBrowserReviewResumeOutbox().removeConversation(conversation.id);
+      }
       setQuestionSubmitting(false);
       setQuestionError("");
       setEntries(conversation.messages.map((message) => ({
@@ -594,7 +619,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       setHistoryOpen(false);
       if (restoredReview) {
         onOpenReviewRef.current?.(restoredReview.id, restoredReview.kind);
-      } else if (restoredResume) {
+      } else if (restoredResume && !restoredQuestion) {
         queueReviewResume(restoredResume);
       }
       return conversation;
@@ -982,6 +1007,19 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setCourseDeleteOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
+    setCourseCreationSetupOpen(true);
+    stickToBottomRef.current = true;
+  }, [isRunning, mode, workflow]);
+
+  const startMarkdownCourseCreation = useCallback(() => {
+    if (mode !== "agent" || isRunning || workflow === "course-create") return;
+    setHistoryOpen(false);
+    setModeInfoOpen(false);
+    setCourseDeleteOpen(false);
+    setCourseCreationSetupError("");
+    setCourseCreationSource("pdf");
+    setTextbookUploadFormat("markdown");
     setCourseCreationSetupOpen(true);
     stickToBottomRef.current = true;
   }, [isRunning, mode, workflow]);
@@ -1047,9 +1085,11 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const confirmPdfCourseCreation = useCallback((
     document: TextbookDocumentMetadata,
   ) => {
-    const request = preparePdfCourseCreationRequest(document);
+    const request = textbookUploadFormat === "markdown"
+      ? prepareMarkdownCourseCreationRequest(document)
+      : preparePdfCourseCreationRequest(document);
     if (!request) {
-      setCourseCreationSetupError("教材信息不完整，请重新上传 PDF。");
+      setCourseCreationSetupError("教材信息不完整，请重新上传教材文件。");
       return;
     }
     launchCourseCreation({
@@ -1057,12 +1097,13 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       displayContent: request.displayContent,
       textbookDocumentId: request.documentId,
     });
-  }, [launchCourseCreation]);
+  }, [launchCourseCreation, textbookUploadFormat]);
 
   const cancelCourseCreationSetup = useCallback(() => {
     setCourseCreationSetupOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("topic");
+    setTextbookUploadFormat("all");
   }, []);
 
   const startGenerationDemo = useCallback(() => {
@@ -1115,6 +1156,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         },
       ]);
       setPendingQuestion(null);
+      useCourseGenerationStore.getState().touchLive(question.conversationId);
       updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
       stickToBottomRef.current = true;
     } catch (error) {
@@ -1150,6 +1192,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         },
       ]);
       setPendingQuestion(null);
+      useCourseGenerationStore.getState().touchLive(question.conversationId);
       stickToBottomRef.current = true;
     } catch (error) {
       setQuestionError(error instanceof Error ? error.message : "取消确认失败");
@@ -1504,6 +1547,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 aria-selected={courseCreationSource === "topic"}
                 onClick={() => {
                   setCourseCreationSource("topic");
+                  setTextbookUploadFormat("all");
                   setCourseCreationSetupError("");
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -1521,6 +1565,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 aria-selected={courseCreationSource === "pdf"}
                 onClick={() => {
                   setCourseCreationSource("pdf");
+                  setTextbookUploadFormat("all");
                   setCourseCreationSetupError("");
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
@@ -1530,7 +1575,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" />
-                上传教材 PDF
+                上传教材文件
               </button>
             </div>
             {courseCreationSource === "topic" ? (
@@ -1545,6 +1590,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               <PdfCourseCreationForm
                 disabled={isRunning}
                 externalError={courseCreationSetupError}
+                acceptedFormat={textbookUploadFormat}
                 onReady={confirmPdfCourseCreation}
                 onCancel={cancelCourseCreationSetup}
               />
@@ -1611,8 +1657,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
-          <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
-            <div className="flex min-w-0 items-center gap-2">
+          <div className="flex items-end justify-between gap-2 px-3 pb-2.5">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
               {mode === "agent" && (
                 <>
                   <button
@@ -1630,6 +1676,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                   >
                     <BookPlus className="h-3.5 w-3.5" />
                     创建课程
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startMarkdownCourseCreation}
+                    disabled={isRunning || workflow === "course-create" || courseCreationSetupOpen}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      workflow === "course-create"
+                        ? "当前对话正在创建课程"
+                        : "上传 MinerU Markdown 并生成知识森林图谱"
+                    }
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Markdown 生成图谱
                   </button>
                   <button
                     type="button"
@@ -2180,6 +2240,7 @@ function handleAgentEvent(
     thinkingIdRef,
     modeRef,
     workflowRef,
+    setWorkflow,
     setPendingQuestion,
     setPendingReview,
     onOpenReviewRef,
@@ -2351,6 +2412,7 @@ function handleAgentEvent(
       finalizeStreaming(streamingIdRef, setEntries);
       finalizeThinking(thinkingIdRef, setEntries);
       setPendingQuestion({ requestId, conversationId, questions });
+      markLiveGenerationAwaitingQuestion(conversationId, questions);
       setIsRunning(true);
       updateRunStatus(setRunStatus, "等待你的确认", "选择一个选项或填写自定义答案");
       return;
@@ -2359,6 +2421,7 @@ function handleAgentEvent(
     case "agent_question_resolved": {
       const requestId = String(payload.request_id ?? "").trim();
       setPendingQuestion((current) => current?.requestId === requestId ? null : current);
+      touchLiveGeneration(payload);
       updateRunStatus(setRunStatus, "已收到确认", "课程创建流程继续执行");
       return;
     }
@@ -2377,6 +2440,10 @@ function handleAgentEvent(
         const liveRun = conversationId
           ? generation.liveRuns[conversationId]
           : undefined;
+        if (shouldCompleteCourseCreationAfterAgentDone(payload, liveRun)) {
+          setWorkflow("default");
+          workflowRef.current = "default";
+        }
         if (shouldPauseGenerationAfterAgentDone(payload, liveRun)) {
           generation.pauseLive(
             conversationId,
@@ -2468,6 +2535,24 @@ function touchLiveGeneration(payload: Record<string, unknown>) {
   if (conversationId && generation.liveRuns[conversationId]) {
     generation.touchLive(conversationId);
   }
+}
+
+function markLiveGenerationAwaitingQuestion(
+  conversationId: string,
+  questions: AgentQuestionItem[],
+) {
+  const generation = useCourseGenerationStore.getState();
+  if (!conversationId || !generation.liveRuns[conversationId]) return;
+  const releaseReady = questions.some(
+    (question) => question.header === "G7_RELEASE_READY",
+  );
+  generation.markAwaitingInput(conversationId, {
+    ...(releaseReady ? { gate: "G7_RELEASE_READY" as const } : {}),
+    label: releaseReady ? "等待发布确认" : "等待你的确认",
+    detail: releaseReady
+      ? "课程已经通过全部门禁，请在右侧选择是否发布。"
+      : "请在右侧课程助手中完成当前确认。",
+  });
 }
 
 function normalizeAgentQuestions(value: unknown): AgentQuestionItem[] {

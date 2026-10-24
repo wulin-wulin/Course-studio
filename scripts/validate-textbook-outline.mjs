@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   assertTextbookSourceUnchanged,
@@ -10,8 +12,13 @@ import {
 } from "../skills/knowledge-pipeline-orchestrator/scripts/textbook-structure.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ORIGINS = new Set(["textbook", "llm-extension", "user"]);
-const MODES = new Set(["outline", "graph"]);
+const MODES = new Set(["outline", "graph", "manifest"]);
+const MATERIAL_SCHEMA = "textbook-material/1.0";
+const MANIFEST_SCHEMA = "course-content-generation/1.0";
+const TEXTBOOK_CONTENT_SCHEMA = "textbook-content/2.0";
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function fail(message) {
   throw new Error(message);
@@ -90,11 +97,62 @@ function readJson(root, filePath, label) {
   }
 }
 
+function readUtf8(root, filePath, label) {
+  assertSafePathChain(root, filePath);
+  if (!pathExists(filePath)) fail(`缺少${label}：${path.relative(root, filePath)}`);
+  const stat = fs.lstatSync(filePath);
+  if (stat.isSymbolicLink() || !stat.isFile()) fail(`${label}必须是普通文件`);
+  const bytes = fs.readFileSync(filePath);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    fail(`${label}必须是有效 UTF-8 文本`);
+  }
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function uniqueStrings(value) {
+  return Array.isArray(value)
+    && value.every((item) => typeof item === "string" && item.length > 0)
+    && new Set(value).size === value.length;
+}
+
+function strings(value) {
+  return Array.isArray(value)
+    && value.every((item) => typeof item === "string" && item.length > 0);
+}
+
+function boundPath(root, relativePath, label) {
+  if (
+    typeof relativePath !== "string"
+    || !relativePath.trim()
+    || path.isAbsolute(relativePath)
+    || relativePath.includes("\\")
+  ) {
+    fail(`${label}必须是工作区内使用正斜杠的相对路径`);
+  }
+  const segments = relativePath.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    fail(`${label}包含非法路径片段`);
+  }
+  const target = path.join(root, ...segments);
+  assertSafePathChain(root, target);
+  return target;
+}
+
+function markdownSlice(lines, lineStart, lineEnd) {
+  const excerpt = lines.slice(lineStart - 1, lineEnd).join("\n");
+  return excerpt + (lineEnd < lines.length ? "\n" : "");
+}
+
 function parseArgs(argv) {
   const mode = argv[2] || "outline";
   const courseId = argv[3];
   if (!MODES.has(mode) || !courseId || !ID_PATTERN.test(courseId)) {
-    fail("用法：node validate-textbook-outline.mjs outline|graph <course-id>");
+    fail("用法：node validate-textbook-outline.mjs outline|graph|manifest <course-id>");
   }
   return { mode, courseId };
 }
@@ -122,7 +180,7 @@ function validateOutline(outline, courseId) {
     fail("教材结构缺少课程标题");
   }
   if (!isRecord(outline.source) || typeof outline.source.sha256 !== "string") {
-    fail("教材结构缺少来源和 PDF 哈希");
+    fail("教材结构缺少来源和源文件哈希");
   }
   if (!Array.isArray(outline.chapters) || outline.chapters.length === 0) {
     fail("教材结构至少需要一个章节");
@@ -160,17 +218,20 @@ function validateOutline(outline, courseId) {
       }
       if (
         point.page !== undefined
+        && point.page !== null
         && (!Number.isInteger(point.page) || point.page < 1)
       ) {
         fail(`知识点 ${point.id} 的 page 必须是正整数`);
       }
-      if (point.origin === "llm-extension") {
+      if (point.origin !== "textbook") {
         if (
           !ID_PATTERN.test(point.anchor_point_id ?? "")
           || chapterPointOrigins.get(point.anchor_point_id) !== "textbook"
         ) {
-          fail(`扩展知识点 ${point.id} 必须锚定在同章中已出现的教材知识点`);
+          fail(`非教材知识点 ${point.id} 必须锚定在同章中已出现的教材知识点`);
         }
+      }
+      if (point.origin === "llm-extension") {
         if (typeof point.extension_reason !== "string" || !point.extension_reason.trim()) {
           fail(`扩展知识点 ${point.id} 缺少 extension_reason`);
         }
@@ -180,6 +241,8 @@ function validateOutline(outline, courseId) {
         title: point.title.trim(),
         chapterId: chapter.id,
         origin: point.origin,
+        anchorPointId: point.anchor_point_id,
+        sourceRefs: point.source_refs,
       });
       chapterPointOrigins.set(point.id, point.origin);
     }
@@ -215,10 +278,761 @@ function validateIndex(root, courseRoot, courseId, outlinePoints) {
   return index;
 }
 
-function validateGraph(root, courseRoot, outline, outlinePoints) {
+function validateMaterialBlock(block, index, kind, lines, seenIds) {
+  const label = `material.${kind}s[${index}]`;
+  if (!isRecord(block) || typeof block.id !== "string" || !block.id) {
+    fail(`${label} 缺少有效 id`);
+  }
+  if (seenIds.has(block.id)) fail(`material block id 重复：${block.id}`);
+  seenIds.add(block.id);
+  if (block.order !== index) fail(`${label}.order 必须与数组顺序一致`);
+  if (
+    !Number.isInteger(block.line_start)
+    || !Number.isInteger(block.line_end)
+    || block.line_start < 1
+    || block.line_end < block.line_start
+    || block.line_end > lines.length
+  ) {
+    fail(`${label} 的 line_start/line_end 超出 Markdown 行范围`);
+  }
+  if (!strings(block.heading_path) || block.heading_path.length === 0) {
+    fail(`${label}.heading_path 必须是非空字符串数组`);
+  }
+  if (!uniqueStrings(block.asset_refs)) {
+    fail(`${label}.asset_refs 必须是不重复字符串数组`);
+  }
+  if (
+    block.page !== null
+    && block.page !== undefined
+    && (!Number.isInteger(block.page) || block.page < 1)
+  ) {
+    fail(`${label}.page 必须为空或正整数`);
+  }
+  const expectedSha = sha256(markdownSlice(lines, block.line_start, block.line_end));
+  if (!SHA256_PATTERN.test(block.sha256 ?? "") || block.sha256 !== expectedSha) {
+    fail(`${label}.sha256 与 full.md 对应行不一致`);
+  }
+  if (kind === "section") {
+    if (
+      block.type !== "section"
+      || typeof block.title !== "string"
+      || !block.title.trim()
+      || !Number.isInteger(block.heading_level)
+      || block.heading_level < 1
+      || block.heading_level > 6
+    ) {
+      fail(`${label} 缺少有效的 type/title/heading_level`);
+    }
+  }
+  return block;
+}
+
+function validateMaterial(root, outline, outlinePoints, binding) {
+  const documentId = outline.document_id;
+  const expectedMaterialPath = `textbook-input/${documentId}/material.json`;
+  const expectedMarkdownPath = `textbook-input/${documentId}/full.md`;
+  if (
+    binding.input_material_path !== expectedMaterialPath
+    || binding.input_markdown_path !== expectedMarkdownPath
+  ) {
+    fail("Markdown 教材绑定必须指向对应 document_id 下的 material.json 和 full.md");
+  }
+  const materialPath = boundPath(root, binding.input_material_path, "input_material_path");
+  const markdownPath = boundPath(root, binding.input_markdown_path, "input_markdown_path");
+  const material = readJson(root, materialPath, "教材正文材料索引");
+  const markdown = readUtf8(root, markdownPath, "教材 Markdown 正文");
+  if (markdown.includes("\r")) fail("full.md 必须使用规范化的 LF 换行");
+  const lines = markdown.split("\n");
+
+  if (material.schema_version !== MATERIAL_SCHEMA) {
+    fail(`material.schema_version 必须是 ${MATERIAL_SCHEMA}`);
+  }
+  if (material.document_id !== documentId) {
+    fail("material.document_id 与教材结构不一致");
+  }
+  if (
+    !isRecord(material.source)
+    || material.source.format !== "markdown"
+    || material.source.sha256 !== outline.source.sha256
+  ) {
+    fail("material.source 必须声明 markdown，且来源摘要与教材结构一致");
+  }
+  if (!isRecord(material.markdown) || material.markdown.path !== "full.md") {
+    fail("material.markdown.path 必须是 full.md");
+  }
+  if (
+    !SHA256_PATTERN.test(material.markdown.sha256 ?? "")
+    || material.markdown.sha256 !== sha256(markdown)
+  ) {
+    fail("material.markdown.sha256 与 full.md 不一致");
+  }
+  if (material.markdown.line_count !== lines.length) {
+    fail("material.markdown.line_count 与 full.md 不一致");
+  }
+  if (
+    material.markdown.character_count !== undefined
+    && material.markdown.character_count !== [...markdown].length
+  ) {
+    fail("material.markdown.character_count 与 full.md 不一致");
+  }
+  if (!Array.isArray(material.sections) || material.sections.length === 0) {
+    fail("material.sections 至少需要一个正文 section");
+  }
+  if (!Array.isArray(material.chunks) || material.chunks.length === 0) {
+    fail("material.chunks 至少需要一个正文 chunk");
+  }
+
+  const seenBlockIds = new Set();
+  const sections = material.sections.map((section, index) => (
+    validateMaterialBlock(section, index, "section", lines, seenBlockIds)
+  ));
+  const sectionById = new Map(sections.map((section) => [section.id, section]));
+  const chunks = material.chunks.map((chunk, index) => {
+    validateMaterialBlock(chunk, index, "chunk", lines, seenBlockIds);
+    const label = `material.chunks[${index}]`;
+    if (!uniqueStrings(chunk.section_ids) || chunk.section_ids.length === 0) {
+      fail(`${label}.section_ids 至少需要一个有效 section id`);
+    }
+    const parents = chunk.section_ids.map((id) => sectionById.get(id));
+    if (parents.some((section) => !section)) {
+      fail(`${label}.section_ids 引用了不存在的 section`);
+    }
+    if (!parents.some((section) => (
+      chunk.line_start >= section.line_start && chunk.line_end <= section.line_end
+    ))) {
+      fail(`${label} 的行范围不属于其引用的 section`);
+    }
+    return chunk;
+  });
+  const chunkById = new Map(chunks.map((chunk) => [chunk.id, chunk]));
+
+  for (const section of sections) {
+    const covering = chunks
+      .filter((chunk) => chunk.section_ids.includes(section.id))
+      .slice()
+      .sort((left, right) => left.line_start - right.line_start || left.line_end - right.line_end);
+    if (covering.length === 0) fail(`section ${section.id} 没有对应 chunk`);
+    let expectedLine = section.line_start;
+    for (const chunk of covering) {
+      if (chunk.line_start !== expectedLine || chunk.line_end > section.line_end) {
+        fail(`section ${section.id} 的 chunks 没有连续覆盖正文行范围`);
+      }
+      expectedLine = chunk.line_end + 1;
+    }
+    if (expectedLine !== section.line_end + 1) {
+      fail(`section ${section.id} 的 chunks 没有完整覆盖正文行范围`);
+    }
+  }
+
+  if (!Array.isArray(material.point_sources) || material.point_sources.length === 0) {
+    fail("material.point_sources 至少需要一个教材知识点映射");
+  }
+  const pointSourcesById = new Map();
+  for (const [index, pointSource] of material.point_sources.entries()) {
+    const label = `material.point_sources[${index}]`;
+    if (!isRecord(pointSource) || !ID_PATTERN.test(pointSource.point_id ?? "")) {
+      fail(`${label}.point_id 非法`);
+    }
+    if (pointSourcesById.has(pointSource.point_id)) {
+      fail(`material.point_sources.point_id 重复：${pointSource.point_id}`);
+    }
+    if (
+      !uniqueStrings(pointSource.section_ids)
+      || pointSource.section_ids.length === 0
+      || pointSource.section_ids.some((id) => !sectionById.has(id))
+    ) {
+      fail(`${label}.section_ids 必须引用真实 section`);
+    }
+    if (
+      !uniqueStrings(pointSource.chunk_ids)
+      || pointSource.chunk_ids.length === 0
+      || pointSource.chunk_ids.some((id) => !chunkById.has(id))
+    ) {
+      fail(`${label}.chunk_ids 必须引用真实 chunk`);
+    }
+    for (const chunkId of pointSource.chunk_ids) {
+      const chunk = chunkById.get(chunkId);
+      if (!chunk.section_ids.some((id) => pointSource.section_ids.includes(id))) {
+        fail(`${label}.chunk_ids 与 section_ids 不属于同一正文区域`);
+      }
+    }
+    pointSourcesById.set(pointSource.point_id, pointSource);
+  }
+
+  const textbookPointIds = new Set(
+    outlinePoints.filter((point) => point.origin === "textbook").map((point) => point.id),
+  );
+  for (const pointId of pointSourcesById.keys()) {
+    if (!textbookPointIds.has(pointId)) {
+      fail(`material.point_sources 引用了非教材知识点：${pointId}`);
+    }
+  }
+  for (const point of outlinePoints.filter((item) => item.origin === "textbook")) {
+    const pointSource = pointSourcesById.get(point.id);
+    if (!pointSource) fail(`教材知识点 ${point.id} 缺少 material.point_sources 映射`);
+    const allowedRefs = new Set([...pointSource.section_ids, ...pointSource.chunk_ids]);
+    if (
+      !uniqueStrings(point.sourceRefs)
+      || point.sourceRefs.length === 0
+      || point.sourceRefs.some((id) => !seenBlockIds.has(id))
+      || point.sourceRefs.some((id) => !allowedRefs.has(id))
+    ) {
+      fail(`教材知识点 ${point.id} 的 source_refs 必须全部来自对应 point_sources`);
+    }
+  }
+
+  return {
+    material,
+    markdown,
+    lines,
+    blockById: new Map([
+      ...sections.map((section) => [section.id, section]),
+      ...chunks.map((chunk) => [chunk.id, chunk]),
+    ]),
+    sectionById,
+    chunkById,
+    pointSourcesById,
+  };
+}
+
+function validateSourceSpan(span, label, outlinePoint, materialContext, documentId) {
+  if (!isRecord(span)) fail(`${label} 必须是对象`);
+  if (span.materialId !== documentId) {
+    fail(`${label}.materialId 必须等于教材 document_id`);
+  }
+  if (!uniqueStrings(span.blockIds) || span.blockIds.length === 0) {
+    fail(`${label}.blockIds 至少需要一个真实 block id`);
+  }
+  const blocks = span.blockIds.map((id) => materialContext.blockById.get(id));
+  if (blocks.some((block) => !block)) fail(`${label}.blockIds 引用了不存在的 material block`);
+  if (
+    !Number.isInteger(span.lineStart)
+    || !Number.isInteger(span.lineEnd)
+    || span.lineStart < 1
+    || span.lineEnd < span.lineStart
+    || span.lineEnd > materialContext.lines.length
+  ) {
+    fail(`${label} 的 lineStart/lineEnd 超出 full.md 行范围`);
+  }
+  const minimumLine = Math.min(...blocks.map((block) => block.line_start));
+  const maximumLine = Math.max(...blocks.map((block) => block.line_end));
+  if (
+    span.lineStart < minimumLine
+    || span.lineEnd > maximumLine
+    || blocks.some((block) => span.lineEnd < block.line_start || span.lineStart > block.line_end)
+  ) {
+    fail(`${label} 的行范围与 blockIds 不一致`);
+  }
+  if (!strings(span.headingPath) || span.headingPath.length === 0) {
+    fail(`${label}.headingPath 必须是非空字符串数组`);
+  }
+  if (!blocks.some((block) => isDeepStrictEqual(block.heading_path, span.headingPath))) {
+    fail(`${label}.headingPath 与引用的 material block 不一致`);
+  }
+  if (!uniqueStrings(span.assetRefs)) {
+    fail(`${label}.assetRefs 必须是不重复字符串数组`);
+  }
+  const knownAssets = new Set(blocks.flatMap((block) => block.asset_refs));
+  if (span.assetRefs.some((asset) => !knownAssets.has(asset))) {
+    fail(`${label}.assetRefs 包含引用 block 中不存在的资源`);
+  }
+  if (
+    span.page !== undefined
+    && (
+      !Number.isInteger(span.page)
+      || span.page < 1
+      || !blocks.some((block) => block.page === span.page)
+    )
+  ) {
+    fail(`${label}.page 与引用的 material block 不一致`);
+  }
+  const expectedSha = sha256(
+    markdownSlice(materialContext.lines, span.lineStart, span.lineEnd),
+  );
+  if (!SHA256_PATTERN.test(span.excerptSha256 ?? "") || span.excerptSha256 !== expectedSha) {
+    fail(`${label}.excerptSha256 与 full.md 对应行不一致`);
+  }
+  const evidencePointId = outlinePoint.origin === "textbook"
+    ? outlinePoint.id
+    : outlinePoint.anchorPointId;
+  const pointSource = materialContext.pointSourcesById.get(evidencePointId);
+  const allowed = new Set([
+    ...(pointSource?.section_ids ?? []),
+    ...(pointSource?.chunk_ids ?? []),
+  ]);
+  if (span.blockIds.some((id) => !allowed.has(id))) {
+    fail(
+      outlinePoint.origin === "textbook"
+        ? `${label}.blockIds 必须全部来自知识点 ${outlinePoint.id} 的 point_sources`
+        : `${label}.blockIds 必须全部来自非教材点锚点 ${evidencePointId} 的 point_sources`,
+    );
+  }
+}
+
+function validateCompleteTextbookCoverage(spans, label, outlinePoint, materialContext) {
+  if (outlinePoint.origin !== "textbook") return;
+  const pointSource = materialContext.pointSourcesById.get(outlinePoint.id);
+  if (!pointSource) fail(`教材知识点 ${outlinePoint.id} 缺少 material.point_sources 映射`);
+
+  const expectedSectionIds = pointSource.section_ids;
+  const actualSectionIds = [];
+  const seenSectionIds = new Set();
+  const intervalsBySectionId = new Map(
+    expectedSectionIds.map((sectionId) => [sectionId, []]),
+  );
+
+  for (const span of spans) {
+    for (const blockId of span.blockIds ?? []) {
+      const section = materialContext.sectionById.get(blockId);
+      const chunk = materialContext.chunkById.get(blockId);
+      const sectionIds = section ? [section.id] : (chunk?.section_ids ?? []);
+      for (const sectionId of sectionIds) {
+        if (!seenSectionIds.has(sectionId)) {
+          seenSectionIds.add(sectionId);
+          actualSectionIds.push(sectionId);
+        }
+        const sourceSection = materialContext.sectionById.get(sectionId);
+        const intervals = intervalsBySectionId.get(sectionId);
+        if (!sourceSection || !intervals) continue;
+        const start = Math.max(span.lineStart, sourceSection.line_start);
+        const end = Math.min(span.lineEnd, sourceSection.line_end);
+        if (start <= end) intervals.push([start, end]);
+      }
+    }
+  }
+
+  if (!isDeepStrictEqual(actualSectionIds, expectedSectionIds)) {
+    fail(
+      `${label} 必须按 material.point_sources 顺序完整覆盖教材知识点 `
+        + `${outlinePoint.id} 的 section_ids`,
+    );
+  }
+
+  for (const sectionId of expectedSectionIds) {
+    const section = materialContext.sectionById.get(sectionId);
+    const intervals = intervalsBySectionId.get(sectionId)
+      .slice()
+      .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+    let nextLine = section.line_start;
+    for (const [start, end] of intervals) {
+      if (start > nextLine) break;
+      nextLine = Math.max(nextLine, end + 1);
+      if (nextLine > section.line_end) break;
+    }
+    if (nextLine <= section.line_end) {
+      fail(
+        `${label} 未完整覆盖教材知识点 ${outlinePoint.id} 的 section ${sectionId} `
+          + `正文行 ${section.line_start}-${section.line_end}`,
+      );
+    }
+  }
+}
+
+function validDate(value) {
+  if (typeof value !== "string" || !DATE_PATTERN.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime())
+    && parsed.toISOString().slice(0, 10) === value;
+}
+
+function nonEmptyString(value, fallback) {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function textbookSourceSpans(outlinePoint, materialContext, documentId) {
+  const evidencePointId = outlinePoint.origin === "textbook"
+    ? outlinePoint.id
+    : (outlinePoint.anchorPointId ?? outlinePoint.id);
+  const pointSource = materialContext.pointSourcesById.get(evidencePointId);
+  if (!pointSource) {
+    fail(
+      `无法为知识点 ${outlinePoint.id} 确定教材证据：`
+        + `缺少教材锚点 ${evidencePointId} 的 material.point_sources`,
+    );
+  }
+
+  return pointSource.section_ids.map((sectionId) => {
+    const section = materialContext.sectionById.get(sectionId);
+    if (!section) {
+      fail(`教材证据 section 不存在：${sectionId}`);
+    }
+    const span = {
+      materialId: documentId,
+      blockIds: [section.id],
+      headingPath: [...section.heading_path],
+      lineStart: section.line_start,
+      lineEnd: section.line_end,
+      assetRefs: [...section.asset_refs],
+      excerptSha256: section.sha256,
+    };
+    if (Number.isInteger(section.page) && section.page > 0) {
+      span.page = section.page;
+    }
+    return span;
+  });
+}
+
+function syncMarkdownManifest(
+  root,
+  courseRoot,
+  courseId,
+  outline,
+  outlinePoints,
+  index,
+  materialContext,
+  binding,
+) {
+  const course = readJson(
+    root,
+    path.join(courseRoot, "course-content", "src", "data", "course.json"),
+    "课程元数据",
+  );
+  if (
+    !isRecord(course)
+    || course.schema_version !== "1.0"
+    || course.id !== courseId
+    || typeof course.title !== "string"
+    || !course.title.trim()
+    || typeof course.description !== "string"
+    || !course.description.trim()
+    || typeof course.language !== "string"
+    || course.language.trim().length < 2
+    || !validDate(course.updatedAt)
+  ) {
+    fail("生成教材 manifest 前必须先完成有效的 course.json");
+  }
+
+  const manifestPath = path.join(
+    courseRoot,
+    "course-content",
+    "generation",
+    "manifest.json",
+  );
+  assertSafePathChain(root, manifestPath);
+
+  const title = course.title.trim();
+  const generatedAt = course.updatedAt;
+  const subject = {
+    id: courseId,
+    input: outline.course.title.trim(),
+    normalizedTitle: title,
+    inputType: "course",
+    language: course.language.trim(),
+    audience: "教材学习者",
+    depth: "遵循教材原有深度",
+    scope: course.description.trim(),
+    exclusions: [],
+    outcomes: [`理解并运用《${title}》中的核心知识。`],
+  };
+
+  const textbookSourceId = "src-textbook";
+  const sourceTitle = nonEmptyString(outline.source?.filename, title);
+  const pointEvidence = outlinePoints.map((outlinePoint, position) => {
+    const indexPoint = index.points[position];
+    const defaultConfidence = outlinePoint.origin === "textbook" ? 1 : 0.8;
+    const defaultScopeStatus = outlinePoint.origin === "textbook" ? "core" : "boundary";
+    return {
+      pointId: outlinePoint.id,
+      title: indexPoint.title,
+      kind: "concept",
+      sourceRefs: [textbookSourceId],
+      confidence: defaultConfidence,
+      scopeStatus: defaultScopeStatus,
+      origin: outlinePoint.origin,
+      sourceSpans: textbookSourceSpans(
+        outlinePoint,
+        materialContext,
+        outline.document_id,
+      ),
+    };
+  });
+  const reviewQueue = pointEvidence
+    .filter((evidence) => (
+      evidence.scopeStatus !== "core" || evidence.confidence < 0.5
+    ))
+    .map((evidence) => ({
+      pointId: evidence.pointId,
+      term: evidence.title,
+      issue: evidence.confidence < 0.5 ? "insufficient-evidence" : "scope-ambiguity",
+      reason: evidence.confidence < 0.5
+        ? "该知识点的规划置信度低于 0.5，需要在 G2 审核中确认。"
+        : "该知识点位于教材原有范围边界，需要在 G2 审核中确认。",
+      suggestedAction: "在 G2 知识点清单审核中确认保留；如需调整或删除，退回 G1 重新生成教材结构。",
+    }));
+  const manifest = {
+    schema_version: MANIFEST_SCHEMA,
+    subject,
+    generation: {
+      evidenceMode: "textbook-grounded",
+      generatedAt,
+      pointCount: outlinePoints.length,
+      contentContract: TEXTBOOK_CONTENT_SCHEMA,
+    },
+    sources: [{
+      id: textbookSourceId,
+      type: "textbook",
+      title: sourceTitle,
+      locator: binding.input_markdown_path,
+      accessedAt: generatedAt,
+    }],
+    pointEvidence,
+    reviewQueue,
+  };
+
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  assertSafePathChain(root, manifestPath);
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return {
+    manifestPath: path.relative(root, manifestPath).split(path.sep).join("/"),
+    sourceSpanCount: manifest.pointEvidence.reduce(
+      (count, evidence) => count + evidence.sourceSpans.length,
+      0,
+    ),
+  };
+}
+
+function validateMarkdownManifest(root, courseRoot, outline, outlinePoints, materialContext) {
+  const manifest = readJson(
+    root,
+    path.join(courseRoot, "course-content", "generation", "manifest.json"),
+    "教材生成 manifest",
+  );
+  if (manifest.schema_version !== MANIFEST_SCHEMA) {
+    fail(`generation/manifest.json 必须使用 ${MANIFEST_SCHEMA}`);
+  }
+  if (manifest.subject?.id !== outline.course.id) {
+    fail("generation/manifest.json subject.id 与课程不一致");
+  }
+  if (manifest.generation?.evidenceMode !== "textbook-grounded") {
+    fail("Markdown 教材必须使用 evidenceMode=textbook-grounded");
+  }
+  const usesTextbookContentV2 = (
+    manifest.generation?.contentContract === TEXTBOOK_CONTENT_SCHEMA
+  );
+  if (
+    manifest.generation?.contentContract !== undefined
+    && !usesTextbookContentV2
+  ) {
+    fail(`generation.contentContract 必须是 ${TEXTBOOK_CONTENT_SCHEMA}`);
+  }
+  if (
+    manifest.generation?.pointCount !== undefined
+    && manifest.generation.pointCount !== outlinePoints.length
+  ) {
+    fail("generation/manifest.json pointCount 与教材结构不一致");
+  }
+  if (!Array.isArray(manifest.sources)) fail("generation/manifest.json sources 必须是数组");
+  const sourceById = new Map();
+  for (const [index, source] of manifest.sources.entries()) {
+    if (!isRecord(source) || typeof source.id !== "string" || !source.id) {
+      fail(`generation/manifest.json sources[${index}] 缺少 id`);
+    }
+    if (sourceById.has(source.id)) fail(`manifest source id 重复：${source.id}`);
+    sourceById.set(source.id, source);
+  }
+  if (![...sourceById.values()].some((source) => source.type === "textbook")) {
+    fail("textbook-grounded manifest 至少需要一个 type=textbook 的来源");
+  }
+  if (!Array.isArray(manifest.pointEvidence) || manifest.pointEvidence.length !== outlinePoints.length) {
+    fail("generation/manifest.json pointEvidence 必须与教材知识点等长同序");
+  }
+
+  const evidenceById = new Map();
+  for (const [index, outlinePoint] of outlinePoints.entries()) {
+    const evidence = manifest.pointEvidence[index];
+    const label = `generation/manifest.json pointEvidence[${index}]`;
+    if (
+      !isRecord(evidence)
+      || evidence.pointId !== outlinePoint.id
+      || evidence.title?.trim() !== outlinePoint.title
+    ) {
+      fail(`${label} 必须与教材知识点 ID、标题和顺序一致`);
+    }
+    if (evidence.origin !== outlinePoint.origin) {
+      fail(`${label}.origin 与教材结构不一致`);
+    }
+    if (usesTextbookContentV2 && "modelEnriched" in evidence) {
+      fail(`${label}.modelEnriched 在 ${TEXTBOOK_CONTENT_SCHEMA} 中必须由 blocks 派生`);
+    }
+    if (!usesTextbookContentV2 && evidence.modelEnriched !== true) {
+      fail(`${label}.modelEnriched 必须为 true`);
+    }
+    if (!uniqueStrings(evidence.sourceRefs)) {
+      fail(`${label}.sourceRefs 必须是不重复字符串数组`);
+    }
+    if (evidence.sourceRefs.some((id) => !sourceById.has(id))) {
+      fail(`${label}.sourceRefs 引用了不存在的 manifest source`);
+    }
+    if (!Array.isArray(evidence.sourceSpans)) {
+      fail(`${label}.sourceSpans 必须是数组`);
+    }
+    if (usesTextbookContentV2 || outlinePoint.origin === "textbook") {
+      if (evidence.sourceSpans.length === 0) {
+        fail(usesTextbookContentV2
+          ? `知识点 ${outlinePoint.id} 至少需要一个教材 sourceSpan`
+          : `教材知识点 ${outlinePoint.id} 至少需要一个 sourceSpan`);
+      }
+    }
+    if (outlinePoint.origin === "textbook") {
+      if (!evidence.sourceRefs.some((id) => sourceById.get(id)?.type === "textbook")) {
+        fail(`教材知识点 ${outlinePoint.id} 至少需要一个 textbook sourceRef`);
+      }
+    }
+    evidence.sourceSpans.forEach((span, spanIndex) => {
+      validateSourceSpan(
+        span,
+        `${label}.sourceSpans[${spanIndex}]`,
+        outlinePoint,
+        materialContext,
+        outline.document_id,
+      );
+    });
+    if (usesTextbookContentV2) {
+      validateCompleteTextbookCoverage(
+        evidence.sourceSpans,
+        `${label}.sourceSpans`,
+        outlinePoint,
+        materialContext,
+      );
+    }
+    evidenceById.set(outlinePoint.id, evidence);
+  }
+  return {
+    manifest,
+    evidenceById,
+    materialContext,
+    documentId: outline.document_id,
+    usesTextbookContentV2,
+  };
+}
+
+function sourceSpanKey(span) {
+  return JSON.stringify({
+    materialId: span?.materialId,
+    blockIds: span?.blockIds,
+    headingPath: span?.headingPath,
+    lineStart: span?.lineStart,
+    lineEnd: span?.lineEnd,
+    page: span?.page,
+    assetRefs: span?.assetRefs,
+    excerptSha256: span?.excerptSha256,
+  });
+}
+
+function validateTextbookContentPoint(point, label, outlinePoint, markdownManifest) {
+  if (
+    !isRecord(point?.content)
+    || point.content.schema_version !== TEXTBOOK_CONTENT_SCHEMA
+    || !Array.isArray(point.content.blocks)
+  ) {
+    fail(`${label} 必须使用 ${TEXTBOOK_CONTENT_SCHEMA} content.blocks`);
+  }
+  if (point.origin !== outlinePoint.origin) {
+    fail(`${label}.origin 与教材结构不一致`);
+  }
+  const seenSpans = new Set();
+  const sourceSpans = [];
+  const textbookSourceSpans = [];
+  let textbookBlocks = 0;
+  let modelBlocks = 0;
+  for (const [blockIndex, block] of point.content.blocks.entries()) {
+    const blockLabel = `${label}.content.blocks[${blockIndex}]`;
+    const provenance = block?.provenance;
+    if (!isRecord(provenance)) fail(`${blockLabel}.provenance 必须是对象`);
+    if (provenance.origin === "textbook") textbookBlocks += 1;
+    if (provenance.origin === "model") modelBlocks += 1;
+    if (provenance.origin === "textbook" && !Array.isArray(provenance.sourceSpans)) {
+      fail(`${blockLabel} 教材块必须声明 sourceSpans`);
+    }
+    const blockSpans = Array.isArray(provenance.sourceSpans)
+      ? provenance.sourceSpans
+      : [];
+    for (const [spanIndex, span] of blockSpans.entries()) {
+      validateSourceSpan(
+        span,
+        `${blockLabel}.provenance.sourceSpans[${spanIndex}]`,
+        outlinePoint,
+        markdownManifest.materialContext,
+        markdownManifest.documentId,
+      );
+      const key = sourceSpanKey(span);
+      if (!seenSpans.has(key)) {
+        seenSpans.add(key);
+        sourceSpans.push(span);
+      }
+      if (provenance.origin === "textbook") textbookSourceSpans.push(span);
+    }
+  }
+  if (textbookBlocks < 1 || modelBlocks < 1) {
+    fail(`${label} 必须同时包含教材块和模型补充块`);
+  }
+  validateCompleteTextbookCoverage(
+    textbookSourceSpans,
+    `${label} 的教材内容块`,
+    outlinePoint,
+    markdownManifest.materialContext,
+  );
+  return sourceSpans;
+}
+
+function validateSequenceCoverage(graph, outline) {
+  if (
+    !isRecord(graph.sequences)
+    || !Array.isArray(graph.sequences.cluster)
+    || !Array.isArray(graph.sequences.point)
+  ) {
+    fail("Markdown 教材图谱必须显式声明 sequences.cluster 和 sequences.point");
+  }
+  const clusterIds = new Set(outline.chapters.map((chapter) => chapter.id));
+  const pointIds = new Set(
+    outline.chapters.flatMap((chapter) => chapter.points.map((point) => point.id)),
+  );
+  function edgeKeys(edges, ids, label) {
+    const keys = new Set();
+    for (const [index, edge] of edges.entries()) {
+      if (
+        !isRecord(edge)
+        || typeof edge.fromId !== "string"
+        || typeof edge.toId !== "string"
+        || !ids.has(edge.fromId)
+        || !ids.has(edge.toId)
+        || edge.fromId === edge.toId
+      ) {
+        fail(`sequences.${label}[${index}] 不是有效的同类阅读顺序边`);
+      }
+      const key = `${edge.fromId}\u0000${edge.toId}`;
+      if (keys.has(key)) fail(`sequences.${label} 包含重复边`);
+      keys.add(key);
+    }
+    return keys;
+  }
+  const clusterEdges = edgeKeys(graph.sequences.cluster, clusterIds, "cluster");
+  const pointEdges = edgeKeys(graph.sequences.point, pointIds, "point");
+  for (let index = 0; index < outline.chapters.length - 1; index += 1) {
+    const fromId = outline.chapters[index].id;
+    const toId = outline.chapters[index + 1].id;
+    if (!clusterEdges.has(`${fromId}\u0000${toId}`)) {
+      fail(`sequences.cluster 缺少相邻章节顺序 ${fromId} -> ${toId}`);
+    }
+  }
+  for (const chapter of outline.chapters) {
+    for (let index = 0; index < chapter.points.length - 1; index += 1) {
+      const fromId = chapter.points[index].id;
+      const toId = chapter.points[index + 1].id;
+      if (!pointEdges.has(`${fromId}\u0000${toId}`)) {
+        fail(`sequences.point 缺少同章相邻知识点顺序 ${fromId} -> ${toId}`);
+      }
+    }
+  }
+}
+
+function validateGraph(root, courseRoot, outline, outlinePoints, markdownManifest = null) {
   const graph = readJson(root, path.join(courseRoot, "clustered-graph.json"), "知识图谱");
-  if (graph.schema_version !== "clustered-graph/2.0") {
-    fail("知识图谱必须使用 clustered-graph/2.0");
+  const expectedGraphSchema = markdownManifest?.usesTextbookContentV2
+    ? "clustered-graph/3.0"
+    : "clustered-graph/2.0";
+  if (graph.schema_version !== expectedGraphSchema) {
+    fail(`知识图谱必须使用 ${expectedGraphSchema}`);
   }
   if (!Array.isArray(graph.clusters) || graph.clusters.length !== outline.chapters.length) {
     fail("教材课程必须由章节一一生成知识簇");
@@ -236,7 +1050,44 @@ function validateGraph(root, courseRoot, outline, outlinePoints) {
       fail(`知识点 ${outlinePoint.id} 的主知识簇不是教材章节 ${outlinePoint.chapterId}`);
     }
   }
-  if (byId.size !== outlinePoints.length) fail("知识图谱包含教材结构之外的知识点");
+  if ((graph.points ?? []).length !== outlinePoints.length || byId.size !== outlinePoints.length) {
+    fail("知识图谱包含教材结构之外的知识点或重复 ID");
+  }
+  if (markdownManifest) {
+    for (const outlinePoint of outlinePoints) {
+      const evidence = markdownManifest.evidenceById.get(outlinePoint.id);
+      const graphPoint = byId.get(outlinePoint.id);
+      const detail = readJson(
+        root,
+        path.join(courseRoot, "course-content", "src", "data", "points", `${outlinePoint.id}.json`),
+        `知识点详情 ${outlinePoint.id}`,
+      );
+      if (markdownManifest.usesTextbookContentV2) {
+        const detailSpans = validateTextbookContentPoint(
+          detail,
+          `知识点详情 ${outlinePoint.id}`,
+          outlinePoint,
+          markdownManifest,
+        );
+        if (!isDeepStrictEqual(detailSpans, evidence.sourceSpans)) {
+          fail(`知识点详情 ${outlinePoint.id} 从 blocks 派生的 sourceSpans 与 manifest 不一致`);
+        }
+        if (graphPoint.origin !== evidence.origin) {
+          fail(`图谱知识点 ${outlinePoint.id}.origin 与 manifest 不一致`);
+        }
+      } else {
+        for (const field of ["origin", "sourceSpans", "modelEnriched"]) {
+          if (!isDeepStrictEqual(graphPoint[field], evidence[field])) {
+            fail(`图谱知识点 ${outlinePoint.id} 的 ${field} 与 manifest 不一致`);
+          }
+          if (!isDeepStrictEqual(detail[field], evidence[field])) {
+            fail(`知识点详情 ${outlinePoint.id} 的 ${field} 与 manifest 不一致`);
+          }
+        }
+      }
+    }
+    validateSequenceCoverage(graph, outline);
+  }
   return graph;
 }
 
@@ -256,8 +1107,9 @@ function loadTextbookInput(root, outline) {
   // hard integrity failure rather than a silent fallback to ordinary courses.
   if (!hasInputRoot && !hasBinding) return null;
   const input = readJson(root, inputPath, "教材输入结构");
+  let binding = null;
   if (hasBinding) {
-    const binding = readJson(root, bindingPath, "教材绑定记录");
+    binding = readJson(root, bindingPath, "教材绑定记录");
     if (
       binding.document_id !== documentId
       || binding.output_outline_path !== `pipeline/${outline.course?.id}/textbook-outline.json`
@@ -274,7 +1126,22 @@ function loadTextbookInput(root, outline) {
       fail("教材输入结构完整性摘要与绑定记录不一致");
     }
   }
-  return input;
+  const hasMaterialPath = Object.prototype.hasOwnProperty.call(
+    binding ?? {},
+    "input_material_path",
+  );
+  const hasMarkdownPath = Object.prototype.hasOwnProperty.call(
+    binding ?? {},
+    "input_markdown_path",
+  );
+  if (hasMaterialPath !== hasMarkdownPath) {
+    fail("Markdown 教材绑定必须同时声明 input_material_path 和 input_markdown_path");
+  }
+  return {
+    input,
+    binding,
+    markdownMode: hasMaterialPath && hasMarkdownPath,
+  };
 }
 
 function main() {
@@ -284,22 +1151,56 @@ function main() {
   ensureInside(root, courseRoot);
   const outline = readJson(root, path.join(courseRoot, "textbook-outline.json"), "教材结构");
   const { points } = validateOutline(outline, courseId);
-  const inputOutline = loadTextbookInput(root, outline);
-  if (inputOutline) {
+  const textbookInput = loadTextbookInput(root, outline);
+  if (textbookInput) {
     try {
-      assertTextbookSourceUnchanged(inputOutline, outline, { courseId });
+      assertTextbookSourceUnchanged(textbookInput.input, outline, { courseId });
     } catch (error) {
       fail(`教材原始结构不可变校验失败：${error.message}`);
     }
   }
-  validateIndex(root, courseRoot, courseId, points);
-  if (mode === "graph") validateGraph(root, courseRoot, outline, points);
+  const index = validateIndex(root, courseRoot, courseId, points);
+  let markdownManifest = null;
+  let manifestSync = null;
+  if (textbookInput?.markdownMode) {
+    const materialContext = validateMaterial(
+      root,
+      outline,
+      points,
+      textbookInput.binding,
+    );
+    if (mode === "manifest") {
+      manifestSync = syncMarkdownManifest(
+        root,
+        courseRoot,
+        courseId,
+        outline,
+        points,
+        index,
+        materialContext,
+        textbookInput.binding,
+      );
+    }
+    markdownManifest = validateMarkdownManifest(
+      root,
+      courseRoot,
+      outline,
+      points,
+      materialContext,
+    );
+  } else if (mode === "manifest") {
+    fail("sync-textbook-manifest 仅适用于绑定 material.json/full.md 的 Markdown 教材");
+  }
+  if (mode === "graph") {
+    validateGraph(root, courseRoot, outline, points, markdownManifest);
+  }
   process.stdout.write(`${JSON.stringify({
     courseId,
     mode,
     documentId: outline.document_id,
     chapterCount: outline.chapters.length,
     pointCount: points.length,
+    ...(manifestSync ?? {}),
     status: "valid",
   })}\n`);
 }

@@ -1,0 +1,572 @@
+{
+  "id": "point-1-4",
+  "title": "度量、状态、事件与日志的区别",
+  "shortSummary": "区分度量、状态、事件与日志的语义、时间模型和存储需求，避免用同一种结构混淆不同数据形态。",
+  "keyTerms": [
+    "度量",
+    "状态",
+    "事件",
+    "日志",
+    "时间模型",
+    "存储需求"
+  ],
+  "animationType": "none",
+  "difficulty": "基础",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-1-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对四类形态的定义、对照表、状态占比公式与质量码语义，按“形态判别 → 聚合与存储决策”重排讲解，并在每个易错点后就近补充反例与练习，不改变任何数值与边界结论。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "classify-data-form",
+          "text": "依据驱动方式、时间特性和可聚合性，把一条具体数据源判定为度量、状态、事件或日志，并说明判定依据。"
+        },
+        {
+          "id": "choose-aggregation-and-storage",
+          "text": "针对给定监测任务选择正确的聚合口径与存储层，避免把状态当度量求均值、把日志混入时序表。"
+        }
+      ],
+      "misconceptions": [
+        "状态值 0/1 也是数值，因此可以对 door_state 直接求算术平均得到“平均开度”。",
+        "固定 60 秒一次的门磁心跳与状态变化上报属于重复数据，应标记为 DUPLICATE。",
+        "日志只是另一种时序数据，给原始事实表加几个文本字段就能统一分析。"
+      ],
+      "modules": [
+        {
+          "id": "four-forms-overview",
+          "title": "四类数据形态与判别维度",
+          "role": "concept-framing",
+          "description": "先建立四类形态的定义与四维对照，再压缩成三个可操作的判别轴。",
+          "outcomeRefs": [
+            "classify-data-form",
+            "choose-aggregation-and-storage"
+          ],
+          "order": 0
+        },
+        {
+          "id": "metric-state-boundary",
+          "title": "度量与状态的聚合边界",
+          "role": "concept-boundary",
+          "description": "用状态持续时间占比公式和算例，说明为什么状态不能求均值。",
+          "outcomeRefs": [
+            "choose-aggregation-and-storage"
+          ],
+          "order": 1
+        },
+        {
+          "id": "event-extraction",
+          "title": "事件抽取与时间语义",
+          "role": "mechanism",
+          "description": "从状态序列到迁移事件的状态机、伪代码与时间戳规则，并排除心跳误判。",
+          "outcomeRefs": [
+            "classify-data-form",
+            "choose-aggregation-and-storage"
+          ],
+          "order": 2
+        },
+        {
+          "id": "log-isolation",
+          "title": "日志隔离与存储边界",
+          "role": "concept-boundary",
+          "description": "说明日志为何不能进入时序超表，以及关联分析应在分析层完成。",
+          "outcomeRefs": [
+            "choose-aggregation-and-storage"
+          ],
+          "order": 3
+        },
+        {
+          "id": "quality-code",
+          "title": "质量码在四类数据中的统一语义",
+          "role": "reference",
+          "description": "按形态核对各质量码的适用范围，识别越界写入。",
+          "outcomeRefs": [
+            "classify-data-form"
+          ],
+          "order": 4
+        },
+        {
+          "id": "decision-practice",
+          "title": "判别流程与迁移练习",
+          "role": "practice",
+          "description": "把定义与边界合成四步判别流程，并用新情境检查迁移能力。",
+          "outcomeRefs": [
+            "classify-data-form",
+            "choose-aggregation-and-storage"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "classify-data-form",
+          "choose-aggregation-and-storage"
+        ],
+        "method": "完成迁移练习，对三种数据源分别给出形态判定、存储层与允许的聚合方式，并说明依据。",
+        "successCriteria": [
+          "三类数据源的形态判定全部正确",
+          "存储层选择与形态匹配，且能引用驱动方式或可聚合性作为依据",
+          "明确指出至少一个常见错误做法为什么错误"
+        ],
+        "exerciseBlockId": "model-practice",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-1-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-four-forms",
+        "moduleId": "four-forms-overview",
+        "depth": "core",
+        "kind": "definition",
+        "title": "四类数据形态的本质差异",
+        "markdown": "工业物联网的数据源可按语义强度与观测方式划分为**度量（Metric）**、**状态（State）**、**事件（Event）**与**日志（Log）**四类。四者在采样驱动方式、时间粒度、可聚合性与存储策略上存在系统性差异；混淆这些差异会导致窗口计算失真、状态机不可达或告警风暴。\n\n- **度量**是物理量的连续观测，由固定周期采样驱动，数值承载幅度信息，天然支持聚合运算。例如 Z1-TEMP-01 每 30 秒上报的 temperature 与 Z1-COMP-01 每 5 秒上报的 compressor_current；其 value 字段保存已换算物理量，单位分别为 Cel 与 A，不写入 ADC 原始码。\n- **状态**是离散有限集合中的取值，表征实体在某一时刻的模态。门磁 Z1-DOOR-01 的 door_state 取值为 {0, 1}，分别对应关闭与开启。心跳上报（每 60 秒）与状态变化上报都是合法新观测，各自赋 event_time 并递增 sequence_no。状态序列可经前向填充构成分段常值函数，但变化时刻的精确捕获依赖事件上报机制。\n- **事件**是状态迁移或外部触发的瞬时发生，具有不可分性和因果语义。门磁从 0→1 的跳变是一次事件，但事件记录本身不直接出现在原始事实表的 metric 中；它需由相邻状态行推导，或经边缘规则引擎显式生成。事件的时间戳取状态变化时刻的 event_time，而非检测或处理时刻。\n- **日志**是系统运行轨迹的文本化记录，面向可观测性与审计，通常无固定 schema，不直接参与实时计算。网关转发失败、TLS 握手异常、SQL 执行耗时均属日志范畴。日志与前三者的关键区分在于：日志的 consumer 是人或离线分析工具，而非时序数据库的连续查询引擎。\n\n| 维度 | 度量 | 状态 | 事件 | 日志 |\n|:---|:---|:---|:---|:---|\n| 驱动方式 | 固定周期采样 | 变化上报+心跳 | 触发/迁移 | 任意系统行为 |\n| 时间特性 | 稠密、等距 | 稀疏、不规则 | 点时刻、瞬时 | 离散、无序风险 |\n| 可聚合性 | 支持均值、积分、降采样 | 仅支持持续时间统计 | 支持计数、速率 | 通常不支持数值聚合 |\n| 存储层 | 时序数据库超表 | 时序数据库超表 | 独立事件表或流处理 | 对象存储/日志系统 |\n| 典型查询 | 窗口聚合、异常检测 | 状态持续时间、可用性 | 模式匹配、因果追溯 | 全文检索、模式挖掘 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "度量、状态、事件与日志的区别"
+              ],
+              "lineStart": 403,
+              "lineEnd": 404,
+              "assetRefs": [],
+              "excerptSha256": "a36a01dba37c14109656640ea55cff067b4354ae7747fb7c9d1d99cc27d7eff1"
+            },
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000025"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "度量、状态、事件与日志的区别",
+                "四类数据形态的本质差异"
+              ],
+              "lineStart": 405,
+              "lineEnd": 424,
+              "assetRefs": [],
+              "excerptSha256": "84efc600b353be1d994ed8904012a32c48b675d2f222db717b2b70273cc7957d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-form-axes",
+        "moduleId": "four-forms-overview",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "把对照表压缩成三个判别轴",
+        "markdown": "教材的四维对照表在做现场判定时偏重，可以压缩成三个依次提问的判别轴：\n\n1. **驱动方式**：是被固定周期采样推着走，还是被变化、心跳或外部触发推着走？\n2. **时间特性**：观测在时间上是稠密等距、稀疏不规则，还是孤立的瞬时点？\n3. **可聚合性**：能否对数值做均值、积分、降采样，还是只能做计数、速率或持续时间统计？\n\n判别结论直接决定下游动作：只有度量适合均值与积分；状态只适合持续时间与可用性统计；事件适合计数、速率与模式匹配；日志应走全文检索而非数值聚合。三个轴中若出现互相矛盾的答案（例如“固定周期采样”却“只能做计数”），说明字段语义尚未定义清楚，应先回到数据契约核对，而不是先选存储。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-four-forms"
+          ]
+        }
+      },
+      {
+        "id": "tb-metric-state-boundary",
+        "moduleId": "metric-state-boundary",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "度量与状态的工程边界",
+        "markdown": "将状态误作度量处理是常见工程错误。door_state 的 value 为 0 或 1，若直接求算术均值会得到 0.5，但该数值没有任何物理意义——它既不表示“半开”，也不对应任何可解释的中间态。正确的工程处理是计算**状态持续时间占比**：给定时间窗口 $[t_0, t_1)$，开启时长为状态值为 1 的区间与窗口交集之并的测度。\n\n设状态序列经前向填充后为 $s(t)$，则开启时间占比 $\\eta$ 为\n\n$$\\eta = \\frac{1}{t_1 - t_0} \\int_{t_0}^{t_1} \\mathbb{1}_{[s(t)=1]} \\, dt$$\n\n离散实现中，对按 event_time 排序的状态行序列，相邻行 $(t_i, v_i)$ 与 $(t_{i+1}, v_{i+1})$ 构成恒定区间 $[t_i, t_{i+1})$。若 $v_i = 1$，则该区间对开启时长的贡献为 $\\max(0, \\min(t_{i+1}, t_1) - \\max(t_i, t_0))$。边界处理有两条硬规则：序列首行之前的值未知，不可臆测为 0 或 1；序列末行之后至窗口结束的部分，按末行值前向填充。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000026"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "度量、状态、事件与日志的区别",
+                "度量与状态的工程边界"
+              ],
+              "lineStart": 425,
+              "lineEnd": 434,
+              "assetRefs": [],
+              "excerptSha256": "5a6a08485b6a27b38d499917e8d867eb572999e403e2644a7960ffa2f991a337"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-ratio-example",
+        "moduleId": "metric-state-boundary",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算一次门开启占比",
+        "markdown": "以 08:00–09:00 的 1 小时窗口为例，窗口长 3600 秒。已按 event_time 排序的状态行为：08:10 变为 1，08:25 变为 0，08:40 变为 1，此后至窗口结束没有新行。\n\n- 08:00–08:10 位于首行之前，取值未知，不计入开启时长；\n- 08:10–08:25 为开启，贡献 900 秒；\n- 08:40–09:00 按末行值 1 前向填充，贡献 1200 秒。\n\n$$\\eta = \\frac{900 + 1200}{3600} \\approx 0.583$$\n\n对照来看：若对这一小时的 0/1 采样点求均值，结果会随采样频率和丢样情况变化；持续时间占比只随真实开关时长变化。可用性统计、开门超时判定这类问题应使用后者，而不是均值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-metric-state-boundary"
+          ]
+        }
+      },
+      {
+        "id": "tb-event-extraction",
+        "moduleId": "event-extraction",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "事件抽取与质量码传播",
+        "markdown": "从状态序列抽取事件需先定义状态机。门磁的合法迁移为 $0 \\leftrightarrow 1$；若出现 0→0 或 1→1 的相邻重复（非心跳场景），应检查是否为 DUPLICATE 质量码投递，或边缘网关的去重逻辑失效。心跳机制引入的 60 秒固定间隔不得与状态变化混淆：心跳的 sequence_no 正常递增，quality_code 为 GOOD，event_time 为发送时刻；若把心跳误判为重复而标 DUPLICATE，则违反契约。\n\n事件抽取的伪代码如下，输入为单设备单 metric、按 sequence_no 排序的原始行集合：\n\n```text\nfunction ExtractEvents(rows, window_start, window_end):\n    events = []\n    prev = null\n\n    for row in rows where window_start <= row.event_time < window_end:\n        if prev is not null and prev.value != row.value:\n            events.append({\n                transition: (prev.value, row.value),\n                event_time: row.event_time,\n                prior_sequence: prev.sequence_no,\n                new_sequence: row.sequence_no\n            })\n        prev = row\n\n    return events\n```\n\n关键在时间戳语义：event_time 取变化后首条新观测的设备赋时，而非网关接收或云端处理时刻；ingest_time 仅用于延迟分析，不参与事件时序重建。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "度量、状态、事件与日志的区别",
+                "事件抽取与质量码传播"
+              ],
+              "lineStart": 435,
+              "lineEnd": 461,
+              "assetRefs": [],
+              "excerptSha256": "ba66ab7f8933bc6c12ab05dd316192a44cb4cb1c408e6c51aed0d6abd37033c1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-event-check",
+        "moduleId": "event-extraction",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "两个高频误判的检查表",
+        "markdown": "事件抽取最容易错在两处，可以用同一张检查表排除：\n\n| 现象 | 错误结论 | 正确判定 |\n|:---|:---|:---|\n| 每 60 秒出现一条 door_state=0 | 重复数据，标 DUPLICATE | 心跳是独立观测，sequence_no 递增且 quality_code 为 GOOD |\n| 连续两条 door_state=1 | 又发生了一次事件 | 无 value 变化即无迁移事件；先查是否 DUPLICATE 或去重失效 |\n\n还要区分存储形态：原始事实表里保存的是状态行，事件是派生结果。若把事件当成另一种原始 metric 直接写入，就会丢失“哪两条状态行之间发生了迁移”这一可追溯信息，事后无法判断事件是由真实变化还是由丢样造成的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-event-extraction"
+          ]
+        }
+      },
+      {
+        "id": "tb-log-isolation",
+        "moduleId": "log-isolation",
+        "depth": "core",
+        "kind": "warning",
+        "title": "日志的隔离策略与反模式",
+        "markdown": "日志数据若灌入时序数据库超表，将污染 metric 的聚合语义。典型反模式是把网关 TLS 错误码当作数值 metric 写入，导致 `avg(value)` 计算出现无意义浮点数。澄湾冷链示范仓的原始事实表 schema 仅容纳 event_time、ingest_time、device_id、metric、value、unit、quality_code、sequence_no 八个字段，日志的文本 payload、堆栈跟踪、日志级别等无法合规存入，此设计本身即构成物理隔离。\n\n若运维需关联分析，应采用外部日志系统（如 Loki）存储日志，以 trace_id 或 (device_id, event_time) 作为关联键，而非扩展原始事实表 schema。时序查询与日志查询的 join 应在分析层完成，不可在持续写入路径上混流。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000028"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "度量、状态、事件与日志的区别",
+                "日志的隔离策略与反模式"
+              ],
+              "lineStart": 462,
+              "lineEnd": 467,
+              "assetRefs": [],
+              "excerptSha256": "782bbef45fe0c706f1df46655c84c3205e39a782675ad425e7bcf95f78239c9d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-log-boundary",
+        "moduleId": "log-isolation",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "先看消费方式，再定存储位置",
+        "markdown": "从上述隔离策略可以抽出一条选型规则：**先看消费方式，再看存储位置**。\n\n- 若数据要参与窗口聚合、异常检测或可用性统计，它必须是结构化数值或离散状态，进入时序库；\n- 若数据主要供人排查、审计或全文检索，它属于日志，进入日志系统；\n- 两者需要对话时，用 trace_id 或 (device_id, event_time) 在分析层关联，而不是在写入路径上合并。\n\n这也解释了为什么“给原始事实表加几个日志字段”不是可行折中：一旦写入路径混流，metric 的聚合语义就被污染，且原始记录不可变，事后难以回滚清理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-log-isolation"
+          ]
+        }
+      },
+      {
+        "id": "tb-quality-code",
+        "moduleId": "quality-code",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "质量码在四类数据中的统一语义",
+        "markdown": "quality_code 作为单值字符串枚举，其语义在不同数据形态中保持一致但适用场景各异：\n\n- **GOOD**：度量通过量程校验，状态上报符合序列连续性，事件抽取无冲突。\n- **MISSING**：仅出现于派生对齐序列的占位行，原始记录缺失时不产生数据行。例如对 Z1-TEMP-01 的 1 小时窗口做 30 秒对齐，期望点数 120；若实际仅 118 条 GOOD 记录，则 gapfill 生成 2 条 value=null、quality_code=MISSING 的派生占位行。此 MISSING 为对齐后序列的语义，不可写入原始事实表。\n- **OUT_OF_RANGE**：度量值超出配置量程，如温度探头标称 −40°C~+60°C，上报 65.0 则标记此码。状态值 0/1 无此情形。\n- **CLOCK_SUSPECT**：需独立证据（如 RTC 未同步、NTP 偏移告警），不可仅凭 ingest_time − event_time 较大推断。\n- **DUPLICATE**：严格限定为相同 device_id、metric、sequence_no 的重复投递。门磁心跳与变化上报的 sequence_no 不同，绝不标 DUPLICATE。\n- **LATE**：到达时刻已超过下游水位线允许迟到范围，需基于事件时间窗口的显式水位线策略判定。\n- **MANUAL_REVIEW**：自动规则无法裁决时的人工复核标记。\n\n检查方法：对任意 quality_code 分布统计，若原始事实表出现 MISSING，则表明写入路径违规；若出现自造枚举值，则直接违反数据契约。可用如下约束检查：\n\n```sql\nSELECT quality_code, COUNT(*)\nFROM coldchain_raw\nWHERE quality_code = 'MISSING'\n   OR quality_code NOT IN (\n       'GOOD', 'MISSING', 'OUT_OF_RANGE',\n       'CLOCK_SUSPECT', 'DUPLICATE', 'LATE', 'MANUAL_REVIEW'\n   )\nGROUP BY quality_code;\n```\n\n原始事实表返回行数应为 0；MISSING 仅应出现在派生视图或物化对齐表中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000029"
+              ],
+              "headingPath": [
+                "时序数据系统与工程全景",
+                "度量、状态、事件与日志的区别",
+                "质量码在四类数据中的统一语义"
+              ],
+              "lineStart": 468,
+              "lineEnd": 496,
+              "assetRefs": [],
+              "excerptSha256": "5541eee26e9c8d257baaf422d816cd918bb75bf3c2325503cbe96cb50b5a9567"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-quality-scope",
+        "moduleId": "quality-code",
+        "depth": "support",
+        "kind": "table",
+        "title": "按数据形态核对质量码适用范围",
+        "markdown": "把教材给出的质量码语义按形态再排一次，能直接暴露越界写入。下表是据此整理的适用性对照，“是”表示该形态允许携带此码：\n\n| 质量码 | 度量 | 状态 | 事件 | 日志 | 关键约束 |\n|:---|:---|:---|:---|:---|:---|\n| GOOD | 是 | 是 | 是 | 否 | 通过对应校验 |\n| MISSING | 仅派生序列 | 仅派生序列 | 否 | 否 | 原始事实表不得出现 |\n| OUT_OF_RANGE | 是 | 否 | 否 | 否 | 状态值 0/1 无此情形 |\n| CLOCK_SUSPECT | 是 | 是 | 是 | 否 | 需独立时钟证据 |\n| DUPLICATE | 是 | 是 | 否 | 否 | 同一序列号的重复投递 |\n| LATE | 是 | 是 | 是 | 否 | 依水位线策略判定 |\n| MANUAL_REVIEW | 是 | 是 | 是 | 否 | 自动规则无法裁决 |\n\n注意两点：事件行的质量码描述的是抽取结果的可信度，而不是原始状态行的码；MISSING 一旦出现在原始事实表，无论数值是否为 null，都说明写入路径已经违规。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-quality-code",
+            "tb-four-forms"
+          ]
+        }
+      },
+      {
+        "id": "model-decision-flow",
+        "moduleId": "decision-practice",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "四步判别流程",
+        "markdown": "把前面各模块合成一个判别流程。先用质量码做一次门禁，再按顺序提问，遇到“是”即停止：\n\n- **质量码门禁**：若记录已被标为 DUPLICATE，它不是新观测，不能进入任何形态的统计；若原始事实表出现 MISSING，说明写入路径已经违规，应先修复链路再谈选型。\n\n1. **它是不是供人或离线工具排查的运行记录？** 是 → 日志，进日志系统，用 trace_id 或 (device_id, event_time) 关联。\n2. **它是不是状态迁移或外部触发的瞬时发生，且没有持续数值幅度？** 是 → 事件，作为派生结果写入独立事件表或流处理。\n3. **它的取值是否来自有限的离散模态集合（如 {0, 1}）？** 是 → 状态，进时序库，只做持续时间与可用性统计。\n4. **它是否由固定周期采样、数值承载幅度并支持聚合？** 是 → 度量，进时序库超表，可做窗口聚合与异常检测。\n\n四问皆否时，不要急着选存储：这通常意味着字段语义尚未定义清楚，应先回到数据契约补定义。顺序不能颠倒，因为日志和事件都可能带数值，先判断“是否供人排查”和“是否瞬时发生”可以避免把它们误归为度量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-four-forms",
+            "tb-metric-state-boundary",
+            "tb-event-extraction",
+            "tb-log-isolation",
+            "tb-quality-code"
+          ]
+        }
+      },
+      {
+        "id": "model-practice",
+        "moduleId": "decision-practice",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "迁移练习：三种数据源怎么放",
+        "markdown": "某网关每秒上报一条 `link_status`，取值 0 或 1；连接失败时另写一条包含错误码与堆栈的文本记录；还有一个 `signal_rssi` 每 5 秒上报数值。请分别判定三者的数据形态、应去的存储层，以及各自允许的聚合方式。\n\n**自查要点**：`link_status` 是状态（离散模态、周期性上报），只能算持续时间占比，不能求均值；文本记录是日志，应进日志系统并以 (device_id, event_time) 关联，不得写入原始事实表；`signal_rssi` 是度量，可做均值、分位数与降采样，但需先确认量程与单位。若 `link_status` 的某条记录被标为 DUPLICATE，它不构成新的状态观测，不应进入持续时间计算；若把 `link_status` 与 `signal_rssi` 放进同一张宽表并统一求均值，则同时犯了“状态当度量”和“聚合口径混用”两个错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-four-forms",
+            "tb-metric-state-boundary",
+            "tb-log-isolation",
+            "tb-quality-code"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "decision-practice",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：形态决定聚合与存储",
+        "markdown": "四类形态的判别最终服务于三个工程决定：**能不能聚合、用什么口径聚合、放在哪一层存储**。度量回答“多大”，状态回答“处于哪个模态、持续多久”，事件回答“何时发生了什么迁移”，日志回答“系统当时在做什么”。\n\n把状态当度量会得到无意义的 0.5，把日志灌进时序表会污染 `avg(value)`，把心跳误标 DUPLICATE 会让状态机不可达——这三类错误共享同一个根因：用同一种结构承载了不同语义的数据。下一节将把这些语义固化成可验收的数据契约与质量目标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-four-forms",
+            "tb-metric-state-boundary",
+            "tb-quality-code"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "form-check-four-forms",
+        "type": "formative-check",
+        "anchorBlockId": "model-practice",
+        "moduleId": "decision-practice",
+        "depth": "core",
+        "outcomeRefs": [
+          "classify-data-form",
+          "choose-aggregation-and-storage"
+        ],
+        "learningPurpose": "检查学习者能否把四类形态的判别维度迁移到未见过的数据源，并据此选择聚合口径与存储层。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-four-forms",
+            "tb-metric-state-boundary",
+            "tb-event-extraction",
+            "tb-log-isolation",
+            "tb-quality-code"
+          ]
+        },
+        "config": {
+          "format": "single-choice",
+          "attempts": 2,
+          "items": [
+            {
+              "prompt": "门磁每 60 秒上报一条 door_state=0，同时门被打开时立即上报 door_state=1。对这两类上报的正确处理是？",
+              "options": [
+                "两者都是状态观测，sequence_no 各自递增，均不标 DUPLICATE",
+                "60 秒周期上报是重复数据，应标 DUPLICATE",
+                "door_state 是数值，可直接求均值得到平均开度"
+              ],
+              "answerIndex": 0
+            },
+            {
+              "prompt": "要把“门开启时长占比”写进可用性报表，应使用哪种计算？",
+              "options": [
+                "对 window 内所有 door_state 求算术平均",
+                "按状态行构造分段常值函数，计算值为 1 的区间与窗口交集时长占比",
+                "统计 door_state=1 的记录条数除以总条数"
+              ],
+              "answerIndex": 1
+            },
+            {
+              "prompt": "网关 TLS 错误码最适合存放在哪里？",
+              "options": [
+                "原始事实表的 value 字段，便于统一聚合",
+                "外部日志系统，以 trace_id 或 (device_id, event_time) 与分析层关联",
+                "派生对齐序列，标为 MISSING 占位行"
+              ],
+              "answerIndex": 1
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "离线作答：分别判断 `link_status`（0/1 周期上报）、连接失败文本记录、`signal_rssi`（每 5 秒数值）的形态与存储层，并写出各自允许的聚合方式。参考答案见“迁移练习”块的自查要点。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时序数据系统与工程全景",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000024"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "度量、状态、事件与日志的区别"
+      ],
+      "lineStart": 403,
+      "lineEnd": 404,
+      "assetRefs": [],
+      "excerptSha256": "a36a01dba37c14109656640ea55cff067b4354ae7747fb7c9d1d99cc27d7eff1"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000025"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "度量、状态、事件与日志的区别",
+        "四类数据形态的本质差异"
+      ],
+      "lineStart": 405,
+      "lineEnd": 424,
+      "assetRefs": [],
+      "excerptSha256": "84efc600b353be1d994ed8904012a32c48b675d2f222db717b2b70273cc7957d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000026"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "度量、状态、事件与日志的区别",
+        "度量与状态的工程边界"
+      ],
+      "lineStart": 425,
+      "lineEnd": 434,
+      "assetRefs": [],
+      "excerptSha256": "5a6a08485b6a27b38d499917e8d867eb572999e403e2644a7960ffa2f991a337"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000027"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "度量、状态、事件与日志的区别",
+        "事件抽取与质量码传播"
+      ],
+      "lineStart": 435,
+      "lineEnd": 461,
+      "assetRefs": [],
+      "excerptSha256": "ba66ab7f8933bc6c12ab05dd316192a44cb4cb1c408e6c51aed0d6abd37033c1"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000028"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "度量、状态、事件与日志的区别",
+        "日志的隔离策略与反模式"
+      ],
+      "lineStart": 462,
+      "lineEnd": 467,
+      "assetRefs": [],
+      "excerptSha256": "782bbef45fe0c706f1df46655c84c3205e39a782675ad425e7bcf95f78239c9d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000029"
+      ],
+      "headingPath": [
+        "时序数据系统与工程全景",
+        "度量、状态、事件与日志的区别",
+        "质量码在四类数据中的统一语义"
+      ],
+      "lineStart": 468,
+      "lineEnd": 496,
+      "assetRefs": [],
+      "excerptSha256": "5541eee26e9c8d257baaf422d816cd918bb75bf3c2325503cbe96cb50b5a9567"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    973,
+    2565
+  ],
+  "scale": 0.91
+}

@@ -152,6 +152,10 @@ export function reviewResumeDeliveryOutcome(
       readNonEmptyString(nested.id);
     return reviewId === active.reviewId ? "consumed" : null;
   }
+  // A question emitted by the resumed turn is a durable downstream stop.
+  // The original review resume has reached the agent and must not be replayed
+  // while that same turn is waiting for the learner's answer (notably G7).
+  if (event.type === "agent_question") return "consumed";
   if (event.type === "agent_error") return "failed";
   if (event.type !== "agent_done") return null;
   const code = Number(payload.return_code);
@@ -179,6 +183,16 @@ export function reconcileReviewResume(
       throw new InvalidReviewPayloadError("历史会话中的待审核任务格式无效");
     }
     return { kind: "pending-review", review };
+  }
+  // The conversation endpoint restores pending native questions. If one is
+  // present, the resumed turn has already advanced beyond the old structured
+  // review. Retrying pending_review_resume here would race the live turn,
+  // produce activity-conflict errors, and hide the question behind retries.
+  if (
+    conversation.pending_question !== null &&
+    conversation.pending_question !== undefined
+  ) {
+    return { kind: "consumed" };
   }
   if (
     conversation.pending_review_resume === null ||

@@ -1,0 +1,498 @@
+{
+  "id": "point-11-3",
+  "title": "EWMA、CUSUM 与变点检测",
+  "shortSummary": "用 EWMA、CUSUM 和变点检测识别缓慢漂移与均值突变，并调校灵敏度与告警延迟。",
+  "keyTerms": [
+    "EWMA",
+    "CUSUM",
+    "变点检测",
+    "缓慢漂移",
+    "均值突变",
+    "灵敏度"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-11-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "教材约束公式、数值算例、参数取值与故障边界；模型补充按“变量—单位—假设—推导—算例—参数实验”重排讲解，并加入跨方法决策表与可离线完成的诊断练习。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "compute-ewma-cusum",
+          "text": "在给定观测序列与参数下，计算 EWMA 平滑值、CUSUM 累积和，并判断是否触发控制限。"
+        },
+        {
+          "id": "select-and-tune",
+          "text": "针对缓慢漂移、均值突变与需要定位变点的工况，选择 EWMA、CUSUM 或变点检测，并说明参数与告警延迟的取舍。"
+        }
+      ],
+      "misconceptions": [
+        "EWMA 既然会平滑历史，就能同样灵敏地发现缓慢漂移。",
+        "把 CUSUM 的 H 调得越小越好，可以更早发现异常而不会增加误报。",
+        "变点检测就是逐点异常检测，可以直接替代 CUSUM。"
+      ],
+      "modules": [
+        {
+          "id": "m-frame",
+          "title": "问题导入：三种方法各自回答什么",
+          "role": "problem-frame",
+          "outcomeRefs": [
+            "compute-ewma-cusum",
+            "select-and-tune"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-ewma",
+          "title": "EWMA 递推、残差控制限与平滑系数",
+          "role": "quantitative-derivation",
+          "outcomeRefs": [
+            "compute-ewma-cusum"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-cusum",
+          "title": "CUSUM 累积和、方向性与阈值推导",
+          "role": "quantitative-derivation",
+          "outcomeRefs": [
+            "compute-ewma-cusum",
+            "select-and-tune"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-changepoint",
+          "title": "变点检测与在线分段",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "select-and-tune"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-tuning",
+          "title": "参数调谐、缺口与多时间尺度故障",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "select-and-tune"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-synthesis",
+          "title": "方法选择与调参检查",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "compute-ewma-cusum",
+            "select-and-tune"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "compute-ewma-cusum",
+          "select-and-tune"
+        ],
+        "method": "完成方法选择练习，并对一段含突变、缓慢漂移与序列缺口的数据给出参数与处置步骤。",
+        "successCriteria": [
+          "能正确复现 EWMA 与 CUSUM 的一步数值计算",
+          "能按任务目标选择方法并说明灵敏度与延迟的取舍",
+          "能指出缺口和质量码污染会导致的具体错误"
+        ],
+        "exerciseBlockId": "model-synthesis",
+        "nextPointId": "point-11-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-scope",
+        "moduleId": "m-frame",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节范围",
+        "markdown": "上一节用 Z 分数、MAD 与 IQR 对单点做偏离判定；本节转向单点统计难以直接回答的两类问题：均值缓慢漂移与均值突变。EWMA 以指数衰减权重平滑历史观测，用残差控制限响应变化；CUSUM 累积同向偏差，专门捕捉小幅持续偏移；变点检测则定位统计特性发生突变的时刻。三者的输入都是同一设备通道按 `event_time` 排序、质量码为 GOOD 的序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000392"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "EWMA、CUSUM 与变点检测"
+              ],
+              "lineStart": 7337,
+              "lineEnd": 7338,
+              "assetRefs": [],
+              "excerptSha256": "84cc2746847c0bba743478c7409d16e46fb20f9ba67728c0b8689bbad5f31dc9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-frame",
+        "moduleId": "m-frame",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "三种任务：响应、累积与定位",
+        "markdown": "把三者放在同一条监测链上看：\n\n- **EWMA** 回答“当前平滑水平离参考值多远”，适合较快的阶跃与噪声抑制；\n- **CUSUM** 回答“同向小偏差已经累积了多久”，对同向的持续偏移更敏感；\n- **变点检测** 回答“均值在哪个时刻换了档”，输出的是位置而不是逐点分数。\n\n因此它们不是互相替代的三个阈值，而是分别覆盖响应、累积与定位三种任务。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scope"
+          ]
+        }
+      },
+      {
+        "id": "tb-ewma",
+        "moduleId": "m-ewma",
+        "depth": "core",
+        "kind": "formula",
+        "title": "EWMA 递推与控制限算例",
+        "markdown": "指数加权移动平均（EWMA）对历史观测赋指数衰减权重。设 $x_t$ 为时刻 $t$ 的观测，$\\lambda \\in (0,1]$ 为平滑系数，则\n\n$$S_t = \\lambda x_t + (1-\\lambda)S_{t-1}$$\n\n$S_0$ 通常取前若干点的算术平均。$\\lambda$ 越接近 1 越接近原始观测，越接近 0 惯性越大；按期望半衰期 $h$ 可反推 $\\lambda = 1 - 2^{-1/h}$，例如 $h=10$ 时 $\\lambda \\approx 0.067$。\n\nZ2 温区温度采样周期为 30 秒，案例取 $\\lambda = 0.2$、3σ 控制限。若 $S_t = 2.3\\,^{\\circ}\\mathrm{C}$，新观测 $x_{t+1} = 5.8\\,^{\\circ}\\mathrm{C}$，则 $S_{t+1} = 0.2 \\times 5.8 + 0.8 \\times 2.3 = 3.0\\,^{\\circ}\\mathrm{C}$，残差 $e_{t+1} = x_{t+1} - S_t = 3.5\\,^{\\circ}\\mathrm{C}$。若训练期残差标准差 $\\hat{\\sigma}_e = 0.4\\,^{\\circ}\\mathrm{C}$，控制限为 $\\pm 3 \\times 0.4 = \\pm 1.2\\,^{\\circ}\\mathrm{C}$，该点触发超限。$\\hat{\\sigma}_e$ 需用 GOOD 质量码残差在线更新。\n\nEWMA 对趋势型漂移不敏感：若温度每小时爬升 $0.5\\,^{\\circ}\\mathrm{C}$，平滑值尾随滞后，残差长期偏小，需引入趋势项或改用 CUSUM。案例参数为 $\\lambda = 0.2$、控制限乘子 3、$\\hat{\\sigma}_e$ 更新窗口最近 4 小时（480 点）、$S_0$ 取前 10 点算术平均。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000393"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "EWMA、CUSUM 与变点检测",
+                "指数加权移动平均与异常响应"
+              ],
+              "lineStart": 7339,
+              "lineEnd": 7361,
+              "assetRefs": [],
+              "excerptSha256": "7452489798cf677235d7e0d9020da3a9d900892848aea924fb91821d8a158792"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ewma-lambda",
+        "moduleId": "m-ewma",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "参数实验：λ 换来的灵敏度与延迟",
+        "markdown": "$\\lambda$ 的选择是灵敏度与告警延迟的显式交易。用半衰期反推 $\\lambda = 1 - 2^{-1/h}$：\n\n| 期望半衰期 $h$ | $\\lambda$ | 行为 |\n|:---|:---|:---|\n| 3 | ≈0.21 | 对阶跃响应快，噪声残留多 |\n| 10 | ≈0.067 | 平滑强，突变延迟约 10 个采样周期 |\n| 30 | ≈0.023 | 只看长期水平，短事件几乎不可见 |\n\n参数实验：固定同一段含阶跃与噪声的序列，把 $\\lambda$ 从 0.067 调到 0.2，观察残差首次超限的时刻。$\\lambda$ 增大通常使告警提前，但训练期误报也会上升；改变 $\\lambda$ 后必须重新估计 $\\hat{\\sigma}_e$，否则控制限仍在描述旧平滑程度下的残差。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ewma"
+          ]
+        }
+      },
+      {
+        "id": "tb-cusum",
+        "moduleId": "m-cusum",
+        "depth": "core",
+        "kind": "formula",
+        "title": "CUSUM 累积和与报警算例",
+        "markdown": "累积和（CUSUM）把同向偏差累加，专门检测均值的小幅偏移：\n\n$$C_t^{+} = \\max\\left(0,\\; C_{t-1}^{+} + (x_t - \\mu_0) - K\\right)$$\n\n$$C_t^{-} = \\max\\left(0,\\; C_{t-1}^{-} - (x_t - \\mu_0) - K\\right)$$\n\n$\\mu_0$ 为标称均值，$K$ 为允许漂移量，$H$ 为决策阈值；$C_t^{+} > H$ 或 $C_t^{-} > H$ 时报警。通常取 $K = 0.5\\delta$、$H = 4\\delta$ 至 $5\\delta$，$\\delta$ 是待检测的最小偏移幅度。\n\nZ2-TEMP-01 取 $\\mu_0 = -18.0\\,^{\\circ}\\mathrm{C}$、$\\delta = 1.5\\,^{\\circ}\\mathrm{C}$，则 $K = 0.75\\,^{\\circ}\\mathrm{C}$、$H = 6.0\\,^{\\circ}\\mathrm{C}$。连续 5 点观测 $-17.2, -16.8, -17.5, -16.5, -16.0$ 的 $C_t^{+}$ 依次为 0.95、2.30、2.95、4.60、6.75，第 5 点超过 $H$ 报警。CUSUM 对方向敏感：短暂波动回归后累积和被下界 0 截断；若压缩机电流同步上升，可构成多通道交叉验证。实现中对每条按 `event_time` 升序的 GOOD 记录更新 $C^{\\pm}$，报警后可复位或衰减。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000394"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "EWMA、CUSUM 与变点检测",
+                "累积和控制图与方向性检测"
+              ],
+              "lineStart": 7362,
+              "lineEnd": 7401,
+              "assetRefs": [],
+              "excerptSha256": "a02f3600439bb13db799475aa79c1e338df9fcad75d8c3c0ec7cf7883756c16c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cusum-derive",
+        "moduleId": "m-cusum",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "K 与 H 如何决定延迟",
+        "markdown": "为什么取 $K = 0.5\\delta$？当真实偏移为 $\\delta$ 时，单点对累积和的净贡献约为 $\\delta - K$。若 $K = 0.5\\delta$，净贡献为 $0.5\\delta$，累积和约经 $H/(\\delta-K)$ 个采样周期越过阈值：取 $H = 4\\delta$ 约需 8 个周期，取 $H = 5\\delta$ 约需 10 个周期。$K$ 太小会让正常噪声也持续累积，$K$ 接近 $\\delta$ 则偏移几乎不进入累积和。\n\n| 参数 | 调大后的效果 | 代价 |\n|:---|:---|:---|\n| $K$ | 忽略更小的偏移 | 小于 $K$ 的漂移永远不报警 |\n| $H$ | 更少误报 | 告警延迟增加，约与 $H$ 成正比 |\n\n该估算只用于量级判断：真实序列中每个采样点的净贡献有高有低，累积和可能提前或推迟越过 $H$。教材算例按表格逐点累加，第 5 点达到 6.75 并触发报警；实际延迟仍由噪声、偏移实际幅度与复位规则共同决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cusum"
+          ]
+        }
+      },
+      {
+        "id": "tb-changepoint",
+        "moduleId": "m-changepoint",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "分段常数模型与 PELT",
+        "markdown": "变点检测关注序列统计特性发生突变的位置，而不是逐点异常评分。工业时序常假设分段常数均值加高斯噪声：\n\n$$x_t \\sim \\mathcal{N}(\\mu_k, \\sigma^2),\\quad \\tau_k \\leq t < \\tau_{k+1}$$\n\n$\\tau_k$ 为第 $k$ 个变点。PELT（Pruned Exact Linear Time）通过最小化代价函数求最优分段：\n\n$$\\mathcal{C} = \\sum_{k=1}^{m+1} \\mathcal{C}(x_{\\tau_{k-1}:\\tau_k}) + \\beta f(m)$$\n\n$\\mathcal{C}(\\cdot)$ 为段内负对数似然，$\\beta$ 为惩罚系数，控制分段数量；$f(m)$ 通常为线性函数。已知方差的高斯段内代价为 $\\sum_{t=\\tau_{k-1}}^{\\tau_k-1}(x_t-\\bar{x})^2/(2\\sigma^2)$。\n\n纯离线 PELT 难以直接套用到澄湾案例：`door_state` 是事件驱动（状态变化加 60 秒心跳），与温度 30 秒固定频率无法共享时间网格。变点检测应按通道执行，只在云平台聚合层按时间邻近性关联；例如门开启后 90 秒内温度出现变点可提升优先级，但不能把门磁心跳当成开门事件。在线场景用宽度 $W$ 的滑动窗口配 PELT 或二元分割检测单变点；120 点窗口对温度覆盖 1 小时，对压缩机电流只覆盖 10 分钟，时间尺度不可混用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000395"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "EWMA、CUSUM 与变点检测",
+                "变点检测与分段常数模型"
+              ],
+              "lineStart": 7402,
+              "lineEnd": 7417,
+              "assetRefs": [],
+              "excerptSha256": "4df70eb29080f92964a0b3c8bf3303f3f15dd78ced8beb7fdc95d2c3296dd7a3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-changepoint-online",
+        "moduleId": "m-changepoint",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "变点触发 + CUSUM 确认的两级链路",
+        "markdown": "把变点检测与 CUSUM 组合成两级监测：\n\n1. **候选定位**：滑动窗口内用 PELT 或二元分割找 $\\tau$。惩罚 $\\beta$ 越大分段越少；$\\beta$ 过小会把噪声当成变点。\n2. **确认与持续监控**：在候选位置重建 $\\mu_0$ 与 $\\hat{\\sigma}$，再用 CUSUM 做方向性确认。确认前不要沿用旧基线继续累积，否则历史偏移会污染 $C^{\\pm}$。\n\n与 EWMA 相比，这条链路多付一次窗口计算和人工可见的定位结果，换来的是“从哪一刻开始变了”这一信息；对只需要尽快报警的通道，单用 CUSUM 往往更省资源。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-changepoint"
+          ]
+        }
+      },
+      {
+        "id": "tb-tuning",
+        "moduleId": "m-tuning",
+        "depth": "core",
+        "kind": "warning",
+        "title": "参数调谐与四类常见故障",
+        "markdown": "参数估计与调谐的四个常见故障：\n\n- **质量码过滤**：EWMA 和 CUSUM 的 $\\mu_0$、$\\sigma$ 估计必须排除 OUT_OF_RANGE 与 LATE 记录。把超量程值纳入训练会抬高标称均值，真实异常反而表现为负向残差；训练期 GOOD 占比低于 95% 时应分质量码估计或缩短更新窗口。\n- **序列缺口与 `sequence_no` 跳变**：缺口说明丢包或边缘缓存溢出。若按时间间隔线性插值填补缺口，会虚构未发生的物理过程；缺口超过 2 个采样周期时，应把 $S_t$ 标为可疑并重新初始化，或切换为只依赖最新点的退化模式。\n- **多时间尺度误配**：把 5 秒采样的压缩机电流强行对齐到 30 秒温度网格会丢失电流突变。需要联合检测时，各通道独立运行 EWMA/CUSUM，在报警层按时间窗口关联，而不是在原始序列上强制重采样。\n- **漂移与变点的区分**：CUSUM 检测均值偏移后的持续偏离，变点检测定位偏移发生的时刻。两者可级联：变点算法标定候选位置，CUSUM 在该位置后启动定向监控。澄湾案例的 Z2 温度通道采用“变点触发 + CUSUM 确认”两级结构，变点窗口 1 小时，确认后进入持续监控态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000396"
+              ],
+              "headingPath": [
+                "异常检测方法",
+                "EWMA、CUSUM 与变点检测",
+                "参数调谐与常见故障"
+              ],
+              "lineStart": 7418,
+              "lineEnd": 7427,
+              "assetRefs": [],
+              "excerptSha256": "c82668fe7be2dd97475f041ffcbc7cc8d74a63495544f5e6a916b6304686aaa0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tuning-checklist",
+        "moduleId": "m-tuning",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "上线调参检查表",
+        "markdown": "调参检查表（每次上线或更换设备后逐项确认）：\n\n| 检查项 | 通过条件 | 不通过时的动作 |\n|:---|:---|:---|\n| 基线样本 | 只用 GOOD 记录，且覆盖一个完整工况周期 | 延长基线窗口或分质量码估计 |\n| 质量码占比 | GOOD ≥ 95% | 缩短更新窗口并标注数据质量风险 |\n| 缺口处理 | 缺口超过 2 个采样周期即重置 $S_t$ | 禁止线性插值填补后继续递推 |\n| 多通道对齐 | 各通道独立检测，仅在报警层关联 | 停止在原始序列层强制重采样 |\n| 参数记录 | $\\lambda$、$K$、$H$、$\\beta$、窗口 $W$ 与版本一同留档 | 补齐后再上线 |\n\n其中任何一项不通过，都不应把“没有报警”当作“没有异常”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tuning"
+          ]
+        }
+      },
+      {
+        "id": "model-synthesis",
+        "moduleId": "m-synthesis",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "方法选择决策表",
+        "markdown": "把方法选择压缩成一张决策表：\n\n| 观察到的现象 | 首选方法 | 关键参数 | 主要风险 |\n|:---|:---|:---|:---|\n| 阶跃式突变，需要快速响应 | EWMA 加残差控制限 | $\\lambda$、控制限乘子 | 对缓慢漂移不敏感 |\n| 小幅持续偏移，需要累积证据 | CUSUM | $K = 0.5\\delta$、$H$ | 误报随 $H$ 减小而增加 |\n| 需要定位“从哪一刻开始变” | 变点检测（PELT/二元分割） | 惩罚 $\\beta$、窗口 $W$ | 离线代价高、窗口尺度错配 |\n| 偏移已发生且需持续跟踪 | 变点触发加 CUSUM 确认 | $\\tau$ 之后的新基线 | 旧基线污染累积和 |\n\n选择顺序建议：先确定要回答的是“现在是否偏离”“是否已持续偏移”还是“何时改变”，再匹配方法；不要用同一组 $\\lambda$ 和阈值同时覆盖三种任务。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ewma",
+            "tb-cusum",
+            "tb-changepoint",
+            "tb-tuning"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "method-selection-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-synthesis",
+        "moduleId": "m-synthesis",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-ewma-cusum",
+          "select-and-tune"
+        ],
+        "learningPurpose": "检查学习者能否按“响应、累积、定位”三种任务选择方法，并在给定参数下判断会提前还是延后告警。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-ewma",
+            "tb-cusum",
+            "tb-changepoint",
+            "tb-tuning"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "scenario": "冷冻温区每小时缓慢上升 0.5 °C，单点残差始终未超 3σ。",
+              "options": [
+                "继续只调小 EWMA 控制限",
+                "改用 CUSUM 累积同向偏差",
+                "改用 Z 分数逐点判定"
+              ],
+              "answerIndex": 1
+            },
+            {
+              "scenario": "压缩机油温在 5 个采样点内阶跃上升约 1.5 °C，需要尽快报警。",
+              "options": [
+                "EWMA 加残差控制限",
+                "变点检测定位后再报警",
+                "把 CUSUM 的 K 设为 1.5δ"
+              ],
+              "answerIndex": 0
+            },
+            {
+              "scenario": "需要回答温度均值从哪一刻开始偏移，并继续跟踪后续偏离。",
+              "options": [
+                "只用 EWMA",
+                "PELT 定位后用 CUSUM 确认",
+                "只用四分位距"
+              ],
+              "answerIndex": 1
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别回答：\n1. 缓慢漂移为何容易躲过 EWMA 的残差控制限？\n2. CUSUM 的 H 减半会同时改变误报和延迟中的哪一项？\n3. 变点检测与 CUSUM 联合使用时，为什么确认前要重建基线？\n\n写出结论并各给一条教材中的依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "异常检测方法",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000392"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "EWMA、CUSUM 与变点检测"
+      ],
+      "lineStart": 7337,
+      "lineEnd": 7338,
+      "assetRefs": [],
+      "excerptSha256": "84cc2746847c0bba743478c7409d16e46fb20f9ba67728c0b8689bbad5f31dc9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000393"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "EWMA、CUSUM 与变点检测",
+        "指数加权移动平均与异常响应"
+      ],
+      "lineStart": 7339,
+      "lineEnd": 7361,
+      "assetRefs": [],
+      "excerptSha256": "7452489798cf677235d7e0d9020da3a9d900892848aea924fb91821d8a158792"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000394"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "EWMA、CUSUM 与变点检测",
+        "累积和控制图与方向性检测"
+      ],
+      "lineStart": 7362,
+      "lineEnd": 7401,
+      "assetRefs": [],
+      "excerptSha256": "a02f3600439bb13db799475aa79c1e338df9fcad75d8c3c0ec7cf7883756c16c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000395"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "EWMA、CUSUM 与变点检测",
+        "变点检测与分段常数模型"
+      ],
+      "lineStart": 7402,
+      "lineEnd": 7417,
+      "assetRefs": [],
+      "excerptSha256": "4df70eb29080f92964a0b3c8bf3303f3f15dd78ced8beb7fdc95d2c3296dd7a3"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000396"
+      ],
+      "headingPath": [
+        "异常检测方法",
+        "EWMA、CUSUM 与变点检测",
+        "参数调谐与常见故障"
+      ],
+      "lineStart": 7418,
+      "lineEnd": 7427,
+      "assetRefs": [],
+      "excerptSha256": "c82668fe7be2dd97475f041ffcbc7cc8d74a63495544f5e6a916b6304686aaa0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2555,
+    905
+  ],
+  "scale": 0.96
+}

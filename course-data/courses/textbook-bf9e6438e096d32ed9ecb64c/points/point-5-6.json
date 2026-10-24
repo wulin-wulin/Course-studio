@@ -1,0 +1,557 @@
+{
+  "id": "point-5-6",
+  "title": "SQL 查询模式与存储方案基准测试",
+  "shortSummary": "用典型 SQL 查询模式与可复现基准测试比较存储方案，避免只凭单一指标做出选型结论。",
+  "keyTerms": [
+    "SQL",
+    "查询模式",
+    "基准测试",
+    "存储选型",
+    "延迟",
+    "可复现"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.84,
+  "prerequisites": [
+    "point-5-3",
+    "point-5-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-benchmark-selection",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按“前置条件—步骤—分支—错误恢复—检查表”的操作流程重排教材顺序，保留全部查询语义、阈值、公式与案例配置，模型只补充可执行步骤与判断表。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "classify-workload",
+          "text": "把典型工业时序 SQL 归入点查、范围扫描、聚合降采样或模式匹配，并用选择率、时间跨度比与主导 I/O 解释其负载特征。"
+        },
+        {
+          "id": "benchmark-and-decide",
+          "text": "设计可复现的跨方案基准测试，结合压缩比、延迟与年化成本公式给出情境化的存储选型结论。"
+        }
+      ],
+      "misconceptions": [
+        "用单线程查询结果代表并发场景，忽略写入与查询并发时的资源隔离度。",
+        "只用全 GOOD 数据压测，掩盖质量码过滤与空窗口处理的开销和语义差异。",
+        "把心跳包当成重复投递删除，导致门磁开启次数漏计和虚假告警。",
+        "直接引用单一压缩比或厂商标称吞吐，而不按行数加权或在自身镜像数据集上复测。"
+      ],
+      "modules": [
+        {
+          "id": "workload-profile",
+          "title": "第一步：刻画查询负载",
+          "role": "prerequisite",
+          "outcomeRefs": [
+            "classify-workload"
+          ],
+          "order": 0
+        },
+        {
+          "id": "window-semantics",
+          "title": "第二步：校验聚合窗口语义",
+          "role": "procedure-step",
+          "outcomeRefs": [
+            "classify-workload"
+          ],
+          "order": 1
+        },
+        {
+          "id": "state-transitions",
+          "title": "第三步：处理状态序列",
+          "role": "procedure-branch",
+          "outcomeRefs": [
+            "classify-workload"
+          ],
+          "order": 2
+        },
+        {
+          "id": "benchmark-protocol",
+          "title": "第四步：执行可复现基准测试",
+          "role": "procedure-step",
+          "outcomeRefs": [
+            "benchmark-and-decide"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-decision",
+          "title": "第五步：成本模型与选型分支",
+          "role": "decision",
+          "outcomeRefs": [
+            "benchmark-and-decide"
+          ],
+          "order": 4
+        },
+        {
+          "id": "verification-checklist",
+          "title": "收尾：验收检查表",
+          "role": "checklist",
+          "outcomeRefs": [
+            "classify-workload",
+            "benchmark-and-decide"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "classify-workload",
+          "benchmark-and-decide"
+        ],
+        "method": "给定一组查询与一个候选方案，完成负载归类、基准测试计划与选型结论，并逐条通过检查表。",
+        "successCriteria": [
+          "四类查询归类正确，且能给出选择率与时间跨度比的判断依据",
+          "基准测试计划包含种子、数据生成函数、硬件规格与 p99 指标",
+          "选型结论引用压缩比或成本公式，并说明适用分支与风险",
+          "检查表中无未解释的跳过项"
+        ],
+        "summaryBlockId": "model-checklist",
+        "nextPointId": "point-6-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-scope",
+        "moduleId": "workload-profile",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节定位",
+        "markdown": "本节把存储选型从“哪款数据库更快”改写为一条可执行流程：先用查询模式刻画负载，再检查查询语义是否正确，随后用可复现的基准测试收集证据，最后以压缩率与成本模型做情境化决策。教材以澄湾冷链示范仓为固定案例，因此表结构、采样周期与阈值都应与该案例配置一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000186"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "SQL 查询模式与存储方案基准测试"
+              ],
+              "lineStart": 3309,
+              "lineEnd": 3310,
+              "assetRefs": [],
+              "excerptSha256": "2efde385261b67884f3c530b61fda4bfeff2067baf6d6e91c64614658f817673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-query-patterns",
+        "moduleId": "workload-profile",
+        "depth": "core",
+        "kind": "table",
+        "title": "四类查询模式与负载特征",
+        "markdown": "教材把工业监测 SQL 负载分为四类，并给出各自的定量画像：\n\n| 查询类型 | 典型选择率 | 时间跨度比 | 主导 I/O 模式 | 并发特征 |\n|:---|:---|:---|:---|:---|\n| 点查 | < 0.001% | 极小 | 索引随机读 | 低并发，延迟敏感 |\n| 范围扫描 | 1%–10% | 0.001–0.1 | 顺序读，预取友好 | 中并发，流式输出 |\n| 聚合降采样 | 0.1%–1%（结果侧） | 0.01–0.5 | 向量聚合，CPU 密集 | 高并发，缓存亲和 |\n| 模式匹配 | 结果不定 | 0.1–1.0 | 滑动窗口状态保持 | 极低并发，内存密集 |\n\n点查以 `device_id`、`metric`、`event_time` 为谓词返回单条原始记录，常用于根因追溯时的人工核验；范围扫描按时间区间拉取完整序列，例如调取 Z1-TEMP-01 在 08:00 至 09:00 的全部 120 条温度记录（$\\lfloor 3600/30 \\rfloor = 120$）；聚合降采样是监控大屏的核心负载；模式匹配涉及滑动窗口、状态转换或阈值穿越计数，计算密度最高。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000187"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "SQL 查询模式与存储方案基准测试",
+                "查询模式分类与负载特征"
+              ],
+              "lineStart": 3311,
+              "lineEnd": 3325,
+              "assetRefs": [],
+              "excerptSha256": "078b4c87a0e24ed9aa31d59d421cf0c77169dc2d14d5b9a696c99b44b882a170"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-selectivity-check",
+        "moduleId": "workload-profile",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把负载画像用于测试设计",
+        "markdown": "用两个比值先做粗判：\n\n- 选择率 $s = \\frac{\\text{结果行数}}{\\text{扫描分区总行数}}$；\n- 时间跨度比 $r = \\frac{\\text{查询窗口长度}}{\\text{数据保留期}}$。\n\n教材给出的经验边界是：$s < 1\\%$ 且 $r < 0.001$ 时索引下推收益明显；超出该范围时，全分区顺序扫描往往更优。因此测试集必须让四类查询各自占可解释的比例，否则“平均延迟”会被点查稀释，无法暴露聚合与模式匹配的真实成本。报告基准结果时，至少同时给出每类查询的占比、选择率区间与 p99。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-query-patterns"
+          ]
+        }
+      },
+      {
+        "id": "textbook-window-alignment",
+        "moduleId": "window-semantics",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "窗口对齐、origin 与有效样本",
+        "markdown": "聚合降采样要求窗口严格左闭右开 $[start, end)$，避免相邻窗口重叠或遗漏。TimescaleDB 的 `time_bucket(bucket_width, ts, origin)` 中，`origin` 决定窗口起点：未显式指定时，窗口默认对齐到 2000-01-01 00:00:00 UTC 的整数倍，可能与业务日历的小时边界错位。案例要求大屏按 Asia/Shanghai 整点切换，因此必须显式传入对应 UTC 的 `origin`，或在应用层完成时区转换，禁止改写 `event_time` 的 UTC 语义。\n\n有效样本均值的分母是有效样本数而不是窗口理论容量，两者之差直接反映该小时的数据质量：\n\n```sql\nSELECT\n    time_bucket('1 hour', event_time, TIMESTAMP '2024-01-14 16:00:00') AS bucket,\n    device_id,\n    AVG(value) FILTER (WHERE quality_code = 'GOOD') AS temp_avg,\n    COUNT(*) FILTER (WHERE quality_code = 'GOOD') AS good_count,\n    COUNT(*) AS total_count\nFROM cold_chain_raw\nWHERE device_id = 'Z2-TEMP-01'\n  AND metric = 'temperature'\n  AND event_time >= '2024-01-15 00:00:00'::timestamptz\n  AND event_time < '2024-01-15 01:00:00'::timestamptz\nGROUP BY bucket, device_id;\n```\n\n`good_count = 0` 时 `temp_avg` 为 `NULL`，应用层应显示断线而非零值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000188"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "SQL 查询模式与存储方案基准测试",
+                "聚合降采样的窗口对齐与边界处理"
+              ],
+              "lineStart": 3326,
+              "lineEnd": 3350,
+              "assetRefs": [],
+              "excerptSha256": "fb34f3d64d11d5d442199cc7d6225d8962b4ffbe52ab641d2d8695fa7398d6b6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-filter-assertion",
+        "moduleId": "window-semantics",
+        "depth": "core",
+        "kind": "warning",
+        "title": "把 FILTER 误区变成测试断言",
+        "markdown": "教材点出的误区值得直接写成基准测试断言：把 `quality_code = 'GOOD'` 放在外层 `WHERE`，会让无有效样本的窗口整行消失，下游填充逻辑再补 `MISSING` 占位，最终把“设备断线”和“质量不合格”混成同一种状态。\n\n验证方式：在测试数据集中固定注入 1% 的 `CLOCK_SUSPECT` 记录，逐方案核对窗口输出行数、`good_count` 与 `temp_avg` 是否为 `NULL`。这项语义检查应与吞吐压测同时进行，而不是等到上线后再补。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-window-alignment"
+          ]
+        }
+      },
+      {
+        "id": "textbook-door-state",
+        "moduleId": "state-transitions",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "门磁跳变检测与 LAG 查询",
+        "markdown": "门磁 `door_state` 是离散状态量：状态变化即时上报，叠加 60 秒心跳。心跳会在状态未变时重复上报相同值，因此不能用相邻值差直接计算开启次数。正确方法是利用 `LAG` 取前序有效状态，仅当当前值为 1 且前序值为 0 或不存在时计为一次开启：\n\n```sql\nWITH ordered AS (\n    SELECT\n        event_time,\n        value,\n        LAG(value) OVER (PARTITION BY device_id ORDER BY event_time, sequence_no) AS prev_value\n    FROM cold_chain_raw\n    WHERE device_id = 'Z1-DOOR-01'\n      AND metric = 'door_state'\n      AND quality_code = 'GOOD'\n      AND event_time >= '2024-01-15 08:00:00'::timestamptz\n      AND event_time < '2024-01-15 09:00:00'::timestamptz\n)\nSELECT event_time AS open_time\nFROM ordered\nWHERE value = 1\n  AND (prev_value IS NULL OR prev_value = 0);\n```\n\n`sequence_no` 作为同级排序键，保证同一 `event_time` 下多条记录的确定性顺序；设备重启后 `sequence_no` 不归零的契约，使跨重启历史仍能正确衔接。若误把心跳包标记为 `DUPLICATE`，会漏计状态维持期间的心跳确认，导致“开启后无后续关闭”的虚假告警。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000189"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "SQL 查询模式与存储方案基准测试",
+                "状态转换查询与门磁序列的特殊处理"
+              ],
+              "lineStart": 3351,
+              "lineEnd": 3379,
+              "assetRefs": [],
+              "excerptSha256": "63c847836747f47df355b3b8e154efd73af9bc4cdf355713f2e5898d7ecf3c03"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-interval-boundary",
+        "moduleId": "state-transitions",
+        "depth": "support",
+        "kind": "note",
+        "title": "从计数扩展到时长：区间连接的边界",
+        "markdown": "把“开启次数”扩展为“单次开启持续时长”，问题从跳变检测变成**区间连接**：每个开启事件要与它之后最近的关闭事件配对。纯 SQL 需要自连接或递归 CTE，数据量超过百万行时性能急剧退化。\n\n教材建议在流处理层维护门磁状态机，输出 `door_open_interval` 派生表并持久化到关系库供即席查询。该派生表与原始事实表并存，不得覆盖 `cold_chain_raw`。这一点也影响选型：关系库承担区间结果查询，而原始状态的写入与扫描压力仍留在时序存储上，基准测试应分别覆盖两者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-door-state"
+          ]
+        }
+      },
+      {
+        "id": "textbook-benchmark-basis",
+        "moduleId": "benchmark-protocol",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "指标、测试数据量与候选方案",
+        "markdown": "基准测试需控制变量，使结果可复现、可比较。核心指标包括：数据加载吞吐（行/秒）、磁盘占用（含索引）、查询 p99 延迟，以及写入与查询并发时的资源隔离度。测试数据集按案例的固定采样周期生成，设运行天数为 $D$：\n\n- 温湿度：$N_{th} = 4 \\times 2 \\times \\frac{86400}{30} \\times D = 23040D$\n- 压缩机电流：$N_{comp} = 4 \\times 1 \\times \\frac{86400}{5} \\times D = 69120D$\n- 门磁：$N_{door} \\approx 4 \\times 1 \\times 64 \\times 24 \\times D = 6144D$\n\n单日约 $9.8 \\times 10^4$ 行原始记录，年数据量约 $3.6 \\times 10^7$ 行。教材给出的方案对照如下：\n\n| 存储方案 | 适用查询类型 | 典型劣势 | 案例配置下的注意点 |\n|:---|:---|:---|:---|\n| PostgreSQL + B-tree 索引 | 点查、小范围扫描 | 时间范围扫描随数据量线性退化 | 需按 `event_time` 范围分区，单表超 $10^7$ 行时强制分区 |\n| TimescaleDB（hypertable） | 聚合降采样、连续聚合 | 超宽表（> 50 列）压缩率下降 | 用 `metric` 窄表模型，按 `device_id` 哈希分区 |\n| InfluxDB IOx / 3.x | 高基数标签、即时聚合 | 复杂关联查询支持弱 | 设备 ID 作 tag 时基数 16，不构成高基数问题 |\n| 对象存储（Parquet + S3） | 批量历史分析、训练导出 | 点查延迟高（秒级） | 按 `event_time` 与 `device_id` 两级分区，配合 DuckDB 本地缓存 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000190"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "SQL 查询模式与存储方案基准测试",
+                "跨存储方案的基准测试框架"
+              ],
+              "lineStart": 3380,
+              "lineEnd": 3400,
+              "assetRefs": [],
+              "excerptSha256": "dccc4ec16ae13c87fe30c3935143486de26cf7a65d60bea108595aae468fb5f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-benchmark-steps",
+        "moduleId": "benchmark-protocol",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "六步执行流程与错误恢复",
+        "markdown": "把教材指标落成可执行流程，固定为六步：\n\n1. 冻结数据生成函数、随机种子、硬件规格与调参版本；缺任一项即不可复现。\n2. 按行数比例混合四类查询，并为每类记录选择率与时间跨度比。\n3. 先单流测加载吞吐与磁盘占用，再叠加并发读写测资源隔离度。\n4. 以 p99 而非均值作查询指标，同时监控压缩后台任务的 I/O 抖动与连续聚合刷新延迟。\n5. 注入 1% 的 `CLOCK_SUSPECT` 与空窗口，核对聚合是否正确排除或返回 `NULL`。\n6. 保存原始结果与执行计划，供选型复核与回归对比。\n\n常见错误与恢复：只测单线程查询时，需补并发场景重跑；使用全 `GOOD` 数据时，需重放带质量码的测试集；未记录种子与版本时，结果只能作演示，不能进入决策。教材建议在镜像数据集上执行 72 小时混合负载测试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-benchmark-basis"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cost-model",
+        "moduleId": "cost-decision",
+        "depth": "core",
+        "kind": "formula",
+        "title": "压缩率与年化成本模型",
+        "markdown": "压缩率高度依赖数据特征：温度与湿度的缓慢变化适合 Gorilla 浮点差分压缩，门磁的状态重复适合游程编码（RLE），压缩机电流的高频波动压缩收益最低。案例配置下的经验值：TimescaleDB 对温度数据为 8:1–12:1，对门磁因 `sequence_no` 单调递增与 `event_time` 规律性可超过 20:1，对压缩机电流通常仅 3:1–5:1。混合负载的整体压缩比必须按行数加权，不能直接引用单一指标。\n\n年化成本模型为：\n\n$$C_{\\text{annual}} = \\frac{N_{\\text{annual}} \\times R_{\\text{row}}}{C_{\\text{compress}}} \\times P_{\\text{storage}} + \\frac{Q_{\\text{query}} \\times T_{\\text{cpu}}}{3600} \\times P_{\\text{compute}}$$\n\n其中 $N_{\\text{annual}}$ 为年记录数，$R_{\\text{row}}$ 为原始行均字节数（案例下约 64 字节，含索引开销），$C_{\\text{compress}}$ 为压缩比，$Q_{\\text{query}}$ 为年查询总 CPU 秒数，$P_{\\text{storage}}$ 与 $P_{\\text{compute}}$ 为单位价格。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000191"
+              ],
+              "headingPath": [
+                "时序数据模型与存储",
+                "SQL 查询模式与存储方案基准测试",
+                "成本模型与选型决策"
+              ],
+              "lineStart": 3401,
+              "lineEnd": 3414,
+              "assetRefs": [],
+              "excerptSha256": "cff2faa085a0a56e94c7ffc19cb3c0cc9958da5b7cc6751474a65af007a657a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-selection-branches",
+        "moduleId": "cost-decision",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "按主导负载分支选型",
+        "markdown": "以成本模型和查询特征做分支判断，而不是比较厂商标称吞吐：\n\n| 主导负载 | 延迟要求 | 倾向方案 | 主要风险 |\n|:---|:---|:---|:---|\n| 聚合降采样 | p99 < 500 ms | TimescaleDB 连续聚合预计算 | 连续聚合视图未排除坏质量码会静默污染结果 |\n| 点查与人工核验 | 毫秒级 | PostgreSQL + 按时间分区 | 单表超过 $10^7$ 行后范围扫描退化 |\n| 年度批量导出、训练数据 | 分钟级可接受 | Parquet on S3 + DuckDB | 点查为秒级，不适合在线服务 |\n| 高基数标签即时聚合 | 秒级以内 | InfluxDB IOx / 3.x | 复杂关联查询支持弱 |\n\n教材结论是：当查询以聚合降采样为主且延迟要求低于 500 ms 时，连续聚合预计算通常优于对象存储的即时扫描；若以年度批量导出为主且可接受分钟级等待，Parquet on S3 配合 DuckDB 的实例化视图更具成本优势。最终结论必须基于自身镜像数据集的压测。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cost-model"
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "verification-checklist",
+        "depth": "core",
+        "kind": "summary",
+        "title": "发布选型结论前的检查表",
+        "markdown": "提交或发布选型结论前，逐条核对：\n\n- [ ] 四类查询都有代表样本，且记录了选择率与时间跨度比。\n- [ ] 聚合窗口左闭右开，`origin` 与业务时区一致。\n- [ ] 聚合使用 `FILTER` 排除坏质量码，空窗口输出 `NULL` 而非零值。\n- [ ] 门磁查询保留心跳，用 `LAG` 识别跳变，区间结果走派生表。\n- [ ] 指标包含加载吞吐、磁盘占用、p99 延迟与并发资源隔离度。\n- [ ] 压缩比按行数加权，成本公式中各参数均有来源。\n- [ ] 报告含数据生成函数、随机种子、硬件规格与调参版本。\n\n下一节转入数据质量四维模型，本节的查询与指标将作为质量规则的验收手段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-benchmark-basis",
+            "textbook-cost-model"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "workload-pattern-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-selectivity-check",
+        "moduleId": "workload-profile",
+        "depth": "core",
+        "outcomeRefs": [
+          "classify-workload"
+        ],
+        "learningPurpose": "检查学习者能否用选择率、时间跨度比与并发特征把查询归入正确模式，而不是只记住名称。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-query-patterns"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "为下列三条负载各选一个查询模式，并写出选择率或时间跨度比的判断依据。",
+          "items": [
+            {
+              "id": "q1",
+              "scenario": "按 device_id、metric、event_time 精确取回一条原始温度记录用于人工核验。",
+              "answer": "点查"
+            },
+            {
+              "id": "q2",
+              "scenario": "调取某设备 08:00–09:00 的全部 120 条原始温度记录并流式输出。",
+              "answer": "范围扫描"
+            },
+            {
+              "id": "q3",
+              "scenario": "为大屏按每小时计算温度均值并输出少量聚合点。",
+              "answer": "聚合降采样"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别说明三条查询的结果行数占比与时间跨度比，据此判断它们属于点查、范围扫描还是聚合降采样，并指出主导 I/O 模式。"
+        }
+      },
+      {
+        "id": "benchmark-plan-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-checklist",
+        "moduleId": "verification-checklist",
+        "depth": "core",
+        "outcomeRefs": [
+          "benchmark-and-decide"
+        ],
+        "learningPurpose": "检查学习者能否识别不可复现或缺语义校验的基准测试计划，并补上缺失项。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-benchmark-basis",
+            "textbook-cost-model"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "某团队提交的基准计划只写“在 8 核机器上导入一年数据，跑几条查询取平均耗时”，请指出至少三处不可复现或会误导选型的问题，并给出修正。",
+          "expectedPoints": [
+            "缺数据生成函数、随机种子与调参版本",
+            "使用平均耗时而非 p99 与并发资源隔离度",
+            "测试集未覆盖四类查询与坏质量码、空窗口",
+            "压缩比或成本未按行数加权"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "对照六步执行流程与检查表，逐项标出该计划缺失的证据，并写出至少一条修正后的测试要求。"
+        }
+      }
+    ]
+  },
+  "subtitle": "时序数据模型与存储",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000186"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "SQL 查询模式与存储方案基准测试"
+      ],
+      "lineStart": 3309,
+      "lineEnd": 3310,
+      "assetRefs": [],
+      "excerptSha256": "2efde385261b67884f3c530b61fda4bfeff2067baf6d6e91c64614658f817673"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000187"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "SQL 查询模式与存储方案基准测试",
+        "查询模式分类与负载特征"
+      ],
+      "lineStart": 3311,
+      "lineEnd": 3325,
+      "assetRefs": [],
+      "excerptSha256": "078b4c87a0e24ed9aa31d59d421cf0c77169dc2d14d5b9a696c99b44b882a170"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000188"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "SQL 查询模式与存储方案基准测试",
+        "聚合降采样的窗口对齐与边界处理"
+      ],
+      "lineStart": 3326,
+      "lineEnd": 3350,
+      "assetRefs": [],
+      "excerptSha256": "fb34f3d64d11d5d442199cc7d6225d8962b4ffbe52ab641d2d8695fa7398d6b6"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000189"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "SQL 查询模式与存储方案基准测试",
+        "状态转换查询与门磁序列的特殊处理"
+      ],
+      "lineStart": 3351,
+      "lineEnd": 3379,
+      "assetRefs": [],
+      "excerptSha256": "63c847836747f47df355b3b8e154efd73af9bc4cdf355713f2e5898d7ecf3c03"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000190"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "SQL 查询模式与存储方案基准测试",
+        "跨存储方案的基准测试框架"
+      ],
+      "lineStart": 3380,
+      "lineEnd": 3400,
+      "assetRefs": [],
+      "excerptSha256": "dccc4ec16ae13c87fe30c3935143486de26cf7a65d60bea108595aae468fb5f7"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000191"
+      ],
+      "headingPath": [
+        "时序数据模型与存储",
+        "SQL 查询模式与存储方案基准测试",
+        "成本模型与选型决策"
+      ],
+      "lineStart": 3401,
+      "lineEnd": 3414,
+      "assetRefs": [],
+      "excerptSha256": "cff2faa085a0a56e94c7ffc19cb3c0cc9958da5b7cc6751474a65af007a657a6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3154,
+    1783
+  ],
+  "scale": 0.92
+}

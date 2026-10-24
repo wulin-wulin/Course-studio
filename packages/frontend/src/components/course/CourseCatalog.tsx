@@ -110,8 +110,12 @@ export function CourseCatalog({
   const runningGenerationCount = activeGenerations.filter(
     (run) => run.status === "running"
   ).length;
-  const pausedGenerationCount =
-    activeGenerations.length - runningGenerationCount;
+  const waitingGenerationCount = activeGenerations.filter(
+    (run) => run.status === "awaiting-input"
+  ).length;
+  const pausedGenerationCount = activeGenerations.filter(
+    (run) => run.status === "paused" || run.status === "error"
+  ).length;
 
   return (
     <main className="course-catalog" aria-label="课程导览">
@@ -137,6 +141,9 @@ export function CourseCatalog({
                     `${validCourses.length} 门课程`,
                     runningGenerationCount > 0
                       ? `${runningGenerationCount} 门创建中`
+                      : "",
+                    waitingGenerationCount > 0
+                      ? `${waitingGenerationCount} 门等待确认`
                       : "",
                     pausedGenerationCount > 0
                       ? `${pausedGenerationCount} 门已暂停`
@@ -188,6 +195,7 @@ export function CourseCatalog({
               ).length;
               const interrupted =
                 run.status === "error" || run.status === "paused";
+              const awaitingInput = run.status === "awaiting-input";
               return (
                 <li key={`generation:${run.conversationId}`}>
                   <button
@@ -201,12 +209,18 @@ export function CourseCatalog({
                     <span className="course-catalog__card-icon" aria-hidden="true">
                       {interrupted ? (
                         <AlertCircle size={19} />
+                      ) : awaitingInput ? (
+                        <Sparkles size={19} />
                       ) : (
                         <Loader2 size={19} className="is-spinning" />
                       )}
                     </span>
                     <span className="course-catalog__generation-badge">
-                      {interrupted ? "创建已暂停" : "正在创建"}
+                      {interrupted
+                        ? "创建已暂停"
+                        : awaitingInput
+                          ? "等待确认"
+                          : "正在创建"}
                     </span>
                     <span className="course-catalog__card-title">
                       {run.course?.title ?? "正在创建的新课程"}
@@ -224,7 +238,11 @@ export function CourseCatalog({
                       </span>
                     </span>
                     <span className="course-catalog__enter">
-                      {interrupted ? "查看并继续创建" : "查看生长过程"}
+                      {interrupted
+                        ? "查看并继续创建"
+                        : awaitingInput
+                          ? "查看并确认"
+                          : "查看生长过程"}
                       <ArrowRight aria-hidden="true" size={16} />
                     </span>
                   </button>
