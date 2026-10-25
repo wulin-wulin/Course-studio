@@ -227,7 +227,13 @@ pdftotext -v
 `DOCUMENT_PARSE_TIMEOUT_SECONDS`。单个上传默认上限为 100 MiB，可通过
 `DOCUMENT_MAX_UPLOAD_BYTES` 调整。
 
-使用在线 MinerU 时，在 `.env` 设置 `DOCUMENT_PARSER=mineru`、
+使用前端时，在 Agent 面板顶部点击 **MinerU 设置**。这里可以选择本地、在线
+MinerU 或自动模式，填写 API 地址、Token、模型版本和超时时间；保存后下一次
+PDF 解析立即生效，无需重启后端。Token 只会保存在后端 `.env`，界面始终只显示掩码。
+Docker 部署需要保持 `.env` 挂载可写。留空 Token 会保留已有 Token；`auto` 没有 Token
+时会回退本地解析。
+
+也可以在 `.env` 设置 `DOCUMENT_PARSER=mineru`、
 `MINERU_API_TOKEN`，随后重启后端。默认地址是 `https://mineru.net/api/v4`，
 默认模型是 `vlm`，也可使用 `MINERU_MODEL_VERSION=pipeline`。
 `DOCUMENT_PARSER=auto` 在存在 Token 时选择 MinerU，否则使用本地解析。

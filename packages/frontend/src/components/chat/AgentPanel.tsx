@@ -19,6 +19,7 @@ import {
   MessageCircle,
   PanelRightClose,
   RefreshCw,
+  ServerCog,
   Send,
   ShieldCheck,
   Sparkles,
@@ -67,6 +68,7 @@ import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
 import { ModelControls } from "./ModelControls";
+import { MineruSettingsDialog } from "./MineruSettingsDialog";
 import { ReviewRequiredCard } from "../review/ReviewRequiredCard";
 
 type AgentEntry = {
@@ -246,6 +248,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
   const [textbookUploadFormat, setTextbookUploadFormat] =
     useState<TextbookUploadFormat>("all");
   const [modeInfoOpen, setModeInfoOpen] = useState(false);
+  const [mineruSettingsOpen, setMineruSettingsOpen] = useState(false);
   const [courseDeleteOpen, setCourseDeleteOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1433,6 +1436,10 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       )}
 
       {courseDeleteOpen && <CourseDeleteDialog onClose={closeCourseDeletion} />}
+      <MineruSettingsDialog
+        open={mineruSettingsOpen}
+        onClose={() => setMineruSettingsOpen(false)}
+      />
 
       <div className="border-b border-border bg-cream/45 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -1472,6 +1479,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
             }`}
           >
             <CircleHelp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setModeInfoOpen(false);
+              setMineruSettingsOpen(true);
+            }}
+            disabled={isRunning}
+            title="配置 MinerU 教材解析"
+            aria-label="配置 MinerU 教材解析"
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-2 text-[11px] font-medium text-text-secondary transition-colors hover:border-primary/30 hover:bg-primary-light hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ServerCog className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>MinerU 设置</span>
           </button>
         </div>
         {modeInfoOpen && (

@@ -160,8 +160,8 @@ export function PdfCourseCreationForm({
             {markdownOnly
               ? "上传 MinerU 输出的 full.md 或结构化 Markdown，系统将读取章节、知识点和正文内容。"
               : pdfOnly
-                ? "上传 PDF 后，系统将调用 MinerU 生成 full.md，再生成章节、知识图谱和知识森林。"
-                : "支持 PDF 与 Markdown，系统将读取教材结构和正文内容来创建课程。"}
+                ? "如需在线 MinerU 解析，请先在 Agent 面板点击“MinerU 设置”；系统会先生成 full.md，再生成章节、知识图谱和知识森林。"
+                : "支持 PDF 与 Markdown；如需在线 MinerU 解析 PDF，请先在 Agent 面板点击“MinerU 设置”。"}
           </div>
         </div>
       </div>

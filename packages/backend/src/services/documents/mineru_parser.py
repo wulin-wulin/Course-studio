@@ -251,6 +251,14 @@ def _parse_mineru_part(
         raise DocumentParserUnavailableError("无法连接 MinerU，请检查网络和 MINERU_API_BASE") from exc
 
 
+def _extract_native_page_text(page: Any) -> str:
+    """Return layout text when available, tolerating genuinely blank pages."""
+    try:
+        return page.extract_text(extraction_mode="layout") or ""
+    except (KeyError, TypeError, ValueError):
+        return ""
+
+
 def parse_mineru_pdf(
     path: Path, *, document_id: str, filename: str, sha256: str,
     scan_pages: int, executable: str, timeout_seconds: float,
@@ -343,8 +351,11 @@ def parse_mineru_pdf(
     if reader.is_encrypted:
         reader.decrypt("")
     # Native text keeps TOC leaders and chapter numbers that OCR can omit.
+    # Blank PDF pages produced by lightweight fixtures (and some scanners) may
+    # not contain a /Contents stream; treat those pages as empty instead of
+    # letting pypdf's layout extractor abort the whole MinerU request.
     toc_text = unicodedata.normalize("NFKC", "\f".join(
-        page.extract_text(extraction_mode="layout") for page in reader.pages[:pages_to_scan]
+        _extract_native_page_text(page) for page in reader.pages[:pages_to_scan]
     ))
     if not any(_TOC_HEADING_RE.fullmatch(line) for line in toc_text.splitlines()):
         toc_text = unicodedata.normalize("NFKC", "\f".join(pages[:pages_to_scan]))
