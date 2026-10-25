@@ -70,7 +70,7 @@ point 中，由发布器原样带入课程详情；不得复制到薄图、概�
 2. 每个知识点首个 `clusterIds` 固定为 outline 中的章节 ID。
 3. 可以增加有独立教学价值的次要簇，但不得改变主章节归属。
 4. 教材原点和模型扩展点均保持 G1 冻结的 `id/title/origin` 与顺序。
-5. 章节顺序和章内点顺序写入 `sequences`；它们不等于 `prerequisites`。
+5. 章节顺序和章内点顺序写入 `sequences`；它们不等于 `prerequisites`。教材模式没有明确内容证据时保持 `prerequisites=[]`。
 6. 章节结构与语义主题冲突时记录复核说明，不得重分章来“修正”教材。
 
 ## 关系构建
@@ -86,7 +86,8 @@ point 中，由发布器原样带入课程详情；不得复制到薄图、概�
 
 - `A.prerequisites = [B]` 表示学习 A 前应先掌握 B。
 - 优先沿用上游边；每次增加或删除都写入
-  `generation.refinedPrerequisiteEdges`。
+  `generation.refinedPrerequisiteEdges`。审计只记录相对 canonical point 的实际增删，且方向固定为
+  `from=dependent`、`to=prerequisite`；`A.prerequisites=[B]` 写成 `from=A,to=B`。
 - 为破环删除的边还要写入 `generation.brokenCycleEdges`。
 - 规则与审计格式见 [references/relation-heuristics.md](references/relation-heuristics.md)。
 

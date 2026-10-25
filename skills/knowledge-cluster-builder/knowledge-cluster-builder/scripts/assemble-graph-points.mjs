@@ -41,6 +41,150 @@ function hasOwn(record, key) {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
+function edgeKey(dependentId, prerequisiteId) {
+  return `${dependentId}\u0000${prerequisiteId}`;
+}
+
+function edgeParts(key) {
+  return key.split('\u0000');
+}
+
+function prerequisiteEdges(points) {
+  const edges = new Set();
+  for (const point of points) {
+    for (const prerequisite of Array.isArray(point?.prerequisites)
+      ? point.prerequisites
+      : []) {
+      if (typeof point?.id === 'string' && typeof prerequisite === 'string') {
+        edges.add(edgeKey(point.id, prerequisite));
+      }
+    }
+  }
+  return edges;
+}
+
+/**
+ * Keep prerequisite audit entries deterministic and replayable.
+ *
+ * The canonical edge direction is `from=dependent, to=prerequisite`, matching
+ * point.prerequisites and the backend review contract. Model drafts commonly
+ * write the visual direction (prerequisite -> dependent) or list every final
+ * edge instead of only the delta. The assembler has both canonical and target
+ * points, so it can normalize those harmless presentation mistakes without
+ * asking the agent to hand-maintain an audit replay.
+ */
+function normalizePrerequisiteAudit(sourcePoints, targetPoints, generation) {
+  const sourceEdges = prerequisiteEdges(sourcePoints);
+  const targetEdges = prerequisiteEdges(targetPoints);
+  const changes = new Map();
+  for (const key of targetEdges) {
+    if (!sourceEdges.has(key)) changes.set(`add\u0000${key}`, 'add');
+  }
+  for (const key of sourceEdges) {
+    if (!targetEdges.has(key)) changes.set(`remove\u0000${key}`, 'remove');
+  }
+
+  const rawAudit = generation?.refinedPrerequisiteEdges;
+  if (rawAudit !== undefined && !Array.isArray(rawAudit)) {
+    throw new Error('generation.refinedPrerequisiteEdges 必须是数组');
+  }
+
+  const reasons = new Map();
+  for (const [index, entry] of (rawAudit ?? []).entries()) {
+    if (
+      !isRecord(entry)
+      || !['op', 'from', 'to', 'reason'].every((key) => hasOwn(entry, key))
+    ) {
+      throw new Error(`generation.refinedPrerequisiteEdges[${index}] 必须包含 op/from/to/reason`);
+    }
+    const op = String(entry.op ?? '').trim();
+    const from = String(entry.from ?? '').trim();
+    const to = String(entry.to ?? '').trim();
+    const reason = String(entry.reason ?? '').trim();
+    if (!['add', 'remove'].includes(op) || !from || !to || !reason) {
+      throw new Error(`generation.refinedPrerequisiteEdges[${index}] 的 op/from/to/reason 无效`);
+    }
+
+    const direct = `${op}\u0000${edgeKey(from, to)}`;
+    const reversed = `${op}\u0000${edgeKey(to, from)}`;
+    const canonical = changes.has(direct)
+      ? direct
+      : (changes.has(reversed) ? reversed : null);
+    // Stale entries are usually caused by a model listing all final edges.
+    // They do not describe a change and must not poison replay validation.
+    if (canonical === null) continue;
+    // Treat repeated direct/reversed entries as one audit item. The graph
+    // delta is authoritative; keeping the first non-empty reason makes the
+    // result deterministic while avoiding a needless retry loop.
+    if (!reasons.has(canonical)) reasons.set(canonical, reason);
+  }
+
+  return [...changes.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([changeKey, op]) => {
+      const edge = changeKey.slice(`${op}\u0000`.length);
+      const [from, to] = edgeParts(edge);
+      return {
+        op,
+        from,
+        to,
+        reason: reasons.get(changeKey)
+          || (op === 'add'
+            ? '图谱草稿相对 canonical prerequisites 新增，待 G6 审核确认'
+            : '图谱草稿相对 canonical prerequisites 移除，待 G6 审核确认'),
+      };
+    });
+}
+
+function normalizeBrokenCycleEdges(sourcePoints, targetPoints, generation) {
+  const sourceEdges = prerequisiteEdges(sourcePoints);
+  const targetEdges = prerequisiteEdges(targetPoints);
+  const removedEdges = new Set(
+    [...sourceEdges].filter((key) => !targetEdges.has(key)),
+  );
+  const rawBroken = generation?.brokenCycleEdges;
+  if (rawBroken !== undefined && !Array.isArray(rawBroken)) {
+    throw new Error('generation.brokenCycleEdges 必须是数组');
+  }
+
+  const seen = new Set();
+  const normalized = [];
+  for (const [index, entry] of (rawBroken ?? []).entries()) {
+    if (
+      !isRecord(entry)
+      || !['from', 'to'].every((key) => hasOwn(entry, key))
+    ) {
+      throw new Error(`generation.brokenCycleEdges[${index}] 必须包含 from/to/reason`);
+    }
+    const from = String(entry.from ?? '').trim();
+    const to = String(entry.to ?? '').trim();
+    if (!from || !to) {
+      throw new Error(`generation.brokenCycleEdges[${index}] 的 from/to 无效`);
+    }
+
+    const direct = edgeKey(from, to);
+    const reversed = edgeKey(to, from);
+    const canonical = removedEdges.has(direct)
+      ? direct
+      : (removedEdges.has(reversed) ? reversed : null);
+    // A stale cycle record does not describe a removed edge in the target
+    // graph and would otherwise fail broken-edge-not-refined.
+    if (canonical === null || seen.has(canonical)) continue;
+    seen.add(canonical);
+    const [canonicalFrom, canonicalTo] = edgeParts(canonical);
+    normalized.push({
+      from: canonicalFrom,
+      to: canonicalTo,
+      reason: String(entry.reason ?? '').trim()
+        || '图谱草稿为破环移除该 prerequisite，待 G6 审核确认',
+    });
+  }
+
+  return normalized.sort((left, right) => (
+    edgeKey(left.from, left.to).localeCompare(edgeKey(right.from, right.to))
+  ));
+}
+
 function loadJson(file, label) {
   try {
     return JSON.parse(readFileSync(file, 'utf8'));
@@ -186,6 +330,16 @@ export function assembleGraphPoints(contentRootInput, graphFileInput, { write = 
       sourceCourseId: index.courseId,
       pointCount: assembledPoints.length,
       clusterCount: graph.clusters.length,
+      refinedPrerequisiteEdges: normalizePrerequisiteAudit(
+        sourcePoints,
+        assembledPoints,
+        graph.generation,
+      ),
+      brokenCycleEdges: normalizeBrokenCycleEdges(
+        sourcePoints,
+        assembledPoints,
+        graph.generation,
+      ),
     },
     points: assembledPoints,
   };

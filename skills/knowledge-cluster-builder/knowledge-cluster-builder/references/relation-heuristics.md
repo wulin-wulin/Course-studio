@@ -62,7 +62,7 @@
 
 ## 五、prerequisites 的复核与优化
 
-上游 `prerequisites` 已是无环 DAG。默认**原样透传**；仅在有明确依据时做以下三类优化，且**每处改动都记入 `generation.refinedPrerequisiteEdges`**（`{op, from, to, reason}`）：
+上游 `prerequisites` 已是无环 DAG。默认**原样透传**；仅在有明确依据时做以下三类优化，且**每处相对 canonical 的实际改动都记入 `generation.refinedPrerequisiteEdges`**（`{op, from, to, reason}`）。审计方向固定为 `from=dependent`、`to=prerequisite`；例如 `A.prerequisites=[B]` 写成 `from=A,to=B`，不能把视觉上的 `B→A` 写入审计，也不能重复列出全部最终边：
 
 1. **补漏（op: add）**：上游遗漏了一条必需前置。判据同第一节的“不先学 B 就学不了 A”。
    - 例：`continuous-integration → software-testing`（CI 的质量门禁以测试为前置）。

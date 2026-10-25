@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Any
 
 from .markdown_parser import _headings, build_markdown_artifacts
@@ -27,27 +28,47 @@ def _heading_score(chapter: dict[str, Any], heading: Any, raw_line: str) -> int:
     number = str(chapter.get("number", ""))
     title = _compact(chapter.get("title", ""))
     heading_title = _compact(getattr(heading, "title", ""))
-    if not title or not heading_title:
+    if not title:
         return -1
+
+    # Numbered headings from an earlier chapter can repeat a later chapter's
+    # words. Require the chapter number to agree whenever Markdown provides
+    # one; unnumbered headings remain eligible because MinerU may emit the
+    # chapter marker and title separately.
+    heading_number = getattr(heading, "number", None)
+    if isinstance(heading_number, tuple) and heading_number:
+        try:
+            expected_number = int(number)
+        except (TypeError, ValueError):
+            return -1
+        if heading_number[0] != expected_number:
+            return -1
     score = 0
-    if heading_title == title:
+    if heading_title and heading_title == title:
         score = 100
-    elif title in heading_title or heading_title in title:
+    elif heading_title and (title in heading_title or heading_title in title):
         score = 85
     # Chapter 4 in the observed export has only a 4.1 heading; the TOC title
     # is still the stronger chapter title, so use the numbered first section
     # as a conservative fallback.
-    heading_number = getattr(heading, "number", None)
     if isinstance(heading_number, tuple) and len(heading_number) >= 2:
-        if str(heading_number[0]) == number and heading_number[1] == 1:
+        if heading_number[1] == 1:
             score = max(score, 70)
     if re.search(rf"第\s*{re.escape(number)}\s*[章节篇部]", raw_line):
         score = max(score, 72)
     # Repeated bare chapter titles in answer keys/indexes often carry a
     # one-number parser annotation (``(4)``/``第4章``).  Prefer the body
     # heading (or its N.1 marker) over that later duplicate.
-    if isinstance(heading_number, tuple) and len(heading_number) == 1:
-        score -= 40
+    if isinstance(heading_number, tuple) and len(heading_number) == 1 and score == 0:
+        # A standalone chapter marker is valid even when the title is emitted
+        # on the following Markdown line.
+        marker_text = re.sub(
+            r"[\s\d第章一二三四五六七八九十百千万零〇]+",
+            "",
+            unicodedata.normalize("NFKC", str(getattr(heading, "title", ""))),
+        )
+        if not marker_text:
+            score = 72
     return score
 
 
@@ -69,14 +90,16 @@ def _find_chapter_sections(
         ),
         default=len(lines) + 1,
     )
-    matched: list[tuple[dict[str, Any], Any, int]] = []
-    used_lines: set[int] = set()
-    previous_line = 0
+    option_sets: list[list[tuple[int, int, Any, dict[str, Any]]]] = []
     for chapter in candidate["chapters"]:
+        try:
+            chapter_number = int(str(chapter.get("number", "")))
+        except (TypeError, ValueError):
+            chapter_number = None
         options: list[tuple[int, int, Any, dict[str, Any]]] = []
         for heading in headings:
             line = int(heading.line)
-            if line <= previous_line or line in used_lines or line >= auxiliary_line:
+            if line >= auxiliary_line:
                 continue
             section = section_by_line.get(line)
             if section is None:
@@ -84,19 +107,65 @@ def _find_chapter_sections(
             raw_line = lines[line - 1] if 0 < line <= len(lines) else ""
             score = _heading_score(chapter, heading, raw_line)
             if score >= 70:
+                # A real chapter anchor is normally followed by its first
+                # numbered point. This small look-ahead disambiguates two
+                # identical unnumbered headings (for example a cross-link in
+                # an introduction followed by the actual chapter heading).
+                if chapter_number is not None:
+                    first_point_distances = [
+                        next_heading.line - line
+                        for next_heading in headings
+                        if next_heading.line > line
+                        and next_heading.line <= line + 200
+                        and getattr(next_heading, "number", None)
+                        == (chapter_number, 1)
+                    ]
+                    if first_point_distances:
+                        # The closer the first point, the stronger the
+                        # evidence that this is the chapter opener rather
+                        # than an earlier cross-reference.
+                        score += max(1, 20 - min(first_point_distances))
                 options.append((score, line, heading, section))
         if not options:
             raise DocumentParseError(
-                f"MinerU Markdown cannot locate chapter {chapter.get('number')}"
+                f"MinerU Markdown 无法定位第 {chapter.get('number')} 章：章节编号与正文标题未对齐"
             )
-        # Preserve document order. A later appendix can contain an exact copy
-        # of a chapter title, while the first evidence-backed heading is the
-        # real chapter boundary.
-        _, line, heading, section = min(options, key=lambda item: item[1])
-        matched.append((chapter, heading, sections.index(section)))
-        used_lines.add(line)
-        previous_line = line
-    return matched
+        option_sets.append(options)
+
+    # Select a monotonic sequence as one unit instead of greedily fixing one
+    # chapter at a time.  OCR books frequently repeat a chapter title in an
+    # introduction, a running header, and an answer key.  A greedy exact-title
+    # choice can jump to the later copy and leave no valid location for the
+    # following chapter.  Backtracking is bounded by the number of headings,
+    # and the memoized suffix keeps the common 10–30 chapter case tiny.
+    @lru_cache(maxsize=None)
+    def search(
+        chapter_index: int, previous_line: int
+    ) -> tuple[tuple[int, int, Any, dict[str, Any]], ...] | None:
+        if chapter_index >= len(option_sets):
+            return ()
+        options = sorted(
+            (option for option in option_sets[chapter_index] if option[1] > previous_line),
+            key=lambda item: (-item[0], item[1]),
+        )
+        for option in options:
+            suffix = search(chapter_index + 1, option[1])
+            if suffix is not None:
+                return (option, *suffix)
+        return None
+
+    selected = search(0, 0)
+    if selected is None:
+        # We already know every chapter has at least one local candidate; the
+        # only remaining failure is an impossible global order.
+        missing = candidate["chapters"][0].get("number", "?")
+        raise DocumentParseError(
+            f"MinerU Markdown chapters cannot be aligned in document order (starting at chapter {missing})"
+        )
+    return [
+        (chapter, option[2], sections.index(option[3]))
+        for chapter, option in zip(candidate["chapters"], selected, strict=True)
+    ]
 
 
 def _is_auxiliary_title(title: str) -> bool:
@@ -111,7 +180,11 @@ def _is_auxiliary_title(title: str) -> bool:
         "常用逻辑门",
         "芯片型号",
     )
-    return any(marker in compact for marker in markers)
+    return any(
+        marker in compact
+        for marker in markers
+        if marker != "索引"
+    ) or compact == "索引"
 
 
 def _is_auxiliary_boundary_title(title: str) -> bool:
@@ -125,13 +198,17 @@ def _is_auxiliary_boundary_title(title: str) -> bool:
     compact = _compact(title)
     if "答案见附录" in compact or "答案见" in compact:
         return False
+    # ``索引`` by itself is an auxiliary section. Ordinary textbook headings
+    # such as ``索引的建立与删除`` and ``索引技术`` are body content and must
+    # not truncate the chapter search window.
+    if compact == "索引":
+        return True
     return compact.startswith(
         (
             "附录",
             "习题答案",
             "自测题答案",
             "参考文献",
-            "索引",
             "常用逻辑门",
             "芯片型号",
         )
@@ -261,7 +338,7 @@ def build_mineru_markdown_artifacts(
                 point_number = f"{chapter_number}.{point_index + 1}"
             if point_number in seen_numbers:
                 raise DocumentParseError(
-                    f"MinerU Markdown has duplicate point number {point_number}"
+                    f"MinerU Markdown 中知识点编号重复：{point_number}"
                 )
             seen_numbers.add(point_number)
 

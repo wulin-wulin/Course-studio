@@ -99,7 +99,7 @@ pipeline/<course-id>/
   2. `sync-index`
   3. `validate-points`
 
-- 教材模式中，G3 生成的 `prerequisites` 只能作为基于内容的候选语义关系；它们不改变 G1 冻结的章节、顺序、教材点身份或章节归属。
+- 教材模式中，G3 生成的 `prerequisites` 只能作为基于内容的候选语义关系；它们不改变 G1 冻结的章节、顺序、教材点身份或章节归属。章节顺序、章内点顺序、点编号和 `sequences` 不能推导 prerequisites；没有明确内容证据时写 `[]`。
 - 教材 Markdown 模式中，每个详情任务必须使用受信 manifest 中该点的 source spans，并读取
   `material.json/full.md` 中对应正文，传入点级证据包；manifest 声明
   `contentContract: "textbook-content/2.0"` 并保存
@@ -134,7 +134,7 @@ pipeline/<course-id>/
 - 点集及 index 顺序不变。普通课程沿用现有图装配；声明 `textbook-content/2.0` 的教材课程使用
   `clustered-graph/3.0` 薄图，point 只保存
   `id/title/origin/clusterIds/role/prerequisites/related`，正文留在 canonical point 文件并由发布器读取。
-- `prerequisites` 默认透传；每条增删必须与审核记录一一对应。
+- `prerequisites` 默认透传；每条增删必须与审核记录一一对应。`generation.refinedPrerequisiteEdges` 只记录相对 canonical point 的实际增删，方向固定为 `from=dependent`、`to=prerequisite`；`A.prerequisites=[B]` 应写 `from=A,to=B`，不能写反或重复列出全部最终边。
 - 新增 `clusters / clusterIds / role / related`，不生成布局。
 - `related` 必须双向声明，只表达横向联系；同一对点只要任一方向存在 prerequisite，就不得再写 related。
 - 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。

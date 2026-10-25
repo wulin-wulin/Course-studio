@@ -1,0 +1,1186 @@
+{
+  "id": "point-8-1",
+  "title": "嵌入式 SQL",
+  "shortSummary": "讲解嵌入式SQL的工作机制、游标使用和动态SQL的基本概念。",
+  "keyTerms": [
+    "嵌入式SQL",
+    "游标",
+    "OPEN",
+    "FETCH",
+    "CLOSE",
+    "动态SQL"
+  ],
+  "animationType": "cursorLifecycle",
+  "animationSuggestion": "用状态图展示游标生命周期，配合结果集表格高亮当前行，逐步演示OPEN、多次FETCH和CLOSE的状态变化。",
+  "difficulty": "中等",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-3-1",
+    "point-3-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "围绕宿主语言与SQL的协作机制，按处理过程、通信方式和游标操作组织内容，补充程序实例与动态SQL对比。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-embedded-sql-process",
+          "text": "说明嵌入式SQL的预编译处理过程及与主语言的通信机制。"
+        },
+        {
+          "id": "use-cursor",
+          "text": "正确使用游标完成多记录结果集的逐行处理。"
+        },
+        {
+          "id": "identify-dynamic-sql",
+          "text": "区分静态嵌入式SQL与动态SQL的适用场景。"
+        }
+      ],
+      "misconceptions": [
+        "认为嵌入式SQL语句由主语言编译器直接编译。",
+        "认为游标仅用于查询，不能用于更新或删除当前行。",
+        "认为动态SQL只是将SQL写成字符串变量，没有实质区别。"
+      ],
+      "modules": [
+        {
+          "id": "overview-process",
+          "title": "嵌入式SQL概述与处理过程",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-embedded-sql-process"
+          ],
+          "order": 0
+        },
+        {
+          "id": "communication",
+          "title": "SQL与主语言的通信机制",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-embedded-sql-process"
+          ],
+          "order": 1
+        },
+        {
+          "id": "cursor-procedure",
+          "title": "游标操作与程序实例",
+          "role": "procedure",
+          "outcomeRefs": [
+            "use-cursor"
+          ],
+          "order": 2
+        },
+        {
+          "id": "dynamic-sql",
+          "title": "动态SQL简介",
+          "role": "concept",
+          "outcomeRefs": [
+            "identify-dynamic-sql"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check",
+          "title": "达成检查",
+          "role": "exercise",
+          "outcomeRefs": [
+            "explain-embedded-sql-process",
+            "use-cursor",
+            "identify-dynamic-sql"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-embedded-sql-process",
+          "use-cursor",
+          "identify-dynamic-sql"
+        ],
+        "method": "完成概念判断与游标操作顺序填空。",
+        "successCriteria": [
+          "能说明预编译四步骤",
+          "能按正确顺序列出游标操作",
+          "能指出动态SQL的必要条件"
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-embedded-overview",
+        "moduleId": "overview-process",
+        "depth": "core",
+        "kind": "definition",
+        "title": "嵌入式SQL的定义与背景",
+        "markdown": "标准SQL是非过程化的查询语言，具有操作统一、面向集合、功能丰富、使用简单等优点，但缺少流程控制能力。为了克服SQL在复杂应用方面的不足，可将SQL语句嵌入程序设计语言（如C、C++、Java等）中使用，被嵌入的语言称为宿主语言或主语言。\n\n在嵌入式SQL中，所有SQL语句都必须加前缀以区分主语言语句。当主语言为C时，语法格式为：`EXEC SQL <SQL语句>;`。若主语言为Java，则称为SQLJ，语法格式为：`#SQL {<SQL语句>};`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000470"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "数据库编程"
+              ],
+              "lineStart": 8683,
+              "lineEnd": 8690,
+              "assetRefs": [],
+              "excerptSha256": "75acc457a242256071b119b278f97a2164393afefe4ffda22300ecd31278f179"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000471"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "嵌入式 SQL"
+              ],
+              "lineStart": 8691,
+              "lineEnd": 8694,
+              "assetRefs": [],
+              "excerptSha256": "c2c6b36df1a5bd3bf6823fe2dd35203effd3a5c5db50f59c0c25b8285bbcbc21"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-processing",
+        "moduleId": "overview-process",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "嵌入式SQL的处理过程",
+        "markdown": "嵌入式SQL是将SQL语句嵌入程序设计语言中。数据库管理系统一般采用预编译方法处理：由预处理程序对源程序进行扫描，识别出嵌入式SQL语句，把它们转换成主语言调用语句，然后由主语言编译程序将纯主语言程序编译成目标码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000472"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "嵌入式 SQL 的处理过程"
+              ],
+              "lineStart": 8695,
+              "lineEnd": 8713,
+              "assetRefs": [
+                "parts/part-0003/images/788e9de80bed2d456bf77cc526e88fe7419d7c7331fa43f918b0d7abbeed8507.jpg"
+              ],
+              "excerptSha256": "39568ecd4d26e988cf6658bd2bb8c8988ca3d0c9ff9b695eb6d315c4d3457a1f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-process-flow",
+        "moduleId": "overview-process",
+        "depth": "support",
+        "kind": "example",
+        "title": "预编译处理流程示意",
+        "markdown": "可以把预编译过程理解为一次“翻译”：含有`EXEC SQL`的源程序首先经过DBMS的预编译器，生成不含SQL语句的纯主语言源程序，再由主语言编译器生成目标代码，最后与数据库接口库链接形成可执行程序。这个过程中，SQL语句被替换为对DBMS运行时库的函数调用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-processing"
+          ]
+        }
+      },
+      {
+        "id": "tb-communication-overview",
+        "moduleId": "communication",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "SQL与主语言的通信",
+        "markdown": "将SQL嵌入高级语言混合编程时，程序中含有两种不同计算模型的语句，它们之间的通信主要包括：\n\n（1）向主语言传递SQL语句的执行状态信息，使主语言能够据此控制程序流程，主要通过SQL通信区（SQLCA）实现。\n\n（2）主语言向SQL语句提供参数，主要通过主变量（host variable）实现。\n\n（3）将SQL语句查询数据库的结果交主语言处理，主要通过主变量和游标（cursor）实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "嵌入式 SQL 语句与主语言之间的通信"
+              ],
+              "lineStart": 8714,
+              "lineEnd": 8725,
+              "assetRefs": [],
+              "excerptSha256": "bcc582e25d6ad8b40028ce8e36bb6c670c80046bc3b59a605f734a6d87c180ae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-sqlca",
+        "moduleId": "communication",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "SQL通信区与主变量",
+        "markdown": "SQL语句执行后，系统反馈的信息送到SQL通信区（SQLCA）。应用程序用`EXEC SQL INCLUDE SQLCA`定义SQLCA，其中变量SQLCODE存放每次执行SQL语句后返回的代码。若SQLCODE等于预定义的常量SUCCESS，表示成功；否则存放错误代码。\n\n嵌入式SQL语句中可以使用主语言的程序变量来输入或输出数据，称为主变量。主变量分为输入主变量和输出主变量。一个主变量可附带一个整型指示变量（indicator variable），用来指示主变量的值或条件。所有主变量和指示变量必须在`BEGIN DECLARE SECTION`与`END DECLARE SECTION`之间说明，并在SQL语句前加冒号（:）作为标志。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000474"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "SQL 通信区"
+              ],
+              "lineStart": 8726,
+              "lineEnd": 8733,
+              "assetRefs": [],
+              "excerptSha256": "178ecd1a7dd24edf829c92be34dfc0c767bc2bf813cdd45a1d49e734bba6fdf1"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000475"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "主变量"
+              ],
+              "lineStart": 8734,
+              "lineEnd": 8741,
+              "assetRefs": [],
+              "excerptSha256": "df087098d65d52d28f4654b8d3b497161d5aaf7a705144fa56525bb9c534d952"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-indicator-example",
+        "moduleId": "communication",
+        "depth": "support",
+        "kind": "example",
+        "title": "指示变量的作用示例",
+        "markdown": "假设查询某学生的成绩并存入主变量`:grade`，但该成绩在数据库中为NULL。若不加指示变量，主语言可能得到不可预期的值；若使用指示变量`:grade_ind`，当返回NULL时`:grade_ind`会被设为负值，程序即可据此判断并做相应处理，避免逻辑错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sqlca"
+          ]
+        }
+      },
+      {
+        "id": "tb-cursor-concept",
+        "moduleId": "cursor-procedure",
+        "depth": "core",
+        "kind": "definition",
+        "title": "游标的概念",
+        "markdown": "SQL是面向集合的，一条SQL语句可以产生或处理多条记录；而主语言是面向记录的，一组主变量一次只能存放一条记录。因此仅使用主变量并不能完全满足SQL语句向应用程序输出数据的要求。\n\n游标是系统为用户开设的一个数据缓冲区，存放SQL语句的执行结果，每个游标区都有一个名字。用户可以通过游标逐一获取记录并赋给主变量，交由主语言进一步处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000476"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "游标"
+              ],
+              "lineStart": 8742,
+              "lineEnd": 8747,
+              "assetRefs": [],
+              "excerptSha256": "3eebd245ef35bcca7b3a3d49a75de277ac650fcdaaf25ec299fe01c645a05b05"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-connection",
+        "moduleId": "communication",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "数据库连接的建立与关闭",
+        "markdown": "嵌入式SQL程序要访问数据库必须先连接数据库。建立连接的语句为：`EXEC SQL CONNECT TO target[AS connection-name][USER user-name];`。其中target是要连接的数据库服务器，connection-name是可选的连接名，用于识别程序内同时建立的多个连接。\n\n关闭连接的语句为：`EXEC SQL DISCONNECT [connection];`。当某个连接上的所有数据库操作完成后，应用程序应主动释放所占用的连接资源。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000477"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "建立和关闭数据库连接"
+              ],
+              "lineStart": 8748,
+              "lineEnd": 8751,
+              "assetRefs": [],
+              "excerptSha256": "aa04cf1f8c3d4f8774cab4f69177c8af5efe14856fee12d03d73a97abe03577f"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(1) 建立数据库连接"
+              ],
+              "lineStart": 8752,
+              "lineEnd": 8771,
+              "assetRefs": [],
+              "excerptSha256": "7a4de122e20a6c1f90b9a147a5e52ee604633d9d2a9d46b20d595228ed726764"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000479"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(2) 关闭数据库连接"
+              ],
+              "lineStart": 8772,
+              "lineEnd": 8779,
+              "assetRefs": [],
+              "excerptSha256": "fd4a06e9d430e985f73c1d4de50fc9852ea1f5a7a9d2a454ec29f7785c533cd7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-program-example",
+        "moduleId": "cursor-procedure",
+        "depth": "support",
+        "kind": "code",
+        "title": "程序实例",
+        "markdown": "教材提供了完整的嵌入式SQL程序实例，演示了从建立连接、声明游标、打开游标、循环FETCH直到关闭游标和断开连接的完整流程。实例中同时展示了如何利用SQLCODE进行错误处理，以及主变量和指示变量的实际使用方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000480"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "程序实例"
+              ],
+              "lineStart": 8780,
+              "lineEnd": 8838,
+              "assetRefs": [],
+              "excerptSha256": "b0ffc09f297e7313ccbd78287d78f39f1619aaaaee5b6d33d573c4da00bfefca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-no-cursor",
+        "moduleId": "cursor-procedure",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "不用游标的SQL语句",
+        "markdown": "并非所有嵌入式SQL语句都需要游标。以下两种情况不用游标：\n\n（1）查询结果为单记录的SELECT语句：结果仅有一条记录，可直接用主变量接收。\n\n（2）非CURRENT形式的增删改语句：如INSERT、UPDATE、DELETE，它们不返回结果集，只需通过SQLCA检查执行状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000481"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "不用游标的 SQL 语句"
+              ],
+              "lineStart": 8839,
+              "lineEnd": 8842,
+              "assetRefs": [],
+              "excerptSha256": "01f93ad560ffd301c46ec5d8dbd257d795b4b8a1cbefc028124641b9cedeb7f9"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000482"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "查询结果为单记录的 SELECT 语句"
+              ],
+              "lineStart": 8843,
+              "lineEnd": 8874,
+              "assetRefs": [],
+              "excerptSha256": "c0ea9a64be151ce70ff113cd3c73bbba280a3b4f6fac1baa7bdc3d433e44463a"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000483"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "非 CURRENT 形式的增删改语句"
+              ],
+              "lineStart": 8875,
+              "lineEnd": 8898,
+              "assetRefs": [],
+              "excerptSha256": "2c0a31290cd73c3b6ec4e92f8ac96e22bc60912d84a260cd240e552bc8e09ded"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-cursor-steps",
+        "moduleId": "cursor-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "游标的使用步骤",
+        "markdown": "使用游标处理多条记录结果的SELECT语句需要以下步骤：\n\n（1）说明游标：`EXEC SQL DECLARE <游标名> CURSOR FOR <SELECT语句>;`\n\n（2）打开游标：`EXEC SQL OPEN <游标名>;`\n\n（3）推进游标指针并取当前记录：`EXEC SQL FETCH <游标名> INTO <主变量>[<指示变量>][, ...];`\n\n（4）关闭游标：`EXEC SQL CLOSE <游标名>;`\n\n此外，可以使用CURRENT形式的UPDATE和DELETE语句修改或删除游标指向的当前记录，格式为：`WHERE CURRENT OF <游标名>`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000484"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "使用游标的 SQL 语句"
+              ],
+              "lineStart": 8899,
+              "lineEnd": 8902,
+              "assetRefs": [],
+              "excerptSha256": "57192c6ff32ea77fe83f7d42f4deb8bc34037ddbe13176f10118075af94f2221"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "查询结果为多条记录的 SELECT 语句"
+              ],
+              "lineStart": 8903,
+              "lineEnd": 8906,
+              "assetRefs": [],
+              "excerptSha256": "d3b04e9bf03be9ea98d574f896ce1dcf0bfbf535c6b750003fded984fbf85bc9"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000486"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(1) 说明游标"
+              ],
+              "lineStart": 8907,
+              "lineEnd": 8916,
+              "assetRefs": [],
+              "excerptSha256": "567be121fd2adb2adf2706de0237e98f73d96049d2bf2536c85f0fba62c4f693"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000487"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(2) 打开游标"
+              ],
+              "lineStart": 8917,
+              "lineEnd": 8926,
+              "assetRefs": [],
+              "excerptSha256": "c7e6e0cdb21422378596a04cdf0cd5916c32e62cbcfd5ef7278e2ee4bd285614"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000488"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "（3）推进游标指针并取当前记录"
+              ],
+              "lineStart": 8927,
+              "lineEnd": 8940,
+              "assetRefs": [],
+              "excerptSha256": "8fddf5b8dd9078266d6a8b701747ec7470c5a8d1cb02f01192c0c6776b9a0496"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000489"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(4) 关闭游标"
+              ],
+              "lineStart": 8941,
+              "lineEnd": 8944,
+              "assetRefs": [],
+              "excerptSha256": "f63080c51292eb7a8e99b5939a4154b6ba39e2fff26ede4e5b4f0c8e3524cc05"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000490"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "EXEC SQL CLOSE <游标名>;"
+              ],
+              "lineStart": 8945,
+              "lineEnd": 8948,
+              "assetRefs": [],
+              "excerptSha256": "99ad3511e743c26fdd7a1b02423d7856d7dead9ff42da8c86d8fc87c5f9695a4"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000491"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "CURRENT 形式的 UPDATE 和 DELETE 语句"
+              ],
+              "lineStart": 8949,
+              "lineEnd": 8952,
+              "assetRefs": [],
+              "excerptSha256": "76d6a73b97109d05fa88e0a722be7cbd0e631e4f83e17b93b0d98f71f3786b1e"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000492"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "WHERE CURRENT OF <游标名>"
+              ],
+              "lineStart": 8953,
+              "lineEnd": 8960,
+              "assetRefs": [],
+              "excerptSha256": "a2469755f7301bdfe3bd9fe0a1f3f587129008749cd42832d87bbf6ec3ac15b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cursor-lifecycle",
+        "moduleId": "cursor-procedure",
+        "depth": "support",
+        "kind": "example",
+        "title": "游标生命周期示意",
+        "markdown": "游标的状态可概括为：声明（DECLARE）阶段仅建立定义，不分配数据；打开（OPEN）时执行关联的SELECT并将结果集存入游标区；FETCH每次将当前指针所指记录送入主变量，并将指针后移；直至结果集遍历完毕后，用CLOSE释放游标区资源。若需修改当前行，则在FETCH后使用`UPDATE ... WHERE CURRENT OF`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cursor-concept",
+            "tb-cursor-steps"
+          ]
+        }
+      },
+      {
+        "id": "tb-dynamic-sql",
+        "moduleId": "dynamic-sql",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "动态SQL的基本概念",
+        "markdown": "前面所讲的嵌入式SQL语句中，主变量、查询条件、数据库对象等都是编程时确定的，属于静态SQL。动态SQL则允许在程序运行过程中临时组装SQL语句。\n\n动态SQL使用SQL语句主变量，其类型为字符型。主要步骤包括：\n\n（1）声明SQL语句主变量。\n\n（2）准备SQL语句（PREPARE）：`EXEC SQL PREPARE <语句名> FROM <SQL语句主变量>;`\n\n（3）执行准备好的语句（EXECUTE）：`EXEC SQL EXECUTE <语句名>[USING <主变量>];`。动态参数用`?`表示，执行时由USING子句中的主变量替换。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000493"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "动态SQL"
+              ],
+              "lineStart": 8961,
+              "lineEnd": 8966,
+              "assetRefs": [],
+              "excerptSha256": "19e32763fa776f3c1317ab58ae604349d8e90865e0b9e409cf07a7667dc3be6e"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000494"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "使用 SQL 语句主变量"
+              ],
+              "lineStart": 8967,
+              "lineEnd": 8980,
+              "assetRefs": [],
+              "excerptSha256": "eae9027671660d64608d55a5d050d0bcf1b355f232014dc2100d646964e95657"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000495"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "动态参数"
+              ],
+              "lineStart": 8981,
+              "lineEnd": 8984,
+              "assetRefs": [],
+              "excerptSha256": "51e77b01ec5167113dbc806b6c8d5d938aa7114358bb7cf43bf64979344dc811"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000496"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(1) 声明 SQL 语句主变量"
+              ],
+              "lineStart": 8985,
+              "lineEnd": 8988,
+              "assetRefs": [],
+              "excerptSha256": "e0880d41f39a09a694fbd5f2969a8b58767f27c5928d1230d04602e1432269ae"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000497"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "(2) 准备 SQL 语句（PREPARE）"
+              ],
+              "lineStart": 8989,
+              "lineEnd": 8994,
+              "assetRefs": [],
+              "excerptSha256": "921b6017f756dbca694cbfcc87423deb85311bd80ec2bcf0efcfd57194832c47"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000498"
+              ],
+              "headingPath": [
+                "概念结构设计",
+                "执行准备好的语句（EXECUTE）"
+              ],
+              "lineStart": 8995,
+              "lineEnd": 9016,
+              "assetRefs": [],
+              "excerptSha256": "7420b8a092a40f934c9ce775e8906494df67533ac726ed435d64323bca79802e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dynamic-vs-static",
+        "moduleId": "dynamic-sql",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "静态SQL与动态SQL的适用场景",
+        "markdown": "静态SQL在编译期即可确定语法和访问计划，执行效率高，适用于操作固定、性能敏感的业务。动态SQL在运行期组装，灵活性高，适用于查询条件由用户输入决定、表名或列名不确定的通用查询工具或报表系统。选择时应权衡灵活性与性能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dynamic-sql"
+          ]
+        }
+      },
+      {
+        "id": "ex-check",
+        "moduleId": "check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. 嵌入式SQL为什么要采用预编译方法处理？\n2. 游标的正确操作顺序是什么？\n3. 什么情况下必须使用动态SQL而非静态嵌入式SQL？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-processing",
+            "tb-cursor-steps",
+            "tb-dynamic-sql"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "cursor-sequence-check",
+        "type": "formative-check",
+        "anchorBlockId": "tb-cursor-steps",
+        "moduleId": "cursor-procedure",
+        "depth": "core",
+        "outcomeRefs": [
+          "use-cursor"
+        ],
+        "learningPurpose": "检查学习者能否正确排列游标操作顺序并理解各步骤作用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-cursor-steps"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按顺序写出游标使用的四个步骤，并说明OPEN和FETCH的主要作用。"
+        }
+      }
+    ]
+  },
+  "subtitle": "数据库编程",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "trunk",
+  "related": [
+    "point-8-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000470"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "数据库编程"
+      ],
+      "lineStart": 8683,
+      "lineEnd": 8690,
+      "assetRefs": [],
+      "excerptSha256": "75acc457a242256071b119b278f97a2164393afefe4ffda22300ecd31278f179"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000471"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "嵌入式 SQL"
+      ],
+      "lineStart": 8691,
+      "lineEnd": 8694,
+      "assetRefs": [],
+      "excerptSha256": "c2c6b36df1a5bd3bf6823fe2dd35203effd3a5c5db50f59c0c25b8285bbcbc21"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000472"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "嵌入式 SQL 的处理过程"
+      ],
+      "lineStart": 8695,
+      "lineEnd": 8713,
+      "assetRefs": [
+        "parts/part-0003/images/788e9de80bed2d456bf77cc526e88fe7419d7c7331fa43f918b0d7abbeed8507.jpg"
+      ],
+      "excerptSha256": "39568ecd4d26e988cf6658bd2bb8c8988ca3d0c9ff9b695eb6d315c4d3457a1f"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000473"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "嵌入式 SQL 语句与主语言之间的通信"
+      ],
+      "lineStart": 8714,
+      "lineEnd": 8725,
+      "assetRefs": [],
+      "excerptSha256": "bcc582e25d6ad8b40028ce8e36bb6c670c80046bc3b59a605f734a6d87c180ae"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000474"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "SQL 通信区"
+      ],
+      "lineStart": 8726,
+      "lineEnd": 8733,
+      "assetRefs": [],
+      "excerptSha256": "178ecd1a7dd24edf829c92be34dfc0c767bc2bf813cdd45a1d49e734bba6fdf1"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000475"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "主变量"
+      ],
+      "lineStart": 8734,
+      "lineEnd": 8741,
+      "assetRefs": [],
+      "excerptSha256": "df087098d65d52d28f4654b8d3b497161d5aaf7a705144fa56525bb9c534d952"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000476"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "游标"
+      ],
+      "lineStart": 8742,
+      "lineEnd": 8747,
+      "assetRefs": [],
+      "excerptSha256": "3eebd245ef35bcca7b3a3d49a75de277ac650fcdaaf25ec299fe01c645a05b05"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000477"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "建立和关闭数据库连接"
+      ],
+      "lineStart": 8748,
+      "lineEnd": 8751,
+      "assetRefs": [],
+      "excerptSha256": "aa04cf1f8c3d4f8774cab4f69177c8af5efe14856fee12d03d73a97abe03577f"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000478"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(1) 建立数据库连接"
+      ],
+      "lineStart": 8752,
+      "lineEnd": 8771,
+      "assetRefs": [],
+      "excerptSha256": "7a4de122e20a6c1f90b9a147a5e52ee604633d9d2a9d46b20d595228ed726764"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000479"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(2) 关闭数据库连接"
+      ],
+      "lineStart": 8772,
+      "lineEnd": 8779,
+      "assetRefs": [],
+      "excerptSha256": "fd4a06e9d430e985f73c1d4de50fc9852ea1f5a7a9d2a454ec29f7785c533cd7"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000480"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "程序实例"
+      ],
+      "lineStart": 8780,
+      "lineEnd": 8838,
+      "assetRefs": [],
+      "excerptSha256": "b0ffc09f297e7313ccbd78287d78f39f1619aaaaee5b6d33d573c4da00bfefca"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000481"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "不用游标的 SQL 语句"
+      ],
+      "lineStart": 8839,
+      "lineEnd": 8842,
+      "assetRefs": [],
+      "excerptSha256": "01f93ad560ffd301c46ec5d8dbd257d795b4b8a1cbefc028124641b9cedeb7f9"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000482"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "查询结果为单记录的 SELECT 语句"
+      ],
+      "lineStart": 8843,
+      "lineEnd": 8874,
+      "assetRefs": [],
+      "excerptSha256": "c0ea9a64be151ce70ff113cd3c73bbba280a3b4f6fac1baa7bdc3d433e44463a"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000483"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "非 CURRENT 形式的增删改语句"
+      ],
+      "lineStart": 8875,
+      "lineEnd": 8898,
+      "assetRefs": [],
+      "excerptSha256": "2c0a31290cd73c3b6ec4e92f8ac96e22bc60912d84a260cd240e552bc8e09ded"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000484"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "使用游标的 SQL 语句"
+      ],
+      "lineStart": 8899,
+      "lineEnd": 8902,
+      "assetRefs": [],
+      "excerptSha256": "57192c6ff32ea77fe83f7d42f4deb8bc34037ddbe13176f10118075af94f2221"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000485"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "查询结果为多条记录的 SELECT 语句"
+      ],
+      "lineStart": 8903,
+      "lineEnd": 8906,
+      "assetRefs": [],
+      "excerptSha256": "d3b04e9bf03be9ea98d574f896ce1dcf0bfbf535c6b750003fded984fbf85bc9"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000486"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(1) 说明游标"
+      ],
+      "lineStart": 8907,
+      "lineEnd": 8916,
+      "assetRefs": [],
+      "excerptSha256": "567be121fd2adb2adf2706de0237e98f73d96049d2bf2536c85f0fba62c4f693"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000487"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(2) 打开游标"
+      ],
+      "lineStart": 8917,
+      "lineEnd": 8926,
+      "assetRefs": [],
+      "excerptSha256": "c7e6e0cdb21422378596a04cdf0cd5916c32e62cbcfd5ef7278e2ee4bd285614"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000488"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "（3）推进游标指针并取当前记录"
+      ],
+      "lineStart": 8927,
+      "lineEnd": 8940,
+      "assetRefs": [],
+      "excerptSha256": "8fddf5b8dd9078266d6a8b701747ec7470c5a8d1cb02f01192c0c6776b9a0496"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000489"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(4) 关闭游标"
+      ],
+      "lineStart": 8941,
+      "lineEnd": 8944,
+      "assetRefs": [],
+      "excerptSha256": "f63080c51292eb7a8e99b5939a4154b6ba39e2fff26ede4e5b4f0c8e3524cc05"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000490"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "EXEC SQL CLOSE <游标名>;"
+      ],
+      "lineStart": 8945,
+      "lineEnd": 8948,
+      "assetRefs": [],
+      "excerptSha256": "99ad3511e743c26fdd7a1b02423d7856d7dead9ff42da8c86d8fc87c5f9695a4"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000491"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "CURRENT 形式的 UPDATE 和 DELETE 语句"
+      ],
+      "lineStart": 8949,
+      "lineEnd": 8952,
+      "assetRefs": [],
+      "excerptSha256": "76d6a73b97109d05fa88e0a722be7cbd0e631e4f83e17b93b0d98f71f3786b1e"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000492"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "WHERE CURRENT OF <游标名>"
+      ],
+      "lineStart": 8953,
+      "lineEnd": 8960,
+      "assetRefs": [],
+      "excerptSha256": "a2469755f7301bdfe3bd9fe0a1f3f587129008749cd42832d87bbf6ec3ac15b4"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000493"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "动态SQL"
+      ],
+      "lineStart": 8961,
+      "lineEnd": 8966,
+      "assetRefs": [],
+      "excerptSha256": "19e32763fa776f3c1317ab58ae604349d8e90865e0b9e409cf07a7667dc3be6e"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000494"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "使用 SQL 语句主变量"
+      ],
+      "lineStart": 8967,
+      "lineEnd": 8980,
+      "assetRefs": [],
+      "excerptSha256": "eae9027671660d64608d55a5d050d0bcf1b355f232014dc2100d646964e95657"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000495"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "动态参数"
+      ],
+      "lineStart": 8981,
+      "lineEnd": 8984,
+      "assetRefs": [],
+      "excerptSha256": "51e77b01ec5167113dbc806b6c8d5d938aa7114358bb7cf43bf64979344dc811"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000496"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(1) 声明 SQL 语句主变量"
+      ],
+      "lineStart": 8985,
+      "lineEnd": 8988,
+      "assetRefs": [],
+      "excerptSha256": "e0880d41f39a09a694fbd5f2969a8b58767f27c5928d1230d04602e1432269ae"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000497"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "(2) 准备 SQL 语句（PREPARE）"
+      ],
+      "lineStart": 8989,
+      "lineEnd": 8994,
+      "assetRefs": [],
+      "excerptSha256": "921b6017f756dbca694cbfcc87423deb85311bd80ec2bcf0efcfd57194832c47"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000498"
+      ],
+      "headingPath": [
+        "概念结构设计",
+        "执行准备好的语句（EXECUTE）"
+      ],
+      "lineStart": 8995,
+      "lineEnd": 9016,
+      "assetRefs": [],
+      "excerptSha256": "7420b8a092a40f934c9ce775e8906494df67533ac726ed435d64323bca79802e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    696,
+    1832
+  ],
+  "scale": 1.22
+}

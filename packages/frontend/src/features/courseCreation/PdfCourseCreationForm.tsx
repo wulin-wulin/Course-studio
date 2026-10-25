@@ -46,20 +46,32 @@ export function PdfCourseCreationForm({
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<AbortController | null>(null);
+  // Keep the successful upload identity separate from the display state. A
+  // parse request can fail after the upload has completed; retrying that parse
+  // should reuse the durable document instead of uploading the same bytes a
+  // second time (and potentially creating another document record).
+  const uploadedDocumentRef = useRef<TextbookDocumentMetadata | null>(null);
 
   useEffect(() => () => requestRef.current?.abort(), []);
 
-  const processFile = useCallback(async (nextFile: File) => {
+  const processFile = useCallback(async (
+    nextFile: File,
+    existingDocument?: TextbookDocumentMetadata,
+  ) => {
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
     setFile(nextFile);
-    setDocument(null);
+    setDocument(existingDocument ?? null);
+    if (!existingDocument) uploadedDocumentRef.current = null;
     setError("");
-    setPhase("uploading");
+    setPhase(existingDocument ? "parsing" : "uploading");
     try {
-      const uploaded = await uploadTextbookDocument(nextFile, controller.signal);
+      const uploaded =
+        existingDocument ??
+        (await uploadTextbookDocument(nextFile, controller.signal));
       if (controller.signal.aborted) return;
+      uploadedDocumentRef.current = uploaded;
       setDocument(uploaded);
       setPhase("parsing");
       const parsed = await parseTextbookDocument(
@@ -89,6 +101,15 @@ export function PdfCourseCreationForm({
     const nextFile = event.target.files?.[0];
     event.target.value = "";
     if (!nextFile) return;
+    // Selecting a replacement (even one that fails local validation) cancels
+    // any in-flight upload/parse for the previous file so its late response
+    // cannot overwrite the new error state.
+    requestRef.current?.abort();
+    requestRef.current = null;
+    // A newly chosen file can never reuse the previous upload identity,
+    // including when local validation rejects the new file before
+    // ``processFile`` is called.
+    uploadedDocumentRef.current = null;
     const supported = acceptedFormat === "markdown"
       ? isSupportedMarkdownTextbookFile(nextFile)
       : acceptedFormat === "pdf"
@@ -128,8 +149,15 @@ export function PdfCourseCreationForm({
     requestRef.current = null;
     setFile(null);
     setDocument(null);
+    uploadedDocumentRef.current = null;
     setPhase("idle");
     setError("");
+  };
+
+  const retry = () => {
+    if (!file) return;
+    const existingDocument = uploadedDocumentRef.current ?? document ?? undefined;
+    void processFile(file, existingDocument);
   };
 
   const busy = phase === "uploading" || phase === "parsing";
@@ -160,8 +188,8 @@ export function PdfCourseCreationForm({
             {markdownOnly
               ? "上传 MinerU 输出的 full.md 或结构化 Markdown，系统将读取章节、知识点和正文内容。"
               : pdfOnly
-                ? "上传 PDF 后，系统将调用 MinerU 生成 full.md，再生成章节、知识图谱和知识森林。"
-                : "支持 PDF 与 Markdown，系统将读取教材结构和正文内容来创建课程。"}
+                ? "如需在线 MinerU 解析，请先在 Agent 面板点击“MinerU 设置”；系统会先生成 full.md，再生成章节、知识图谱和知识森林。"
+                : "支持 PDF 与 Markdown；如需在线 MinerU 解析 PDF，请先在 Agent 面板点击“MinerU 设置”。"}
           </div>
         </div>
       </div>
@@ -278,7 +306,7 @@ export function PdfCourseCreationForm({
             {phase === "error" && file && (
               <button
                 type="button"
-                onClick={() => void processFile(file)}
+                onClick={retry}
                 disabled={disabled}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/25 bg-surface px-3 text-xs font-semibold text-primary hover:bg-primary-light disabled:opacity-50"
               >
