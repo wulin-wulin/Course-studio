@@ -1,0 +1,503 @@
+{
+  "id": "point-7-6",
+  "title": "可重复清洗流水线与边界测试",
+  "shortSummary": "把清洗规则组织为可重复流水线，并用边界与回归测试验证幂等性、可回滚和输出一致。",
+  "keyTerms": [
+    "清洗流水线",
+    "可重复",
+    "边界测试",
+    "回归测试",
+    "幂等",
+    "可回滚"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-7-1",
+    "point-7-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "operation-procedure-with-boundary-tests",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于可重复性定义、配置类别、四阶段流水线与五类边界用例的事实边界，按“验收目标→前置条件→步骤→错误恢复→检查表”的操作流程重排，并补充可执行的判据与回滚闭环。",
+      "estimatedMinutes": 17,
+      "outcomes": [
+        {
+          "id": "explain-reproducibility",
+          "text": "解释可重复清洗流水线的验收含义，并指出哪些配置与执行因素必须被版本化锁定。"
+        },
+        {
+          "id": "design-boundary-verification",
+          "text": "为固定频率与多频率清洗任务设计边界测试和回归验收，判断幂等、可回滚与输出一致是否成立。"
+        }
+      ],
+      "misconceptions": [
+        "把“重跑结果看起来差不多”当成可重复，忽略行数、质量码、派生标记或输出哈希的差异。",
+        "修改清洗配置后只重跑新数据、不回填历史分区，却仍宣称两个时段使用同一口径。",
+        "只用正常样本做回归，未注入空窗口、单点孤岛、序列号回退和迟到数据等边界输入。"
+      ],
+      "modules": [
+        {
+          "id": "m-scope-and-definition",
+          "title": "先确定可重复的验收含义",
+          "role": "framing",
+          "description": "明确本节要交付的两个验收目标，并把可重复性从口号拆成可检查条件。",
+          "outcomeRefs": [
+            "explain-reproducibility"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-fixed-config-and-stages",
+          "title": "锁定配置与阶段交接",
+          "role": "procedure",
+          "description": "按操作流程固定配置项、流水线阶段和阶段间的 schema 交接。",
+          "outcomeRefs": [
+            "explain-reproducibility",
+            "design-boundary-verification"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-boundary-and-regression",
+          "title": "边界用例与回归闭环",
+          "role": "verification",
+          "description": "把边界测试写成可执行断言，并用基准快照与分区切换完成回归和回滚。",
+          "outcomeRefs": [
+            "design-boundary-verification"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-troubleshooting",
+          "title": "误判排查与配置漂移处置",
+          "role": "recovery",
+          "description": "按检查表定位常见误判，处理配置漂移导致的历史分区不一致。",
+          "outcomeRefs": [
+            "design-boundary-verification"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-reproducibility",
+          "design-boundary-verification"
+        ],
+        "method": "完成一套边界测试断言表，并说明重跑、回填与回滚各自由什么证据判定通过。",
+        "successCriteria": [
+          "能写出至少三类边界输入及其期望输出行数、质量码与派生标记",
+          "能说明配置哈希、执行顺序和时区基准如何影响可重复性",
+          "能给出失败后保留旧分区、切回旧版本的恢复路径"
+        ],
+        "exerciseBlockId": "model-boundary-test-matrix",
+        "summaryBlockId": "model-troubleshoot-checklist",
+        "nextPointId": "point-8-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-frame",
+        "moduleId": "m-scope-and-definition",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节的落点",
+        "markdown": "教材把本节落在两件事上：让清洗流水线在相同输入与相同配置下可重复，以及用边界测试证明它在极端但合法的输入下仍按契约输出。后续的定义、配置、阶段与测试，都服务于这两个验收目标。\n\n学习时可以把它们当成一组操作流程：先锁定前置条件，再按阶段执行，遇到异常走恢复分支，最后用检查表确认可以交付。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000261"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "可重复清洗流水线与边界测试"
+              ],
+              "lineStart": 4736,
+              "lineEnd": 4737,
+              "assetRefs": [],
+              "excerptSha256": "e1f4e21e3d778ee41a7aae720f55184f8ed102b9730afbf9ef0ab1119641f77c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-reproducibility-definition",
+        "moduleId": "m-scope-and-definition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "可重复性的严格含义",
+        "markdown": "可重复性在这里指：给定相同的原始事实表、相同的版本化配置参数与相同的执行顺序，流水线输出的派生序列逐行比对完全一致。它排除任何依赖执行时刻随机状态、未声明环境变量或人工交互式判断的步骤。\n\n在澄湾冷链的多频率场景中，可重复性主要受三类风险冲击：时间边界解释不一致、插值策略参数未显式声明、质量码传播规则模糊。教材用固定契约消除歧义：窗口统一左闭右开，固定频率的期望点数按 $N = \\lfloor \\frac{end-start}{T_s} \\rfloor$ 计算，因此 1 小时、30 秒周期的温度数据对齐后应为 120 行，与原始点是否齐全无关。\n\n流水线还应被建模为有限状态机：每个阶段接收前一阶段的完整输出模式，包括字段集合、质量码枚举和行级元数据；最终输出保留 `event_time`、`device_id`、`metric`、`sequence_no` 等追溯字段，且不得覆盖已持久化的原始记录。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000262"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "可重复清洗流水线与边界测试",
+                "可重复清洗流水线的定义与必要性"
+              ],
+              "lineStart": 4738,
+              "lineEnd": 4745,
+              "assetRefs": [],
+              "excerptSha256": "1176798b7f9ef9fd8adf036866be4255c929586d2c1be7779356030816c069e2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reproducibility-gate",
+        "moduleId": "m-scope-and-definition",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把定义变成三道检查门",
+        "markdown": "把教材定义落到操作上，可以设三道检查门：\n\n1. **输入门**：原始事实表分区、配置内容哈希、执行顺序三者被同时记录，缺一项就不能声称复现。\n2. **规则门**：时间边界、插值方法与外推限制、质量码优先级都来自版本化配置，而不是代码里的临时分支或值班人员的现场判断。\n3. **环境门**：执行时刻、主机名、`ingest_time` 只能作为元数据出现，不得进入对齐、插值或质量码判定。\n\n于是“幂等重跑”有了可验证说法：同一分区、同一配置版本重跑，除显式声明的时变字段外差异行为 0，并且输出文件的 SHA-256 保持一致。若差异不为 0，应先怀疑配置哈希或执行顺序变化，而不是先归因于数据本身。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-reproducibility-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-config-as-code",
+        "moduleId": "m-fixed-config-and-stages",
+        "depth": "core",
+        "kind": "table",
+        "title": "配置即代码与版本锁定",
+        "markdown": "实现可重复性的核心机制是把所有可变参数纳入版本控制，并在每次执行时记录配置内容哈希。教材给出的配置类别如下：\n\n| 配置类别 | 示例参数 | 作用域 |\n|:---|:---|:---|\n| 采样契约 | 周期 30 s、单位 Cel、期望点数公式 | 全局，按 metric 区分 |\n| 间隙处理 | 最大连续缺失点数 `k_max`、插值方法、外推限制 | 按 device_id + metric |\n| 离群规则 | 滑动窗口宽度 `w`、标准差倍数 `n_sigma`、最小有效样本 `n_min` | 按温区或设备组 |\n| 重采样网格 | 对齐基准 `t_0`（案例取每日 00:00:00 UTC） | 全局 |\n| 质量码传播 | 输入含 `CLOCK_SUSPECT` 时输出强制置 `MANUAL_REVIEW` | 全局 |\n\n配置以 YAML 等结构化文件存储。流水线启动时校验当前配置哈希：与历史执行记录不匹配时，拒绝覆盖已有派生表分区，改为写入新的分区路径。这样任何时刻都能回到特定配置版本重跑并比对差异。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000263"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "可重复清洗流水线与边界测试",
+                "配置即代码与版本锁定"
+              ],
+              "lineStart": 4746,
+              "lineEnd": 4759,
+              "assetRefs": [],
+              "excerptSha256": "02e913c2ea04e538ea4302ba96b0f661b435a75481eb72556609c8882580b793"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-config-hash-guard",
+        "moduleId": "m-fixed-config-and-stages",
+        "depth": "support",
+        "kind": "warning",
+        "title": "哈希守门与可回滚的分区策略",
+        "markdown": "配置哈希不只是审计字段，它还是写入前的守门条件。建议把执行流程写成固定分支：\n\n- **哈希一致**：允许重写同版本分区，但仍先产出到临时路径，校验通过后再原子切换。\n- **哈希不一致**：禁止覆盖旧分区，写入带新版本标识的路径，并把旧分区保留为回滚目标。\n\n配套自查三项：配置是否按 `metric`、`device_id + metric`、温区等作用域正确落位；`t_0` 是否显式标注时区（例如 `2024-01-01T00:00:00Z`）；执行记录是否同时保存配置哈希、代码版本和输入分区清单。缺少任意一项，回滚时都无法解释“当时为什么得到这个结果”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-config-as-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-pipeline-stages",
+        "moduleId": "m-fixed-config-and-stages",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "四个顺序阶段与血缘",
+        "markdown": "典型可重复流水线包含四个顺序阶段，每个阶段都要声明输入输出模式：\n\n1. **去重与排序**：按 `device_id`、`metric`、`sequence_no` 去重，保留 `ingest_time` 最早的一行；增加派生字段 `dedup_rank`。`sequence_no` 缺口在此阶段只做标记，不填充。\n2. **时间对齐与间隙识别**：把不规则序列映射到固定网格。Z1-TEMP-01 的 1 小时窗口网格点为 `t_0 + i × 30 s`，`i = 0..119`；若有效记录的 `event_time` 落在 `[grid_point - 周期/2, grid_point + 周期/2)` 内，则对齐到该网格点；否则插入 `value=null`、`quality_code='MISSING'` 的占位行，并标记 `derived_gap_fill=true`，显式区分原始对齐行与派生填充行。\n3. **插值与边界约束**：只对满足条件的缺失段插值——缺失长度不超过 `k_max` 且两端均为有效原始记录；否则保持 `MISSING`。门磁等离散状态量禁止数值插值，只允许前向填充，且填充距离不超过 2 个心跳周期（案例为 120 秒）。\n4. **质量码聚合与输出校验**：按输入质量码、处理操作类型和规则冲突计算最终 `quality_code`。例如原始为 `OUT_OF_RANGE` 时输出保持该值；插值两端分别为 `GOOD` 与 `CLOCK_SUSPECT` 时强制置 `MANUAL_REVIEW`。\n\n数据血缘以行级粒度记录：每个派生行的 `lineage` 保存贡献的原始 `sequence_no` 列表与处理阶段标识，使最终告警可以回溯到原始传感器记录。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000264"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "可重复清洗流水线与边界测试",
+                "流水线阶段与数据血缘"
+              ],
+              "lineStart": 4760,
+              "lineEnd": 4773,
+              "assetRefs": [],
+              "excerptSha256": "a8f86e09fa12128750c958a8a4873c6e0dbcdbfc1761052ac317a69c0da17370"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stage-contract-checklist",
+        "moduleId": "m-fixed-config-and-stages",
+        "depth": "core",
+        "kind": "table",
+        "title": "阶段交接检查表与失败恢复",
+        "markdown": "每两个阶段之间都应能通过一张交接检查表，否则可重复性只停留在口头：\n\n| 检查项 | 通过条件 | 失败后的动作 |\n|:---|:---|:---|\n| 字段集合 | 下一阶段所需字段全部存在，派生字段有明确命名 | 停止推进，补齐 schema 声明 |\n| 质量码枚举 | 只出现已声明的码值，传播规则有版本 | 回退到上一阶段重算 |\n| 原始可追溯 | `event_time/device_id/metric/sequence_no` 未被覆盖 | 从原始事实表重放 |\n| 分区写入 | 只写新版本路径，未覆盖 `raw_telemetry` 或旧派生分区 | 丢弃临时分区并告警 |\n\n失败恢复也按流程走：从最近一个完整分区重放，重放前后比对行数与哈希；若差异来自质量码优先级变更，应升级规则版本并重新回填，而不是就地修改历史输出。这样“幂等”与“可回滚”才是同一套机制的两面。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pipeline-stages"
+          ]
+        }
+      },
+      {
+        "id": "tb-boundary-tests",
+        "moduleId": "m-boundary-and-regression",
+        "depth": "core",
+        "kind": "table",
+        "title": "五类边界测试与验收准则",
+        "markdown": "边界测试验证流水线在极端但合法输入下的行为稳定性。教材针对固定契约给出五类用例：\n\n| 用例 | 输入 | 期望输出 |\n|:---|:---|:---|\n| 空窗口 | 1 小时窗口内 Z3-TEMP-01 无原始记录 | 120 行全 `MISSING`，不得跳过输出或改变行数 |\n| 单点孤岛 | 窗口内仅 1 条有效记录，位于第 60 个网格点 | 该点为原始值 `GOOD`，其余 119 行为 `MISSING`，禁止向两侧外推插值 |\n| 序列号回退 | 注入非法回退值，如从 1000 突变为 50 | 该记录及连续性恢复前的后续记录标记 `CLOCK_SUSPECT` 并触发 `MANUAL_REVIEW`，不得静默接受或丢弃 |\n| 多频率混合 | Z1-TEMP-01（30 s）与 Z1-COMP-01（5 s）同时对齐到 30 秒网格 | 两条序列均 120 行、时间戳完全一致；电流每 6 个原始采样平均到 1 个网格点 |\n| 迟到数据 | `event_time` 08:00、`ingest_time` 08:15，水位线已到 08:10 | 标记 `LATE`，不参与已完成分区；显式 backfill 后重算该分区并比对差异 |\n\n量化验收：同一配置版本执行 100 次，输出文件 SHA-256 必须完全一致；与基准输出比对，除声明的时变字段（如执行时间戳）外，差异行数为零。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000265"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "可重复清洗流水线与边界测试",
+                "边界测试与验收准则"
+              ],
+              "lineStart": 4774,
+              "lineEnd": 4789,
+              "assetRefs": [],
+              "excerptSha256": "ca5a1536f6264999f373f12b5fb15320acd741be235ccd2cc2c6739fe1e247ae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundary-test-matrix",
+        "moduleId": "m-boundary-and-regression",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "把边界用例写成可执行断言",
+        "markdown": "设计顺序建议固定为“先锁契约，再写输入构造，最后写断言与失败含义”：\n\n1. **锁契约**：写明周期、网格基准 `t_0`、窗口左右边界、`k_max`、质量码优先级版本。契约没写清，任何断言都不可复现。\n2. **构造输入**：每个用例只改变一个边界变量，其余保持基准。空窗口不要顺手加心跳；序列号回退要保留前后连续段。\n3. **写断言**：同时检查行数、时间戳集合、`quality_code`、`derived_gap_fill` 与 `lineage`，而不是只看业务值。\n4. **写失败含义**：例如“空窗口行数变为 0”意味着优化逻辑跳过了输出；“孤岛被外推”意味着插值边界条件失效；“回退被静默丢弃”意味着异常记录未被标记。\n\n以单点孤岛为例，断言可写成：`len(rows) == 120`、`rows[60].value == 原始值`、`rows[60].quality_code == 'GOOD'`、其余行 `MISSING` 且 `derived_gap_fill == true`、不存在由该点外推得到的值。这样测试失败时能直接指向阶段二或阶段三的具体分支。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-boundary-tests"
+          ]
+        }
+      },
+      {
+        "id": "model-regression-rollback-loop",
+        "moduleId": "m-boundary-and-regression",
+        "depth": "advanced",
+        "kind": "mechanism",
+        "title": "回归、幂等与回滚的闭环",
+        "markdown": "把边界用例串成发布前的回归闭环，可以按四步走：\n\n1. **留基准**：用当前配置版本生成基准快照，保存输入分区清单、配置哈希、代码版本和输出哈希。\n2. **算新分区**：变更后全量重算到新版本路径，不触碰旧分区。\n3. **做行级 diff**：按主键对齐比较行数、时间戳、质量码与派生标记；差异必须能归因到声明的规则变化。\n4. **切读或回退**：通过则把下游读取切到新分区并保留旧分区至验证期结束；失败则切回旧分区，新分区标记为不合格。\n\n幂等要单独验证三次：相同输入重跑、并行实例重跑、任务中断后续跑。三者都应得到同一输出哈希。可回滚不是“把数据改回去”，而是保留旧版本分区并把读路径切回；这也解释了为什么教材要求配置哈希不匹配时拒绝覆盖旧分区。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-boundary-test-matrix",
+            "tb-pipeline-stages"
+          ]
+        }
+      },
+      {
+        "id": "tb-misconceptions",
+        "moduleId": "m-troubleshooting",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "常见误区与配置漂移故障",
+        "markdown": "教材列出三类高频误判：\n\n- **把原始缺失与派生填充混为一谈**：原始事实表缺失时没有数据行，而 `MISSING` 占位行是阶段二的输出。查询时过滤 `derived_gap_fill is null` 可得到纯原始对齐行；其行数不应超过期望点数，且只在窗口采样完整时等于期望点数。\n- **隐式依赖系统默认时区**：`event_time` 与 `ingest_time` 以 UTC 持久保存，若网格基准按本地时间计算，夏令时切换会让网格点偏移。所有时间常量都要显式标注时区。\n- **样本量不足仍计算统计量**：例如 `w=10` 分钟、`n_min=5` 而窗口只有 3 个有效点时，标准差估计极不稳定；正确行为是跳过统计判定并输出 `MANUAL_REVIEW`（原因 `INSUFFICIENT_SAMPLE`）。\n\n典型故障是配置漂移：运维修改 `k_max` 后未回填历史数据，导致相同原始输入在不同月份产生不同插值结果。修复顺序为：锁定当前配置版本、以新版本全量回溯、新旧输出并行期间切换下游读取、旧分区保留到验证期结束。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000266"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "可重复清洗流水线与边界测试",
+                "常见误区与故障排查"
+              ],
+              "lineStart": 4790,
+              "lineEnd": 4820,
+              "assetRefs": [],
+              "excerptSha256": "3de0178190656b24315621ac59bbea7bd020c9d6296527f4dd1938300ee21d86"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-troubleshoot-checklist",
+        "moduleId": "m-troubleshooting",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "排查顺序小练习",
+        "markdown": "遇到“同输入却输出不同”时，按固定顺序排查，避免直接改代码：\n\n1. 查期望点数与实际行数，先确认是否跳过了空窗口或占位行。\n2. 查 `derived_gap_fill` 分布，区分原始缺失和派生填充。\n3. 查 `quality_code` 与原因分布，确认是否出现 `INSUFFICIENT_SAMPLE`、`CLOCK_SUSPECT` 或 `MANUAL_REVIEW` 的异常聚集。\n4. 比对配置哈希、代码版本与输入分区清单，确认是否发生配置漂移。\n5. 若确认漂移，锁定新版本、全量回填到新分区，并保留旧分区作为回滚目标。\n\n练习：已知 2024-06 与 2024-07 在相同原始输入下插值结果不同，请写出三步定位方案，并说明回填期间下游应读取哪个分区、旧分区何时可以删除。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-misconceptions"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "boundary-assertion-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-boundary-test-matrix",
+        "moduleId": "m-boundary-and-regression",
+        "depth": "core",
+        "outcomeRefs": [
+          "design-boundary-verification"
+        ],
+        "learningPurpose": "检查学习者能否把边界用例转成覆盖行数、质量码与派生标记的可执行断言。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-boundary-tests",
+            "model-boundary-test-matrix"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "1 小时窗口内仅第 60 个网格点存在 1 条有效温度记录",
+          "prompt": "选择必须成立的断言组合",
+          "options": [
+            "输出 120 行，第 60 点为 GOOD，其余为 MISSING 且 derived_gap_fill 为 true",
+            "只输出 1 行有效记录，省略其余网格点",
+            "以第 60 点向两侧线性外推填充其余 119 行"
+          ],
+          "answerIndex": 0,
+          "explanation": "固定网格要求行数不因数据缺失而改变；单点孤岛不得外推，派生占位行必须显式标记。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出单点孤岛用例的至少四条断言：总行数、有效点位置、其余点的质量码与派生标记，并说明为什么不能外推插值。"
+        }
+      }
+    ]
+  },
+  "subtitle": "清洗、重采样与插值",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000261"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "可重复清洗流水线与边界测试"
+      ],
+      "lineStart": 4736,
+      "lineEnd": 4737,
+      "assetRefs": [],
+      "excerptSha256": "e1f4e21e3d778ee41a7aae720f55184f8ed102b9730afbf9ef0ab1119641f77c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000262"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "可重复清洗流水线与边界测试",
+        "可重复清洗流水线的定义与必要性"
+      ],
+      "lineStart": 4738,
+      "lineEnd": 4745,
+      "assetRefs": [],
+      "excerptSha256": "1176798b7f9ef9fd8adf036866be4255c929586d2c1be7779356030816c069e2"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000263"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "可重复清洗流水线与边界测试",
+        "配置即代码与版本锁定"
+      ],
+      "lineStart": 4746,
+      "lineEnd": 4759,
+      "assetRefs": [],
+      "excerptSha256": "02e913c2ea04e538ea4302ba96b0f661b435a75481eb72556609c8882580b793"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000264"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "可重复清洗流水线与边界测试",
+        "流水线阶段与数据血缘"
+      ],
+      "lineStart": 4760,
+      "lineEnd": 4773,
+      "assetRefs": [],
+      "excerptSha256": "a8f86e09fa12128750c958a8a4873c6e0dbcdbfc1761052ac317a69c0da17370"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000265"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "可重复清洗流水线与边界测试",
+        "边界测试与验收准则"
+      ],
+      "lineStart": 4774,
+      "lineEnd": 4789,
+      "assetRefs": [],
+      "excerptSha256": "ca5a1536f6264999f373f12b5fb15320acd741be235ccd2cc2c6739fe1e247ae"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000266"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "可重复清洗流水线与边界测试",
+        "常见误区与故障排查"
+      ],
+      "lineStart": 4790,
+      "lineEnd": 4820,
+      "assetRefs": [],
+      "excerptSha256": "3de0178190656b24315621ac59bbea7bd020c9d6296527f4dd1938300ee21d86"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1684,
+    1664
+  ],
+  "scale": 0.93
+}

@@ -8,6 +8,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { textbookStructureSha256 as hashTextbookStructure } from "../skills/knowledge-pipeline-orchestrator/scripts/textbook-structure.mjs";
+import { validateSequences } from "../skills/knowledge-cluster-builder/knowledge-cluster-builder/scripts/sequence-contract.mjs";
 
 const COURSE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -242,7 +243,18 @@ export function clusterReviewPayload(graph) {
       related,
     };
   });
-  return { clusters, assignments };
+  const payload = { clusters, assignments };
+  if (Object.prototype.hasOwnProperty.call(graph, "sequences")) {
+    const sequenceFindings = validateSequences(graph.sequences, {
+      clusterIds,
+      pointIds,
+    });
+    if (sequenceFindings.length > 0) {
+      fail(`graph.sequences 审核载荷非法：${sequenceFindings[0].message}`);
+    }
+    payload.sequences = structuredClone(graph.sequences);
+  }
+  return payload;
 }
 
 function normalizeRefinedAudit(value) {

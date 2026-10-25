@@ -20,6 +20,7 @@ import {
   assertTextbookSourceUnchanged,
   textbookStructureSha256,
 } from './textbook-structure.mjs';
+import { validateSequences } from '../../knowledge-cluster-builder/knowledge-cluster-builder/scripts/sequence-contract.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GRAPH_CHECKER = path.resolve(
@@ -35,7 +36,13 @@ const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HEX = /^#[0-9a-fA-F]{6}$/;
 const ROLES = new Set(['trunk', 'branch', 'leaf']);
+const LEGACY_GRAPH_SCHEMA = 'clustered-graph/2.0';
+const THIN_GRAPH_SCHEMA = 'clustered-graph/3.0';
+const TEXTBOOK_CONTENT_SCHEMA = 'textbook-content/2.0';
 const RELATION_FIELDS = ['clusterIds', 'role', 'related'];
+const THIN_POINT_FIELDS = [
+  'id', 'title', 'origin', 'clusterIds', 'role', 'prerequisites', 'related',
+];
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -162,7 +169,18 @@ function clusterReviewPayload(graph) {
       related: [...point.related],
     };
   });
-  return { clusters, assignments };
+  const payload = { clusters, assignments };
+  if (Object.prototype.hasOwnProperty.call(graph, 'sequences')) {
+    const sequenceFindings = validateSequences(graph.sequences, {
+      clusterIds,
+      pointIds,
+    });
+    if (sequenceFindings.length > 0) {
+      throw new Error(`graph.sequences 审核载荷非法：${sequenceFindings[0].message}`);
+    }
+    payload.sequences = structuredClone(graph.sequences);
+  }
+  return payload;
 }
 
 function graphReviewAuditPayload(graph) {
@@ -567,20 +585,20 @@ function validateGraphShape(graph, findings) {
   if (!checkShape(
     graph,
     ['schema_version', 'subject', 'generation', 'clusters', 'points'],
-    [],
+    ['sequences'],
     findings,
     'graph',
     'bad-top-level-shape',
     'clustered-graph.json',
   )) return;
 
-  if (graph.schema_version !== 'clustered-graph/2.0') {
+  if (![LEGACY_GRAPH_SCHEMA, THIN_GRAPH_SCHEMA].includes(graph.schema_version)) {
     add(
       findings,
       'error',
       'graph',
       'bad-schema-version',
-      'schema_version 必须为 clustered-graph/2.0',
+      `schema_version 必须为 ${LEGACY_GRAPH_SCHEMA} 或 ${THIN_GRAPH_SCHEMA}`,
     );
   }
 
@@ -788,6 +806,28 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
   if (!equal(manifest.subject, graph.subject)) {
     add(findings, 'error', 'handoff', 'subject-changed', 'graph.subject 未从 manifest 原样透传');
   }
+  const usesThinGraph = graph.schema_version === THIN_GRAPH_SCHEMA;
+  const usesTextbookContentV2 = (
+    manifest.generation?.contentContract === TEXTBOOK_CONTENT_SCHEMA
+  );
+  if (usesThinGraph && !usesTextbookContentV2) {
+    add(
+      findings,
+      'error',
+      'handoff',
+      'thin-graph-requires-textbook-content-v2',
+      `${THIN_GRAPH_SCHEMA} 只允许用于 ${TEXTBOOK_CONTENT_SCHEMA} 内容包`,
+    );
+  }
+  if (usesTextbookContentV2 && !usesThinGraph) {
+    add(
+      findings,
+      'error',
+      'handoff',
+      'textbook-content-v2-requires-thin-graph',
+      `${TEXTBOOK_CONTENT_SCHEMA} 必须使用 ${THIN_GRAPH_SCHEMA}，避免在图谱中复制正文`,
+    );
+  }
   if (graph.generation.sourceCourseId !== course.id || course.id !== index.courseId) {
     add(
       findings,
@@ -835,7 +875,9 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
   for (const source of sourcePoints) {
     const target = targetById.get(source.id);
     if (!target) continue;
-    const expectedKeys = [...Object.keys(source), ...RELATION_FIELDS].sort();
+    const expectedKeys = (usesThinGraph
+      ? THIN_POINT_FIELDS
+      : [...Object.keys(source), ...RELATION_FIELDS]).sort();
     const actualKeys = Object.keys(target).sort();
     if (!equal(expectedKeys, actualKeys)) {
       add(
@@ -843,18 +885,23 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
         'error',
         'handoff',
         'point-shape-changed',
-        `${source.id} 必须只在上游字段之外追加 clusterIds/role/related`,
+        usesThinGraph
+          ? `${source.id} 必须且只能包含 ${THIN_POINT_FIELDS.join('/')}`
+          : `${source.id} 必须只在上游字段之外追加 clusterIds/role/related`,
         { pointId: source.id, expectedKeys, actualKeys },
       );
     }
-    for (const key of Object.keys(source)) {
+    const immutableKeys = usesThinGraph ? ['id', 'title', 'origin'] : Object.keys(source);
+    for (const key of immutableKeys) {
       if (key !== 'prerequisites' && !equal(source[key], target[key])) {
         add(
           findings,
           'error',
           'handoff',
           'content-changed',
-          `${source.id}.${key} 未原样透传`,
+          usesThinGraph
+            ? `${source.id}.${key} 未从 canonical point 原样恢复`
+            : `${source.id}.${key} 未原样透传`,
           { pointId: source.id, field: key },
         );
       }
@@ -901,7 +948,7 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
       if (!targetById.get(relatedId)?.related?.includes(point.id)) {
         add(
           findings,
-          'warning',
+          'error',
           'relations',
           'related-not-symmetric',
           `${point.id} related ${relatedId} 未对称声明`,
@@ -946,6 +993,12 @@ function validateGraphHandoff(contentRoot, graphFile, findings) {
     graphPoints: graph.points.length,
     clusters: graph.clusters.length,
     prerequisiteEdges: targetEdges.size,
+    clusterSequenceEdges: Array.isArray(graph.sequences?.cluster)
+      ? graph.sequences.cluster.length
+      : 0,
+    pointSequenceEdges: Array.isArray(graph.sequences?.point)
+      ? graph.sequences.point.length
+      : 0,
     multiClusterPoints: graph.points.filter((point) => point?.clusterIds?.length > 1).length,
     refinedEdges: Array.isArray(graph.generation.refinedPrerequisiteEdges)
       ? graph.generation.refinedPrerequisiteEdges.length
@@ -1244,4 +1297,9 @@ async function main() {
   process.exitCode = result.ok ? 0 : 1;
 }
 
-await main();
+export { run as checkPipeline };
+
+const isDirectRun = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectRun) await main();

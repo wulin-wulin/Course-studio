@@ -1,0 +1,581 @@
+{
+  "id": "point-7-1",
+  "title": "去重、排序与规范化",
+  "shortSummary": "按业务键与时间完成去重、排序和网格对齐，把无序原始记录转换为可分析的规范序列。",
+  "keyTerms": [
+    "去重",
+    "排序",
+    "规范化",
+    "时间网格",
+    "对齐",
+    "幂等"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-6-2",
+    "point-6-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-fault-branches",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的判定键、SQL 口径、量程表与边界用例，把散落的规则重排为「前置条件→去重分支→排序→规范化验证→边界验收」的可执行流程，并在每步后补充判断依据与检查项。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-dedupe-order",
+          "text": "解释去重键、载荷冲突分支与排序键如何共同决定一条记录的阅读顺序和质量标记。"
+        },
+        {
+          "id": "apply-normalization",
+          "text": "对一批原始记录执行分类与规范化验证，给出规范记录、重复审计、人工复核三类去向，并说明结果为何可幂等重放。"
+        }
+      ],
+      "misconceptions": [
+        "把到达乱序当成时钟故障，直接改写 event_time 或原始质量码。",
+        "认为清洗阶段可以覆盖原始事实表的 quality_code，或让一条记录同时携带多个质量码。",
+        "把相同数值的连续状态上报（如门磁心跳）当成重复投递删除。"
+      ],
+      "modules": [
+        {
+          "id": "m-goal-inputs",
+          "title": "任务定位与输入前置条件",
+          "role": "orientation",
+          "description": "明确本节在清洗链路中的位置，以及流水线启动前必须成立的事实。",
+          "outcomeRefs": [
+            "explain-dedupe-order",
+            "apply-normalization"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-dedup-conflict",
+          "title": "去重判定与冲突分支",
+          "role": "decision",
+          "description": "按三元组识别同一次观测，区分重复副本、载荷冲突与单纯乱序。",
+          "outcomeRefs": [
+            "explain-dedupe-order"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-order-stability",
+          "title": "排序稳定性与三类输出",
+          "role": "procedure",
+          "description": "用稳定排序键与窗口回连确定阅读顺序，并把记录分流到规范表、审计表与复核队列。",
+          "outcomeRefs": [
+            "explain-dedupe-order",
+            "apply-normalization"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-normalize-quality",
+          "title": "验证性规范化与质量码传播",
+          "role": "procedure",
+          "description": "核对单位与量程但不改数值，把结论写入派生质量码并保留来源证据。",
+          "outcomeRefs": [
+            "explain-dedupe-order",
+            "apply-normalization"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-verify-boundary",
+          "title": "边界用例与上线检查",
+          "role": "verification",
+          "description": "用教材用例与故障注入反例验证分支覆盖，并用检查表确认流水线可验收。",
+          "outcomeRefs": [
+            "apply-normalization"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-bridge",
+          "title": "与缺失处理的衔接",
+          "role": "bridge",
+          "description": "指出规范序列无法解释空档，把问题交给下一节的缺失机制。",
+          "outcomeRefs": [
+            "explain-dedupe-order",
+            "apply-normalization"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-dedupe-order",
+          "apply-normalization"
+        ],
+        "method": "完成形成性检查中的分类任务，并为每条记录写出判定依据与去向。",
+        "successCriteria": [
+          "能区分重复副本、载荷冲突与到达乱序三种情形",
+          "规范化不改数值，越界只写派生质量码",
+          "能说明同一输入配同一规则版本重复执行时输出不变"
+        ],
+        "exerciseBlockId": "model-checklist",
+        "summaryBlockId": "model-bridge-missing",
+        "nextPointId": "point-7-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-task-frame",
+        "moduleId": "m-goal-inputs",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节在清洗链路中的位置",
+        "markdown": "教材把第 7 章定位为从概念、设计到验证的清洗环节，要求把每种方法放回统一的数据链路，并记录假设、单位、时间语义与可复现的验收证据。\n\n7.1 节处理的是清洗流水线的第一个确定性问题：同一批原始记录里哪些是同一观测、应当以什么顺序阅读、哪些字段需要被规范化验证。它不负责补洞，也不负责插值，这些留给后续小节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000229"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值"
+              ],
+              "lineStart": 4051,
+              "lineEnd": 4054,
+              "assetRefs": [],
+              "excerptSha256": "a27683b33d250785dddf0ff99e8f8e8a97e1c583dcd1a1009d8881131fb0c50a"
+            },
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000230"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "去重、排序与规范化"
+              ],
+              "lineStart": 4055,
+              "lineEnd": 4056,
+              "assetRefs": [],
+              "excerptSha256": "6a98854d8a9b4cef280d44f99356abe8bfb10ee0a730b626a51bdf7ecb8d9229"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-step0",
+        "moduleId": "m-goal-inputs",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把三件事串成一条可执行流程",
+        "markdown": "把本节当作一条带分支的操作流程，而不是三个并列的名词：\n\n1. **前置条件**：原始事实表已由端侧完成 ADC 到物理量的换算，且记录至少带 `device_id`、`metric`、`sequence_no`、`event_time`、`ingest_time`、`value`、`unit`、`quality_code`。\n2. **去重与分类**：按三元组 `(device_id, metric, sequence_no)` 判定同一次观测。\n3. **排序**：按 `(device_id, metric, event_time, sequence_no)` 建立阅读顺序。\n4. **规范化验证**：核对单位与量程，只写派生质量码，不动数值。\n\n流程有三条输出通道：规范记录、重复审计、人工复核队列。所谓幂等，是指同一批输入配同一规则版本重复执行时，三条通道的分流结果不变；这也正是后面要保存批次标识与规则版本的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-frame"
+          ]
+        }
+      },
+      {
+        "id": "tb-dedup-identify",
+        "moduleId": "m-dedup-conflict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "重复判定的三分支与乱序的处理边界",
+        "markdown": "教材规定重复判定的键是 `device_id`、`metric`、`sequence_no` 三元组，并给出三种结局：\n\n- 同键且 `event_time`、`value`、`unit` 一致：最早到达者为规范记录，其余标记 `DUPLICATE`。\n- 同键但载荷不一致：不做择优，全部标记 `MANUAL_REVIEW`。\n- 只是到达乱序：仅重排，不得改写原有质量码。\n\n`CLOCK_SUSPECT` 不能只靠到达顺序或固定传输时延阈值认定，必须给出与到达顺序无关的证据：按 `sequence_no` 排列后 `event_time` 回退，并由 NTP 状态、RTC 日志或可信时钟比对确认。教材给出的查询只在 `row_class = 'canonical'` 的记录上定位时间回退候选，避免副本改变相邻关系。\n\n门磁状态变化与 60 秒心跳都是递增 `sequence_no` 的新观测，不套用固定采样周期阈值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000231"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "去重、排序与规范化",
+                "时间戳逆序与重复记录的识别"
+              ],
+              "lineStart": 4057,
+              "lineEnd": 4089,
+              "assetRefs": [],
+              "excerptSha256": "2226cfb9e253899bae69c59bca39cc455565774b4e57cb7dd24484e05c20be58"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dedup-decision",
+        "moduleId": "m-dedup-conflict",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "去重分支速查",
+        "markdown": "| 观察到的情形 | 判定 | 处理去向 |\n|---|---|---|\n| 同键，载荷完全一致，多条 | 一条 `canonical`，其余 `DUPLICATE` | 规范表 + 重复审计 |\n| 同键，载荷存在差异 | 全部 `MANUAL_REVIEW` | 人工复核队列 |\n| 到达顺序与序号不符，载荷无冲突 | 重排，质量码不变 | 规范表 |\n| 序号递增但 `event_time` 回退，且有独立时钟证据 | `CLOCK_SUSPECT` | 规范表（带标记） |\n\n判断顺序建议自上而下：先看载荷是否一致，再看是否只是到达乱序，最后才讨论时钟。把这个顺序倒过来，就会用「看起来时间不对」去覆盖本应保留的观测。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dedup-identify"
+          ]
+        }
+      },
+      {
+        "id": "tb-order-stability",
+        "moduleId": "m-order-stability",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "排序键、窗口回连与三类输出",
+        "markdown": "清洗后的记录按 `(device_id, metric, event_time, sequence_no)` 排序。教材给出的 PostgreSQL 16 查询体现三个设计点：\n\n- **先圈窗口再回连**：`target_keys` 先选出目标时间窗内的三元组，再回连 `raw_events` 取全部副本，避免只按窗口过滤时漏掉跨边界冲突。\n- **用 `ROW_NUMBER()` 定序**：在 `(device_id, metric, sequence_no)` 分区内按 `ingest_time`、`event_time`、`value`、`unit`、`quality_code` 排名，第一名为 `canonical`。\n- **不改原始表**：查询只读 `raw_events`，结果物化为 `classified_events`；`canonical` 进规范表，`duplicate` 进审计表，`conflict` 进复核队列。\n\n即便副本完全相同且同时到达、任选一行业务结果一致，消费查询仍须显式排序。每次运行还要保存清洗批次标识与规则版本，使失败重放、审计对账与结果回滚都有明确依据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000232"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "去重、排序与规范化",
+                "排序稳定性与分区键设计"
+              ],
+              "lineStart": 4090,
+              "lineEnd": 4154,
+              "assetRefs": [],
+              "excerptSha256": "008f5fc1e4c0671de9ab82806a03772e5cc52873909bba61e0b7641368b93dc3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-order-tiebreak",
+        "moduleId": "m-order-stability",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "为什么把 event_time 放在 sequence_no 前面",
+        "markdown": "以温度点为例：设备先发出 `sequence_no=201`、`event_time=10:00:30`，随后因缓存补发 `sequence_no=200`、`event_time=10:00:00`。\n\n- 按到达时间排，会把 201 读成「先发生」，得到错误的斜率。\n- 按 `(event_time, sequence_no)` 排，200 回到 10:00:00，顺序恢复为一次正常采样。\n- 若两条记录的 `event_time` 相同，`sequence_no` 作为决定性次序，保证结果不随执行计划漂移。\n\n注意这仍是一次重排，而不是修改 `event_time`。原始记录一字不动，改变的只是派生表的阅读顺序；质量码也不会因为「重排后顺眼了」而被清空。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-order-stability"
+          ]
+        }
+      },
+      {
+        "id": "tb-unit-range",
+        "moduleId": "m-normalize-quality",
+        "depth": "core",
+        "kind": "table",
+        "title": "验证性规范化：只核对，不改数值",
+        "markdown": "端侧已把 ADC 原始码换算为物理量，边缘层与云平台不得重复换算。清洗阶段只做验证性规范化：\n\n| metric | unit | 量程下限 | 量程上限 | 越界处置 |\n|---|---|---|---|---|\n| temperature | Cel | −40.0 | 60.0 | `OUT_OF_RANGE` |\n| relative_humidity | %RH | 0.0 | 100.0 | `OUT_OF_RANGE` |\n| compressor_current | A | 0.0 | 50.0 | `OUT_OF_RANGE` |\n| door_state | 1 | 0 | 1 | 非 0/1 值标记 `OUT_OF_RANGE` |\n\n越界只标识传感器失效或换算错误，不替代业务告警：持续超出 −25°C 至 10°C 的运营目标区间并不触发 `OUT_OF_RANGE`。门磁的 `value` 必须是数值，`unit` 固定为字符串 `1`（无量纲）；若发现 `open`、`close` 或布尔值写入，属于契约违规，整条记录转入死信队列，不做自动转换。\n\n教材注明这些阈值仅用于教学案例，实际部署需按传感器数据手册与冷库工艺要求独立设定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000233"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "去重、排序与规范化",
+                "物理量单位与量程规范化"
+              ],
+              "lineStart": 4155,
+              "lineEnd": 4171,
+              "assetRefs": [],
+              "excerptSha256": "faf4b3a4ddca54f6b52b598a3bad01a4acb33b8ccbb29c533f9aa875b09091d4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-normalize-check",
+        "moduleId": "m-normalize-quality",
+        "depth": "support",
+        "kind": "warning",
+        "title": "规范化不等于清洗数值",
+        "markdown": "把「规范化」理解成「修正数值」是最常见的偏差。这里允许的动作只有三类：统一表达形式、按契约核对单位与量程、用派生字段记录结论。\n\n因此 `value=55.0` A 的电流记录，处理结果是 `OUT_OF_RANGE`，数值仍是 55.0。若在清洗阶段把它截断到 50.0，后续就无法判断这是传感器故障还是线路真实过载，审计证据也随之消失。\n\n同样的理由，单位不做猜测式换算：`unit` 不在契约内就直接判违规，而不是「大概是摄氏度」地改写成 `Cel`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-unit-range"
+          ]
+        }
+      },
+      {
+        "id": "tb-quality-propagation",
+        "moduleId": "m-normalize-quality",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "派生质量码与原始事实的不可变约束",
+        "markdown": "规范化产生的新 `quality_code` 只写入清洗后的派生表，原始事实表保持不可变：云平台接入服务已完成首次持久化，下游处理不得覆盖。教材给出的派生分类规则是：\n\n- 规范记录且无新增问题：保留来源 `quality_code`。\n- 重复副本（同三元组、同载荷）：`DUPLICATE`。\n- 载荷冲突：`MANUAL_REVIEW`。\n- 时间回退且有独立证据确认：`CLOCK_SUSPECT`。\n- 已换算物理量越界：`OUT_OF_RANGE`。\n\n`quality_code` 始终是单值字符串。多条规则同时命中时，派生审计表用 `rule_id` 保存证据并选择一个 `derived_quality_code`；`source_quality_code` 只用于追溯。教材还给出一个自查查询：比对 `classified_events` 的总行数、三类数量与质量码映射，结果应为空。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000234"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "去重、排序与规范化",
+                "质量码传播与不可覆盖约束"
+              ],
+              "lineStart": 4172,
+              "lineEnd": 4245,
+              "assetRefs": [],
+              "excerptSha256": "b39a9347469e9b6a06733549810752653a47f6cc2c6451203d57215651413b78"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-quality-single-code",
+        "moduleId": "m-normalize-quality",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "两个容易犯的错",
+        "markdown": "**误解一：清洗可以顺手修正原始质量码。** 原始事实表承载的是接入时刻的持久化证据；一旦允许下游覆盖，就无法再判断问题出在设备、链路还是清洗逻辑。正确做法是保留 `source_quality_code`，把新结论写进派生字段。\n\n**误解二：一条记录可以同时挂多个质量码。** `quality_code` 是单值，冲突时靠 `rule_id` 记录「哪些规则命中了」，再由规则优先级选出一个派生值。把多个码拼成字符串会破坏按码统计与告警过滤。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-quality-propagation"
+          ]
+        }
+      },
+      {
+        "id": "tb-boundary-tests",
+        "moduleId": "m-verify-boundary",
+        "depth": "core",
+        "kind": "table",
+        "title": "边界用例与故障注入反例",
+        "markdown": "可重复流水线必须在已知输入上产生确定输出。教材的五个用例覆盖了主要分支：\n\n| 用例 | 输入特征 | 预期输出 |\n|---|---|---|\n| TC-01 | `sequence_no=100` 相同载荷投递 3 次 | 一条规范记录，另两行 `DUPLICATE` |\n| TC-02 | 先收 201 后收 200，按序号排列时时间递增 | 重排并保留原质量码 |\n| TC-03 | 序号 300 的 `event_time` 比 299 早 90 秒且 NTP 未同步 | `CLOCK_SUSPECT`，不修改时间 |\n| TC-04 | 电流 `value=55.0` A | `OUT_OF_RANGE`，数值保持 55.0 |\n| TC-05 | 门磁 60 秒心跳与前一条状态值相同但序号递增 | 保留为新观测，不标记 `DUPLICATE` |\n\n反例同样重要：只按 `ingest_time` 排序，会让 TC-02 把网络到达次序误当成观测次序；只凭固定秒数阈值写 `CLOCK_SUSPECT`，会把缓存延迟与真正的 RTC 回退混为一谈。验收要分别验证到达重排、序号连续性与独立时钟证据。输出记录还应带清洗规则版本号与执行时间戳，使不同软件版本的处理差异可审计、可回滚。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000235"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "去重、排序与规范化",
+                "流水线边界测试与故障注入"
+              ],
+              "lineStart": 4246,
+              "lineEnd": 4261,
+              "assetRefs": [],
+              "excerptSha256": "550949a4d0884bd953ba4df3df1ddf49f877f43c74a76edb7d209f25125e4ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "m-verify-boundary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "上线前检查表",
+        "markdown": "把本节规则落到可执行检查表，逐项确认后再接下游：\n\n- 去重键固定为 `(device_id, metric, sequence_no)`，且窗口内三元组先圈定、再回连全部副本。\n- 载荷不一致的记录全部进入复核队列，没有「按到达时间择优」的隐藏逻辑。\n- 排序键为 `(device_id, metric, event_time, sequence_no)`，消费查询显式排序。\n- 乱序重排不写回 `event_time`；`CLOCK_SUSPECT` 必须有独立时钟证据。\n- 量程与单位只做验证，`value` 原样保留；契约违规进死信队列。\n- 派生质量码单值、`rule_id` 留证、原始事实表只读。\n- 批次标识与规则版本随输出落盘，可重放、可对账、可回滚。\n\n任何一项无法确认，说明流水线还缺少可验证的中间证据，而不是阈值需要再调一调。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-boundary-tests"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-missing",
+        "moduleId": "m-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "下一步：把「没有记录」也变成可分类的事实",
+        "markdown": "完成去重、排序与规范化后，规范序列只保证「已有的观测被正确排列和标记」，并不能说明缺失的时间段发生了什么。相邻两条规范记录之间的空档，可能只是采集周期没到、设备停机，也可能是业务上本来就没有事件。\n\n下一节把这类空档形式化为缺失机制，并给出按成因分类的判定线索。届时判断的对象，正是本节输出的规范序列与派生质量码。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-boundary-tests",
+            "model-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "point-7-1-classify-check",
+        "type": "formative-check",
+        "title": "给五条原始记录分类",
+        "anchorBlockId": "model-checklist",
+        "moduleId": "m-verify-boundary",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-normalization"
+        ],
+        "learningPurpose": "检查学习者能否把去重、排序与规范化规则同时套用到混合输入上，并说清每条记录的判定依据与去向。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-dedup-identify",
+            "tb-order-stability",
+            "tb-unit-range",
+            "tb-boundary-tests"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "format": "short-answer",
+          "scenario": "同一批次中共有五条记录：(A) 同一三元组、载荷完全相同的三条副本，其中一条最早到达；(B) 先到 sequence_no=201、event_time 10:00:30，后到 sequence_no=200、event_time 10:00:00；(C) 同一三元组但 value 不同；(D) compressor_current 的 value 为 55.0 A；(E) 门磁状态值与上一条相同，但 sequence_no 已递增。",
+          "items": [
+            {
+              "prompt": "记录 A 应该如何分类？",
+              "expected": "一条为 canonical，其余两条标记 DUPLICATE，并保留在重复审计表中。"
+            },
+            {
+              "prompt": "记录 B 是否应当写入 CLOCK_SUSPECT？",
+              "expected": "不应写入；这只是到达乱序，按 (event_time, sequence_no) 重排即可，原质量码不变。"
+            },
+            {
+              "prompt": "记录 C 与记录 E 的处理差异是什么？",
+              "expected": "C 是同键不同载荷，全部标记 MANUAL_REVIEW；E 是新观测，保留为正常记录，因为相同状态值不等于重复投递。"
+            },
+            {
+              "prompt": "记录 D 处理后 value 是多少，派生质量码是什么？",
+              "expected": "value 仍为 55.0，派生质量码为 OUT_OF_RANGE；规范化只做验证，不修改数值。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "self-check",
+          "markdown": "若无法作答，先用三步自问：① 三元组是否相同、载荷是否一致？② 序号顺序与时间顺序是否一致，是否有独立时钟证据？③ 单位与量程是否在契约内？三步分别对应去重、排序、规范化，答案应落到规范表、重复审计或人工复核队列之一。"
+        }
+      }
+    ]
+  },
+  "subtitle": "清洗、重采样与插值",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000229"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值"
+      ],
+      "lineStart": 4051,
+      "lineEnd": 4054,
+      "assetRefs": [],
+      "excerptSha256": "a27683b33d250785dddf0ff99e8f8e8a97e1c583dcd1a1009d8881131fb0c50a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000230"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "去重、排序与规范化"
+      ],
+      "lineStart": 4055,
+      "lineEnd": 4056,
+      "assetRefs": [],
+      "excerptSha256": "6a98854d8a9b4cef280d44f99356abe8bfb10ee0a730b626a51bdf7ecb8d9229"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000231"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "去重、排序与规范化",
+        "时间戳逆序与重复记录的识别"
+      ],
+      "lineStart": 4057,
+      "lineEnd": 4089,
+      "assetRefs": [],
+      "excerptSha256": "2226cfb9e253899bae69c59bca39cc455565774b4e57cb7dd24484e05c20be58"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000232"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "去重、排序与规范化",
+        "排序稳定性与分区键设计"
+      ],
+      "lineStart": 4090,
+      "lineEnd": 4154,
+      "assetRefs": [],
+      "excerptSha256": "008f5fc1e4c0671de9ab82806a03772e5cc52873909bba61e0b7641368b93dc3"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000233"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "去重、排序与规范化",
+        "物理量单位与量程规范化"
+      ],
+      "lineStart": 4155,
+      "lineEnd": 4171,
+      "assetRefs": [],
+      "excerptSha256": "faf4b3a4ddca54f6b52b598a3bad01a4acb33b8ccbb29c533f9aa875b09091d4"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000234"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "去重、排序与规范化",
+        "质量码传播与不可覆盖约束"
+      ],
+      "lineStart": 4172,
+      "lineEnd": 4245,
+      "assetRefs": [],
+      "excerptSha256": "b39a9347469e9b6a06733549810752653a47f6cc2c6451203d57215651413b78"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000235"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "去重、排序与规范化",
+        "流水线边界测试与故障注入"
+      ],
+      "lineStart": 4246,
+      "lineEnd": 4261,
+      "assetRefs": [],
+      "excerptSha256": "550949a4d0884bd953ba4df3df1ddf49f877f43c74a76edb7d209f25125e4ea9"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1544,
+    1898
+  ],
+  "scale": 1.25
+}

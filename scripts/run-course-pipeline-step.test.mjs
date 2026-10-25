@@ -38,6 +38,56 @@ test("pipeline step runner maps fixed actions to one course-local path", () => {
   assert.equal(invocation.courseRoot, path.join(PROJECT_ROOT, "pipeline", "demo-course"));
 });
 
+test("pipeline step runner maps validate-point-drafts to the fixed validator phase", () => {
+  const invocation = buildPipelineStepInvocation(
+    "validate-point-drafts",
+    "demo-course",
+    PROJECT_ROOT,
+  );
+  assert.equal(
+    invocation.script,
+    path.join(
+      PROJECT_ROOT,
+      ".opencode",
+      "skills",
+      "candidate-knowledge-point-generator",
+      "scripts",
+      "validate_output.mjs",
+    ),
+  );
+  assert.deepEqual(invocation.args, [
+    "--root",
+    "pipeline/demo-course/course-content",
+    "--phase",
+    "point-drafts",
+  ]);
+});
+
+test("pipeline step runner maps validate-animation-drafts to the fixed validator phase", () => {
+  const invocation = buildPipelineStepInvocation(
+    "validate-animation-drafts",
+    "demo-course",
+    PROJECT_ROOT,
+  );
+  assert.equal(
+    invocation.script,
+    path.join(
+      PROJECT_ROOT,
+      ".opencode",
+      "skills",
+      "candidate-knowledge-point-generator",
+      "scripts",
+      "validate_output.mjs",
+    ),
+  );
+  assert.deepEqual(invocation.args, [
+    "--root",
+    "pipeline/demo-course/course-content",
+    "--phase",
+    "animation-drafts",
+  ]);
+});
+
 test("every pipeline action is fixed and rejects attacker-controlled path syntax", () => {
   assert.ok(pipelineStepActions().length >= 10);
   for (const action of pipelineStepActions()) {

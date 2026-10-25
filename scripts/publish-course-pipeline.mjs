@@ -4,10 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createCourseMapLayout } from "./layout-course-map.mjs";
 import { buildCourseAnimationRuntime } from "./bundle-course-animations.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const LEGACY_GRAPH_SCHEMA = "clustered-graph/2.0";
+const THIN_GRAPH_SCHEMA = "clustered-graph/3.0";
+const TEXTBOOK_CONTENT_SCHEMA = "textbook-content/2.0";
 const DEFAULT_G7_CHECK_TIMEOUT_MS = 2 * 60 * 1000;
 const PALETTE = [
   ["#2F7A65", "#E2F4EC", "#185342"],
@@ -50,6 +54,20 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.keys(value).sort().map((key) => [key, stable(value[key])]),
+    );
+  }
+  return value;
+}
+
 function parseArgs(argv) {
   const courseId = argv[2];
   if (!courseId || !ID_PATTERN.test(courseId)) {
@@ -60,8 +78,10 @@ function parseArgs(argv) {
 }
 
 function validateGraphBasics(graph, courseId) {
-  if (graph?.schema_version !== "clustered-graph/2.0") {
-    fail("clustered-graph.json 的 schema_version 必须是 clustered-graph/2.0");
+  if (![LEGACY_GRAPH_SCHEMA, THIN_GRAPH_SCHEMA].includes(graph?.schema_version)) {
+    fail(
+      `clustered-graph.json 的 schema_version 必须是 ${LEGACY_GRAPH_SCHEMA} 或 ${THIN_GRAPH_SCHEMA}`,
+    );
   }
   if (graph.subject?.id !== courseId || graph.generation?.sourceCourseId !== courseId) {
     fail("图谱的 subject.id、generation.sourceCourseId 必须与 course-id 一致");
@@ -95,13 +115,84 @@ function validateGraphBasics(graph, courseId) {
   }
 }
 
+export function loadCanonicalPoints(contentRoot, graph) {
+  const index = readJson(
+    path.join(contentRoot, "src", "data", "index.json"),
+    "课程知识点索引",
+  );
+  if (!Array.isArray(index.points)) fail("课程知识点索引 points 必须是数组");
+  const indexIds = index.points.map((point) => point?.id);
+  const graphIds = graph.points.map((point) => point?.id);
+  if (JSON.stringify(indexIds) !== JSON.stringify(graphIds)) {
+    fail("clustered-graph.json 必须与 canonical index 保持相同知识点和顺序");
+  }
+  return indexIds.map((id) => {
+    const point = readJson(
+      path.join(contentRoot, "src", "data", "points", `${id}.json`),
+      `canonical 知识点 ${id}`,
+    );
+    if (!isRecord(point) || point.id !== id) {
+      fail(`canonical 知识点 ${id}.json 的 id 与 index 不一致`);
+    }
+    return point;
+  });
+}
+
+export function deriveCompatibilityMetadata(point) {
+  if (
+    point?.content?.schema_version !== TEXTBOOK_CONTENT_SCHEMA
+    || !Array.isArray(point.content.blocks)
+  ) {
+    return {};
+  }
+  const sourceSpans = [];
+  const seen = new Set();
+  let modelEnriched = false;
+  for (const block of point.content.blocks) {
+    const provenance = isRecord(block?.provenance) ? block.provenance : {};
+    if (provenance.origin === "model") modelEnriched = true;
+    for (const span of Array.isArray(provenance.sourceSpans)
+      ? provenance.sourceSpans
+      : []) {
+      const key = JSON.stringify(stable(span));
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sourceSpans.push(structuredClone(span));
+    }
+  }
+  return { sourceSpans, modelEnriched };
+}
+
 function sentence(value, fallback) {
   const text = String(value ?? "").trim();
   if (!text) return fallback;
   return /[。！？.!?]$/.test(text) ? text : `${text}。`;
 }
 
-function buildCourseData(courseId, sourceCourse, manifest, graph) {
+function normalizedSequences(graph) {
+  const value = graph.sequences ?? { cluster: [], point: [] };
+  if (
+    !value
+    || typeof value !== "object"
+    || Array.isArray(value)
+    || !Array.isArray(value.cluster)
+    || !Array.isArray(value.point)
+  ) {
+    fail("clustered-graph.json 的 sequences 必须包含 cluster/point 数组");
+  }
+  return {
+    cluster: value.cluster.map((edge) => ({ fromId: edge.fromId, toId: edge.toId })),
+    point: value.point.map((edge) => ({ fromId: edge.fromId, toId: edge.toId })),
+  };
+}
+
+export function buildCourseData(
+  courseId,
+  sourceCourse,
+  manifest,
+  graph,
+  canonicalPoints = graph.points,
+) {
   const courseTitle = sourceCourse.title.trim();
   const colorByCluster = new Map(
     graph.clusters.map((cluster, index) => [cluster.id, PALETTE[index % PALETTE.length]]),
@@ -110,6 +201,27 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
   const kindById = new Map(
     (manifest.pointEvidence ?? []).map((evidence) => [evidence.pointId, evidence.kind]),
   );
+  const evidenceById = new Map(
+    (manifest.pointEvidence ?? []).map((evidence) => [evidence.pointId, evidence]),
+  );
+  const canonicalById = new Map(canonicalPoints.map((point) => [point.id, point]));
+  const usesThinGraph = graph.schema_version === THIN_GRAPH_SCHEMA;
+  if (usesThinGraph && manifest.generation?.contentContract !== TEXTBOOK_CONTENT_SCHEMA) {
+    fail(`${THIN_GRAPH_SCHEMA} 只允许发布 ${TEXTBOOK_CONTENT_SCHEMA} 内容包`);
+  }
+  for (const relationPoint of graph.points) {
+    const canonical = canonicalById.get(relationPoint.id);
+    if (!canonical) fail(`图谱知识点 ${relationPoint.id} 缺少 canonical point 文件`);
+    if (
+      usesThinGraph
+      && (
+        canonical.title !== relationPoint.title
+        || canonical.origin !== relationPoint.origin
+      )
+    ) {
+      fail(`图谱知识点 ${relationPoint.id} 的 title/origin 与 canonical point 不一致`);
+    }
+  }
   const rolesById = Object.fromEntries(graph.points.map((point) => [point.id, point.role]));
 
   const clusters = graph.clusters
@@ -126,24 +238,29 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
       };
     });
 
-  const points = graph.points.map((point) => ({
+  const points = graph.points.map((point) => {
+    const canonical = usesThinGraph ? canonicalById.get(point.id) : point;
+    return {
     id: point.id,
     title: point.title,
     clusterId: point.clusterIds[0],
     clusterIds: [...point.clusterIds],
     role: point.role,
     related: [...point.related],
-    shortSummary: point.shortSummary,
-    difficulty: point.difficulty,
-    importance: point.importance,
-    keyTerms: [...point.keyTerms],
-  }));
+    shortSummary: canonical.shortSummary,
+    difficulty: canonical.difficulty,
+    importance: canonical.importance,
+    keyTerms: [...canonical.keyTerms],
+    ...(point.origin ? { origin: point.origin } : {}),
+    };
+  });
   const baseIndex = {
     schema_version: "1.0",
     courseId,
     generatedAt: graph.generation.generatedAt,
     clusters,
     points,
+    sequences: normalizedSequences(graph),
   };
   const layout = createCourseMapLayout({
     courseId,
@@ -155,15 +272,36 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
   const indexPointById = new Map(layout.index.points.map((point) => [point.id, point]));
 
   const details = graph.points.map((point) => {
+    const canonical = usesThinGraph ? canonicalById.get(point.id) : point;
     const indexPoint = indexPointById.get(point.id);
     const primaryCluster = clusterById.get(point.clusterIds[0]);
+    const evidence = evidenceById.get(point.id);
+    const compatibility = usesThinGraph
+      ? deriveCompatibilityMetadata(canonical)
+      : {};
     return {
-      ...point,
+      ...canonical,
+      ...(isRecord(canonical.content)
+        ? { content: structuredClone(canonical.content) }
+        : {}),
       subtitle: primaryCluster.title,
       clusterId: point.clusterIds[0],
       clusterIds: [...point.clusterIds],
+      role: point.role,
+      prerequisites: [...point.prerequisites],
       related: [...point.related],
       kind: kindById.get(point.id),
+      ...(point.origin || evidence?.origin
+        ? { origin: point.origin ?? evidence.origin }
+        : {}),
+      ...(usesThinGraph
+        ? compatibility
+        : point.sourceSpans || evidence?.sourceSpans
+        ? { sourceSpans: point.sourceSpans ?? evidence.sourceSpans }
+        : {}),
+      ...(!usesThinGraph && typeof (point.modelEnriched ?? evidence?.modelEnriched) === "boolean"
+        ? { modelEnriched: point.modelEnriched ?? evidence.modelEnriched }
+        : {}),
       pos: indexPoint.pos,
       scale: indexPoint.scale,
     };
@@ -181,7 +319,7 @@ function buildCourseData(courseId, sourceCourse, manifest, graph) {
   return { course, index: layout.index, details };
 }
 
-async function publish(courseId) {
+export async function publish(courseId) {
   const root = path.resolve(process.cwd());
   const pipelineDirectory = path.join(root, "pipeline", courseId);
   const contentRoot = path.join(pipelineDirectory, "course-content");
@@ -262,7 +400,14 @@ async function publish(courseId) {
   const animations = Array.isArray(animationManifest.animations) ? animationManifest.animations : null;
   if (animations === null) fail("动画清单格式无效");
 
-  const { course, index, details } = buildCourseData(courseId, sourceCourse, manifest, graph);
+  const canonicalPoints = loadCanonicalPoints(contentRoot, graph);
+  const { course, index, details } = buildCourseData(
+    courseId,
+    sourceCourse,
+    manifest,
+    graph,
+    canonicalPoints,
+  );
   fs.mkdirSync(coursesDirectory, { recursive: true });
   const temporaryDirectory = path.join(coursesDirectory, `.publishing-${courseId}-${process.pid}`);
   fs.rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -295,9 +440,14 @@ async function publish(courseId) {
   })}\n`);
 }
 
-try {
-  await publish(parseArgs(process.argv));
-} catch (error) {
-  process.stderr.write(`${error.message}\n`);
-  process.exitCode = 1;
+const isDirectRun = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectRun) {
+  try {
+    await publish(parseArgs(process.argv));
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
+  }
 }

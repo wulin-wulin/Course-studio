@@ -1,0 +1,549 @@
+{
+  "id": "point-8-4",
+  "title": "自相关、互相关与滞后特征",
+  "shortSummary": "用自相关与互相关识别滞后结构和传感器耦合，构造可验证且不过度拟合的滞后特征。",
+  "keyTerms": [
+    "自相关",
+    "互相关",
+    "滞后特征",
+    "传感器耦合",
+    "ACF",
+    "互相关函数"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-8-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 ACF/PACF/CCF 定义、公式、案例数值与检查方法，按“采样网格—假设—推导—算例—参数实验”重排讲解，并把滞后特征构造改写成可执行步骤；模型补充只增加单位换算、算例与验收清单，不改变教材结论。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "interpret-acf-ccf",
+          "text": "给定采样周期、ACF 与 CCF 曲线，读出周期候选与跨传感器时延，并说明平稳性、样本量和对齐方式对结论的限制。"
+        },
+        {
+          "id": "build-safe-lag-features",
+          "text": "按 event_time 构造近期、周期与交互滞后特征，识别信息泄漏、伪周期和数值不稳定，并给出可验证检查。"
+        }
+      ],
+      "misconceptions": [
+        "把 ACF 峰值直接当作物理周期，忽略采样缺口、混叠与趋势残留。",
+        "按 ingest_time 排序构造滞后特征，导致训练看到在线时尚未到达的观测。",
+        "把 CCF 峰值方向直接解释为因果方向，忽略对齐方式与样本量前提。",
+        "认为滞后越多、最大滞后越大模型越好，忽视特征共线性与过拟合风险。"
+      ],
+      "modules": [
+        {
+          "id": "m1-lag-signal",
+          "title": "滞后视角：从序列到特征",
+          "role": "motivation",
+          "description": "先统一滞后单位与读图顺序，再进入相关函数的定量推导。",
+          "outcomeRefs": [
+            "interpret-acf-ccf",
+            "build-safe-lag-features"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m2-acf-pacf",
+          "title": "自相关、偏自相关与最大滞后",
+          "role": "derivation-and-worked-example",
+          "description": "从定义、假设到显著性与计算成本，用 30 分钟峰值的算例落地。",
+          "outcomeRefs": [
+            "interpret-acf-ccf"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m3-cross-correlation",
+          "title": "互相关与跨传感器时延",
+          "role": "derivation-and-application",
+          "description": "处理不同采样率的对齐，把时延估计转成可执行的监测规则。",
+          "outcomeRefs": [
+            "interpret-acf-ccf"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m4-lag-feature-construction",
+          "title": "滞后特征的构造与防泄漏",
+          "role": "procedure",
+          "description": "按步骤构造滞后特征并固定防止未来信息泄漏的操作顺序。",
+          "outcomeRefs": [
+            "build-safe-lag-features"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m5-periodic-interaction",
+          "title": "周期滞后与交互特征",
+          "role": "extension",
+          "description": "把周期结构变成周期滞后，并在数值稳定前提下构造跨传感器交互。",
+          "outcomeRefs": [
+            "build-safe-lag-features"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m6-verification",
+          "title": "故障情形与验收",
+          "role": "diagnosis-and-check",
+          "description": "用伪周期、时延偏误与泄漏三类故障反推检查清单和发布验收。",
+          "outcomeRefs": [
+            "interpret-acf-ccf",
+            "build-safe-lag-features"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "interpret-acf-ccf",
+          "build-safe-lag-features"
+        ],
+        "method": "完成一份滞后特征表的审查题，并把 ACF/CCF 峰值换算为物理时间、说明其成立前提。",
+        "successCriteria": [
+          "能把滞后 k 结合采样周期正确换算为物理时间",
+          "能指出信息泄漏与伪周期风险，并给出对应检查动作",
+          "能说明相关与时延线索为何不等于因果结论"
+        ],
+        "exerciseBlockId": "model-lag-exercise",
+        "summaryBlockId": "model-verification",
+        "nextPointId": "point-8-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-intro",
+        "moduleId": "m1-lag-signal",
+        "depth": "core",
+        "kind": "definition",
+        "title": "为什么在滞后维度上看相关性",
+        "markdown": "教材把三件事放在同一条工程链路上：自相关衡量同一序列在不同时间滞后下的线性依赖，互相关衡量两个序列在不同相对偏移下的相似性，滞后特征则把历史观测 $x_{t-1}, x_{t-2}, \\ldots$ 直接作为当前时刻的模型输入。先识别滞后结构，再决定把哪些滞后变成特征，是本节的顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000286"
+              ],
+              "headingPath": [
+                "时序变换与特征工程",
+                "自相关、互相关与滞后特征"
+              ],
+              "lineStart": 5195,
+              "lineEnd": 5196,
+              "assetRefs": [],
+              "excerptSha256": "70d909c9e98367fbe51219a2e2d23edb10a3d0f644ec5a66fcb3f9efb2e694d5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lag-unit",
+        "moduleId": "m1-lag-signal",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "先用采样网格统一滞后单位",
+        "markdown": "滞后 $k$ 以采样点计，不以秒计。若采样周期 $\\Delta t=30\\,$s，则 $k=4$ 对应 2 分钟，$k=60$ 对应 30 分钟；同一个 $k$ 在 5 秒采样序列和 30 秒采样序列上代表的时间完全不同，跨传感器比较前必须先对齐到公共网格。\n\n读 ACF/CCF 可以按固定顺序：先确认采样网格与缺失情况，再确认序列在窗口内是否平稳或已去趋势，最后才把峰值位置换算成物理时间。趋势未去除时 $r_k$ 衰减缓慢，峰值位置不能直接当成周期。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-intro"
+          ]
+        }
+      },
+      {
+        "id": "tb-acf-pacf",
+        "moduleId": "m2-acf-pacf",
+        "depth": "core",
+        "kind": "formula",
+        "title": "ACF、PACF 与最大滞后",
+        "markdown": "对离散采样序列 $\\{x_t\\}$，滞后 $k$ 的样本自相关为\n\n$$r_k = \\frac{\\sum_{t=1}^{N-k}(x_t - \\bar{x})(x_{t+k} - \\bar{x})}{\\sum_{t=1}^{N}(x_t - \\bar{x})^2}$$\n\n其中 $N$ 为有效样本数，$\\bar{x}$ 为全序列均值；分母用全序列方差而非滞后配对方差，从而保证 $|r_k| \\leq 1$。该定义要求序列平稳或至少在观测窗口内均值恒定；若存在明显趋势，$r_k$ 会衰减缓慢，难以区分周期性与非平稳性。\n\n偏自相关（PACF）剔除中间滞后 $1,2,\\ldots,k-1$ 的影响后，度量 $x_t$ 与 $x_{t+k}$ 的净相关。案例中 Z1-TEMP-01 的温度 ACF 在滞后 60（30 分钟）处出现峰值，可能暗示压缩机启停周期；PACF 在滞后 1 处截断则提示一阶自回归结构。模型识别阶段用截尾与拖尾特征推断 ARIMA 阶数；特征工程阶段则直接把显著滞后处的 $r_k$ 作为输入变量，但须预先确定最大滞后 $K_{\\max}$，案例取 $K_{\\max}=120$（1 小时），再远的滞后因冷链热惯性衰减而物理意义薄弱。\n\n| 统计量 | 计算复杂度 | 主要用途 | 对趋势敏感性 |\n|:---|:---|:---|:---|\n| ACF | $O(N \\cdot K_{\\max})$ | 周期检测、模型识别 | 高，需先差分或去趋势 |\n| PACF | $O(N \\cdot K_{\\max}^2)$（Yule-Walker）或 $O(N \\cdot K_{\\max})$（Levinson-Durbin） | AR 阶数确定 | 高 |\n| 滞后特征 $x_{t-k}$ | $O(N \\cdot K_{\\max})$ | 直接作为模型输入 | 中，模型可学习趋势 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000287"
+              ],
+              "headingPath": [
+                "时序变换与特征工程",
+                "自相关、互相关与滞后特征",
+                "自相关与偏自相关的物理意义"
+              ],
+              "lineStart": 5197,
+              "lineEnd": 5214,
+              "assetRefs": [],
+              "excerptSha256": "e13340dabe13e6a2d215b20f300bd26481aa7ae9ef30c28f2167b38968a0ba75"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-acf-worked",
+        "moduleId": "m2-acf-pacf",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：把滞后 60 翻译成 30 分钟",
+        "markdown": "设一条 30 秒采样的温度序列有 $N=120$ 个有效点，正好覆盖 1 小时，取 $K_{\\max}=120$。若 ACF 在 $k=60$ 出现明显峰，先换算：$60 \\times 30\\,$s $= 1800\\,$s $= 30$ 分钟，再检查这段时间是否与设备控制逻辑（例如压缩机启停）吻合，而不是立刻宣布发现了周期。\n\n显著性可以用近似置信带 $\\pm 2/\\sqrt{N}$ 粗判：$N=120$ 时约为 $\\pm 0.183$，带内峰值不足以支撑周期结论。若 $k=1$ 处接近 1、之后单调缓降且无局部峰，更像趋势残留，应先按 8.3 节的方法差分或去趋势再看 ACF。参数实验可对比 $K_{\\max}=60$ 与 $120$：前者只覆盖 30 分钟，可能截断真实周期；后者增加计算量与共线特征，需要滚动验证确认增益。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-acf-pacf"
+          ]
+        }
+      },
+      {
+        "id": "tb-ccf-delay",
+        "moduleId": "m3-cross-correlation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "CCF 与跨传感器时延",
+        "markdown": "互相关函数度量两个序列在不同相对偏移下的相似性。Z1-TEMP-01 与 Z1-COMP-01 的采样周期不同（30 秒与 5 秒），须先按左闭右开窗口与最近邻前向填充对齐到公共网格，压缩机电流降采样为 $\\{\\tilde{y}_t\\}$，不得用后向填充引入未来信息。滞后 $k$ 的样本互相关为\n\n$$c_{xy}(k) = \\frac{\\sum_{t=\\max(1,1-k)}^{\\min(N,N-k)}(x_t - \\bar{x})(\\tilde{y}_{t+k} - \\bar{\\tilde{y}})}{\\sqrt{\\sum_{t=1}^{N}(x_t-\\bar{x})^2 \\cdot \\sum_{t=1}^{N}(\\tilde{y}_t-\\bar{\\tilde{y}})^2}}$$\n\n$k>0$ 表示压缩机电流变化领先温度变化。物理直觉是：压缩机启动后，蒸发器降温经空气对流与货物热容传到测温点，存在分钟级时延。若峰值在 $k=4$，该温区热响应时间约为 120 秒，可用于“预期未达”规则：压缩机已高负荷运行超过 2 分钟而温度未下降，触发 MANUAL_REVIEW 质量码。\n\n边界条件：两序列须覆盖同一物理时段，且 $N \\geq 2K_{\\max}$ 以保证统计稳定；门磁是事件驱动变量，其与温度的 CCF 只在平稳假设下近似对称，必须结合物理约束限定 $k$ 的搜索范围。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000288"
+              ],
+              "headingPath": [
+                "时序变换与特征工程",
+                "自相关、互相关与滞后特征",
+                "互相关与跨传感器时延估计"
+              ],
+              "lineStart": 5215,
+              "lineEnd": 5226,
+              "assetRefs": [],
+              "excerptSha256": "c466d7a21a49ccced94dc5b42e4960198167c7129a2ec2cff9cc2ac7462df53e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-delay-rule",
+        "moduleId": "m3-cross-correlation",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：120 秒时延如何变成规则",
+        "markdown": "对齐到 30 秒网格后，峰值 $k=4$ 对应 $4 \\times 30\\,$s $=120\\,$s。把这个数字写成可执行规则时需要三个量：触发条件（压缩机电流高于运行阈值）、等待窗口（120 秒）、判据（温度下降幅度小于预期）。等待窗口应略大于估计时延而不是恰好相等，否则正常的传输抖动也会被误判。\n\n若峰值跑到 $k=-10$（温度领先压缩机），先不要解释成因果反转：检查降采样时是否取到了窗口右边界之后的电流值。时延估计的可信前提是每个对齐后的 $\\tilde{y}_t$ 的 event_time 都不晚于窗口右边界；样本量不足 $2K_{\\max}$ 时，峰值位置本身就不稳定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ccf-delay"
+          ]
+        }
+      },
+      {
+        "id": "tb-lag-construction",
+        "moduleId": "m4-lag-feature-construction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "滞后特征的安全构造",
+        "markdown": "滞后特征直接把历史观测 $x_{t-1}, \\ldots, x_{t-K}$ 作为当前时刻的输入。构造必须严格遵循时间顺序：在时刻 $t$ 可用的最大滞后是 $t-1$，不得混入 $t$ 及之后的观测。在线推理从滑动窗口缓冲区实时提取，批量训练按 event_time 排序后构造。案例派生特征表如下（非原始事实表字段）：\n\n| 派生字段名 | 来源设备 | 滞后量 | 物理意义 |\n|:---|:---|:---|:---|\n| temp_lag_1 | Z1-TEMP-01 | 30 秒 | 上一采样点温度 |\n| temp_lag_60 | Z1-TEMP-01 | 30 分钟 | 半小时前温度基准 |\n| comp_lag_4 | Z1-COMP-01 | 20 秒（降采样后等效 2 分钟） | 压缩机电流前置指标 |\n| door_lag_0 | Z1-DOOR-01 | 0（状态变化触发） | 当前门状态，事件对齐后 |\n\n信息泄漏的高危情形是按 ingest_time 排序构造：某条记录 event_time 为 $t$、因网络抖动 ingest_time 为 $t+5$ 分钟，若按 ingest_time 排序，训练时模型会“看到”在线时尚未到达的值。防护措施是所有滞后特征按 event_time 排序，ingest_time 只用于延迟监控与迟到标记（quality_code=LATE），不参与特征时序。\n\n伪代码的安全构造步骤是：按 event_time 升序遍历记录；从缓冲区读取最旧到最近的 $K$ 个历史值组成特征行；检查 sequence_no 是否连续，缺口在允许范围内用 null 填充并标记 MISSING，超出范围则清空缓冲区重新开始；最后左移缓冲区并写入当前值，使当前值只成为未来时刻的滞后，同时以当前值为标签。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000289"
+              ],
+              "headingPath": [
+                "时序变换与特征工程",
+                "自相关、互相关与滞后特征",
+                "滞后特征的工程构造与信息泄漏防护"
+              ],
+              "lineStart": 5227,
+              "lineEnd": 5282,
+              "assetRefs": [],
+              "excerptSha256": "256ad0826087785b1f2c1b958fd3d1e260febc350aa7cf87b7290bced07033bc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lag-checklist",
+        "moduleId": "m4-lag-feature-construction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把构造过程固化成检查清单",
+        "markdown": "实现时按五步检查，任何一步失败都不应继续生成特征：① 按 event_time 升序排序，并验证 sequence_no 严格递增 1；② 当前值只作为标签，特征行只出现 $t-1$ 及更早的值；③ 先左移缓冲区再写入当前值，防止同一行读到自身；④ 为每个滞后字段记录来源 event_time，供后续审计；⑤ 序列断裂超出容忍范围时清空缓冲区，不跨断裂拼接。\n\n还要控制滞后数量：$K_{\\max}$ 由物理时间常数决定，不能因为验证分数好看就无限加长；每增加一组滞后都应在按时间切分的验证集上确认增益。滞后特征之间高度共线，过多滞后会把噪声一起带进模型，这正是“可验证且不过度拟合”的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-lag-construction"
+          ]
+        }
+      },
+      {
+        "id": "tb-periodic-interaction",
+        "moduleId": "m5-periodic-interaction",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "周期滞后与交互滞后",
+        "markdown": "当 ACF 揭示显著周期 $P$ 时，可构造周期滞后 $x_{t-P}, x_{t-2P}$ 捕获季节性。Z2 温区压缩机启停周期约 15 分钟，对应 $P=30$ 个 30 秒采样点。周期滞后与近期滞后的组合可以区分“正常日间升温”与“开门异常”：前者温度上升时周期滞后特征同步上升，后者会打破周期相关性。\n\n交互滞后把不同传感器的滞后组合，例如温度变化率与压缩机电流前置值相乘：\n\n$$\\Delta_{temp}(t) = x_t^{(TEMP)} - x_{t-1}^{(TEMP)}, \\quad f_{interact}(t) = \\Delta_{temp}(t) \\cdot \\tilde{y}_{t-k}^{(COMP)}$$\n\n该特征在物理上近似瞬时热负荷与制冷能力的失衡度。数值稳定性要求：当 $\\tilde{y}_{t-k}^{(COMP)}=0$ 时特征归零，不得除以零构造“效率比”。门磁的 0/1 值不应直接与温度滞后做算术运算；应先把不规则心跳与变化上报转换成“距上次开门时长”或“当前门状态指示”等规则化特征。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000290"
+              ],
+              "headingPath": [
+                "时序变换与特征工程",
+                "自相关、互相关与滞后特征",
+                "周期性滞后与交互特征"
+              ],
+              "lineStart": 5283,
+              "lineEnd": 5294,
+              "assetRefs": [],
+              "excerptSha256": "3f9f21392bff064dad4588528a6b9be9f2dec8844abc915e890bb547b62212f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-periodic-example",
+        "moduleId": "m5-periodic-interaction",
+        "depth": "support",
+        "kind": "example",
+        "title": "算例：用周期滞后区分升温原因",
+        "markdown": "设 Z2 温度序列 30 秒采样、周期 $P=30$，则周期滞后覆盖 15 分钟。取三个特征：$x_{t-1}$（30 秒前）、$x_{t-30}$（15 分钟前）、$x_{t-60}$（30 分钟前）。正常日间升温时，三者同步抬升，$x_t - x_{t-30}$ 保持在小范围；开门导致升温时，$x_{t-1}$ 先跳、$x_{t-30}$ 变化很小，近期变化率与周期基线的差会突然放大。\n\n交互特征可以写成“变化率 × 前置电流”：电流接近零时乘积归零，避免除以零；压缩机满负荷而温度仍上升，则提示门未关或制冷能力不足。注意这类交互只提供线索，方向性解释仍需物理约束与后续验证。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-periodic-interaction"
+          ]
+        }
+      },
+      {
+        "id": "tb-failure-audit",
+        "moduleId": "m6-verification",
+        "depth": "core",
+        "kind": "warning",
+        "title": "三类故障与可验证检查",
+        "markdown": "伪周期：Z3 温区 ACF 在滞后 40、80、120 处出现峰值，看似 20 分钟周期，实际是 sequence_no 每 40 点固定缺 1 条的固件问题，峰值来自采样不规则而非真实周期。检查方法是看 sequence_no 差分是否全为 1，并计算有效采样率；低于 0.98 时 ACF 解读须谨慎。\n\n时延估计偏误：Z4 温区 CCF 峰值出现在 $k=-10$，违背热力学因果方向，根因是降采样时最近邻填充取到了未来 5 秒的电流值。检查方法是对降采样序列抽样比对原始时间戳，确认 $\\tilde{y}_t$ 的 event_time 不晚于窗口右边界。\n\n信息泄漏：某模型验证集 AUC 0.97，上线跌到 0.61，审计发现训练用了 lag_0（同时刻其他传感器的值）。检查方法是对每条特征记录核查所有来源字段的 event_time 都严格小于当前预测时刻；对异步传感器设置最大容忍延迟 $T_{wait}$，超期未到的特征置 null。\n\n```sql\nWITH feature_audit AS (\n    SELECT\n        event_time,\n        temp_lag_1_event_time,\n        compressor_lag_4_event_time,\n        CASE\n            WHEN temp_lag_1_event_time >= event_time THEN 'LEAK_TEMP'\n            WHEN compressor_lag_4_event_time >= event_time THEN 'LEAK_COMP'\n            ELSE 'CLEAN'\n        END AS audit_flag\n    FROM lag_features\n    WHERE device_id = 'Z1-TEMP-01'\n      AND event_time >= '2024-01-01'::timestamptz\n      AND event_time < '2024-01-02'::timestamptz\n)\nSELECT audit_flag, COUNT(*)\nFROM feature_audit\nGROUP BY audit_flag;\n```\n\n该查询统计泄漏记录数，非零结果即说明构造逻辑存在时序瑕疵，须回溯修正缓冲区更新顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000291"
+              ],
+              "headingPath": [
+                "时序变换与特征工程",
+                "自相关、互相关与滞后特征",
+                "故障情形与可验证检查"
+              ],
+              "lineStart": 5295,
+              "lineEnd": 5331,
+              "assetRefs": [],
+              "excerptSha256": "dd46c0ea49896b8c65f49944d111d9d4804d4d12f79254dd938369784ec58b3c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-verification",
+        "moduleId": "m6-verification",
+        "depth": "core",
+        "kind": "summary",
+        "title": "发布前的四行验收",
+        "markdown": "把上面的检查收敛成四行，逐条留下证据：1）sequence_no 差分全为 1，有效采样率不低于 0.98；2）对齐后每个 $\\tilde{y}_t$ 的 event_time 不晚于窗口右边界；3）每个特征行的所有来源 event_time 严格早于预测时刻；4）$K_{\\max}$ 与物理时间常数一致，且滞后组在按时间切分的验证集上带来增益。\n\n最后提醒：ACF/CCF 只说明线性相关与领先滞后关系，不能单独证明因果。要把时延规则用于告警或控制，还需热力学方向、干预实验或现场证据支持。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-failure-audit"
+          ]
+        }
+      },
+      {
+        "id": "model-lag-exercise",
+        "moduleId": "m6-verification",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：审查一份滞后特征表",
+        "markdown": "某温区温度 30 秒采样，压缩机电流 5 秒采样。团队把电流降采样到 30 秒后发现 CCF 峰值在 $k=4$，并构造了 temp_lag_1、temp_lag_60 与 comp_lag_4，其中 comp_lag_4 取对齐窗口右边界之后最近的一个电流值。\n\n请回答：1）$k=4$ 对应的物理时延是多少？2）这份特征表最可能的信息泄漏点在哪，如何修正？3）如果温度 ACF 在滞后 40、80、120 重复出现峰值，而 sequence_no 每 40 点缺 1 条，应如何解释？\n\n参考答案：1）$4 \\times 30\\,$s $=120\\,$s；2）comp_lag_4 取到了窗口右边界之后的值，应改用不晚于窗口右边界的前向值并记录来源 event_time；3）先怀疑采样缺口造成的伪周期，检查有效采样率后再谈周期。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-failure-audit",
+            "model-verification"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "lag-feature-formative-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-lag-exercise",
+        "moduleId": "m6-verification",
+        "depth": "core",
+        "title": "滞后特征审查小测",
+        "outcomeRefs": [
+          "interpret-acf-ccf",
+          "build-safe-lag-features"
+        ],
+        "learningPurpose": "检查能否把 ACF/CCF 读数与安全滞后构造规则一起用于新情景判断。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-ccf-delay",
+            "tb-lag-construction",
+            "model-lag-checklist"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            {
+              "id": "q1",
+              "prompt": "温度 30 秒采样，CCF 峰值在 k=4，对应多少秒的时延？",
+              "answer": "120 秒"
+            },
+            {
+              "id": "q2",
+              "prompt": "comp_lag_4 取到对齐窗口右边界之后的电流值，会带来什么问题？",
+              "answer": "引入未来信息，造成信息泄漏，离线评估虚高而线上失效"
+            },
+            {
+              "id": "q3",
+              "prompt": "ACF 在等间隔滞后重复出峰，但 sequence_no 每 40 点缺 1 条，应先检查什么？",
+              "answer": "先用 sequence_no 差分和有效采样率排除采样缺口造成的伪周期"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "离线作答：1）30 秒采样、CCF 峰值 k=4 的时延是多少秒？2）滞后特征取到窗口右边界之后的值会带来什么风险？3）ACF 重复出峰但 sequence_no 有规律缺口时，应如何判断周期是否真实？"
+        }
+      }
+    ]
+  },
+  "subtitle": "时序变换与特征工程",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000286"
+      ],
+      "headingPath": [
+        "时序变换与特征工程",
+        "自相关、互相关与滞后特征"
+      ],
+      "lineStart": 5195,
+      "lineEnd": 5196,
+      "assetRefs": [],
+      "excerptSha256": "70d909c9e98367fbe51219a2e2d23edb10a3d0f644ec5a66fcb3f9efb2e694d5"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000287"
+      ],
+      "headingPath": [
+        "时序变换与特征工程",
+        "自相关、互相关与滞后特征",
+        "自相关与偏自相关的物理意义"
+      ],
+      "lineStart": 5197,
+      "lineEnd": 5214,
+      "assetRefs": [],
+      "excerptSha256": "e13340dabe13e6a2d215b20f300bd26481aa7ae9ef30c28f2167b38968a0ba75"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000288"
+      ],
+      "headingPath": [
+        "时序变换与特征工程",
+        "自相关、互相关与滞后特征",
+        "互相关与跨传感器时延估计"
+      ],
+      "lineStart": 5215,
+      "lineEnd": 5226,
+      "assetRefs": [],
+      "excerptSha256": "c466d7a21a49ccced94dc5b42e4960198167c7129a2ec2cff9cc2ac7462df53e"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000289"
+      ],
+      "headingPath": [
+        "时序变换与特征工程",
+        "自相关、互相关与滞后特征",
+        "滞后特征的工程构造与信息泄漏防护"
+      ],
+      "lineStart": 5227,
+      "lineEnd": 5282,
+      "assetRefs": [],
+      "excerptSha256": "256ad0826087785b1f2c1b958fd3d1e260febc350aa7cf87b7290bced07033bc"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000290"
+      ],
+      "headingPath": [
+        "时序变换与特征工程",
+        "自相关、互相关与滞后特征",
+        "周期性滞后与交互特征"
+      ],
+      "lineStart": 5283,
+      "lineEnd": 5294,
+      "assetRefs": [],
+      "excerptSha256": "3f9f21392bff064dad4588528a6b9be9f2dec8844abc915e890bb547b62212f7"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000291"
+      ],
+      "headingPath": [
+        "时序变换与特征工程",
+        "自相关、互相关与滞后特征",
+        "故障情形与可验证检查"
+      ],
+      "lineStart": 5295,
+      "lineEnd": 5331,
+      "assetRefs": [],
+      "excerptSha256": "dd46c0ea49896b8c65f49944d111d9d4804d4d12f79254dd938369784ec58b3c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    826,
+    1663
+  ],
+  "scale": 0.96
+}

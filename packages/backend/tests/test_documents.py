@@ -1,5 +1,6 @@
 import json
 import io
+from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,6 +11,10 @@ from fastapi.testclient import TestClient
 from src.main import app
 from src.services.documents import binding
 from src.services.documents.local_parser import parse_pdf_outline, parse_toc_text
+from src.services.documents.structure import (
+    TextbookStructureIntegrityError,
+    assert_textbook_source_unchanged,
+)
 from src.services.documents.store import (
     DocumentStorageError,
     DocumentStore,
@@ -411,6 +416,55 @@ class DocumentServiceTest(unittest.TestCase):
         persisted = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(persisted["chapters"][0]["points"][-1]["origin"], "llm-extension")
         self.assertTrue((session_root / "textbook-input" / metadata["id"] / "outline.json").is_file())
+
+    def test_user_extension_requires_same_chapter_textbook_anchor(self):
+        source = {
+            "schema_version": "textbook-outline/1.0",
+            "document_id": "doc-0123456789abcdef01234567",
+            "course": {"id": "textbook-course", "title": "教材课程"},
+            "chapters": [
+                {
+                    "id": "chapter-1",
+                    "title": "第一章",
+                    "order": 0,
+                    "points": [
+                        {
+                            "id": "source-point",
+                            "title": "教材知识点",
+                            "order": 0,
+                            "origin": "textbook",
+                        }
+                    ],
+                }
+            ],
+        }
+        workflow = deepcopy(source)
+        workflow["chapters"][0]["points"].append(
+            {
+                "id": "user-point",
+                "title": "用户知识点",
+                "order": 1,
+                "origin": "user",
+            }
+        )
+
+        with self.assertRaisesRegex(
+            TextbookStructureIntegrityError,
+            "非教材知识点 user-point 必须锚定在同章教材知识点",
+        ):
+            assert_textbook_source_unchanged(
+                source,
+                workflow,
+                course_id="textbook-course",
+            )
+
+        workflow["chapters"][0]["points"][-1]["anchor_point_id"] = "source-point"
+        result = assert_textbook_source_unchanged(
+            source,
+            workflow,
+            course_id="textbook-course",
+        )
+        self.assertEqual(result["extension_point_count"], 1)
 
     def test_pdf_binding_rejects_changes_to_parser_owned_point_identity(self):
         source = b"%PDF-1.7\nminimal test source\n"

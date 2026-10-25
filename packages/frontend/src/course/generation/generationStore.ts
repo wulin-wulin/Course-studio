@@ -30,6 +30,14 @@ type CourseGenerationState = {
   openLive: (conversationId: string) => void;
   applySnapshot: (snapshot: unknown) => void;
   touchLive: (conversationId: string, now?: number) => void;
+  markAwaitingInput: (
+    conversationId: string,
+    options?: {
+      gate?: GenerationGate;
+      label?: string;
+      detail?: string;
+    },
+  ) => void;
   pauseLive: (conversationId: string, message?: string) => void;
   resumeLive: (conversationId: string) => void;
   pauseStaleLiveRuns: (now?: number) => void;
@@ -73,6 +81,32 @@ export function shouldPauseGenerationAfterAgentDone(
     return false;
   }
   return true;
+}
+
+export function shouldCompleteCourseCreationAfterAgentDone(
+  payload: unknown,
+  run: Pick<LiveCourseGenerationRun, "published" | "status"> | undefined
+): boolean {
+  if (!isRecord(payload)) return false;
+  const returnCode = Number(payload.return_code ?? payload.returnCode);
+  return returnCode === 0 && isCompletedCourseCreationRun(run);
+}
+
+export function shouldRestoreCourseCreationWorkflow(
+  workflow: unknown,
+  run: Pick<LiveCourseGenerationRun, "published" | "status"> | undefined,
+  hasPendingInteraction = false,
+): boolean {
+  return (
+    workflow === "course-create" &&
+    (hasPendingInteraction || !isCompletedCourseCreationRun(run))
+  );
+}
+
+function isCompletedCourseCreationRun(
+  run: Pick<LiveCourseGenerationRun, "published" | "status"> | undefined
+): boolean {
+  return run?.published === true || run?.status === "completed";
 }
 
 const EMPTY_ACTIVE_STATE = {
@@ -131,9 +165,14 @@ const PHASE_COPY: Record<GenerationGate, { label: string; detail: string }> = {
     detail: "知识树正在按照聚类结果移动到各自的知识区域。",
   },
   G7_RELEASE_READY: {
-    label: "课程发布完成",
-    detail: "知识点、知识簇和正式课程包已经准备完成。",
+    label: "等待发布确认",
+    detail: "课程已经通过全部门禁，请在右侧课程助手中确认是否发布。",
   },
+};
+
+const COMPLETED_PHASE_COPY = {
+  label: "课程发布完成",
+  detail: "知识点、知识簇和学习路径已经汇成完整森林。",
 };
 
 const CLUSTER_PALETTE = [
@@ -234,6 +273,32 @@ export const useCourseGenerationStore = create<CourseGenerationState>((set) => (
         status: "running",
         error: null,
         updatedAt: now,
+      };
+      const liveRuns = { ...state.liveRuns, [normalizedId]: run };
+      if (state.mode === "live" && state.conversationId === normalizedId) {
+        return { ...state, ...activeStateFromRun(run), liveRuns };
+      }
+      return { ...state, liveRuns };
+    });
+  },
+
+  markAwaitingInput: (conversationId, options = {}) => {
+    const normalizedId = conversationId.trim();
+    if (!isPersistableLiveGenerationConversationId(normalizedId)) return;
+    set((state) => {
+      const previous =
+        state.liveRuns[normalizedId] ?? makePlaceholderRun(normalizedId);
+      if (previous.published || previous.status === "completed") return state;
+      const gate = options.gate ?? previous.gate;
+      const phase = PHASE_COPY[gate];
+      const run: LiveCourseGenerationRun = {
+        ...previous,
+        status: "awaiting-input",
+        gate,
+        phaseLabel: options.label?.trim() || phase.label,
+        phaseDetail: options.detail?.trim() || phase.detail,
+        error: null,
+        updatedAt: Date.now(),
       };
       const liveRuns = { ...state.liveRuns, [normalizedId]: run };
       if (state.mode === "live" && state.conversationId === normalizedId) {
@@ -624,8 +689,8 @@ function runFromSnapshot(
     status: snapshot.published ? "completed" : "running",
     course: snapshot.course,
     gate,
-    phaseLabel: phase.label,
-    phaseDetail: phase.detail,
+    phaseLabel: snapshot.published ? COMPLETED_PHASE_COPY.label : phase.label,
+    phaseDetail: snapshot.published ? COMPLETED_PHASE_COPY.detail : phase.detail,
     totalPoints: Math.max(snapshot.total_points, points.length),
     points,
     clusters,
@@ -864,6 +929,8 @@ export function normalizePersistedRun(
     ? "error"
     : published || value.status === "completed"
       ? "completed"
+      : value.status === "awaiting-input"
+        ? "awaiting-input"
       : "paused";
   const persistedError = readString(value, "error");
   return {
@@ -881,7 +948,9 @@ export function normalizePersistedRun(
     error:
       status === "paused"
         ? persistedError || INTERRUPTED_RUN_MESSAGE
-        : persistedError || null,
+        : status === "error"
+          ? persistedError || null
+          : null,
     updatedAt: readNumber(value, "updatedAt") ?? Date.now(),
     snapshotKey: readString(value, "snapshotKey"),
   };

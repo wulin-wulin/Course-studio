@@ -16,6 +16,7 @@ Reads models.json from the project root; falls back to env vars when absent.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 import sys
@@ -29,6 +30,33 @@ MODEL_CAPS = {
     "tool_call": True,
     "modalities": {"input": ["text", "image"], "output": ["text"]},
 }
+
+# OpenCode cannot infer token limits for our custom OpenAI-compatible
+# providers. Without an explicit limit it reports ``context: 0`` and cannot
+# calculate a safe automatic-compaction threshold.
+KIMI_256K_MODEL_IDS = frozenset({
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2-0905-preview",
+    "kimi-k2-turbo-preview",
+})
+KIMI_256K_LIMIT = {"context": 262_144, "output": 32_768}
+COMPACTION = {
+    "auto": True,
+    "keep": {"tokens": 15_000},
+    "buffer": 20_000,
+    # OpenCode 1.18.x uses this deprecated name for ``buffer``. Keeping the
+    # values equal makes the config effective before and after an upgrade.
+    "reserved": 20_000,
+}
+
+
+def _model_caps(model_id: str) -> dict:
+    capabilities = dict(MODEL_CAPS)
+    if model_id in KIMI_256K_MODEL_IDS:
+        capabilities["limit"] = dict(KIMI_256K_LIMIT)
+    return capabilities
+
 
 PERMISSION = {
     # A session workspace contains a copy of one or more course packages.
@@ -106,6 +134,25 @@ COURSE_CREATOR_PERMISSION = {
     "doom_loop": "deny",
 }
 
+
+def _without_manifest_edit(permission: dict) -> dict:
+    """Keep textbook agents from replacing the trusted manifest scaffold."""
+
+    restricted = deepcopy(permission)
+    restricted["edit"].pop(
+        "**/pipeline/*/course-content/generation/manifest.json",
+        None,
+    )
+    return restricted
+
+
+TEXTBOOK_OUTLINE_CREATOR_PERMISSION = _without_manifest_edit(
+    COURSE_OUTLINE_CREATOR_PERMISSION
+)
+TEXTBOOK_COURSE_CREATOR_PERMISSION = _without_manifest_edit(
+    COURSE_CREATOR_PERMISSION
+)
+
 COURSE_CONTENT_WORKER_PERMISSION = {
     "edit": {
         "**": "deny",
@@ -155,6 +202,16 @@ def _course_agents() -> dict:
             "description": "在知识点审核通过后生成课程详情、动画与图谱并发布",
             "mode": "primary",
             "permission": COURSE_CREATOR_PERMISSION,
+        },
+        "textbook-outline-creator": {
+            "description": "Generate and validate a textbook-grounded outline, stopping at G2 review.",
+            "mode": "primary",
+            "permission": TEXTBOOK_OUTLINE_CREATOR_PERMISSION,
+        },
+        "textbook-course-creator": {
+            "description": "Continue a textbook-grounded course after G2 review and publish it.",
+            "mode": "primary",
+            "permission": TEXTBOOK_COURSE_CREATOR_PERMISSION,
         },
         "course-content-worker": {
             "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",
@@ -214,6 +271,34 @@ def _default_id(data: dict | None, models: list[dict]) -> str:
     return models[0]["id"] if models else ""
 
 
+def _build_config(models: list[dict], default_id: str) -> dict:
+    providers = {}
+    for model in models:
+        model_id = model["id"]
+        providers[model_id] = {
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": model["base_url"],
+                "apiKey": model["api_key"],
+            },
+            "models": {model_id: _model_caps(model_id)},
+        }
+
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": providers,
+        "model": f"{default_id}/{default_id}",
+        "compaction": {
+            "auto": COMPACTION["auto"],
+            "keep": dict(COMPACTION["keep"]),
+            "buffer": COMPACTION["buffer"],
+            "reserved": COMPACTION["reserved"],
+        },
+        "permission": PERMISSION,
+        "agent": _course_agents(),
+    }
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("usage: gen_opencode_config.py <output_path>", file=sys.stderr)
@@ -236,21 +321,7 @@ def main() -> int:
 
     default_id = _default_id(data, models)
 
-    providers = {}
-    for m in models:
-        providers[m["id"]] = {
-            "npm": "@ai-sdk/openai-compatible",
-            "options": {"baseURL": m["base_url"], "apiKey": m["api_key"]},
-            "models": {m["id"]: dict(MODEL_CAPS)},
-        }
-
-    config = {
-        "$schema": "https://opencode.ai/config.json",
-        "provider": providers,
-        "model": f"{default_id}/{default_id}",
-        "permission": PERMISSION,
-        "agent": _course_agents(),
-    }
+    config = _build_config(models, default_id)
 
     out_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
     ids = ", ".join(m["id"] for m in models)

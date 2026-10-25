@@ -232,12 +232,12 @@ export function assertTextbookSourceUnchanged(
           `新增知识点 ${pointId} 必须使用受控扩展 origin=llm-extension 或 origin=user`,
         );
       }
+      const anchorId = text(workflowPoint.anchor_point_id);
+      const anchor = sourcePointById.get(anchorId);
+      if (!anchor || anchor.chapterIndex !== chapterIndex) {
+        throw new Error(`非教材知识点 ${pointId} 必须锚定在同章教材知识点`);
+      }
       if (workflowPoint.origin === 'llm-extension') {
-        const anchorId = text(workflowPoint.anchor_point_id);
-        const anchor = sourcePointById.get(anchorId);
-        if (!anchor || anchor.chapterIndex !== chapterIndex) {
-          throw new Error(`扩展知识点 ${pointId} 必须锚定在同章教材知识点`);
-        }
         if (typeof workflowPoint.extension_reason !== 'string' || !workflowPoint.extension_reason.trim()) {
           throw new Error(`扩展知识点 ${pointId} 缺少 extension_reason`);
         }

@@ -194,7 +194,7 @@ def assert_textbook_source_unchanged(
                 _assert_optional_source_fields(
                     expected_source,
                     point,
-                    ("number", "page"),
+                    ("number", "page", "source_refs"),
                     f"知识点 {point_id}",
                 )
                 source_cursor += 1
@@ -217,13 +217,13 @@ def assert_textbook_source_unchanged(
                 raise TextbookStructureIntegrityError(
                     f"新增知识点 {point_id} 必须使用受控扩展 origin=llm-extension 或 origin=user"
                 )
+            anchor_id = _text(point.get("anchor_point_id"))
+            anchor = source_points_by_id.get(anchor_id)
+            if anchor is None or anchor[0] != chapter_index:
+                raise TextbookStructureIntegrityError(
+                    f"非教材知识点 {point_id} 必须锚定在同章教材知识点"
+                )
             if origin == "llm-extension":
-                anchor_id = _text(point.get("anchor_point_id"))
-                anchor = source_points_by_id.get(anchor_id)
-                if anchor is None or anchor[0] != chapter_index:
-                    raise TextbookStructureIntegrityError(
-                        f"扩展知识点 {point_id} 必须锚定在同章教材知识点"
-                    )
                 if not _text(point.get("extension_reason")):
                     raise TextbookStructureIntegrityError(
                         f"扩展知识点 {point_id} 缺少 extension_reason"

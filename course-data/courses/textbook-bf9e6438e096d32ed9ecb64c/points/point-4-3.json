@@ -1,0 +1,587 @@
+{
+  "id": "point-4-3",
+  "title": "HTTP、CoAP 与批流传输的取舍",
+  "shortSummary": "按开销、时延、可靠性与网络条件比较 HTTP、CoAP 和批流传输，给出可解释的选型依据。",
+  "keyTerms": [
+    "HTTP",
+    "CoAP",
+    "批量传输",
+    "流式传输",
+    "时延",
+    "协议开销"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.84,
+  "prerequisites": [
+    "point-4-1",
+    "point-4-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的协议事实、时延公式、案例参数与选型表，按统一比较维度重排为选型决策流程，并补充时延预算与取舍规则。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "select-protocol",
+          "text": "给定链路条件、数据粒度与端到端时延目标，在 HTTP、CoAP 与批流传输之间选出方案并说明依据。"
+        },
+        {
+          "id": "budget-latency",
+          "text": "拆解端到端监测时延的组成，识别把批流窗口时延或单次传输时延当作总时延的错误。"
+        }
+      ],
+      "misconceptions": [
+        "把“轻量”或“现代”当作唯一判据，忽略连接建立、NAT 穿透与运维成本。",
+        "把批流窗口的排队时延当成端到端监测时延，漏掉采样周期与下游规则窗口。",
+        "认为 CoAP Observe 等价于持久可靠的推送，实际上跨网络边界仍需本地缓冲与确认。"
+      ],
+      "modules": [
+        {
+          "id": "scenario-and-dimensions",
+          "title": "场景与统一比较维度",
+          "role": "orientation",
+          "outcomeRefs": [
+            "select-protocol",
+            "budget-latency"
+          ],
+          "order": 0
+        },
+        {
+          "id": "latency-cost-model",
+          "title": "时延与成本模型",
+          "role": "model",
+          "outcomeRefs": [
+            "budget-latency",
+            "select-protocol"
+          ],
+          "order": 1
+        },
+        {
+          "id": "batch-design-tradeoff",
+          "title": "批流参数与延迟取舍",
+          "role": "tradeoff",
+          "outcomeRefs": [
+            "select-protocol",
+            "budget-latency"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scenario-mapping",
+          "title": "情境化选型映射",
+          "role": "decision",
+          "outcomeRefs": [
+            "select-protocol"
+          ],
+          "order": 3
+        },
+        {
+          "id": "verification-and-traps",
+          "title": "误区识别与验证",
+          "role": "verification",
+          "outcomeRefs": [
+            "budget-latency",
+            "select-protocol"
+          ],
+          "order": 4
+        },
+        {
+          "id": "decision-and-ops",
+          "title": "动态决策与运维检查",
+          "role": "procedure",
+          "outcomeRefs": [
+            "select-protocol",
+            "budget-latency"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "select-protocol",
+          "budget-latency"
+        ],
+        "method": "为一个给定场景写出协议选择、端到端时延预算与检查方式。",
+        "successCriteria": [
+          "选型结论与链路条件、数据粒度一致",
+          "时延预算包含采样周期与下游规则窗口",
+          "能指出至少一个验证手段"
+        ],
+        "summaryBlockId": "model-completion-bridge",
+        "nextPointId": "point-4-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-scope",
+        "moduleId": "scenario-and-dimensions",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节比较的对象",
+        "markdown": "本节的比较对象是三类通信策略：HTTP、CoAP，以及以它们为载体的批流传输。讨论范围限定在边缘采集层的回传链路，而不是云端 API 设计或设备侧总线协议。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000129"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍"
+              ],
+              "lineStart": 2386,
+              "lineEnd": 2387,
+              "assetRefs": [],
+              "excerptSha256": "fc31299c7912ecd9f3ee8c8e614d89e3f7b3d5d8223a4fe47c462177d93a2d7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-positioning",
+        "moduleId": "scenario-and-dimensions",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "三者的协议定位与核心差异",
+        "markdown": "HTTP 以请求-响应模型为基础、依赖 TCP，头部开销较大但基础设施成熟；CoAP 面向低功耗、有损网络，基于 UDP 并内置重传与资源观测；批流传输通过聚合多条记录降低连接频次，在带宽受限或按量计费时平衡实时性与经济性。\n\n| 维度 | HTTP/1.1 + TLS | CoAP + DTLS | 批流传输（HTTP/CoAP 载体） |\n|:---|:---|:---|:---|\n| 传输层 | TCP | UDP | 依载体而定 |\n| 典型头部开销 | 800–1500 B | 4–20 B | 摊薄至单条记录 |\n| 内置重传 | 依赖 TCP | 应用层 CON/NON | 应用层实现 |\n| 天然观测模式 | 长轮询 / WebSocket | Observe（RFC 7252） | 无，需自行设计 |\n| NAT/防火墙穿透 | 成熟 | 需 CoAP 代理或 DTLS 会话固定 | 同载体 |\n| 功耗敏感场景 | 较差 | 较优 | 依批大小与唤醒周期 |\n\n案例链路条件：4 个温区的边缘网关经 4G 备份链路回传，温湿度 30 s 采样、压缩机电流 5 s 采样、门磁事件触发加 60 s 心跳。若每条记录独立发起 HTTP/TLS，仅 Z1 的电流单点就有 720 条/小时请求，TLS 握手与 TCP 慢启动能耗在电池备援下不可接受。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000130"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍",
+                "协议定位与核心差异"
+              ],
+              "lineStart": 2388,
+              "lineEnd": 2402,
+              "assetRefs": [],
+              "excerptSha256": "98e77af5050dfb97394b16c60135fb1e4eb3909471dc09bbd8e8b3aeca3ea0a5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dimension-checklist",
+        "moduleId": "scenario-and-dimensions",
+        "depth": "core",
+        "kind": "note",
+        "title": "把比较维度固定成选型清单",
+        "markdown": "为避免在不同场景间来回换标准，建议固定四个比较维度，并逐项给出可度量的答案：\n\n1. **单条成本**：每条约多少字节的协议开销、需要几次往返才能发出？\n2. **时延构成**：连接建立、排队、传输与云侧处理各占多少，是否有窗口等待？\n3. **可靠性归属**：重传与确认由传输层、协议层还是应用层负责，失败时谁可见？\n4. **落地成本**：NAT/防火墙穿透、代理部署、证书与观测链路是否可运维？\n\n选型结论应能写成“因为第 1、2 项满足目标而第 3、4 项可接受”的句式；只写“更轻量”不构成依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scope",
+            "textbook-positioning"
+          ]
+        }
+      },
+      {
+        "id": "textbook-latency-model",
+        "moduleId": "latency-cost-model",
+        "depth": "core",
+        "kind": "formula",
+        "title": "单次传输的时延与成本模型",
+        "markdown": "单次传输的总时延为：\n\n$$T_{\\text{total}} = T_{\\text{queue}} + T_{\\text{connect}} + T_{\\text{transfer}} + T_{\\text{server}}$$\n\n其中 $T_{\\text{queue}}$ 为边缘缓冲队列等待，$T_{\\text{connect}}$ 含 TCP 握手与 TLS 协商（CoAP 则为 DTLS 会话恢复或完整握手），$T_{\\text{transfer}}$ 为有效载荷传输，$T_{\\text{server}}$ 为云平台接入服务写入 ingest_time 前的处理耗时。案例链路：下行 20 Mbps、上行 5 Mbps、RTT 中位数 120 ms。\n\n以 Z1-COMP-01 的单条 compressor_current 记录为例，JSON 约 180 B，HTTP/1.1 + TLS 1.3 的 $T_{\\text{connect}}$ 约 2–3 RTT（240–360 ms，含 0-RTT 恢复失败回退），头部开销占比超过 90%。同等载荷以 CoAP NON 发送则无连接建立时延，$T_{\\text{transfer}}$ 在 5 Mbps 上行中可忽略，但丢包后应用层无感知，需配合 sequence_no 的缺口检测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍",
+                "单条传输的时延与成本模型"
+              ],
+              "lineStart": 2403,
+              "lineEnd": 2412,
+              "assetRefs": [],
+              "excerptSha256": "f6cce2c0fbdbae1c1704043ea0b7ecbd5a45ba4a2f4d931212e9b7605765946d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-latency-budget",
+        "moduleId": "latency-cost-model",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "先把端到端时延预算算清",
+        "markdown": "选型真正要对齐的是端到端监测时延，而不是单次传输时延。把教材公式扩成完整预算：\n\n$$T_{\\text{monitor}} = T_{\\text{sample}} + T_{\\text{queue}} + T_{\\text{connect}} + T_{\\text{transfer}} + T_{\\text{server}} + T_{\\text{rule}}$$\n\n$T_{\\text{sample}}$ 是采样周期的等待，$T_{\\text{rule}}$ 是下游规则引擎或窗口的延迟。这两项最容易被漏掉：压缩机电流的采样周期已经是 5 s，本身就超过许多“秒级响应”的承诺；下游窗口还可能再叠加数秒。\n\n因此步骤应反过来：先定目标 $T_{\\text{monitor}}$，扣除 $T_{\\text{sample}}$ 与 $T_{\\text{rule}}$，剩下的时间才是传输侧预算，再用它判断能否承受一次 TLS 握手或一个 10 s 的批次窗口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-latency-model"
+          ]
+        }
+      },
+      {
+        "id": "textbook-batch-params",
+        "moduleId": "batch-design-tradeoff",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "批流传输的双条件触发与批次参数",
+        "markdown": "批流传输通过聚合窗口 $W_{\\text{batch}}$ 与记录数阈值 $N_{\\text{max}}$ 双条件触发发送。案例中网关管辖 Z1 全部 4 类设备，每秒记录数约为：温湿度 0.067 条/s、压缩机电流 0.2 条/s、门磁心跳 0.017 条/s，合计约 0.28 条/s。\n\n取 $W_{\\text{batch}} = 10$ s、$N_{\\text{max}} = 5$ 条时，通常由时间窗口触发，批次内平均 2.8 条记录；JSON 数组约 500 B，共享同一 TLS 连接后 $T_{\\text{connect}}$ 摊薄至单条约 86 ms，但 $T_{\\text{queue}}$ 引入最大 10 s 的观测到发送延迟。\n\n批次格式保留原始事实表全部字段并附加批次元数据：\n\n```\nbatch_record\n  gateway_id   GW-Z1-01\n  batch_time   2024-01-15T08:30:10Z\n  records      [event_time, device_id, metric, value, unit, quality_code, sequence_no]\n```\n\n`batch_time` 由边缘网关赋时，不写入原始事实表；云侧在持久化时写入 ingest_time。边缘网关不得覆盖 event_time 或 sequence_no。\n\n还要把采样后传输时延与采样等待分开：电流采样周期 5 s，最坏情况下物理变化到被采样还要等 5 s；采样后进入队列到发送又是 $W_{\\text{batch}}$ 量级。总检测时延必须同时包含两者。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍",
+                "批流传输的设计参数"
+              ],
+              "lineStart": 2413,
+              "lineEnd": 2447,
+              "assetRefs": [],
+              "excerptSha256": "26be6d212396d1a7cce1654ee1bc38675b8292b043dfb6c2ffbb6488f3b3aa3a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-tradeoff",
+        "moduleId": "batch-design-tradeoff",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "用目标时延反推批窗口上限",
+        "markdown": "批窗口越大，单条摊销的连接与头部成本越低，但 $T_{\\text{queue}}$ 近似线性增长；$N_{\\text{max}}$ 则决定了低速率设备能否提前发送——案例中合计 0.28 条/s，5 条阈值大约需要 18 s 才能凑满，因此实际几乎总是时间窗口先触发。\n\n反推方法：\n\n$$W_{\\text{batch}} \\le T_{\\text{monitor}} - T_{\\text{sample}} - T_{\\text{rule}} - T_{\\text{transfer}} - T_{\\text{server}}$$\n\n例：电流监测目标 20 s，采样 5 s，下游窗口 3 s，传输与处理留 2 s，则批窗口上限约 10 s，这与教材配置一致；若目标是 8 s，则 10 s 批窗口直接超出预算，应改单条发送或缩短窗口。\n\n注意压缩不必然划算：gzip 可把 JSON 批流压到 20%–30%，但边缘 CPU 能耗可能高于省下的传输能耗，需实测量化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-batch-params",
+            "model-latency-budget"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scenario-mapping",
+        "moduleId": "scenario-mapping",
+        "depth": "core",
+        "kind": "table",
+        "title": "三种策略的案例配置映射",
+        "markdown": "| 场景 | 推荐策略 | 关键配置 | 风险点 |\n|:---|:---|:---|:---|\n| Z1–Z4 温湿度常规回传 | HTTP 批流，$W_{\\text{batch}}=30$ s | 数组编码，gzip 压缩 | 批次过大导致内存溢出 |\n| 压缩机电流趋势监测 | HTTP 批流，$W_{\\text{batch}}=10$ s | 独立队列，优先发送 | 不可用于亚秒级过载保护 |\n| 门磁状态变化 | CoAP CON 单条或 MQTT | Observe 订阅，ACK 确认 | 心跳与变化事件需区分 sequence_no |\n| 4G 拥塞/基站切换 | CoAP NON 降级，本地缓冲 | 退避至 $W_{\\text{batch}}=300$ s | 需重试与幂等配合 |\n| 固件升级与配置下发 | HTTP/HTTPS 可靠传输 | 断点续传，签名校验 | 与数据流分离通道 |\n\n门磁的状态变化与 60 s 心跳都是合法新观测，各自以发送时刻作为 event_time 并递增 sequence_no。若把心跳标为 DUPLICATE，会破坏 sequence_no 的单调语义，使缺口检测失效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000133"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍",
+                "三种策略的澄湾配置映射"
+              ],
+              "lineStart": 2448,
+              "lineEnd": 2459,
+              "assetRefs": [],
+              "excerptSha256": "32b21d8a428125786f12155e30b9cb48b04615b5e089469d3541a3d090bf980d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decision-rules",
+        "moduleId": "scenario-mapping",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "四条可解释的取舍规则",
+        "markdown": "把映射表压缩成有优先级的判断顺序，冲突时前者优先：\n\n1. **闭环或保护动作优先时延**：需要亚秒级或严格上限的场景不能用批窗口，选单条低开销路径（CoAP CON/NON 或 MQTT），并接受确认与重传的额外逻辑。\n2. **常规遥测且链路受限时优先单条成本**：数据可容忍秒级到十秒级延迟时，用批流摊薄握手与头部开销，窗口由时延预算反推。\n3. **链路劣化时先保连通性再谈效率**：降低发送频次、扩大窗口并启用本地缓冲，恢复后异步回填，而不是持续重试压垮链路。\n4. **配置与固件走独立可靠通道**：HTTP/HTTPS 的断点续传与签名校验与数据流分离，避免大包阻塞遥测。\n\n规则之外还要算运维账：CoAP 的穿透依赖代理或固定 DTLS 会话，这部分人力与故障面必须计入，而不能只看头部字节数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scenario-mapping",
+            "model-dimension-checklist"
+          ]
+        }
+      },
+      {
+        "id": "textbook-misconceptions",
+        "moduleId": "verification-and-traps",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "四个常见误区与验证方法",
+        "markdown": "**误区一：以压缩率替代协议选择。** gzip 能把 JSON 批流压到 20%–30%，但边缘 CPU 能耗可能高于省下的传输能耗。验证：同硬件测压缩前后整机电流，计算每比特有效载荷的焦耳成本。\n\n**误区二：混淆 CoAP Observe 与边缘缓存。** Observe 让服务器主动推送资源变化，但不保证跨网络边界的持久化；网关仍需本地缓冲直至云端 ACK 或达到最大重试。\n\n**误区三：假设批次内 sequence_no 连续。** 批流允许同批跨 device_id 与 metric，但 sequence_no 仅在同一 device_id 与 metric 组合内单调。验证：按 1 小时窗口用 generate_series 生成期望序号，比较 actual_points 与 expected_points，检查 first_seq 是否与窗口起始对齐，并检测缺口；即使点数相等且无缺口，也要用 first_seq 排除前置偏移造成的隐性缺失。\n\n**误区四：把批流传输时延当成端到端监测时延。** 从过载到告警的最坏时延 = 采样周期（5 s）+ 批流窗口（10 s）+ 传输与处理时延 + 下游规则窗口，不能省略采样周期项而宣称“秒级响应”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000134"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍",
+                "常见误区与验证方法"
+              ],
+              "lineStart": 2460,
+              "lineEnd": 2498,
+              "assetRefs": [],
+              "excerptSha256": "59a87c944722fa0975dbb91a0239beab396c4d718aadae149fae516f6e43d642"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-verification-check",
+        "moduleId": "verification-and-traps",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "选型上线前的四项核对",
+        "markdown": "在方案评审时逐项留下证据，而不是只写结论：\n\n| 核对项 | 需要留下的证据 |\n|:---|:---|\n| 能耗与压缩 | 压缩前后整机电流、每比特焦耳成本 |\n| 可靠性闭环 | 本地缓冲的确认条件（ACK 或重试上限）与丢弃策略 |\n| 序号语义 | sequence_no 的单调范围是否按 device_id + metric 界定，缺口检测结果 |\n| 时延预算 | 含采样周期与下游窗口的分解表，以及最坏情况合计 |\n\n任一项拿不出数据时，应把结论标为待验证，而不是假定协议默认行为即可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-misconceptions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-decision-state",
+        "moduleId": "decision-and-ops",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "按状态机切换协议，而不是静态配置",
+        "markdown": "边缘网关的协议选择宜按状态机执行：\n\n```\nHEALTHY：RTT < 200 ms 且丢包率 < 1% → 维持 HTTP 批流\n          RTT 恶化或丢包上升 → DEGRADED\nDEGRADED：批流窗口扩至 300 s，CoAP NON 作为探测\n          连续 3 次探测失败 → OFFLINE\nOFFLINE：本地循环缓冲，FIFO 淘汰旧数据（保留最近 72 h）\n          链路恢复 → 优先发送最新批次，历史数据异步回填\n          回填时校验 sequence_no，冲突者标 quality_code='DUPLICATE'\n```\n\n运维检查点：每小时执行序号缺口检测；每日统计各网关批次发送成功率与平均批次大小；每月评估协议切换日志与能耗记录的关联性。这些检查不替代重试、幂等与加密设计，但为协议层选型提供可量化的反馈闭环。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "HTTP、CoAP 与批流传输的取舍",
+                "决策流程与运维检查点"
+              ],
+              "lineStart": 2499,
+              "lineEnd": 2519,
+              "assetRefs": [],
+              "excerptSha256": "f1c15f5aa02770d9473a623bd9f45836ff20be38ac61e6f5a5345656017f6cc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-completion-bridge",
+        "moduleId": "decision-and-ops",
+        "depth": "core",
+        "kind": "summary",
+        "title": "收束：从选型到编码的下一步",
+        "markdown": "把本节压成四步：先定端到端时延目标并扣除采样与下游窗口；再按数据粒度与链路条件在单条低开销、批流、可靠文件通道之间分配；然后用状态机处理链路劣化与恢复；最后用能耗、确认闭环、序号缺口与时延分解四类证据验收。\n\n协议定下之后，下一个问题变成“每条记录用什么格式承载”：自描述、紧凑性与模式演进弹性之间的权衡，将决定带宽与兼容成本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-decision-state",
+            "model-decision-rules",
+            "model-verification-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "protocol-choice-check",
+        "type": "formative-check",
+        "title": "选型判断：冷链三场景",
+        "anchorBlockId": "model-decision-rules",
+        "moduleId": "scenario-mapping",
+        "depth": "core",
+        "outcomeRefs": [
+          "select-protocol",
+          "budget-latency"
+        ],
+        "learningPurpose": "检查学习者能否把四条取舍规则应用到新场景，并同时给出时延预算上的理由。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-positioning",
+            "textbook-scenario-mapping"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "passingScore": 0.7,
+          "items": [
+            {
+              "prompt": "仓门被撬需要 2 s 内通知安保，链路为不稳定 4G。应选择哪种策略？",
+              "options": [
+                "CoAP CON 单条并本地缓冲确认",
+                "HTTP 批流，窗口 30 s",
+                "HTTP 批流，窗口 300 s",
+                "仅用 CoAP Observe，不做本地缓冲"
+              ],
+              "answerIndex": 0,
+              "explanation": "时延目标远小于任何批次窗口，需单条低开销路径；同时 Observe 不保证跨网络边界持久化，仍要本地缓冲与确认。"
+            },
+            {
+              "prompt": "温湿度只用于每小时趋势分析，4G 按流量计费。最合适的首选方案是？",
+              "options": [
+                "每条记录独立 HTTP/TLS 请求",
+                "HTTP 批流，窗口约 30 s 并压缩",
+                "CoAP NON 逐条发送",
+                "关闭采样以节省流量"
+              ],
+              "answerIndex": 1,
+              "explanation": "该场景可容忍十秒级延迟，批流可摊薄握手与头部开销；逐条 HTTP 的 TLS 成本不可接受，CoAP 逐条也不解决连接频次问题。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "分别说明仓门告警与温湿度趋势两类场景的协议选择，并写出各自的端到端时延预算（含采样周期与下游窗口）。"
+        }
+      }
+    ]
+  },
+  "subtitle": "边缘采集与可靠传输",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000129"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍"
+      ],
+      "lineStart": 2386,
+      "lineEnd": 2387,
+      "assetRefs": [],
+      "excerptSha256": "fc31299c7912ecd9f3ee8c8e614d89e3f7b3d5d8223a4fe47c462177d93a2d7c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000130"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍",
+        "协议定位与核心差异"
+      ],
+      "lineStart": 2388,
+      "lineEnd": 2402,
+      "assetRefs": [],
+      "excerptSha256": "98e77af5050dfb97394b16c60135fb1e4eb3909471dc09bbd8e8b3aeca3ea0a5"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000131"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍",
+        "单条传输的时延与成本模型"
+      ],
+      "lineStart": 2403,
+      "lineEnd": 2412,
+      "assetRefs": [],
+      "excerptSha256": "f6cce2c0fbdbae1c1704043ea0b7ecbd5a45ba4a2f4d931212e9b7605765946d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000132"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍",
+        "批流传输的设计参数"
+      ],
+      "lineStart": 2413,
+      "lineEnd": 2447,
+      "assetRefs": [],
+      "excerptSha256": "26be6d212396d1a7cce1654ee1bc38675b8292b043dfb6c2ffbb6488f3b3aa3a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000133"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍",
+        "三种策略的澄湾配置映射"
+      ],
+      "lineStart": 2448,
+      "lineEnd": 2459,
+      "assetRefs": [],
+      "excerptSha256": "32b21d8a428125786f12155e30b9cb48b04615b5e089469d3541a3d090bf980d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000134"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍",
+        "常见误区与验证方法"
+      ],
+      "lineStart": 2460,
+      "lineEnd": 2498,
+      "assetRefs": [],
+      "excerptSha256": "59a87c944722fa0975dbb91a0239beab396c4d718aadae149fae516f6e43d642"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000135"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "HTTP、CoAP 与批流传输的取舍",
+        "决策流程与运维检查点"
+      ],
+      "lineStart": 2499,
+      "lineEnd": 2519,
+      "assetRefs": [],
+      "excerptSha256": "f1c15f5aa02770d9473a623bd9f45836ff20be38ac61e6f5a5345656017f6cc8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3182,
+    2830
+  ],
+  "scale": 0.94
+}

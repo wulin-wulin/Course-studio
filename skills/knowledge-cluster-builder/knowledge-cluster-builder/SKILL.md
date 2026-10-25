@@ -1,152 +1,177 @@
 ---
 name: knowledge-cluster-builder
-description: 接收上游 v2 课程内容中间包（course.json + index.json + points/*.json + generation/manifest.json），为每个知识点补充簇归属（clusterIds，支持一点多簇、首个为主簇）、层级角色（trunk/branch/leaf）与横向关联（related），并透传/优化上游已产出的 prerequisites（保持无环 DAG），输出 clustered-graph/2.0 中间产物。用于把已生成完整内容的知识点聚类分簇、判断学习先后依赖、建立知识点关系，且尚未进入森林布局或 CKDS 发布阶段时。
+description: 接收已校验的课程内容包，为冻结的知识点集合补充知识簇、层级角色、前置依赖、横向关系与阅读顺序。textbook-content/2.0 必须输出不复制正文的 clustered-graph/3.0 薄关系图；旧内容包继续输出 clustered-graph/2.0。
 ---
 
-# 知识点聚类与关系构建（适配上游 v2）
+# 知识簇与关系图构建
 
-## 目标与边界
+## 职责边界
 
-输入上游 v2 生成的**课程内容中间包**，输出在其之上补齐**簇归属、层级角色、横向关联**并透传/优化 `prerequisites` 的知识图谱。上游（`candidate-knowledge-point-generator` v2）已产出完整知识点内容和保证无环的 `prerequisites`，并**有意把知识簇和布局推迟给本阶段**。
+本阶段只负责关系：
 
-本阶段职责与不做的事：
+- 定义 `clusters`，并为每点设置 `clusterIds`；首个簇是主簇。
+- 设置 `role`：`trunk / branch / leaf`。
+- 透传或按审计记录调整 `prerequisites`，最终必须是 DAG。
+- 设置无向语义关联 `related`。
+- 教材模式保留显式章节顺序和章内知识点顺序 `sequences`。
 
-- **核心是聚类**：生成 `clusters` 定义 + 为每个点标注 `clusterIds`（支持一点归属多簇）。这是上游明确留给本阶段的空缺。
-- **透传 + 优化 prerequisites**：默认沿用上游依赖，按需做补漏/去冗余/纠向的优化，每处改动记录审计（见 [references/relation-heuristics.md](references/relation-heuristics.md)）。不重建。
-- **补 role 与 related**：上游禁止这两类字段，由本阶段新增。
-- **不改写内容**：`coreIdea / principles / applications / qa / …` 原样透传，不重写不扩写。
-- **不做布局**：不生成 `pos / scale / polygon / labelPos`，那是 CKDS 发布阶段的职责。
-- **不增删知识点**：点集来自上游。发现缺漏/冗余写入报告，不擅自增删。
+本阶段不得增删知识点、改写冻结的 `id/title/origin`、重写知识点正文，或生成
+`pos / scale / polygon / labelPos` 等布局字段。
 
-输出是发布前的中间产物，不可直接当作 CKDS `index.json` 发布。
+## 输入
 
-### 教材 PDF 模式覆盖规则
+从 `course-content` 读取：
 
-若 `clustered-graph.json` 同级存在已校验的 `textbook-outline.json`，本 Skill 不执行第 2 节的自由聚类规则，而按以下确定性约束构图：
-
-- 每个教材章节一一生成同 ID、同标题、同顺序的 cluster；
-- 每个知识点的首个 `clusterIds` 固定为它在教材结构中的章节 ID；
-- 可以在确有独立教学价值时追加次要簇，但不得改变首个章节归属；
-- 仍按本 Skill 补充 `role`、`related` 和经审计的 `prerequisites`；
-- 装配和 `check-graph` 通过后，额外调用 `validate-textbook-graph`；
-- 章节结构与语义主题不一致时写入复核说明，不得通过重分章来修正教材。
-
-教材模式的时序边界是：章节到知识点的包含关系已经在上游 G1 从 PDF 目录恢复并冻结；本 Skill 只处理内容完成后的语义图谱关系。`prerequisites`、`related`、`role` 和次要簇可以帮助表达学习路径和横向联系，但不能新增、删除、移动或合并教材点，也不能把章节重新分配给其他主簇。章节顺序不自动推导为先修关系。
-
-## 输入解释
-
-输入是一个 v2 中间包目录，本 skill 读取：
-
-| 来源 | 读取内容 |
+| 路径 | 用途 |
 |---|---|
-| `src/data/points/<id>.json` | 完整知识点内容 + `prerequisites`（已是 DAG） |
-| `src/data/index.json` | 点列表与冻结顺序（`course-content-index/1.0`） |
-| `src/data/course.json` | `courseId`、标题 |
-| `generation/manifest.json` | `subject`（含 `outcomes`，透传到输出）；`pointEvidence[].kind`（原子类型，作聚类与关系先验） |
+| `src/data/index.json` | 冻结的知识点集合与顺序 |
+| `src/data/points/<id>.json` | canonical 知识点正文及上游 `prerequisites` |
+| `generation/manifest.json` | `subject`、证据模式、`kind` 与内容契约 |
+| `src/data/course.json` | 课程 ID 与课程元数据 |
 
-`kind` 只存在于 manifest 的 `pointEvidence`，不在 point 详情里——聚类和依赖判定要用 `kind` 时从这里取。若输入中间包本身不合法（缺文件、id 冲突、prerequisites 有环/悬空），先报告并停止，不在脏输入上建图。
+开始前通过 `course_pipeline validate-all` 校验内容包。图阶段可以阅读 canonical point
+帮助判断关系，但不能把 `content` 或旧正文栏目复制到 3.0 图里。
 
-## 工作流
+## 输出版本
 
-### 1. 载入并核对输入
+### 教材内容 2.0：clustered-graph/3.0
 
-加载四类来源，建立 `id → point` 索引。确认 `points/*.json` 与 `index.json` 的 id 集合一致、`prerequisites` 只引用已存在 id。主智能体先调用 `course_pipeline` 的 `validate-all` 确认输入干净；本 Skill 不直接运行 Bash。
-
-### 2. 聚类分簇（核心）
-
-把语义相近、构成同一学习主题的点归入同一簇。
-
-- 依据 `kind`（来自 manifest）+ `keyTerms` + `shortSummary` 的语义相近度聚类，而非字面词匹配。
-- 簇数量由点集规模与主题结构决定，不用固定数字；每簇 5–20 个点较利于可视化。
-- 为每个簇生成 `id`（kebab-case）、`title`、`subtitle`、`description`，并按建议学习/展示先后排 `order`（整型）。
-- 簇 `id` 必须泛化到当前课程本身，不套用其他领域的固定簇名。
-
-### 3. 标注簇归属 clusterIds（支持一点多簇）
-
-为每个点写 `clusterIds` 数组：
-
-- **默认单簇**：多数点只属于一个簇，`clusterIds` 只含主簇。
-- **仅当一个点在多个簇都有独立教学价值时才多簇**（判定见 references）——宁可单簇，避免多簇泛滥让森林可视化糊成一团。
-- **首个元素为主簇**（primary）：该点最核心的归属，供后续森林布局/着色使用。其余为附加归属。
-
-### 4. 标注层级角色 role
-
-在每个点的**主簇**内部，按其在 `prerequisites` 中的拓扑位置 + `importance` 标注 `trunk` / `branch` / `leaf`（细则见 references）。每个非空主簇应至少有一个 `trunk`。
-
-### 5. 透传并优化 prerequisites
-
-默认原样透传上游 `prerequisites`。允许三类主动优化（详见 references）：**补漏**（上游遗漏的必需前置）、**去冗余**（可由传递关系推出的间接边）、**纠向**（明显反向的依赖）。
-
-- 每处改动记入 `generation.refinedPrerequisiteEdges`：`{ op: "add"|"remove", from, to, reason }`。
-- 不确定的关系保持上游原样，宁可不动。
-- 引用值必须是点 id，禁止中文标题、悬空、自环。
-
-### 6. 补横向关联 related（无向）
-
-为相关但非必需前置的点对建立 `related`（对比、并列、互补、易混淆）。与 `prerequisites` 互斥；建议成对声明。
-
-### 7. 保证无环并自检
-
-优化后 `prerequisites` 仍须无环。若优化引入环，按 references 的规则打破并记入 `generation.brokenCycleEdges`。然后由主智能体调用 `course_pipeline` 的 `check-graph`。
-
-它做两类校验——**对象与引用完整性**（point 必需字段齐全且没有契约外字段、clusterIds 命中簇、prerequisites/related 无悬空、无自环、id 规范；注意 clusterIds 是外键、与 DAG 无关）与**图性质**（prerequisites 无环 + 拓扑排序）。通过（退出 0）才算合格。
-
-失败时调用 `check-graph-json` 获取结构化问题，按每条 finding 的 `pointId + field + value + fix` 定位修改，改完重跑直到 `ok: true`。
-
-### 8. 增量叠加输出
-
-先生成关系草稿：顶层写 `subject`（透传 manifest）、`generation`、`clusters`、`points`；草稿的每个 point 只需写 `id / clusterIds / role / related`，主动优化前置边时再写 `prerequisites`。**禁止靠模型复制、概括或手工重写正文。** 然后由主智能体依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`，让受信脚本按冻结 index 顺序机械补齐全部 v2 内容字段。
-
-装配脚本会自动补齐草稿中省略的正文，并用上游 point 文件与 manifest 覆盖草稿里任何被模型改写/精简的正文和 `subject`；若增删知识点、遗漏关系字段或包含契约外字段，则立即失败。只有三条命令都通过，才可把结果视为 `clustered-graph/2.0`。最终对象在上游字段之外只能追加 `clusterIds / role / related`，`prerequisites` 只能按审计记录优化。
-
-## 输出契约
-
-写出单个 UTF-8 标准 JSON `clustered-graph.json`（`clustered-graph/2.0`）：
+当 `manifest.generation.contentContract === "textbook-content/2.0"` 时，必须输出
+`clustered-graph/3.0`。每个 `points[]` 对象只能包含：
 
 ```json
 {
-  "schema_version": "clustered-graph/2.0",
-  "subject": { "id": "…", "input": "…", "normalizedTitle": "…", "inputType": "course", "language": "zh-CN", "audience": "…", "depth": "…", "scope": "…", "exclusions": ["…"], "outcomes": ["…"] },
+  "id": "finite-state",
+  "title": "有限状态",
+  "origin": "textbook",
+  "clusterIds": ["chapter-one"],
+  "role": "trunk",
+  "prerequisites": [],
+  "related": ["state-transition"]
+}
+```
+
+`content`、`sourceSpans`、`modelEnriched`、摘要、术语和动画信息全部留在
+`src/data/points/<id>.json`。发布器会从 canonical point 加载正文并合并图关系；
+兼容接口需要的顶层 `sourceSpans/modelEnriched` 在发布边界从 `content.blocks` 派生。
+`content.learningDesign`、block 的 `moduleId/depth` 与 `content.learningAssets` 也只保留在 canonical
+point 中，由发布器原样带入课程详情；不得复制到薄图、概括后覆盖，或因构图阶段未使用而删除。
+
+### 旧内容包：clustered-graph/2.0
+
+没有 `textbook-content/2.0` 契约的旧课程继续使用 2.0 完整点图。此路径仅用于向后兼容，
+不得把新教材课程降级为 2.0。
+
+## 教材模式的确定性约束
+
+如果流水线存在已校验的 `textbook-outline.json`：
+
+1. 每个教材章节生成同 ID、同标题、同顺序的主簇。
+2. 每个知识点首个 `clusterIds` 固定为 outline 中的章节 ID。
+3. 可以增加有独立教学价值的次要簇，但不得改变主章节归属。
+4. 教材原点和模型扩展点均保持 G1 冻结的 `id/title/origin` 与顺序。
+5. 章节顺序和章内点顺序写入 `sequences`；它们不等于 `prerequisites`。
+6. 章节结构与语义主题冲突时记录复核说明，不得重分章来“修正”教材。
+
+## 关系构建
+
+### 知识簇
+
+- 普通主题模式依据 `kind`、`keyTerms`、`shortSummary` 与内容语义分簇。
+- 大多数点只属于一个簇；确有跨主题教学价值时再追加次要簇。
+- `clusters[].order` 表示推荐展示顺序，不能据此自动制造前置依赖。
+- 每个有主成员的簇至少有一个 `trunk`。
+
+### 前置依赖
+
+- `A.prerequisites = [B]` 表示学习 A 前应先掌握 B。
+- 优先沿用上游边；每次增加或删除都写入
+  `generation.refinedPrerequisiteEdges`。
+- 为破环删除的边还要写入 `generation.brokenCycleEdges`。
+- 规则与审计格式见 [references/relation-heuristics.md](references/relation-heuristics.md)。
+
+### related 与 role
+
+- `related` 只表达非前置的横向联系，不能与同一对点的 prerequisite 重复。
+- `related` 必须双向声明；若 `A.related` 包含 B，则 `B.related` 必须包含 A。
+- `trunk` 是簇内骨架，`branch` 承接或分化主干，`leaf` 是应用或末端专题。
+- 仍被其他点依赖的点不能标为 `leaf`。
+
+## 装配与门禁
+
+先写关系草稿。教材 3.0 草稿点可以只写 `id/prerequisites/clusterIds/role/related`；
+`assemble-graph` 会按 index 顺序从 canonical point 机械恢复 `title/origin`，并阻止正文进入图谱。
+旧 2.0 草稿按原流程机械装配完整上游点。
+
+完成草稿后依次调用：
+
+1. `course_pipeline assemble-graph`
+2. `course_pipeline assemble-graph-check`
+3. `course_pipeline check-graph`
+4. 教材模式再调用 `course_pipeline validate-textbook-graph`
+5. `course_pipeline review-knowledge-graph`
+
+`assemble-graph-check` 或 `check-graph` 未通过时不得进入 G6 审核。没有有效的
+`knowledge-graph/G6_GRAPH_REVIEW` 回执时不得发布。
+
+## clustered-graph/3.0 顶层示例
+
+```json
+{
+  "schema_version": "clustered-graph/3.0",
+  "subject": {},
   "generation": {
-    "generatedAt": "2026-07-16",
-    "sourceCourseId": "software-engineering-pilot",
-    "pointCount": 10,
-    "clusterCount": 3,
+    "generatedAt": "2026-10-22",
+    "sourceCourseId": "state-machines",
+    "pointCount": 2,
+    "clusterCount": 1,
     "brokenCycleEdges": [],
-    "refinedPrerequisiteEdges": [
-      { "op": "add", "from": "continuous-integration", "to": "software-testing", "reason": "CI 的质量门禁以测试为必需前置，上游遗漏" }
-    ]
+    "refinedPrerequisiteEdges": []
   },
   "clusters": [
-    { "id": "requirements", "title": "需求工程", "subtitle": "识别并规范化利益相关者诉求", "description": "从需求获取到可验证的需求规格。", "order": 1 }
+    {
+      "id": "chapter-one",
+      "title": "第一章",
+      "subtitle": "基础结构",
+      "description": "建立本章的概念与方法基础。",
+      "order": 0
+    }
   ],
+  "sequences": {
+    "cluster": [],
+    "point": [{ "fromId": "finite-state", "toId": "state-transition" }]
+  },
   "points": [
     {
-      "id": "software-testing", "title": "软件测试",
-      "shortSummary": "…", "coreIdea": "…", "principles": ["…","…"], "keyTerms": ["…","…"],
-      "applications": ["…"], "aliases": ["Software Testing"], "intuition": "…",
-      "misconceptions": ["…"], "qa": [{ "q": "…", "a": "…" }], "animationType": "none",
-      "difficulty": "基础", "importance": 0.94, "prerequisites": ["requirements-specification"],
-      "clusterIds": ["quality-assurance"], "role": "trunk", "related": ["change-impact-analysis"]
+      "id": "finite-state",
+      "title": "有限状态",
+      "origin": "textbook",
+      "clusterIds": ["chapter-one"],
+      "role": "trunk",
+      "prerequisites": [],
+      "related": ["state-transition"]
+    },
+    {
+      "id": "state-transition",
+      "title": "状态转移",
+      "origin": "textbook",
+      "clusterIds": ["chapter-one"],
+      "role": "branch",
+      "prerequisites": [],
+      "related": ["finite-state"]
     }
   ]
 }
 ```
 
-字段口径：`id/title/clusterIds/role/prerequisites/related` 是关系层；其余为 v2 内容字段的原样透传（含可选 `formula/comparisons/history/yearIntroduced/prosCons/visualType/visualSuggestion/animationSuggestion`）。
+## 完成检查
 
-除 JSON 外，只报告：簇数量、点数量、多簇点数量、依赖边数、优化边数、被打破的环边数，以及建议人工复核的聚类或关系分歧。
-
-## 发布前检查
-
-- [ ] 输出通过 `clustered-graph.schema.json` 校验。
-- [ ] `course_pipeline` 的 `check-graph` action 成功。
-- [ ] 每个点 `clusterIds` 非空、去重、每个都命中已声明的簇；首个为主簇。
-- [ ] 多簇点确有跨主题的独立教学理由，未滥用多簇。
-- [ ] 所有 `prerequisites`/`related` 都是点 id（无中文标题、无悬空、无自环）；`prerequisites` 全图无环。
-- [ ] 对上游 prerequisites 的每处改动都记入 `refinedPrerequisiteEdges`；引入的环已记入 `brokenCycleEdges`。
-- [ ] 每个非空主簇至少一个 `trunk`；标为 `leaf` 的点未被其他点依赖。
-- [ ] v2 内容字段原样透传，未被改写；未生成布局字段。
-- [ ] 已运行 `assemble-graph-points.mjs`，其 `--check` 模式退出码为 0；没有手工复制或精简 point 正文。
-- [ ] `pointCount` 等于 `points` 长度，`clusterCount` 等于 `clusters` 长度。
-- [ ] 主智能体已调用 `review-knowledge-graph`；无有效 `knowledge-graph/G6_GRAPH_REVIEW` 回执时不得进入 G7。
+- [ ] 图的点集和顺序与 index 完全一致。
+- [ ] `subject` 从 manifest 原样恢复。
+- [ ] 3.0 point 只有七个规定字段，未复制 `content/sourceSpans/modelEnriched`。
+- [ ] 每点至少一个有效 `clusterIds`，首个是主簇。
+- [ ] prerequisites 无悬空、自环、重复和环；所有改动有审计记录。
+- [ ] related 双向一致，且无悬空、自环和 prerequisite 类型冲突。
+- [ ] sequences 无悬空、自环、重复和有向环。
+- [ ] generation 的点数、簇数与实际数组一致。
+- [ ] 装配、图校验、教材结构校验和 G6 审核均已通过。

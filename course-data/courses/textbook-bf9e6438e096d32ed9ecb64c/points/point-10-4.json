@@ -1,0 +1,544 @@
+{
+  "id": "point-10-4",
+  "title": "触发、确认、恢复与关闭生命周期",
+  "shortSummary": "定义告警从触发、确认、恢复到关闭的完整生命周期，避免重复通知和悬挂告警。",
+  "keyTerms": [
+    "告警生命周期",
+    "触发",
+    "确认",
+    "恢复",
+    "关闭",
+    "悬挂告警"
+  ],
+  "animationType": "alarmLifecycle",
+  "animationSuggestion": "沿时间轴推进示例告警：逐步显示每个采样点的越限/回限判定与连续计数，标注确认、恢复、关闭的发生时刻，并允许切换「先确认后恢复」「先恢复后补确认」「时钟异常导致恢复挂起」三条分支。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-10-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "operation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的四状态偏序、时延定义与案例数值，按处置顺序重排讲解，补入操作对照表、逐步复核与值班检查清单。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-lifecycle",
+          "text": "用四个状态与三类驱动源解释告警生命周期，并说明确认与恢复为何互不阻塞。"
+        },
+        {
+          "id": "operate-lifecycle",
+          "text": "对一条告警时间线判定触发、确认、恢复、关闭是否合法，算出响应时延与恢复时延，并识别悬挂告警与计数器缺陷。"
+        }
+      ],
+      "misconceptions": [
+        "把告警当成一次性通知，认为「开」和「关」两个状态就足以描述处置过程。",
+        "认为必须先确认才能恢复，导致异常已消除而告警仍挂起。",
+        "用 ingest_time 而不是 event_time 计算持续时间和响应时延。"
+      ],
+      "modules": [
+        {
+          "id": "lifecycle-model",
+          "title": "状态语义与驱动源",
+          "role": "concept-framing",
+          "description": "建立四状态偏序关系，说明生命周期模型相对二元开关模型多记住了什么。",
+          "outcomeRefs": [
+            "explain-lifecycle"
+          ],
+          "order": 0
+        },
+        {
+          "id": "trigger-and-duration",
+          "title": "触发前置条件与持续时间",
+          "role": "procedure-step",
+          "description": "按阈值与持续时间两级条件执行触发判定，并计算最小检测时延。",
+          "outcomeRefs": [
+            "operate-lifecycle"
+          ],
+          "order": 1
+        },
+        {
+          "id": "acknowledge",
+          "title": "确认的原子性与响应时延",
+          "role": "procedure-step",
+          "description": "把人工介入写成显式记录，并据此度量响应时延与触发升级。",
+          "outcomeRefs": [
+            "operate-lifecycle"
+          ],
+          "order": 2
+        },
+        {
+          "id": "recover",
+          "title": "恢复判定与并发分支",
+          "role": "procedure-branch",
+          "description": "用回限窗口判定恢复，处理未确认即恢复、时钟异常等分支。",
+          "outcomeRefs": [
+            "explain-lifecycle",
+            "operate-lifecycle"
+          ],
+          "order": 3
+        },
+        {
+          "id": "close",
+          "title": "关闭归档与路径校验",
+          "role": "procedure-step",
+          "description": "执行关闭与冻结，验证可达路径并拦截跳过恢复的非法转换。",
+          "outcomeRefs": [
+            "operate-lifecycle"
+          ],
+          "order": 4
+        },
+        {
+          "id": "defect-check",
+          "title": "缺陷排查与值班检查",
+          "role": "verification",
+          "description": "按症状与检查方法定位实现缺陷，并形成发现悬挂告警的检查顺序。",
+          "outcomeRefs": [
+            "operate-lifecycle"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-lifecycle",
+          "operate-lifecycle"
+        ],
+        "method": "完成一次生命周期判定练习：给定越限、确认、回限与时钟异常事件，逐步标注状态、时延与应触发的检查动作。",
+        "successCriteria": [
+          "四个状态与三类驱动源的对应关系正确",
+          "触发与恢复均按连续两点规则判定，时延数值以 event_time 计算",
+          "能指出未确认即恢复、恢复后计数器未清零等分支的处置方式"
+        ],
+        "exerciseBlockId": "defect-checks",
+        "summaryBlockId": "model-hanging-alarm-runbook",
+        "nextPointId": "point-10-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "lifecycle-scope",
+        "moduleId": "lifecycle-model",
+        "depth": "support",
+        "kind": "note",
+        "title": "本节范围：从状态语义到处置动作",
+        "markdown": "本节把告警当作需要持续管理的对象，而不是一瞬间的通知。阅读目标不是记住四个名词，而是能在一条真实时间线上判断：这条告警是否该触发、谁确认了它、它是否已经恢复，以及什么时候可以关闭归档。\n\n内容按处置顺序展开：先建立状态语义，再依次处理触发、确认、恢复、关闭，最后用实现缺陷清单检查自己的系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000360"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期"
+              ],
+              "lineStart": 6727,
+              "lineEnd": 6728,
+              "assetRefs": [],
+              "excerptSha256": "7841ec8d0a71ec12977efc03ce59c24caac7a5aeee76ee1d66ab0e8de7de874b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "lifecycle-states",
+        "moduleId": "lifecycle-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "四状态、偏序关系与三类驱动源",
+        "markdown": "一个完整的告警生命周期包含四个核心状态：\n\n- **触发（Trigger）**：必经入口，表示越限条件已满足并生成告警对象。\n- **确认（Acknowledge）**：记录人工介入的时刻与操作者。\n- **恢复（Recover）**：监测量回到正常区间并满足持续时间条件。\n- **关闭（Close）**：生命周期终点，冻结记录并归档。\n\n四者构成偏序关系：触发是必经入口；确认与恢复可以并发到达但互不阻塞；关闭要求告警先处于恢复状态。这正是它区别于「开/关」二元模型的地方——确认状态支撑响应时延计算，恢复状态保留历史上下文供根因追溯，关闭状态则是归档审计的终点。\n\n状态转换由三类驱动源推动：\n\n1. **数据驱动**：越限或回限。\n2. **时间驱动**：持续时间条件满足、超时升级。\n3. **人工驱动**：运维确认、强制关闭。\n\n本节案例配置进一步规定：Z1 温区高温告警必须人工确认后才能进入恢复观察期，避免自动回限让告警「闪消」而遗漏处置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000361"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期",
+                "告警生命周期模型与状态语义"
+              ],
+              "lineStart": 6729,
+              "lineEnd": 6734,
+              "assetRefs": [],
+              "excerptSha256": "26d41962b9fa7e6496503af01ca26dcbad6dc45ce7313828ab71c4f08aa9ce91"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-binary-vs-lifecycle",
+        "moduleId": "lifecycle-model",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：生命周期比开关模型多记住了什么",
+        "markdown": "二元开关模型只保存「有没有告警」，因此三件事无法回答：谁在什么时候接手、异常持续了多久、这条记录为何被归档。生命周期模型用四个时间戳把这些问题变成可查询字段：\n\n| 字段 | 来源 | 用途 |\n|:---|:---|:---|\n| trigger_time | 触发判定 | 响应时延与恢复时延的起点 |\n| ack_time | 人工确认 | 计算响应时延，判断是否超时升级 |\n| recover_time | 回限判定 | 计算异常持续时长 |\n| close_time | 关闭操作 | 归档审计终点 |\n\n「确认与恢复互不阻塞」不是实现偷懒，而是承认真实处置顺序：值班人员可能在异常自然消失后才确认，也可能在告警仍存在时先确认再处置。强制规定先后顺序，会把真实发生的顺序记录成假数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "lifecycle-scope",
+            "lifecycle-states"
+          ]
+        }
+      },
+      {
+        "id": "trigger-duration-rule",
+        "moduleId": "trigger-and-duration",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "触发判定：阈值与持续时间两级条件",
+        "markdown": "触发判定由**阈值判定**与**持续时间判定**两级组成：先判断单个采样点是否越限，再要求连续 $N$ 个采样点越限才生成告警。设采样周期为 $T_s$，最小检测时延为\n\n$$\n\\Delta t_{\\min} = (N-1) \\cdot T_s\n$$\n\n本节案例配置中，Z1-TEMP-01 的 $T_s = 30$ 秒，静态高温阈值 $\\theta_{\\max} = 8\\,^{\\circ}\\mathrm{C}$，采用连续两点越限规则（$N = 2$），因此 $\\Delta t_{\\min} = 30$ 秒而不是 60 秒——把「连续两点」理解成要跨越两个完整周期，会让时延计算翻倍。\n\n下表给出触发判定的时间线，event_time 为设备赋时：\n\n| 序号 | event_time | value | 单点越限 | 连续计数 | 触发判定 |\n|:---|:---|:---|:---|:---|:---|\n| 1 | 09:00:00 | 7.5 | 否 | 0 | — |\n| 2 | 09:00:30 | 8.2 | 是 | 1 | 未满足 |\n| 3 | 09:01:00 | 8.5 | 是 | 2 | **触发**，$\\Delta t = 30$ 秒 |\n| 4 | 09:01:30 | 8.1 | 是 | 3 | 维持触发态 |\n| 5 | 09:02:00 | 7.8 | 否 | 0 | —（转入恢复判定）|\n\n关键边界：序号 2 与 3 的 event_time 间隔恰为 30 秒，已满足连续两点要求。若序号 3 因网络延迟导致 ingest_time 晚于允许迟到上限，其 quality_code 应标为 LATE，但 event_time 不变，触发判定仍按 event_time 序列进行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000362"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期",
+                "触发条件与持续时间计算"
+              ],
+              "lineStart": 6735,
+              "lineEnd": 6756,
+              "assetRefs": [],
+              "excerptSha256": "26f7f39dd0d2ccd705bfd29dd0618531275c74bb666653e954171b4db8ae8e37"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trigger-walkthrough",
+        "moduleId": "trigger-and-duration",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "逐步复核：为什么这次触发用了 30 秒",
+        "markdown": "按上表逐步走一遍，可以把「持续时间条件」落到实处：\n\n1. 09:00:30 首次越限，连续计数从 0 变 1；此时只有单点证据，判定为未满足。\n2. 09:01:00 再次越限，计数变 2，恰好达到 $N = 2$，生成告警。\n3. 从第一个越限点到触发点只过去了 30 秒，所以最小检测时延是 $(2-1) \\times 30 = 30$ 秒。\n\n如果这条记录因网关缓存 15 秒批量上报而晚到，ingest_time 会变成 09:01:15 甚至更晚，但 event_time 仍是 09:01:00。判定与后续时延计算都必须锚定 event_time，否则同一条告警在不同网络条件下会得到不同的触发时刻。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "trigger-duration-rule"
+          ]
+        }
+      },
+      {
+        "id": "ack-atomicity",
+        "moduleId": "acknowledge",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "确认：显式记录与响应时延度量",
+        "markdown": "确认不是对物理状态的修改，而是把「人已经介入」这件事显式记录下来。它在告警记录上体现为派生的 ack_time 与 ack_operator 字段，不属于原始事实表；确认不改变监测量，但会影响升级路径——本节案例配置规定，触发后 10 分钟仍未确认的告警自动升级至值班主管。\n\n响应时延的精确定义为\n\n$$\nT_{\\mathrm{resp}} = t_{\\mathrm{ack}} - t_{\\mathrm{trigger}}\n$$\n\n其中 $t_{\\mathrm{trigger}}$ 取告警触发时刻（即上表序号 3 的 event_time），而不是运维人员看到通知的时刻。这样度量的才是组织响应能力，而不是通知通道的性能。\n\n确认操作还要求原子性：读取告警、校验当前状态、写入确认信息必须在同一事务内完成。\n\n```python\ndef acknowledge(alarm_id, operator, ack_time):\n    # 数据库层使用 SELECT FOR UPDATE 防止并发竞态\n    alarm = db.lock_and_get(alarm_id)\n    if alarm.state != \"TRIGGERED\":\n        raise InvalidStateTransition(alarm.state)\n    alarm.state = \"ACKNOWLEDGED\"\n    alarm.ack_time = ack_time\n    alarm.ack_operator = operator\n    db.commit()\n    return alarm.state\n```\n\n常见误区是把 ingest_time 当作 $t_{\\mathrm{trigger}}$：若边缘网关缓存 15 秒批量上报，ingest_time 会晚于 event_time 数十秒，响应时延被人为压缩，真实响应效率被掩盖。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000363"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期",
+                "确认机制与响应时延度量"
+              ],
+              "lineStart": 6757,
+              "lineEnd": 6787,
+              "assetRefs": [],
+              "excerptSha256": "427c7680787ed587392eac88b45842e683d1cd15b38b71a2901c868e996cbd2a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "recover-window",
+        "moduleId": "recover",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "恢复判定：回限窗口与特殊分支",
+        "markdown": "恢复要求监测量持续回到正常区间并满足持续时间条件，否则阈值附近的振荡会让告警反复抖动。本节案例采用对称设计：恢复同样要求连续两点回限，即温度连续两次采样 $\\leq 8\\,^{\\circ}\\mathrm{C}$。\n\n有一个容易被规则写错的情形：告警处于触发态但尚未确认时，如果已经满足回限条件，系统应直接转入恢复态，并保留「未确认」标记供事后审计。不允许强制要求「先确认后恢复」，否则会出现真实异常早已消除、告警却仍挂起的反直觉状态。\n\n| 序号 | event_time | value | 单点回限 | 连续计数 | 恢复判定 |\n|:---|:---|:---|:---|:---|:---|\n| 5 | 09:02:00 | 7.8 | 是 | 1 | 未满足 |\n| 6 | 09:02:30 | 7.6 | 是 | 2 | **恢复** |\n| 7 | 09:03:00 | 8.3 | 否（越限）| — | 不重新触发（需新的连续两点）|\n\n恢复时延定义为从触发时刻到恢复时刻的跨度：$T_{\\mathrm{rec}} = 09{:}02{:}30 - 09{:}01{:}00 = 90$ 秒。它反映异常物理过程的持续时长，与响应时延正交——两者可以一个很长、另一个很短。\n\n故障情形：若序号 6 的 quality_code 为 CLOCK_SUSPECT，其 event_time 可信度下降。本节案例规定这类记录不参与连续计数，序号 6 被跳过，恢复判定顺延到序号 7；而序号 7 的 8.3 已经越限，连续计数归零，恢复失败。运维界面必须显式标注「时钟异常导致恢复判定挂起」，不能静默遗漏。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000364"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期",
+                "恢复判定与回限窗口"
+              ],
+              "lineStart": 6788,
+              "lineEnd": 6805,
+              "assetRefs": [],
+              "excerptSha256": "4543cfc0edb447ce984ff279d9d1e8aa0365019a3445a3245398635551c12d27"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recover-paths",
+        "moduleId": "recover",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：确认与恢复的两条合法时序",
+        "markdown": "把确认与恢复的先后顺序展开，会看到两条都合法的时序路径：\n\n| 路径 | 时序 | 适用情境 |\n|:---|:---|:---|\n| 先确认后恢复 | 触发 → 确认 → 恢复 → 关闭 | 有人值守、异常持续，需要留下处置记录 |\n| 先恢复后确认 | 触发 → 恢复 → 补录确认 → 关闭 | 快速自愈、确认滞后，人工介入记录事后补齐 |\n\n第二条路径正是「互不阻塞」的操作含义：处置和记录是两件事，系统不能因为记录迟到就把已恢复的告警重新拉回触发态。但两条路径都要求关闭前已经恢复，这一点不因确认顺序而松动。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ack-atomicity",
+            "recover-window"
+          ]
+        }
+      },
+      {
+        "id": "close-archive",
+        "moduleId": "close",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "关闭与归档：冻结记录并校验可达路径",
+        "markdown": "关闭是生命周期终点，只允许对已恢复的告警执行。关闭时写入派生的 close_time，并冻结全部可变字段，形成不可篡改的审计记录。本节案例要求关闭操作必须在恢复后 24 小时内完成，超时由系统自动关闭。\n\n状态机需要验证以下可达路径：\n\n1. 触发 → 确认 → 恢复 → 关闭（标准路径）。\n2. 触发 → 恢复 → 补录确认 → 关闭（快速自愈）。\n3. 触发 → 确认 → 人工处置介入 → 恢复 → 关闭。\n4. 触发 → 超时未确认 → 升级（升级是并行的通知动作，不是生命周期状态）。\n\n同时要挡住不可达路径：从触发直接关闭（跳过恢复），以及在从未触发的情况下出现恢复。实现层应在外键约束与状态机校验两处同时防护，而不是只依赖应用代码。\n\n```sql\nSELECT alarm_id, device_id, state, trigger_time, ack_time, recover_time,\n       EXTRACT(EPOCH FROM (COALESCE(recover_time, now()) - trigger_time)) AS duration_seconds\nFROM alarm_lifecycle          -- 派生告警表，非原始事实表\nWHERE device_id = 'Z1-TEMP-01'\n  AND state <> 'CLOSED'\n  AND trigger_time >= '2024-01-15 00:00:00+08';\n```\n\n这条查询用于检索当前未关闭告警及其在生命周期中的停留时长。now() 在事务中返回事务开始时间，保证并发视图一致；duration_seconds 是派生计算值，不得反向覆盖状态字段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000365"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期",
+                "关闭与归档约束"
+              ],
+              "lineStart": 6806,
+              "lineEnd": 6837,
+              "assetRefs": [],
+              "excerptSha256": "8c44d89ca922988a76400828f107b56950cf2113b2b7dbf698fcd114c06e2099"
+            }
+          ]
+        }
+      },
+      {
+        "id": "defect-checks",
+        "moduleId": "defect-check",
+        "depth": "core",
+        "kind": "table",
+        "title": "四类实现缺陷与检查方法",
+        "markdown": "下面四类缺陷在真实系统里反复出现，症状往往表现为「指标看起来正常」，所以要用检查动作而不是肉眼观察来发现。\n\n| 缺陷 | 症状 | 检查方法 |\n|:---|:---|:---|\n| 用 ingest_time 替代 event_time 计算持续时间 | 网络抖动时告警时延指标随机波动 | 抽样比对同一告警的触发时刻差值方差，若大于采样周期则存在该缺陷 |\n| sequence_no 缺口未中断连续计数 | 设备离线复连后，缺失期间的告警状态错误延续 | 构造 quality_code = MISSING 的占位行，验证连续计数器是否强制归零 |\n| 门磁心跳被当作持续开启 | Z1-DOOR-01 的 60 秒心跳被读成门开了 60 秒 | 区分 door_state 的取值（0/1）与上报原因（变化事件/心跳），心跳不累积持续时间 |\n| 恢复后未重置连续计数器 | 单点越限立刻再触发，告警高频震荡 | 验证进入恢复态时，触发侧与恢复侧计数器是否都清零 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000366"
+              ],
+              "headingPath": [
+                "阈值告警与状态机",
+                "触发、确认、恢复与关闭生命周期",
+                "常见实现缺陷与检查方法"
+              ],
+              "lineStart": 6838,
+              "lineEnd": 6855,
+              "assetRefs": [],
+              "excerptSha256": "0df9a114060cc90ad5bd4b70ebe0a35b563f659a80fc88cb9611c4a6fd3997b0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hanging-alarm-runbook",
+        "moduleId": "defect-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "收束：三步检查与悬挂告警",
+        "markdown": "把上面的规则收束成值班时可执行的三步检查，悬挂告警就是在这里被发现的：\n\n1. **看状态与停留时长**：查询所有未关闭告警，按状态分组看停留时间。停留在触发态超过确认时限、或停留在恢复态超过关闭时限的，都是待处理对象。\n2. **看计数器**：对刚恢复又立即触发的告警，检查触发侧与恢复侧的连续计数是否都已清零。\n3. **看数据可信度**：确认参与判定的记录里没有 LATE、CLOCK_SUSPECT、MISSING 这类会改变结论的质量码，且相关挂起已在界面标注。\n\n长期停留在确认态而设备始终未恢复的告警，必须设置最大持续期或升级兜底，否则它会一直挂着，既不升级也不关闭。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "close-archive",
+            "defect-checks"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "lifecycle-transition-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-hanging-alarm-runbook",
+        "moduleId": "defect-check",
+        "depth": "core",
+        "title": "生命周期判定练习",
+        "outcomeRefs": [
+          "explain-lifecycle",
+          "operate-lifecycle"
+        ],
+        "learningPurpose": "检查学习者能否把四状态规则应用到含时钟异常与确认滞后的真实时间线，并给出正确的状态、时延与检查动作。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "lifecycle-states",
+            "trigger-duration-rule",
+            "recover-window",
+            "defect-checks"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "Z1-TEMP-01 在 09:00:30 与 09:01:00 连续两点超过 8 °C，09:01:40 运维确认，09:02:00 与 09:02:30 连续两点回限，其中 09:02:30 的记录 quality_code 为 CLOCK_SUSPECT。",
+          "questions": [
+            "触发时刻与最小检测时延分别是多少？",
+            "响应时延与恢复时延各为多少，为什么两者正交？",
+            "CLOCK_SUSPECT 记录如何处理，当前告警能否关闭？",
+            "若 09:05:00 单点越限即再次告警，应先检查哪个计数器？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "在一张纸上画出该告警的四个时间戳，标注每次状态转换的驱动源，并写出两处判断依据：最小检测时延用 $(N-1)T_s$ 计算，响应时延用 event_time 而非 ingest_time。对 CLOCK_SUSPECT 记录说明它为何不参与连续计数，以及此时告警应停留在哪个状态。"
+        }
+      }
+    ]
+  },
+  "subtitle": "阈值告警与状态机",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000360"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期"
+      ],
+      "lineStart": 6727,
+      "lineEnd": 6728,
+      "assetRefs": [],
+      "excerptSha256": "7841ec8d0a71ec12977efc03ce59c24caac7a5aeee76ee1d66ab0e8de7de874b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000361"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期",
+        "告警生命周期模型与状态语义"
+      ],
+      "lineStart": 6729,
+      "lineEnd": 6734,
+      "assetRefs": [],
+      "excerptSha256": "26d41962b9fa7e6496503af01ca26dcbad6dc45ce7313828ab71c4f08aa9ce91"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000362"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期",
+        "触发条件与持续时间计算"
+      ],
+      "lineStart": 6735,
+      "lineEnd": 6756,
+      "assetRefs": [],
+      "excerptSha256": "26f7f39dd0d2ccd705bfd29dd0618531275c74bb666653e954171b4db8ae8e37"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000363"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期",
+        "确认机制与响应时延度量"
+      ],
+      "lineStart": 6757,
+      "lineEnd": 6787,
+      "assetRefs": [],
+      "excerptSha256": "427c7680787ed587392eac88b45842e683d1cd15b38b71a2901c868e996cbd2a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000364"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期",
+        "恢复判定与回限窗口"
+      ],
+      "lineStart": 6788,
+      "lineEnd": 6805,
+      "assetRefs": [],
+      "excerptSha256": "4543cfc0edb447ce984ff279d9d1e8aa0365019a3445a3245398635551c12d27"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000365"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期",
+        "关闭与归档约束"
+      ],
+      "lineStart": 6806,
+      "lineEnd": 6837,
+      "assetRefs": [],
+      "excerptSha256": "8c44d89ca922988a76400828f107b56950cf2113b2b7dbf698fcd114c06e2099"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000366"
+      ],
+      "headingPath": [
+        "阈值告警与状态机",
+        "触发、确认、恢复与关闭生命周期",
+        "常见实现缺陷与检查方法"
+      ],
+      "lineStart": 6838,
+      "lineEnd": 6855,
+      "assetRefs": [],
+      "excerptSha256": "0df9a114060cc90ad5bd4b70ebe0a35b563f659a80fc88cb9611c4a6fd3997b0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1567,
+    1346
+  ],
+  "scale": 0.95
+}

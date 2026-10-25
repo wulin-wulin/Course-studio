@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     # validating dozens of points and animations. Keep its hard ceiling
     # separate so ordinary chat/edit turns still fail fast when wedged.
     course_create_terminal_timeout_seconds: float = 21600.0
+    # OpenCode 1.18 keeps required-input tools pending/empty while the model is
+    # streaming their arguments and does not publish argument deltas. Keep this
+    # ceiling conservative so large writes can finish before declaring a stall.
+    opencode_empty_tool_call_timeout_seconds: float = 600.0
     # Course data is intentionally outside the frontend bundle.  It is the
     # canonical JSON package directory used by both the HTTP API and future
     # course-management skills.
@@ -76,6 +80,16 @@ class Settings(BaseSettings):
     document_parse_timeout_seconds: float = 180.0
     document_pdftotext_executable: str = "pdftotext"
     document_parser: Literal["local", "mineru", "auto"] = "local"
+
+    # Structure analysis is a second, evidence-constrained pass after MinerU.
+    # ``auto`` lets the parser call the configured model only when the
+    # deterministic candidate reports ambiguity; ``off`` keeps parsing fully
+    # local; ``required`` fails closed when a valid model proposal cannot be
+    # obtained.  The model never receives permission to edit raw Markdown.
+    document_structure_llm_mode: Literal["off", "auto", "required"] = "auto"
+    document_structure_llm_model: str = ""
+    document_structure_llm_max_input_chars: int = 120_000
+    document_structure_llm_max_output_tokens: int = 8_000
 
     # Remote parser settings stay backend-only; the document API returns safe
     # status/errors and normalized outlines, never credentials or signed URLs.

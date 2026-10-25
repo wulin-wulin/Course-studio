@@ -86,9 +86,37 @@ generated/<course-id>-course-content/
 
 无法检索时将 `evidenceMode` 设为 `model-only`，来源保持为空，知识点置信度不得高于 `0.6`，边界项进入复核队列。
 
+当编排 Skill 提供绑定的教材 `material.json/full.md` 时，使用
+`evidenceMode: "textbook-grounded"` 和 `contentContract: "textbook-content/2.0"`，不再执行普通
+主题的外部检索流程。主智能体必须先从受信 `generation/manifest.json` 取得每个点完整的
+`pointEvidence` 单项，再按 material chunks 分批读取对应正文并构造证据包。chunk 只控制读取批次，
+不是可写入详情的来源标识；worker 必须原样使用 `pointEvidence.sourceSpans`，不得从 chunk 自行
+重建或替换 span。
+教材原有点必须按 `material.point_sources` 的顺序读取并覆盖全部 section 正文；不能用一个章节标题
+或局部摘录代表整个知识点。所有非教材点（`llm-extension` 或 `user`）必须有同章教材
+`anchor_point_id`，并只读取该锚点允许的非空相关子集。
+详情正文写入有序 `content.blocks`：教材块记录精确 span 和 `quote|paraphrase`，模型块通过
+`basedOnBlockIds` 指向前面的教材上下文。每个教材点和受控扩展点都必须同时包含教材块和模型
+补充块；扩展点也要有非空教材锚点 span。不得只根据标题生成内容，也不得把模型补充伪装成
+教材原文。
+
+读取证据后先设计学习成果，再编排正文：为每个点填写 `content.learningDesign` 的 outcomes、
+misconceptions、modules 和 completion，然后让 block 的 `moduleId/depth` 服务这些目标。默认采用
+`adaptationLevel: "balanced"`：教材约束事实、定义、公式、数值、适用条件、边界和完整覆盖；模型
+可重排教学顺序、压缩重复、增加类比、案例、练习、动画和桥接。不得用固定 token 百分比衡量教材
+与模型内容；用允许/禁止动作、覆盖检查、冲突检查和 provenance 审计把握重编尺度。
+
+三档控制的是教学重构动作，不是教材/模型文字占比：`faithful` 保留教材术语和主要讲解顺序，只做
+去重、澄清与必要检查；`balanced` 围绕成果重排并补足理解、迁移与练习，作为默认档；
+`teaching-first` 可按学习任务重建叙事、合并或拆分讲解，并把教材段落放到最有助于理解的位置。
+无论哪一档，都必须覆盖完整证据范围，并用 block provenance 区分教材依据和模型补充。
+
 ### 3. 生成课程元数据与规划索引
 
-先写 `src/data/course.json`、`generation/manifest.json` 和 `src/data/index.json`。
+普通课程先写 `src/data/course.json`、`generation/manifest.json` 和 `src/data/index.json`。绑定
+`material.json/full.md` 的教材课程只手写 `course.json`、`index.json` 和教材结构；随后由主智能体
+调用 `course_pipeline` 的 `sync-textbook-manifest`。教材模式不得让模型手写
+`generation/manifest.json` 中的 sources、pointEvidence 或 sourceSpans。
 
 高召回提取所有可独立定义、讲解并考核的知识点：
 
@@ -111,7 +139,10 @@ importance
 keyTerms
 ```
 
-`id` 使用稳定的 ASCII kebab-case；冲突使用有语义的限定词，禁止随机编号。为每个索引项在 manifest 的 `pointEvidence` 中按 index 同序记录冻结的 `pointId/title`、原子类型、来源、置信度和范围状态。所有边界、待复核或低置信度点必须关联到 `reviewQueue`。
+`id` 使用稳定的 ASCII kebab-case；冲突使用有语义的限定词，禁止随机编号。普通课程为每个索引项在
+manifest 的 `pointEvidence` 中按 index 同序记录冻结的 `pointId/title`、原子类型、来源、置信度和
+范围状态。教材课程的 pointEvidence 由 `sync-textbook-manifest` 从结构与 material 机械生成，模型
+不得重复展开。所有边界、待复核或低置信度点必须关联到 `reviewQueue`。
 
 完成后由主智能体调用 `course_pipeline` 的 `validate-index`。索引阶段未通过前，不得生成详情；通过后还必须完成 `knowledge-points/G2_IDENTITY_REVIEW` 结构化审核。
 
@@ -132,8 +163,10 @@ keyTerms
 3. 全量 `id/title` 注册表；
 4. 全量合法 prerequisite ID 和建议前置候选；
 5. 相关来源与事实约束；
-6. 数据契约和动画请求契约；
-7. 明确的文件所有权。
+6. session-local 的 `SKILL.md`、数据契约、动画契约、point Schema 和 animation-request Schema
+   的明确路径，并被要求在写文件前完整读取；
+7. 教材模式下对应点的 `manifest.pointEvidence` 完整单项 JSON，包括原样的 `sourceSpans`；
+8. 明确的文件所有权。
 
 子智能体只写自己负责的：
 
@@ -143,10 +176,18 @@ generation/animation-requests/<id>.json
 ```
 
 不得修改 `index.json`、manifest、动画清单、注册文件或共享样式。
+主智能体也不得用 `edit`/`write` 直接修改已分配给详情任务的文件；校验失败必须交回原 worker，
+或在原 worker 无法继续时交给拥有同一组互斥文件的 repair task。
 
-### 5. 生成丰富但非填充式的详情
+第一波只生成合计 3–5 个知识点作为 canary。每个详情任务返回后，主智能体立即调用
+`course_pipeline` 的 `validate-point-drafts`，把完整、未经摘要的校验错误发回原任务并在原文件
+所有权内修复；原任务无法继续时只能创建同所有权 repair task，主智能体不得代写；
+本波全部通过后才启动下一波。子智能体不得自行运行校验脚本，最终完整 `validate-points`
+仍是 G3 的硬门禁。
 
-每个详情必须包含：
+### 5. 按当前内容契约生成详情
+
+普通 `researched/model-only` 课程继续使用栏目式 v1，每个详情必须包含：
 
 - 索引 6 项元数据；
 - `coreIdea`；
@@ -162,6 +203,44 @@ generation/animation-requests/<id>.json
 按事实适用性生成 `formula`、`comparisons`、`history`、`yearIntroduced`、`prosCons`、`visualType` 和 `visualSuggestion`。不适用时省略，不得为了字段数量编造内容。
 
 `shortSummary` 说明“是什么或解决什么问题”；`coreIdea` 解释机制而不是复述摘要；原理每条只表达一个可验证要点；应用必须是真实任务或场景。
+
+教材 `textbook-content/2.0` 详情保留索引元数据、`origin`、`prerequisites` 和动画字段，正文写入
+`content.schema_version`、`content.learningDesign`、`content.blocks` 以及有明确学习目的时的
+`content.learningAssets`。不得同时写旧正文栏目或顶层 `sourceSpans/modelEnriched`。
+块类型、来源联合和完整字段以 `schemas/textbook-content.schema.json` 为准：
+
+- 先定义 learning outcomes 和常见误区，再选择主要教学模式、模块、完成条件和预计时长；
+- `adaptationLevel` 仅允许 `faithful|balanced|teaching-first`，默认显式写 `balanced`；
+- 内容组织采用“问题导入、核心理解、应用活动、达成检查、下一点桥接”的通用骨架，并按概念解释、
+  定量机理、操作流程、比较决策、故障诊断或案例分析选择类型模板；通常使用 4–7 个模块，按复杂度
+  增减，不得机械凑齐固定栏目；
+- 类型模板必须改变实际编排：概念解释突出定义、边界和正反例；定量机理突出变量、单位、假设、推导、
+  算例和参数实验；操作流程突出前置条件、步骤、分支、错误恢复和检查表；比较决策使用统一维度并给出
+  情境化取舍；故障诊断按症状、假设、证据、定位和修复组织；案例分析按情境、决策、证据、结果、
+  反思和迁移组织。只在 `primaryPattern` 中改名、正文仍使用同一套栏目不算完成差异化重编；
+- 顶部会自动展示 outcomes，正文不得再生成完整重复的学习目标块；`estimatedMinutes` 必须计入正文
+  阅读、公式与表格理解、互动活动和练习作答的总时间；
+- 每个 block 必须用 `moduleId` 命中一个 module，并用 `depth: core|support|advanced` 表示学习深度；
+- 块数组顺序就是阅读顺序，ID 在点内唯一；
+- 教材块至少一个，必须有非空精确 spans；
+- 教材块的 spans 按块顺序和数组顺序做首次出现去重后，必须与注入的完整
+  `manifest.pointEvidence.sourceSpans` 深度相等且顺序一致；不得使用 material 的 `chunk-*` ID
+  替换 manifest 中的 `block-*` section ID；
+- 模型块至少一个，只能引用排在前面的块，并最终追溯到教材块；
+- 模型块必须就近跟随它所依据的教材内容：单一锚点的补充放在该锚点之后，综合多个块的补充放在最后一个被引用块之后；不得先堆完全部教材块再集中追加所有模型块；
+- 模型块不得引入 `pointEvidence.sourceSpans` 之外的新 span；
+- 模型块可补充解释、推导、例子、对比或练习，但标题和呈现必须让来源清楚；
+- `learningAssets` 的每项必须有 anchor、目标引用、学习目的、可追溯 grounding 和无交互 fallback；
+  类型自有参数放在 `config`，不得借此放入未经 provenance 支持的事实；
+- `completion.nextPointId` 可省略；需要下一点桥接时只能填写冻结 `index.points[]` 中紧随当前点的
+  稳定 ID，末点不得填写；
+- 点级 `sourceSpans` 和 `modelEnriched` 由校验器从 blocks 派生，不由任务重复填写。
+
+所有 point 和 animation request 都是 JSON 文件。LaTeX 的每个反斜杠在文件中必须编码为合法
+JSON 的 `\\`：例如运行时公式 `\delta` 要写成 `"\\delta"`，不能写成非法的 `"\delta"`；
+Markdown 正文统一使用 `$...$` 或 `$$...$$`，不得使用 `\(...\)`、`\[...\]`、未包裹的
+LaTeX 命令或可见的字面量 `\n\n`；`\frac` 等命令仍须写成 `\\frac`。worker 写完后必须用
+`read` 回读自己拥有的两个 JSON 文件，检查物理文本中的转义、字段和闭合结构后才能返回。
 
 ### 6. 提交动画意图
 
@@ -179,7 +258,7 @@ generation/animation-requests/<id>.json
 
 所有详情完成后，串行检查：
 
-1. 标题、别名和缩写造成的重复；
+1. 标题、别名和缩写造成的重复（教材来源点保留原始标题时，同名教材点按 `point.id` 区分，不视为生成重复）；
 2. 模板化正文或同一句式批量替换；
 3. 过宽章节和过细实现细节；
 4. 悬空、自引用、重复或成环的前置关系；
@@ -210,9 +289,16 @@ src/animations/<Component>.tsx
 src/animations/<Component>.css
 ```
 
-组件必须遵守 [animation-contract.md](animation-contract.md)，使用 React、SVG 和 CSS，除非三维空间关系确实不可替代。不得让多个动画任务修改同一文件。
+每个动画任务提示必须要求子智能体先加载 `candidate-knowledge-point-generator` Skill，再完整读取
+session-local 的 [animation-contract.md](animation-contract.md)，并传入完整 animation manifest 单项和
+绑定知识点的相关正文块；只给路径或转述部分规则不算完成契约注入。组件使用 React、SVG 和 CSS，
+除非三维空间关系确实不可替代。不得让多个动画任务修改同一文件。
 
-组件完成后由主智能体串行调用 `course_pipeline` 的 `build-animation-registry`。
+第一个动画组件必须作为 canary。每个动画任务返回后，主智能体立即调用 `course_pipeline` 的
+`validate-animation-drafts`；失败时把完整错误发回原任务，在原 TSX/CSS 所有权内修复并重验。
+首个组件通过后才能启动其余组件；其余任务也必须逐个通过草稿校验。
+
+全部组件通过草稿校验后，由主智能体串行调用 `course_pipeline` 的 `build-animation-registry`。
 
 该脚本更新 points 中的动画字段，并生成 `courseKnowledge.ts`、`AnimationBlock.tsx` 和共享样式。即使没有动画也必须运行。
 

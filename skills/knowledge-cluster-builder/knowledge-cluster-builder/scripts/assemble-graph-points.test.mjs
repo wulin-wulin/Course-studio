@@ -153,3 +153,87 @@ test('拒绝点集缺失，基础图校验器也会提前拦截精简 point 对�
   const report = JSON.parse(check.stdout);
   assert.ok(report.findings.some((finding) => finding.code === 'point-missing-fields'));
 });
+
+function convertFixtureToThinTextbookGraph(value) {
+  const manifestPath = path.join(value.contentRoot, 'generation/manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.generation = { contentContract: 'textbook-content/2.0' };
+  writeJson(manifestPath, manifest);
+
+  for (const pointValue of [value.first, value.second]) {
+    const canonical = {
+      ...pointValue,
+      origin: 'textbook',
+      content: {
+        schema_version: 'textbook-content/2.0',
+        blocks: [{
+          id: 'definition',
+          kind: 'definition',
+          markdown: `${pointValue.title}的教材定义。`,
+          provenance: { origin: 'textbook', representation: 'paraphrase', sourceSpans: [] },
+        }],
+      },
+    };
+    writeJson(
+      path.join(value.contentRoot, 'src/data/points', `${pointValue.id}.json`),
+      canonical,
+    );
+  }
+  value.graph.schema_version = 'clustered-graph/3.0';
+  value.graph.points = value.graph.points.map((pointValue) => ({
+    id: pointValue.id,
+    ...(Object.hasOwn(pointValue, 'prerequisites')
+      ? { prerequisites: pointValue.prerequisites }
+      : {}),
+    clusterIds: pointValue.clusterIds,
+    role: pointValue.role,
+    related: pointValue.related,
+  }));
+  writeJson(value.graphFile, value.graph);
+}
+
+test('textbook-content/2.0 机械装配 clustered-graph/3.0 薄关系点且不复制正文', (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  convertFixtureToThinTextbookGraph(value);
+
+  const result = assembleGraphPoints(value.contentRoot, value.graphFile);
+  assert.equal(result.thinGraph, true);
+  const output = JSON.parse(readFileSync(value.graphFile, 'utf8'));
+  assert.deepEqual(output.points.map((pointValue) => Object.keys(pointValue)), [
+    ['id', 'title', 'origin', 'clusterIds', 'role', 'prerequisites', 'related'],
+    ['id', 'title', 'origin', 'clusterIds', 'role', 'prerequisites', 'related'],
+  ]);
+  assert.deepEqual(output.points[0], {
+    id: 'first-point',
+    title: '第一个知识点',
+    origin: 'textbook',
+    clusterIds: ['foundations'],
+    role: 'trunk',
+    prerequisites: [],
+    related: [],
+  });
+  assert.deepEqual(output.points[1].prerequisites, []);
+  assert.equal('content' in output.points[0], false);
+  assert.equal('coreIdea' in output.points[0], false);
+
+  const checked = spawnSync(process.execPath, [CHECK_GRAPH, value.graphFile, '--json'], {
+    encoding: 'utf8',
+  });
+  assert.equal(checked.status, 0, checked.stderr || checked.stdout);
+  assert.equal(JSON.parse(checked.stdout).ok, true);
+});
+
+test('clustered-graph/3.0 拒绝把 canonical content 复制进关系图', (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  convertFixtureToThinTextbookGraph(value);
+  value.graph = JSON.parse(readFileSync(value.graphFile, 'utf8'));
+  value.graph.points[0].content = { blocks: [] };
+  writeJson(value.graphFile, value.graph);
+
+  assert.throws(
+    () => assembleGraphPoints(value.contentRoot, value.graphFile),
+    /(?:first|second)-point 含契约外字段: content/,
+  );
+});

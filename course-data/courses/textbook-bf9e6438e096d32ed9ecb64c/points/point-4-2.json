@@ -1,0 +1,577 @@
+{
+  "id": "point-4-2",
+  "title": "MQTT 主题、QoS 与会话语义",
+  "shortSummary": "说明 MQTT 主题设计、QoS 等级与持久会话的语义差异，选择与业务可靠性匹配的配置。",
+  "keyTerms": [
+    "MQTT",
+    "主题",
+    "QoS",
+    "持久会话",
+    "遗嘱消息",
+    "重传"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-1-2",
+    "point-4-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的主题模板、QoS 等级表、案例参数与故障验证方法，围绕「业务后果决定配置」重排为统一维度比较与情境化选型，补充决策规则、反例与检查表。",
+      "estimatedMinutes": 17,
+      "outcomes": [
+        {
+          "id": "explain-mqtt-semantics",
+          "text": "解释 MQTT 主题层级、QoS 三级保证与会话续传各自的语义边界。"
+        },
+        {
+          "id": "select-mqtt-config",
+          "text": "针对一条冷链数据流的业务后果，选择主题结构、QoS、Retain 与会话过期配置并说明依据。"
+        }
+      ],
+      "misconceptions": [
+        "把 QoS 2 当作所有主题的默认值：高等级带来更多报文往返、状态保存与重复处理成本，单点缺失无影响的趋势数据用 QoS 0 更合适。",
+        "认为发布端设置 QoS 1 就能保证端到端至少一次：Broker 到订阅端按订阅 QoS 执行，实际保证取两者较小值。",
+        "用 Retain 让新订阅者立刻收到高频采样主题的最新值：保留消息会增加 Broker 写入压力，新订阅者拿到的是过期快照而非实时流。",
+        "认为会话恢复会重发全部消息：只有 QoS 1/2 的出站未确认消息会续传，已确认的入站消息不再投递。"
+      ],
+      "modules": [
+        {
+          "id": "mqtt-topic",
+          "title": "主题作为可枚举的路由契约",
+          "role": "decision-dimension",
+          "description": "先固定主题层级与变量段，决定数据能否被稳定过滤。",
+          "outcomeRefs": [
+            "explain-mqtt-semantics"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mqtt-qos",
+          "title": "QoS 等级与端到端保证",
+          "role": "comparison",
+          "description": "按丢失与重复的业务代价比较三个等级，并处理发布/订阅取小值。",
+          "outcomeRefs": [
+            "explain-mqtt-semantics",
+            "select-mqtt-config"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mqtt-session",
+          "title": "会话状态与消息续传",
+          "role": "comparison",
+          "description": "用断网预算比较会话过期时间，明确续传只覆盖出站未确认消息。",
+          "outcomeRefs": [
+            "explain-mqtt-semantics",
+            "select-mqtt-config"
+          ],
+          "order": 2
+        },
+        {
+          "id": "mqtt-retain-will",
+          "title": "Retain 与 Will 的语义边界",
+          "role": "comparison",
+          "description": "按「最新值是否就是完整答案」区分配置类主题与事实流。",
+          "outcomeRefs": [
+            "explain-mqtt-semantics",
+            "select-mqtt-config"
+          ],
+          "order": 3
+        },
+        {
+          "id": "mqtt-failure",
+          "title": "配置错误的症状与验证",
+          "role": "verification",
+          "description": "把降级、会话黑洞、主题注入与标识回绕转成可取证验证动作。",
+          "outcomeRefs": [
+            "select-mqtt-config"
+          ],
+          "order": 4
+        },
+        {
+          "id": "mqtt-decision",
+          "title": "情境化选型与检查表",
+          "role": "transfer",
+          "description": "按固定顺序完成一条新数据流的配置决策并留下验证证据。",
+          "outcomeRefs": [
+            "select-mqtt-config"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-mqtt-semantics",
+          "select-mqtt-config"
+        ],
+        "method": "完成门磁、压缩机电流与校准参数三个情境的配置选择，并写出取舍依据。",
+        "successCriteria": [
+          "能指出端到端保证取发布与订阅 QoS 的较小值",
+          "为每条数据流给出主题、QoS、会话与 Retain 的完整配置",
+          "每项选择都能对应一条业务后果或验证证据"
+        ],
+        "exerciseBlockId": "m-select-checklist",
+        "summaryBlockId": "m-decision-summary",
+        "nextPointId": "point-4-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "t-section-context",
+        "moduleId": "mqtt-topic",
+        "depth": "support",
+        "kind": "note",
+        "title": "本节范围",
+        "markdown": "本节讨论「MQTT 主题、QoS 与会话语义」，属于「边缘采集与可靠传输」，并以澄湾冷链示范仓的 Z1–Z4 温区作为配置示例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000123"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "MQTT 主题、QoS 与会话语义"
+              ],
+              "lineStart": 2291,
+              "lineEnd": 2292,
+              "assetRefs": [],
+              "excerptSha256": "41702257784cfb62b2777fcaa36c7ab02fcedfbf62f80b3da1c5ac7bfded3ed1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "t-topic-structure",
+        "moduleId": "mqtt-topic",
+        "depth": "core",
+        "kind": "definition",
+        "title": "主题层级与命名空间",
+        "markdown": "MQTT 主题（Topic）是发布/订阅模型中的层次化路由键，以 `/` 分隔层级。案例采用固定深度的主题结构：\n\n```\ncw/coldchain/{zone_id}/{device_type}/{device_id}/{metric}\n```\n\n其中 `cw` 为项目命名空间，`coldchain` 标识业务域，`{zone_id}` 取 `Z1|Z2|Z3|Z4`，`{device_type}` 取 `temp|hum|door|comp`，`{device_id}` 为完整设备标识（如 `Z1-TEMP-01`），`{metric}` 限定为 `temperature`、`relative_humidity`、`door_state` 或 `compressor_current`。\n\n固定结构让订阅端可以用通配符稳定过滤：运维终端订阅 `cw/coldchain/Z1/+/+/+` 获取 Z1 全量数据，能耗分析服务订阅 `cw/coldchain/+/comp/+/compressor_current` 聚合压缩机负载。主题深度直接影响 Broker 的订阅树遍历开销，因此固件只烧录模板、运行时填充变量段，禁止把时间戳或随机序列嵌入主题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "MQTT 主题、QoS 与会话语义",
+                "主题层级与命名空间设计"
+              ],
+              "lineStart": 2293,
+              "lineEnd": 2304,
+              "assetRefs": [],
+              "excerptSha256": "06f2761ad17ae564f722e114c9bc4e51dde5abbae040bb06cd3c695a02f0c16b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "m-topic-rules",
+        "moduleId": "mqtt-topic",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "主题设计的三个检查问题",
+        "markdown": "主题一旦上线就很难修改，先按三个问题检查：\n\n1. **每级一义**：命名空间、业务域、区域、设备类型、设备、指标各占一段，不把多个维度塞进同一段。\n2. **变量段是闭集**：设备标识与指标来自固定枚举，固件只填模板，运行时不拼接时间戳或随机串。\n3. **订阅可预测**：任何合法主题都能被至少一种运维或分析通配符稳定命中，且通配符不会把不同指标混在一起。\n\n这三条只决定「能否靠主题找到数据」，不能替代 QoS 与会话的可靠性设计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "t-topic-structure"
+          ]
+        }
+      },
+      {
+        "id": "t-qos-levels",
+        "moduleId": "mqtt-qos",
+        "depth": "core",
+        "kind": "table",
+        "title": "三种 QoS 的传输保证",
+        "markdown": "MQTT 定义三种服务质量等级，保证强度递增，资源消耗与延迟也递增：\n\n| QoS 等级 | 语义 | Broker 投递次数上限 | 案例中的用途 |\n|:---|:---|:---|:---|\n| 0 | 至多一次（At most once） | ≤1 | 压缩机电流 5 秒高频采样，允许单点丢失 |\n| 1 | 至少一次（At least once） | ≥1 | 温湿度常规采样与门磁 60 秒心跳，需确保无遗漏 |\n| 2 | 恰好一次（Exactly once） | =1 | 门磁状态变化，避免重复触发工单 |\n\nQoS 由发布端在 PUBLISH 报文中指定，但端到端生效需要两端配合：发布端到 Broker 的传输按发布 QoS 执行，Broker 到订阅端的传输按订阅 QoS 执行，实际保证取二者较小值。若订阅端用 QoS 0、发布端用 QoS 1，最终仍降级为至多一次。QoS 1 依赖 PUBLISH 与 PUBACK 的报文标识符（Packet Identifier）配对，发布端未收到 PUBACK 则在会话有效期内重发。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000125"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "MQTT 主题、QoS 与会话语义",
+                "QoS 等级与传输保证"
+              ],
+              "lineStart": 2305,
+              "lineEnd": 2320,
+              "assetRefs": [],
+              "excerptSha256": "af2ab3e7bd589e8b67e04056d892c40b1f9d87f9db81892b3eac07dc70dae492"
+            }
+          ]
+        }
+      },
+      {
+        "id": "m-qos-matrix",
+        "moduleId": "mqtt-qos",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "把 QoS 放回业务后果上比较",
+        "markdown": "端到端保证不是发布端单方面决定的。设发布 QoS 为 $q_p$、订阅 QoS 为 $q_s$，有效保证对应 $\\min(q_p, q_s)$ 的语义。例如发布 QoS 2、订阅 QoS 1，最终仍是至少一次，订阅端必须能处理重复。\n\n三个等级按业务后果比较：\n\n- **允许丢单点、追求低开销**：选 QoS 0。压缩机电流每 5 秒一点，缺一点不影响趋势分析。\n- **不能漏、可接受重复**：选 QoS 1。温湿度用于合规追溯，重复可由 `sequence_no` 去重。\n- **重复本身有业务代价**：选 QoS 2。门磁变化触发巡检工单，重复投递就是重复派单。\n\n所以「QoS 越高越可靠」只说对一半：等级提高的是保证强度，同时提高报文往返、状态保存与重复处理成本。门磁心跳只用于活性探测，单次重复不造成业务异常，反而可以降为 QoS 1。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "t-qos-levels"
+          ]
+        }
+      },
+      {
+        "id": "t-session-state",
+        "moduleId": "mqtt-session",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "会话状态与消息续传",
+        "markdown": "MQTT 会话由客户端标识符（Client ID）唯一确定。连接时 `Clean Start` 标志与 `Session Expiry Interval` 共同决定状态继承行为：\n\n- `Clean Start = 1`：丢弃旧会话，新建空会话。\n- `Clean Start = 0` 且 `Session Expiry Interval > 0`：尝试恢复会话，恢复失败则新建。\n- `Session Expiry Interval = 0`：网络断开后立即清除会话状态。\n\n会话状态包含未确认的 QoS 1/2 报文、待投递的 QoS 1/2 消息和订阅列表。案例中的边缘网关采用 `Clean Start = 0`、`Session Expiry Interval = 3600` 秒，允许网关重启或网络闪断后恢复未完成传输，同时避免长期离线的僵尸会话占用 Broker 内存。\n\n续传边界必须严格界定：只有 QoS 1/2 的出站（网关到 Broker）消息在会话恢复后重发，已确认的入站消息不再投递。网关本地缓冲按 `sequence_no` 顺序出队，从首个未获 PUBACK 的报文开始续传，保证事件时间与序列号时序不被 MQTT 重发打乱。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "MQTT 主题、QoS 与会话语义",
+                "会话状态与消息续传"
+              ],
+              "lineStart": 2321,
+              "lineEnd": 2353,
+              "assetRefs": [],
+              "excerptSha256": "391967119f256dcadbc13911af6877279e97a22455f9aef7b8f5528372b0ca98"
+            }
+          ]
+        }
+      },
+      {
+        "id": "m-session-decision",
+        "moduleId": "mqtt-session",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "会话过期时间按断网预算反推",
+        "markdown": "会话过期时间应由「可接受断网时长」决定，而不是照抄默认值：\n\n- **过期时间太短**：网关离线超过窗口后 Broker 清除会话，未确认消息进入黑洞。案例用 3600 秒覆盖分钟级闪断与短时重启。\n- **过期时间太长**：长期离线设备的会话与待投递消息持续占用 Broker 内存，形成僵尸会话。\n\n还要区分方向：恢复后重发的是 QoS 1/2 出站未确认消息，已确认的入站消息不会再来。因此会话续传解决的是「网关到 Broker 不丢」，不能代替端到端的幂等写入与序列号缺口检测。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "t-session-state"
+          ]
+        }
+      },
+      {
+        "id": "t-retain-will",
+        "moduleId": "mqtt-retain-will",
+        "depth": "core",
+        "kind": "warning",
+        "title": "保留消息与遗嘱的适用边界",
+        "markdown": "保留消息（Retained Message）标志使 Broker 保存该主题最后一条消息，新订阅者立即接收。案例禁止对高频采样主题设置 Retain：若 Z1-TEMP-01 的温度以 QoS 1 保留发布，Broker 每秒承受写入压力，且新订阅者获得的是缓存过期读数而非实时流。Retain 的合法用途限于设备元数据主题，例如 `cw/coldchain/Z1/meta/Z1-TEMP-01/config` 保存量程校准参数，订阅者上线时同步配置。\n\n遗嘱消息（Will Message）在连接异常断开时由 Broker 代发，用于快速探测离线。案例中门磁设置遗嘱主题 `cw/coldchain/Z1/door/Z1-DOOR-01/lwt`，载荷为 `{\"state\":\"OFFLINE\"}`，但云平台需以心跳超时为最终判定依据，遗嘱仅作加速提示。反例：网关进程正常退出时发送 DISCONNECT 并清空遗嘱，而网络分区导致 Broker 未收到 DISCONNECT，遗嘱会误触发假离线告警，需结合采集状态机与设备身份校验综合判定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000127"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "MQTT 主题、QoS 与会话语义",
+                "保留消息与遗嘱的误用风险"
+              ],
+              "lineStart": 2354,
+              "lineEnd": 2361,
+              "assetRefs": [],
+              "excerptSha256": "5ead2e933a1a6fd0fca3eaba25a557be5d86620cbeefcc720ebb6f0e39c85d75"
+            }
+          ]
+        }
+      },
+      {
+        "id": "m-retain-rules",
+        "moduleId": "mqtt-retain-will",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "按数据语义选择 Retain 与 Will",
+        "markdown": "Retain 与 Will 服务两种不同的「在线性」信息，选择前先问数据语义：\n\n| 数据 | 是否 Retain | 理由 |\n|:---|:---|:---|\n| 高频采样事实流 | 否 | 最新值不等于正确值；保留增加写入压力，新订阅者还会把快照误当实时 |\n| 设备配置与量程参数 | 是 | 订阅者上线就需要当前配置，最新值就是完整答案 |\n| 设备离线提示 | 用 Will，但不作唯一判据 | Will 只是断连时的加速提示，心跳超时才是最终判定 |\n\n判断规则可压缩为一句：只有当「最新一条就是完整答案」时才用 Retain；Will 只回答「可能离线」，不回答「一定离线」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "t-retain-will"
+          ]
+        }
+      },
+      {
+        "id": "t-failure-modes",
+        "moduleId": "mqtt-failure",
+        "depth": "core",
+        "kind": "table",
+        "title": "四类故障模式与验证方法",
+        "markdown": "四类典型故障及其验证方法：\n\n| 故障 | 症状 | 验证方法 |\n|:---|:---|:---|\n| QoS 降级未感知 | 订阅 QoS 2，实际保证降至至少一次 | 抓包检查 SUBACK 的 Granted QoS；断网 30 秒恢复后检查是否收到相同 `sequence_no` 的重复报文 |\n| 会话过期导致消息黑洞 | 网关离线期间未确认消息丢失 | 监控 Broker 的 `$SYS/broker/clients/expired` 计数，结合本地缓冲的序列号缺口 |\n| 主题注入与数据污染 | 通配符订阅收到异常路由消息 | Broker 启用主题 ACL，并用完整主题正则校验变量段 |\n| Packet Identifier 回绕冲突 | 高频 QoS 1/2 场景下标识冲突 | 监控 `packetId` 分配速率，接近 65535/小时需调整会话周期或升级配置 |\n\n案例参数汇总：温湿度 QoS 1、期望 120 点/小时；压缩机电流 QoS 0、720 点/小时；门磁变化 QoS 2、触发式；门磁心跳 QoS 1、≤60 点/小时；四类主题均不启用 Retain，会话过期统一 3600 秒。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000128"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "MQTT 主题、QoS 与会话语义",
+                "常见故障模式与验证方法"
+              ],
+              "lineStart": 2362,
+              "lineEnd": 2385,
+              "assetRefs": [],
+              "excerptSha256": "ddcc01a16ddb7b605ffd164fa38050c740ffc324edd613ec1f314ba8996d0607"
+            }
+          ]
+        }
+      },
+      {
+        "id": "m-failure-evidence",
+        "moduleId": "mqtt-failure",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "从症状反推配置错误",
+        "markdown": "把故障现象当作证据链的起点，而不是直接改配置：\n\n| 症状 | 优先检查的证据 | 常见修复 |\n|:---|:---|:---|\n| 门磁工单重复 | SUBACK 的 Granted QoS、重复的 `sequence_no` | 端到端统一 QoS 2，或核对 Broker 允许的最大 QoS |\n| 恢复后数据缺口 | 过期会话计数、本地缓冲序列号 | 延长 Session Expiry Interval，并核对网关断网预算 |\n| 订阅收到越权主题 | 实际主题字符串、ACL 与主题正则 | 变量段做白名单校验，禁止 `../` 与 `#` 进入主题 |\n| 高频发布后确认错乱 | `packetId` 分配速率与回绕点 | 降低该主题 QoS、缩短会话或升级标识空间 |\n\n这张表把故障模式转成验证动作：先取证，再决定是改主题、改 QoS 还是改会话。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "t-failure-modes"
+          ]
+        }
+      },
+      {
+        "id": "m-select-checklist",
+        "moduleId": "mqtt-decision",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "一条新数据流的配置检查表",
+        "markdown": "面对一条新的数据流，按固定顺序做配置决策，顺序不能颠倒：\n\n1. **定主题**：写出固定深度模板，确认每段取值是闭集，并列出至少一个合法通配符订阅。\n2. **定业务后果**：问「丢一条会怎样、重复一条会怎样」。丢失不可接受则至少一次；重复有业务代价则恰好一次；两者都可接受则至多一次。\n3. **定 QoS**：按上一步结论选等级，再检查订阅端 QoS，确认 $\\min(q_p, q_s)$ 仍满足要求。\n4. **定会话**：用可接受断网时长反推 Session Expiry Interval，并决定 Clean Start。\n5. **定 Retain/Will**：只在「最新值即完整答案」的主题启用 Retain；Will 仅作离线加速提示。\n6. **写验证**：为每项配置留下可观测证据，如 Granted QoS、过期会话计数、ACL 命中日志。\n\n以澄湾冷链为例：门磁状态变化是「丢失会漏巡检、重复会重复派单」，所以选 QoS 2；压缩机电流是「单点丢失不影响趋势」，所以选 QoS 0；温湿度位于两者之间，用 QoS 1 并由 `sequence_no` 承担去重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "t-topic-structure",
+            "t-qos-levels",
+            "t-session-state",
+            "t-retain-will",
+            "t-failure-modes"
+          ]
+        }
+      },
+      {
+        "id": "m-decision-summary",
+        "moduleId": "mqtt-decision",
+        "depth": "support",
+        "kind": "summary",
+        "title": "三条取舍规则",
+        "markdown": "1. **可靠性跟着业务后果走**：QoS 由丢失与重复的代价决定，端到端保证取发布与订阅的较小值。\n2. **会话长度跟着断网预算走**：过期时间覆盖可接受断网时长，但不能长到制造僵尸会话；续传只覆盖出站未确认消息。\n3. **Retain 与 Will 跟着数据语义走**：Retain 只给「最新值即完整答案」的配置类主题，Will 只作离线提示，最终判定仍靠心跳。\n\n下一节把 MQTT 放回协议选型：当链路是低功耗有损网络或需要批量摊薄开销时，HTTP、CoAP 与批流传输会给出不同取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "m-select-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "mqtt-config-check",
+        "type": "formative-check",
+        "anchorBlockId": "m-select-checklist",
+        "moduleId": "mqtt-decision",
+        "depth": "core",
+        "outcomeRefs": [
+          "select-mqtt-config"
+        ],
+        "learningPurpose": "检查学习者能否把「业务后果决定配置」的规则迁移到门磁、压缩机电流与配置同步三个情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "t-qos-levels",
+            "t-session-state",
+            "t-retain-will"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "id": "door-event",
+              "scenario": "门磁状态变化会触发巡检工单，重复投递会造成重复派单，短时断网后仍需续传。",
+              "question": "应选择哪种 QoS 与会话配置？",
+              "options": [
+                "QoS 0，会话过期 0 秒",
+                "QoS 1，启用 Retain",
+                "QoS 2，会话过期 3600 秒",
+                "QoS 2，不启用会话"
+              ],
+              "answerIndex": 2,
+              "explanation": "重复有业务代价，选恰好一次；会话需覆盖短时断网以续传出站未确认消息。"
+            },
+            {
+              "id": "compressor-current",
+              "scenario": "压缩机电流每 5 秒采样，单点缺失不影响趋势分析，Broker 负载需要控制。",
+              "question": "优先选择哪种配置？",
+              "options": [
+                "QoS 0，不启用 Retain",
+                "QoS 2，启用 Retain",
+                "QoS 1，启用 Retain",
+                "QoS 2，会话过期 0 秒"
+              ],
+              "answerIndex": 0,
+              "explanation": "允许单点丢失时用 QoS 0 降低 Broker 负载；高频事实流不启用 Retain。"
+            },
+            {
+              "id": "config-topic",
+              "scenario": "新上线网关需要立即拿到 Z1-TEMP-01 的量程校准参数。",
+              "question": "哪种做法最合适？",
+              "options": [
+                "在温度采样主题启用 Retain",
+                "在 `meta/.../config` 主题启用 Retain",
+                "把校准参数写入遗嘱消息",
+                "用 QoS 2 发布采样值替代配置同步"
+              ],
+              "answerIndex": 1,
+              "explanation": "配置类主题满足「最新值即完整答案」，可启用 Retain；采样事实流不应 Retain。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "分别说明门磁状态变化、压缩机电流采样与新网关配置同步三种数据流应选择的 QoS、会话过期与 Retain 设置，并为每项写出一条业务后果依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "边缘采集与可靠传输",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000123"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "MQTT 主题、QoS 与会话语义"
+      ],
+      "lineStart": 2291,
+      "lineEnd": 2292,
+      "assetRefs": [],
+      "excerptSha256": "41702257784cfb62b2777fcaa36c7ab02fcedfbf62f80b3da1c5ac7bfded3ed1"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000124"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "MQTT 主题、QoS 与会话语义",
+        "主题层级与命名空间设计"
+      ],
+      "lineStart": 2293,
+      "lineEnd": 2304,
+      "assetRefs": [],
+      "excerptSha256": "06f2761ad17ae564f722e114c9bc4e51dde5abbae040bb06cd3c695a02f0c16b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000125"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "MQTT 主题、QoS 与会话语义",
+        "QoS 等级与传输保证"
+      ],
+      "lineStart": 2305,
+      "lineEnd": 2320,
+      "assetRefs": [],
+      "excerptSha256": "af2ab3e7bd589e8b67e04056d892c40b1f9d87f9db81892b3eac07dc70dae492"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000126"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "MQTT 主题、QoS 与会话语义",
+        "会话状态与消息续传"
+      ],
+      "lineStart": 2321,
+      "lineEnd": 2353,
+      "assetRefs": [],
+      "excerptSha256": "391967119f256dcadbc13911af6877279e97a22455f9aef7b8f5528372b0ca98"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000127"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "MQTT 主题、QoS 与会话语义",
+        "保留消息与遗嘱的误用风险"
+      ],
+      "lineStart": 2354,
+      "lineEnd": 2361,
+      "assetRefs": [],
+      "excerptSha256": "5ead2e933a1a6fd0fca3eaba25a557be5d86620cbeefcc720ebb6f0e39c85d75"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000128"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "MQTT 主题、QoS 与会话语义",
+        "常见故障模式与验证方法"
+      ],
+      "lineStart": 2362,
+      "lineEnd": 2385,
+      "assetRefs": [],
+      "excerptSha256": "ddcc01a16ddb7b605ffd164fa38050c740ffc324edd613ec1f314ba8996d0607"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3298,
+    2738
+  ],
+  "scale": 1.24
+}

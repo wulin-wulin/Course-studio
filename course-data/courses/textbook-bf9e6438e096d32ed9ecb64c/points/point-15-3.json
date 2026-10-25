@@ -1,0 +1,527 @@
+{
+  "id": "point-15-3",
+  "title": "采集、传输、存储链路实现",
+  "shortSummary": "实现从设备采集、网关传输到云端存储的完整链路，打通端、边、云的数据通路。",
+  "keyTerms": [
+    "采集链路",
+    "传输链路",
+    "存储链路",
+    "端边云",
+    "数据通路",
+    "集成"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-4-5",
+    "point-5-1",
+    "point-15-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "operation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的四层温区、桶级缓冲参数、延迟公式、SLO 目标与四类故障检查作为事实边界，按“前置条件—分层实现—分支与错误恢复—验收检查”的操作顺序重排，补充可执行的前置清单、迟到与重复的判定走查和检查表，不改写任何数值与字段约束。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "implement-end-to-end-link",
+          "text": "按分层契约搭建端—边—云链路，说明各层可写字段、桶级触发条件与持久化写入时机。"
+        },
+        {
+          "id": "diagnose-link-defects",
+          "text": "用量化延迟指标与可验证检查方法定位链路实现中的典型缺陷，并给出修复动作。"
+        }
+      ],
+      "misconceptions": [
+        "认为网关可以在转发前改写 quality_code 或补写 ingest_time。",
+        "把 ingest_time 与 event_time 的均值差直接当作网络传输延迟。",
+        "认为网关超时丢包后应由网关补造 MISSING 占位行或无限重试。",
+        "把门磁的 60 秒心跳与状态变化上报判为重复记录。"
+      ],
+      "modules": [
+        {
+          "id": "link-preconditions",
+          "title": "开工前的链路前置条件",
+          "role": "orient",
+          "description": "明确本节在项目中的位置，并列出联调前必须冻结的契约与参数。",
+          "outcomeRefs": [
+            "implement-end-to-end-link"
+          ],
+          "order": 0
+        },
+        {
+          "id": "layer-contract",
+          "title": "分层职责与不可改写字段",
+          "role": "explain",
+          "description": "四层职责边界、采样周期差异与最坏检测时延的含义。",
+          "outcomeRefs": [
+            "implement-end-to-end-link"
+          ],
+          "order": 1
+        },
+        {
+          "id": "edge-gateway",
+          "title": "边缘网关的校验、缓存与转发",
+          "role": "worked-example",
+          "description": "语法与语义校验、按桶隔离的循环队列、超时丢包的分支处置。",
+          "outcomeRefs": [
+            "implement-end-to-end-link"
+          ],
+          "order": 2
+        },
+        {
+          "id": "cloud-persistence",
+          "title": "云端接入与持久化写入",
+          "role": "procedure",
+          "description": "ingest_time 写入时机、超表主键与分块、水位线与迟到记录落库。",
+          "outcomeRefs": [
+            "implement-end-to-end-link",
+            "diagnose-link-defects"
+          ],
+          "order": 3
+        },
+        {
+          "id": "latency-slo",
+          "title": "延迟分解与 SLO 度量",
+          "role": "explain",
+          "description": "端到端延迟公式、可优化子指标与四项验收目标。",
+          "outcomeRefs": [
+            "diagnose-link-defects"
+          ],
+          "order": 4
+        },
+        {
+          "id": "failure-verification",
+          "title": "故障模式与可验证检查",
+          "role": "check",
+          "description": "时钟漂移、序列回绕、主键顺序与门磁心跳四类故障的检查与修复。",
+          "outcomeRefs": [
+            "diagnose-link-defects"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "implement-end-to-end-link",
+          "diagnose-link-defects"
+        ],
+        "method": "按检查表走通一条记录从端侧到超表的路径，并完成网关重复记录的分支判定题。",
+        "successCriteria": [
+          "能说出每层允许写入的字段与禁止改写的字段",
+          "能按桶类型复述触发条件与超时阈值，并说明超时后的正确处置",
+          "能把 ingest_time - event_time 拆成采样等待与传输队列两部分",
+          "能针对四类故障各给出一个可执行的验证动作"
+        ],
+        "summaryBlockId": "model-link-summary",
+        "nextPointId": "point-15-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-scope",
+        "moduleId": "link-preconditions",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节要打通的数据通路",
+        "markdown": "15.3 节把前面各章分别讨论的采集、传输与存储方法收拢成一条可运行的端到端通路：设备端完成采样与赋时，边缘网关负责校验、缓存与转发，云平台完成首次持久化并形成不可变的原始事实层。本节的重点不是重讲单个组件，而是让这条通路在真实工况下跑通、可度量、可验证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000538"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "采集、传输、存储链路实现"
+              ],
+              "lineStart": 9980,
+              "lineEnd": 9981,
+              "assetRefs": [],
+              "excerptSha256": "12ccb8199595bf306cf8a5d1859896ac50fd5e0fde4cad98408544bd0cff72ad"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-entry-checklist",
+        "moduleId": "link-preconditions",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：联调前先冻结四件事",
+        "markdown": "**开始写第一行代码之前，先确认四项前置条件。**\n\n1. **契约冻结**：端侧产生的字段名、单位枚举与时间语义已经确定，联调期间不再临时加字段或改语义。\n2. **周期与容量已知**：各桶的采样周期、单包条数与超时阈值事先算好，避免边写边调参数。\n3. **存储就绪**：原始事实表已按事件时间分区，写入约束先于接入服务验证通过。\n4. **验收口径确认**：允许迟到量、传输延迟与缺口率目标已写入验收表，联调时按同一口径采集指标。\n\n四项确认后，先用模拟器灌入端侧数据，依次打通端侧、网关、接入服务、超表四段，再逐层替换为真实实现。任何一段未验证前不要接下一段，否则时延指标无法归因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-section-scope"
+          ]
+        }
+      },
+      {
+        "id": "textbook-architecture",
+        "moduleId": "layer-contract",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "分层职责与不可改写字段",
+        "markdown": "冷链监测链路的核心矛盾是：端侧资源受限、网络条件波动，但下游分析要求时间语义严格一致。解法是**在每一层固化不可变字段，禁止跨层重写**。端侧设备完成采样与物理量换算，生成包含 `event_time`、`sequence_no` 与换算后 `value` 的原始观测；边缘网关只做字段校验、本地缓存与转发，不得触碰 `value`、`event_time`、`sequence_no` 与 `quality_code`；云平台接入服务在首次持久化时注入 `ingest_time`，此后该记录进入不可变的原始事实层。\n\n四层温区的采样周期差异是链路设计的起点：温湿度每 30 秒、压缩机电流每 5 秒、门磁状态变化触发上报并附加 60 秒心跳。因此网关缓存必须按 `device_id` 与 `metric` 分桶，避免慢速门磁阻塞快速电流。网关向云平台投递采用按桶独立触发：电流桶满 20 条或超 10 秒打包发送，温湿度桶满 5 条或超 30 秒触发，门磁桶在状态变化时立即发送、心跳单独成包。\n\n传输时延必须区分两个区间。设传感器响应与 ADC 转换耗时为 $t_{\\text{adc}}$，采样间隔为 $T_s$，则**最坏检测时延**为 $T_s + t_{\\text{net}}$，其中 $t_{\\text{net}}$ 是采样完成后的网络传输时延。案例配置中压缩机电流的 $T_s = 5\\,\\text{s}$，即使 $t_{\\text{net}} = 500\\,\\text{ms}$，从物理异常发生到云平台感知仍需等待下一次采样窗口，因此该链路不承载亚秒级设备安全保护职能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000539"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "采集、传输、存储链路实现",
+                "链路总体架构与分层职责边界"
+              ],
+              "lineStart": 9982,
+              "lineEnd": 9989,
+              "assetRefs": [],
+              "excerptSha256": "a24d386efe416b771392a9a6548e214cd8dff2c17687030fd66b2e73c9b75d9d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-worst-case",
+        "moduleId": "layer-contract",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么安全联锁不能放在这条链路上",
+        "markdown": "把最坏检测时延拆开看：物理异常落在两次采样之间时，系统要先等完剩余采样周期（0 到 $T_s$），再叠加传输与处理时间。电流链路 $T_s = 5\\,\\text{s}$，所以即使网络只有 500 毫秒，最坏也要约 5.5 秒才能被云端看见；温湿度链路 30 秒的周期更把上限推到 30 秒以上。\n\n这不是实现质量问题，而是采样与传输架构给出的能力边界。需要亚秒级动作的设备保护（如压缩机过流跳闸、门被强行打开时的即时联锁）必须放在端侧或边缘控制回路中完成，云端链路只承担监测、告警与追溯。把安全联锁寄托在跨公网的采集链路上，等于用秒级通路承担毫秒级职责。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture"
+          ]
+        }
+      },
+      {
+        "id": "textbook-gateway",
+        "moduleId": "edge-gateway",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "边缘网关的校验、缓存与转发",
+        "markdown": "边缘网关的校验层是防止污染原始事实的最后防线。校验分两层：语法层检查字段存在性、`metric` 枚举值、`unit` 与 `metric` 的匹配关系（temperature 必须对应 Cel）；语义层检查 `sequence_no` 的单调性——网关为每个 `(device_id, metric)` 组合维护已见最大序号 `seq_max`，若新记录 `sequence_no ≤ seq_max` 则判为重复投递，直接丢弃并记录日志，**不得把 `quality_code` 改为 DUPLICATE**。`quality_code` 由端侧写入，网关无权改写任何八元组字段。\n\n缓存结构采用固定容量的循环队列，按桶隔离：\n\n| 桶类型 | 触发条件 | 单包最大条数 | 超时阈值 |\n|:---|:---|:---|:---|\n| 温湿度 | 条数满或超时 | 5 | 30 s |\n| 压缩机电流 | 条数满或超时 | 20 | 10 s |\n| 门磁变化 | 立即发送 | 1 | — |\n| 门磁心跳 | 立即发送 | 1 | — |\n\n超时未投递时，网关丢弃该包并在本地 `edge_drop_log` 记录 `device_id`、`metric`、首条 `event_time` 与原因 `BUFFER_TIMEOUT`，**不无限重试，也不标记 `quality_code`**。云平台接入服务后续若发现 `sequence_no` 缺口，会插入 `quality_code=MISSING` 的派生占位行；该判定基于水位线，而不是网关的局部超时。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000540"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "采集、传输、存储链路实现",
+                "边缘网关的校验、缓存与转发机制"
+              ],
+              "lineStart": 9990,
+              "lineEnd": 10004,
+              "assetRefs": [],
+              "excerptSha256": "2c61f06e19a9104a66a165b1d822441b3b74028f04082f4593d2811bbc10b3f9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gateway-branch",
+        "moduleId": "edge-gateway",
+        "depth": "core",
+        "kind": "warning",
+        "title": "补充：网关侧三个分支的正确处置",
+        "markdown": "**分支一：序号重复。** 新记录 `sequence_no ≤ seq_max` 时，丢弃并写日志，不改 `quality_code`。若网关把它改成 `DUPLICATE` 再转发，云端既看不到原始质量码，也无法区分“端侧判定的重复”和“网关自行判定”。\n\n**分支二：桶超时。** 丢包并记 `BUFFER_TIMEOUT`，不重试、不补码。缺口判定由云端基于水位线统一完成；网关只负责把“我丢了什么”留在本地日志里，供事后核对。\n\n**分支三：字段不合法。** 语法或语义校验失败同样不得改字段冒充合法记录，应丢弃并记录原因。\n\n三个分支的共同原则是：**网关只做过滤与搬运，不做语义裁决。** 一旦允许网关改质量码或补时间戳，原始事实层就不再可信，后续的延迟分析与缺口统计也失去基准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-gateway"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cloud-ingest",
+        "moduleId": "cloud-persistence",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "云平台接入服务与持久化写入",
+        "markdown": "云平台接入服务在首次成功接收记录时写入 `ingest_time`，使用接入服务的系统时钟（UTC），与 `event_time` 共同构成延迟分析基准。二者差值 $\\Delta t = \\text{ingest\\_time} - \\text{event\\_time}$ 的统计分布是链路健康度的核心指标，但**不得把单次 $\\Delta t$ 超标直接映射为 `CLOCK_SUSPECT`**——后者需要 RTC 未同步或相对可信时钟偏差的独立证据。\n\n原始事实表采用 TimescaleDB 超表设计，分区键 `event_time` 必须位于主键前缀：\n\n```sql\nCREATE TABLE coldchain.raw_fact (\n    event_time      TIMESTAMPTZ NOT NULL,\n    ingest_time     TIMESTAMPTZ NOT NULL,\n    device_id       TEXT NOT NULL,\n    metric          TEXT NOT NULL,\n    value           DOUBLE PRECISION,\n    unit            TEXT NOT NULL,\n    quality_code    TEXT NOT NULL,\n    sequence_no     BIGINT NOT NULL,\n    PRIMARY KEY (event_time, device_id, metric, sequence_no)\n);\n\nSELECT create_hypertable('coldchain.raw_fact', 'event_time',\n       chunk_time_interval => INTERVAL '7 days');\n```\n\n`value` 允许 `NULL` 仅用于派生对齐后的占位行；原始记录缺失时不插入数据行。`ingest_time` 的写入时机严格限定为“首次持久接收”，后续复制、备份与流处理都不得更新该字段。\n\n接入服务按 `watermark = max(event_time) - allowed_lateness` 维护每个 `(device_id, metric)` 的水位线，案例配置 `allowed_lateness = 5` 分钟。若新记录 `event_time < watermark`，则写入 `quality_code = 'LATE'` 的原始记录——这是 `quality_code` 唯一可由非端侧修改的场景，因为记录首次持久化时尚无“端侧原始”与“接入判定”的先后之分。门磁心跳与状态变化各自独立递增 `sequence_no`，心跳到达时即使状态值重复，也不得标为 `DUPLICATE`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000541"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "采集、传输、存储链路实现",
+                "云平台接入服务与持久化写入"
+              ],
+              "lineStart": 10005,
+              "lineEnd": 10031,
+              "assetRefs": [],
+              "excerptSha256": "18dcffdf9db6168569ebebfdf181b8e6cf7466523d5c0065628e9bae2b432afe"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-late-example",
+        "moduleId": "cloud-persistence",
+        "depth": "core",
+        "kind": "example",
+        "title": "补充：一条迟到记录如何落库",
+        "markdown": "设某温湿度点位当前已见最大事件时间为 10:00，允许迟到 5 分钟，则水位线是 09:55。\n\n- 新记录事件时间 09:58：不早于水位线，正常写入，质量码保持端侧给出的 `GOOD`。\n- 新记录事件时间 09:50：早于水位线，作为原始记录写入并标 `LATE`，**不丢弃**，也不改写成 `MISSING`。\n- 若这条 09:50 记录的 `sequence_no` 已经出现过，则属于重复投递而不是迟到，应在去重阶段处理。\n\n判定顺序决定了结果：先看序号是否重复，再看事件时间是否落后于水位线，最后才看单次 $\\Delta t$ 是否异常。把顺序倒过来，就会出现“迟到记录被当成重复丢掉”或“传输慢被误标时钟异常”两类错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cloud-ingest"
+          ]
+        }
+      },
+      {
+        "id": "textbook-latency-slo",
+        "moduleId": "latency-slo",
+        "depth": "core",
+        "kind": "formula",
+        "title": "链路延迟的量化与 SLO",
+        "markdown": "端到端延迟要拆成可独立优化的子指标。设端到端延迟为 $L$，则：\n\n$$L = T_{\\text{wait}} + t_{\\text{adc}} + t_{\\text{proc}} + t_{\\text{net}} + t_{\\text{queue}}$$\n\n其中 $T_{\\text{wait}}$ 是等待下一次采样的时间（0 到 $T_s$ 的均匀分布），$t_{\\text{proc}}$ 是网关处理与打包耗时，$t_{\\text{queue}}$ 是云端接入队列等待时间。本案例的 SLO 针对 $t_{\\text{net}} + t_{\\text{queue}}$，即采样完成后的传输与处理延迟：\n\n| 指标 | 目标值 | 测量方法 |\n|:---|:---|:---|\n| P99 传输延迟（温湿度）| < 3 s | `ingest_time - event_time` 的百分位，扣除已知 $T_s$ 倍数 |\n| P99 传输延迟（压缩机电流）| < 2 s | 同上 |\n| 门磁状态变化端到端延迟 | < 1.5 s | 状态变化 `event_time` 到告警触发时刻 |\n| 序列缺口率 | < 0.1% | `MISSING` 占位行数 / 期望总点数 |\n\n**常见误区**：把 `ingest_time - event_time` 的均值直接当作“网络延迟”报告。对 30 秒采样的温湿度，$T_{\\text{wait}}$ 的期望值是 15 秒；若实测均值 16 秒，实际传输延迟约 1 秒，而不是 16 秒。正确做法是按 $T_s$ 取模后分析余数分布，或只对同一 `sequence_no` 连续到达的相邻记录计算差分，以消除 $T_{\\text{wait}}$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000542"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "采集、传输、存储链路实现",
+                "链路延迟的量化与 SLO 设计"
+              ],
+              "lineStart": 10032,
+              "lineEnd": 10048,
+              "assetRefs": [],
+              "excerptSha256": "66cbedbcdebeeb291d32ba3177d512fc938830ce58f40078d16510180544c10a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-latency-misconception",
+        "moduleId": "latency-slo",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：均值 16 秒不等于网络 16 秒",
+        "markdown": "**误区：把延迟均值当作传输能力。** 温湿度链路 30 秒采样，采样等待在 0 到 30 秒之间近似均匀，均值就有 15 秒。此时 16 秒的实测均值只说明传输与队列合计约 1 秒，已经满足 P99 小于 3 秒的目标；若直接按 16 秒判断，会误以为链路严重超标并去做无效扩容。\n\n可执行的核对方式有两种：把 $\\Delta t$ 对 $T_s$ 取模看余数分布，或取同一设备同一指标相邻记录做差分。两种方法都在扣除采样等待，剩下的才是可优化的传输与处理部分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-latency-slo"
+          ]
+        }
+      },
+      {
+        "id": "textbook-failure-checks",
+        "moduleId": "failure-verification",
+        "depth": "core",
+        "kind": "table",
+        "title": "四类故障模式与可验证检查",
+        "markdown": "**故障一：网关时钟漂移导致缓存超时误判。** 网关用本地 RTC 判定超时，RTC 超前会提前触发空包发送，滞后则让数据滞留。检查方法：对比网关日志中的 `event_time` 与发送时刻的本地时间戳，差值应稳定在 $[0, T_s + t_{\\text{proc}}]$ 区间；出现系统性偏移即说明 RTC 需要校准。\n\n**故障二：`sequence_no` 回绕误判。** 案例运行期内不讨论整数回绕，但工程实现要预留检测逻辑：\n\n```\nfunction check_sequence(device_id, metric, new_seq):\n    prev = state[(device_id, metric)].last_seq\n    if new_seq == prev:\n        return DUPLICATE_DROP\n    if new_seq > prev or (prev > 2^63 and new_seq < 2^31):\n        state[(device_id, metric)].last_seq = new_seq\n        return ACCEPT\n    return GAP_DETECTED\n```\n\n**故障三：超表主键顺序错误导致建表失败。** 若把 `event_time` 放到主键末尾，`create_hypertable` 会报 `unique constraint must include all partitioning columns and be prefixed by them`。验证方法：执行 `\\d coldchain.raw_fact` 确认主键列顺序，或查询 `timescaledb_information.hypertables` 确认超表状态。\n\n**故障四：门磁心跳被下游误作重复。** 60 秒心跳与状态变化上报的 `door_state` 可能相同，但各自拥有独立的 `event_time` 与 `sequence_no`。检查方法：按 `device_id='Z1-DOOR-01'` 查询 `sequence_no` 连续性，心跳应均匀间隔约 60 秒，变化记录插入其中，且不应出现 `DUPLICATE` 标记。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000543"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "采集、传输、存储链路实现",
+                "故障模式与可验证检查方法"
+              ],
+              "lineStart": 10049,
+              "lineEnd": 10070,
+              "assetRefs": [],
+              "excerptSha256": "6633f57eae05eddd68c9a023ae4ec03b9ac62c6c68b65c09899fd677fea9a909"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-link-summary",
+        "moduleId": "failure-verification",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：交付前的检查顺序",
+        "markdown": "把本节的实现收敛成一份可执行的交付清单：\n\n1. **字段边界**：端侧产生 `event_time`、`sequence_no`、`value`、`quality_code`；网关注入 `ingest_time` 是被禁止的；云端只在首次持久化时写 `ingest_time`。\n2. **缓冲分支**：按桶核对条数与超时阈值；超时丢包只记本地日志，不改质量码、不无限重试。\n3. **存储约束**：主键前缀是 `event_time`，分块 7 天；原始记录缺失不补行，占位行只出现在派生视图。\n4. **延迟口径**：报告 $t_{\\text{net}} + t_{\\text{queue}}$ 时先扣除采样等待，不要用 $\\Delta t$ 均值代替传输延迟。\n5. **故障演练**：逐项执行四类检查，并保留检查输出作为验收证据。\n\n这条通路打通后，下一节会把质量规则、清洗步骤与特征计算接到同一条链路上，形成可重复运行的流水线。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-gateway",
+            "textbook-cloud-ingest",
+            "textbook-latency-slo",
+            "textbook-failure-checks"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "gateway-duplicate-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-gateway-branch",
+        "moduleId": "edge-gateway",
+        "depth": "core",
+        "title": "网关收到重复序号时怎么办",
+        "outcomeRefs": [
+          "implement-end-to-end-link"
+        ],
+        "learningPurpose": "检查学习者能否把“网关只过滤不定性”的分层契约应用到具体的重复投递分支。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-gateway"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "边缘网关收到一条 Z1-TEMP-01 的 temperature 记录，其 sequence_no 小于等于该 (device_id, metric) 已见最大序号。按教材的校验规则，正确处置是？",
+          "options": [
+            "把 quality_code 改为 DUPLICATE 后再转发给云端",
+            "丢弃该记录并写日志，不修改 quality_code，继续处理后续记录",
+            "覆盖缓存中同序号的旧记录后立即发送",
+            "在网关本地插入一条 MISSING 占位行补齐序列"
+          ],
+          "answerIndex": 1,
+          "explanation": "网关为每个 (device_id, metric) 维护 seq_max，序号不大于最大值即判为重复投递，直接丢弃并记录日志；quality_code 由端侧写入，网关无权改写，MISSING 占位行也只能由云端在派生视图中生成。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "如果互动不可用：请写出网关判定重复的字段依据、丢弃后的记录动作，并说明为什么网关不能把 quality_code 改成 DUPLICATE，也不能补写 MISSING 占位行。"
+        }
+      }
+    ]
+  },
+  "subtitle": "综合项目：冷链仓储智能监测",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000538"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "采集、传输、存储链路实现"
+      ],
+      "lineStart": 9980,
+      "lineEnd": 9981,
+      "assetRefs": [],
+      "excerptSha256": "12ccb8199595bf306cf8a5d1859896ac50fd5e0fde4cad98408544bd0cff72ad"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000539"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "采集、传输、存储链路实现",
+        "链路总体架构与分层职责边界"
+      ],
+      "lineStart": 9982,
+      "lineEnd": 9989,
+      "assetRefs": [],
+      "excerptSha256": "a24d386efe416b771392a9a6548e214cd8dff2c17687030fd66b2e73c9b75d9d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000540"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "采集、传输、存储链路实现",
+        "边缘网关的校验、缓存与转发机制"
+      ],
+      "lineStart": 9990,
+      "lineEnd": 10004,
+      "assetRefs": [],
+      "excerptSha256": "2c61f06e19a9104a66a165b1d822441b3b74028f04082f4593d2811bbc10b3f9"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000541"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "采集、传输、存储链路实现",
+        "云平台接入服务与持久化写入"
+      ],
+      "lineStart": 10005,
+      "lineEnd": 10031,
+      "assetRefs": [],
+      "excerptSha256": "18dcffdf9db6168569ebebfdf181b8e6cf7466523d5c0065628e9bae2b432afe"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000542"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "采集、传输、存储链路实现",
+        "链路延迟的量化与 SLO 设计"
+      ],
+      "lineStart": 10032,
+      "lineEnd": 10048,
+      "assetRefs": [],
+      "excerptSha256": "66cbedbcdebeeb291d32ba3177d512fc938830ce58f40078d16510180544c10a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000543"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "采集、传输、存储链路实现",
+        "故障模式与可验证检查方法"
+      ],
+      "lineStart": 10049,
+      "lineEnd": 10070,
+      "assetRefs": [],
+      "excerptSha256": "6633f57eae05eddd68c9a023ae4ec03b9ac62c6c68b65c09899fd677fea9a909"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1210,
+    580
+  ],
+  "scale": 0.96
+}

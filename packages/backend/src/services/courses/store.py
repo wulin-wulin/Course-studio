@@ -38,6 +38,51 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_JSON_BYTES = 8 * 1024 * 1024
 _ANIMATION_RUNTIME_SCHEMA = "course-animation-runtime/1.0"
 _ANIMATION_ASSET_FILES = frozenset({"manifest.json", "runtime.js", "runtime.css"})
+_TEXTBOOK_CONTENT_SCHEMA = "textbook-content/2.0"
+_TEXTBOOK_ADAPTATION_LEVELS = frozenset(
+    {"faithful", "balanced", "teaching-first"}
+)
+_TEXTBOOK_LEARNING_DEPTHS = frozenset({"core", "support", "advanced"})
+_TEXTBOOK_BLOCK_KINDS = frozenset(
+    {
+        "definition",
+        "explanation",
+        "mechanism",
+        "procedure",
+        "formula",
+        "example",
+        "worked-example",
+        "comparison",
+        "application",
+        "code",
+        "table",
+        "figure",
+        "warning",
+        "misconception",
+        "exercise",
+        "summary",
+        "note",
+        "other",
+    }
+)
+_LEGACY_POINT_CONTENT_FIELDS = frozenset(
+    {
+        "coreIdea",
+        "principles",
+        "formula",
+        "comparisons",
+        "applications",
+        "aliases",
+        "intuition",
+        "misconceptions",
+        "history",
+        "yearIntroduced",
+        "prosCons",
+        "qa",
+        "visualType",
+        "visualSuggestion",
+    }
+)
 _POINT_META_FIELDS = (
     "id",
     "title",
@@ -56,6 +101,960 @@ _DEFAULT_COLORS = (
     ("#2563eb", "#dbeafe", "#1e3a8a"),
     ("#be185d", "#fce7f3", "#831843"),
 )
+
+
+def _is_textbook_content_point(point: Any) -> bool:
+    return (
+        isinstance(point, dict)
+        and isinstance(point.get("content"), dict)
+        and point["content"].get("schema_version") == _TEXTBOOK_CONTENT_SCHEMA
+    )
+
+
+def _validate_textbook_source_spans(
+    value: Any,
+    label: str,
+    *,
+    require_non_empty: bool,
+) -> list[str]:
+    """Validate the complete sourceSpan contract used by textbook-content/2.0."""
+
+    errors: list[str] = []
+    if not isinstance(value, list):
+        return [f"{label} 必须是数组"]
+    if require_non_empty and not value:
+        errors.append(f"{label} 至少需要一个来源定位")
+
+    required_keys = {
+        "materialId",
+        "blockIds",
+        "headingPath",
+        "lineStart",
+        "lineEnd",
+        "assetRefs",
+        "excerptSha256",
+    }
+    allowed_keys = required_keys | {"page"}
+    for index, span in enumerate(value):
+        span_label = f"{label}[{index}]"
+        if not isinstance(span, dict):
+            errors.append(f"{span_label} 必须是对象")
+            continue
+
+        missing = sorted(required_keys - set(span))
+        extra = sorted(set(span) - allowed_keys)
+        if missing:
+            errors.append(f"{span_label} 缺少字段：{', '.join(missing)}")
+        if extra:
+            errors.append(f"{span_label} 包含未知字段：{', '.join(extra)}")
+
+        material_id = span.get("materialId")
+        if not isinstance(material_id, str) or not material_id.strip():
+            errors.append(f"{span_label}.materialId 必须是非空字符串")
+
+        for field_name, minimum in (("blockIds", 1), ("headingPath", 1), ("assetRefs", 0)):
+            items = span.get(field_name)
+            if (
+                not isinstance(items, list)
+                or len(items) < minimum
+                or any(not isinstance(item, str) or not item.strip() for item in items)
+            ):
+                requirement = (
+                    f"至少包含 {minimum} 项非空字符串的数组"
+                    if minimum
+                    else "非空字符串数组"
+                )
+                errors.append(f"{span_label}.{field_name} 必须是{requirement}")
+                continue
+            if field_name in {"blockIds", "assetRefs"} and len(set(items)) != len(items):
+                errors.append(f"{span_label}.{field_name} 不允许重复项")
+
+        line_start = span.get("lineStart")
+        line_end = span.get("lineEnd")
+        if not isinstance(line_start, int) or isinstance(line_start, bool) or line_start < 1:
+            errors.append(f"{span_label}.lineStart 必须是正整数")
+        if (
+            not isinstance(line_end, int)
+            or isinstance(line_end, bool)
+            or line_end < 1
+            or not isinstance(line_start, int)
+            or isinstance(line_start, bool)
+            or line_end < line_start
+        ):
+            errors.append(f"{span_label}.lineEnd 必须是不小于 lineStart 的正整数")
+
+        if "page" in span:
+            page = span.get("page")
+            if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+                errors.append(f"{span_label}.page 必须是正整数")
+
+        excerpt_sha256 = span.get("excerptSha256")
+        if not isinstance(excerpt_sha256, str) or not _SHA256_RE.fullmatch(excerpt_sha256):
+            errors.append(f"{span_label}.excerptSha256 必须是小写 SHA-256")
+
+    return errors
+
+
+def _is_markdown_escaped(value: str, index: int) -> bool:
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and value[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 1
+
+
+def _markdown_lines(value: str) -> Iterable[tuple[int, int, str]]:
+    """Yield CRLF, LF, and CR lines with their original offsets."""
+
+    start = 0
+    while start < len(value):
+        end = start
+        while end < len(value) and value[end] not in {"\r", "\n"}:
+            end += 1
+        if end < len(value):
+            end += 1
+            if value[end - 1] == "\r" and end < len(value) and value[end] == "\n":
+                end += 1
+        yield start, end, value[start:end]
+        start = end
+
+
+def _markdown_fence_run(line: str) -> tuple[str, str] | None:
+    body = line
+    if body.endswith("\r\n"):
+        body = body[:-2]
+    elif body.endswith(("\r", "\n")):
+        body = body[:-1]
+    match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", body)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _mask_markdown_code(value: str) -> str:
+    """Mask CommonMark-style fenced and inline code at stable offsets."""
+
+    masked = list(value)
+    fence: str | None = None
+    for start, end, line in _markdown_lines(value):
+        run = _markdown_fence_run(line)
+        marker, suffix = run if run else (None, None)
+        closes_fence = bool(
+            fence
+            and marker
+            and marker[0] == fence[0]
+            and len(marker) >= len(fence)
+            and suffix is not None
+            and not suffix.strip(" \t")
+        )
+        opens_fence = bool(
+            fence is None
+            and marker
+            and suffix is not None
+            and (marker[0] == "~" or "`" not in suffix)
+        )
+        if fence is not None or opens_fence:
+            for index in range(start, end):
+                if masked[index] not in {"\n", "\r"}:
+                    masked[index] = " "
+        if opens_fence:
+            fence = marker
+        elif closes_fence:
+            fence = None
+
+    without_fences = "".join(masked)
+    index = 0
+    while index < len(without_fences):
+        if without_fences[index] != "`" or _is_markdown_escaped(
+            without_fences, index
+        ):
+            index += 1
+            continue
+        run_end = index + 1
+        while run_end < len(without_fences) and without_fences[run_end] == "`":
+            run_end += 1
+        marker_length = run_end - index
+        search = run_end
+        close = -1
+        while search < len(without_fences):
+            candidate = without_fences.find("`", search)
+            if candidate < 0:
+                break
+            close_end = candidate + 1
+            while (
+                close_end < len(without_fences)
+                and without_fences[close_end] == "`"
+            ):
+                close_end += 1
+            if close_end - candidate == marker_length:
+                close = candidate
+                break
+            search = close_end
+        if close < 0:
+            index = run_end
+            continue
+        close_end = close + marker_length
+        for cursor in range(index, close_end):
+            if masked[cursor] not in {"\n", "\r"}:
+                masked[cursor] = " "
+        index = close_end
+    return "".join(masked)
+
+
+def _find_unescaped(value: str, needle: str, start: int) -> int:
+    cursor = start
+    while cursor < len(value):
+        found = value.find(needle, cursor)
+        if found < 0 or not _is_markdown_escaped(value, found):
+            return found
+        cursor = found + len(needle)
+    return -1
+
+
+def _mask_legacy_math(value: str, opening: str, closing: str) -> str:
+    masked = list(value)
+    cursor = 0
+    while cursor < len(value):
+        start = _find_unescaped(value, opening, cursor)
+        if start < 0:
+            break
+        end = _find_unescaped(value, closing, start + len(opening))
+        if end < 0:
+            cursor = start + len(opening)
+            continue
+        for index in range(start, end + len(closing)):
+            if masked[index] not in {"\n", "\r"}:
+                masked[index] = " "
+        cursor = end + len(closing)
+    return "".join(masked)
+
+
+def _mask_dollar_math(value: str) -> str:
+    """Mask the equal-length dollar runs used by remark-math."""
+
+    masked = list(value)
+    cursor = 0
+    while cursor < len(value):
+        start = value.find("$", cursor)
+        if start < 0:
+            break
+        run_end = start + 1
+        while run_end < len(value) and value[run_end] == "$":
+            run_end += 1
+        marker_length = run_end - start
+        if _is_markdown_escaped(value, start):
+            cursor = run_end
+            continue
+
+        search = run_end
+        close = -1
+        while search < len(value):
+            candidate = value.find("$", search)
+            if candidate < 0:
+                break
+            close_end = candidate + 1
+            while close_end < len(value) and value[close_end] == "$":
+                close_end += 1
+            if close_end - candidate == marker_length:
+                close = candidate
+                break
+            search = close_end
+        if close < 0:
+            cursor = run_end
+            continue
+        close_end = close + marker_length
+        for index in range(start, close_end):
+            if masked[index] not in {"\n", "\r"}:
+                masked[index] = " "
+        cursor = close_end
+    return "".join(masked)
+
+
+def _markdown_prose(value: str) -> str:
+    prose = _mask_markdown_code(value)
+    # Keep legacy \(...\) and \[...\] readable while new generation uses
+    # the canonical $...$ and $$...$$ delimiters.
+    for opening, closing in ((r"\[", r"\]"), (r"\(", r"\)")):
+        prose = _mask_legacy_math(prose, opening, closing)
+    return _mask_dollar_math(prose)
+
+
+def _validate_textbook_markdown(value: str, label: str) -> list[str]:
+    errors: list[str] = []
+    visible_text = _mask_markdown_code(value)
+    if re.search(r"(?:\\r)?\\n(?:\\r)?\\n", visible_text):
+        errors.append(f"{label} 不得用可见的字面量 \\n\\n 代替真实段落换行")
+    if re.search(r"\\+[A-Za-z]+", _markdown_prose(value)):
+        errors.append(f"{label} 的 LaTeX 命令必须放在数学分隔符内")
+    return errors
+
+
+def _validate_textbook_id_list(
+    value: Any,
+    label: str,
+    *,
+    require_non_empty: bool = True,
+) -> tuple[list[str], list[str]]:
+    """Validate a unique kebab-case reference list and return usable IDs."""
+
+    errors: list[str] = []
+    if not isinstance(value, list):
+        return [f"{label} 必须是数组"], []
+    if require_non_empty and not value:
+        errors.append(f"{label} 至少需要一项")
+
+    valid: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not _ID_RE.fullmatch(item):
+            errors.append(f"{label}[{index}] 必须为 kebab-case")
+            continue
+        if item in seen:
+            errors.append(f"{label} 不允许重复项：{item}")
+            continue
+        seen.add(item)
+        valid.append(item)
+    return errors, valid
+
+
+def _validate_textbook_learning_design(
+    value: Any,
+    label: str,
+    *,
+    blocks: list[Any],
+    block_index_by_id: dict[str, int],
+) -> tuple[list[str], set[str], set[str]]:
+    """Validate the optional outcome-first teaching plan for one point."""
+
+    errors: list[str] = []
+    outcome_ids: set[str] = set()
+    module_ids: set[str] = set()
+    if not isinstance(value, dict):
+        return [f"{label} 必须是对象"], outcome_ids, module_ids
+
+    required_keys = {
+        "primaryPattern",
+        "estimatedMinutes",
+        "outcomes",
+        "misconceptions",
+        "modules",
+        "completion",
+    }
+    allowed_keys = required_keys | {"adaptationLevel", "editorialPolicy"}
+    missing = sorted(required_keys - set(value))
+    extra = sorted(set(value) - allowed_keys)
+    if missing:
+        errors.append(f"{label} 缺少字段：{', '.join(missing)}")
+    if extra:
+        errors.append(f"{label} 包含未知字段：{', '.join(extra)}")
+
+    primary_pattern = value.get("primaryPattern")
+    if not isinstance(primary_pattern, str) or not primary_pattern.strip():
+        errors.append(f"{label}.primaryPattern 必须是非空字符串")
+
+    adaptation_level = value.get("adaptationLevel", "balanced")
+    if adaptation_level not in _TEXTBOOK_ADAPTATION_LEVELS:
+        errors.append(
+            f"{label}.adaptationLevel 必须是 faithful/balanced/teaching-first"
+        )
+    if "editorialPolicy" in value and (
+        not isinstance(value.get("editorialPolicy"), str)
+        or not value["editorialPolicy"].strip()
+    ):
+        errors.append(f"{label}.editorialPolicy 必须是非空字符串")
+
+    estimated_minutes = value.get("estimatedMinutes")
+    if (
+        not isinstance(estimated_minutes, int)
+        or isinstance(estimated_minutes, bool)
+        or estimated_minutes < 1
+    ):
+        errors.append(f"{label}.estimatedMinutes 必须是正整数")
+
+    outcomes = value.get("outcomes")
+    if not isinstance(outcomes, list) or not outcomes:
+        errors.append(f"{label}.outcomes 必须是非空数组")
+        outcomes = []
+    for index, outcome in enumerate(outcomes):
+        outcome_label = f"{label}.outcomes[{index}]"
+        if not isinstance(outcome, dict):
+            errors.append(f"{outcome_label} 必须是对象")
+            continue
+        missing_outcome = sorted({"id", "text"} - set(outcome))
+        extra_outcome = sorted(set(outcome) - {"id", "text"})
+        if missing_outcome:
+            errors.append(f"{outcome_label} 缺少字段：{', '.join(missing_outcome)}")
+        if extra_outcome:
+            errors.append(f"{outcome_label} 包含未知字段：{', '.join(extra_outcome)}")
+        outcome_id = outcome.get("id")
+        if not isinstance(outcome_id, str) or not _ID_RE.fullmatch(outcome_id):
+            errors.append(f"{outcome_label}.id 必须为 kebab-case")
+        elif outcome_id in outcome_ids:
+            errors.append(f"{outcome_label}.id 重复：{outcome_id}")
+        else:
+            outcome_ids.add(outcome_id)
+        if not isinstance(outcome.get("text"), str) or not outcome["text"].strip():
+            errors.append(f"{outcome_label}.text 必须是非空字符串")
+
+    misconceptions = value.get("misconceptions")
+    if not isinstance(misconceptions, list):
+        errors.append(f"{label}.misconceptions 必须是字符串数组")
+    else:
+        seen_misconceptions: set[str] = set()
+        for index, misconception in enumerate(misconceptions):
+            if not isinstance(misconception, str) or not misconception.strip():
+                errors.append(
+                    f"{label}.misconceptions[{index}] 必须是非空字符串"
+                )
+            elif misconception in seen_misconceptions:
+                errors.append(f"{label}.misconceptions 不允许重复项")
+            else:
+                seen_misconceptions.add(misconception)
+
+    modules = value.get("modules")
+    if not isinstance(modules, list) or not modules:
+        errors.append(f"{label}.modules 必须是非空数组")
+        modules = []
+    covered_outcomes: set[str] = set()
+    module_orders: set[int] = set()
+    for index, module in enumerate(modules):
+        module_label = f"{label}.modules[{index}]"
+        if not isinstance(module, dict):
+            errors.append(f"{module_label} 必须是对象")
+            continue
+        required_module_keys = {"id", "title", "outcomeRefs", "order"}
+        allowed_module_keys = required_module_keys | {"role", "description"}
+        missing_module = sorted(required_module_keys - set(module))
+        extra_module = sorted(set(module) - allowed_module_keys)
+        if missing_module:
+            errors.append(f"{module_label} 缺少字段：{', '.join(missing_module)}")
+        if extra_module:
+            errors.append(f"{module_label} 包含未知字段：{', '.join(extra_module)}")
+        module_id = module.get("id")
+        if not isinstance(module_id, str) or not _ID_RE.fullmatch(module_id):
+            errors.append(f"{module_label}.id 必须为 kebab-case")
+        elif module_id in module_ids:
+            errors.append(f"{module_label}.id 重复：{module_id}")
+        else:
+            module_ids.add(module_id)
+        if not isinstance(module.get("title"), str) or not module["title"].strip():
+            errors.append(f"{module_label}.title 必须是非空字符串")
+        for optional_text in ("role", "description"):
+            if optional_text in module and (
+                not isinstance(module.get(optional_text), str)
+                or not module[optional_text].strip()
+            ):
+                errors.append(f"{module_label}.{optional_text} 必须是非空字符串")
+        order = module.get("order")
+        if not isinstance(order, int) or isinstance(order, bool) or order < 0:
+            errors.append(f"{module_label}.order 必须是非负整数")
+        elif order in module_orders:
+            errors.append(f"{module_label}.order 重复：{order}")
+        else:
+            module_orders.add(order)
+        reference_errors, references = _validate_textbook_id_list(
+            module.get("outcomeRefs"), f"{module_label}.outcomeRefs"
+        )
+        errors.extend(reference_errors)
+        for outcome_id in references:
+            if outcome_id not in outcome_ids:
+                errors.append(
+                    f"{module_label}.outcomeRefs 引用了不存在的学习目标：{outcome_id}"
+                )
+            else:
+                covered_outcomes.add(outcome_id)
+
+    for outcome_id in sorted(outcome_ids - covered_outcomes):
+        errors.append(f"{label}.modules 未覆盖学习目标：{outcome_id}")
+
+    completion = value.get("completion")
+    completion_outcome_refs: set[str] = set()
+    if not isinstance(completion, dict) or not completion:
+        errors.append(f"{label}.completion 必须是非空对象")
+    else:
+        allowed_completion_keys = {
+            "outcomeRefs",
+            "method",
+            "successCriteria",
+            "exerciseBlockId",
+            "summaryBlockId",
+            "nextPointId",
+        }
+        extra_completion = sorted(set(completion) - allowed_completion_keys)
+        if extra_completion:
+            errors.append(
+                f"{label}.completion 包含未知字段：{', '.join(extra_completion)}"
+            )
+        if "outcomeRefs" in completion:
+            reference_errors, references = _validate_textbook_id_list(
+                completion.get("outcomeRefs"),
+                f"{label}.completion.outcomeRefs",
+            )
+            errors.extend(reference_errors)
+            for outcome_id in references:
+                if outcome_id not in outcome_ids:
+                    errors.append(
+                        f"{label}.completion.outcomeRefs 引用了不存在的学习目标：{outcome_id}"
+                    )
+                else:
+                    completion_outcome_refs.add(outcome_id)
+        for text_field in ("method", "nextPointId"):
+            if text_field in completion and (
+                not isinstance(completion.get(text_field), str)
+                or not completion[text_field].strip()
+            ):
+                errors.append(f"{label}.completion.{text_field} 必须是非空字符串")
+        if "nextPointId" in completion and isinstance(
+            completion.get("nextPointId"), str
+        ) and not _ID_RE.fullmatch(completion["nextPointId"]):
+            errors.append(f"{label}.completion.nextPointId 必须为 kebab-case")
+        if "successCriteria" in completion:
+            criteria = completion.get("successCriteria")
+            if (
+                not isinstance(criteria, list)
+                or not criteria
+                or any(not isinstance(item, str) or not item.strip() for item in criteria)
+            ):
+                errors.append(
+                    f"{label}.completion.successCriteria 必须是非空字符串数组"
+                )
+        for block_field in ("exerciseBlockId", "summaryBlockId"):
+            if block_field not in completion:
+                continue
+            block_id = completion.get(block_field)
+            if not isinstance(block_id, str) or not _ID_RE.fullmatch(block_id):
+                errors.append(f"{label}.completion.{block_field} 必须为 kebab-case")
+            elif block_id not in block_index_by_id:
+                errors.append(
+                    f"{label}.completion.{block_field} 引用了不存在的内容块：{block_id}"
+                )
+    if completion_outcome_refs:
+        for outcome_id in sorted(outcome_ids - completion_outcome_refs):
+            errors.append(f"{label}.completion 未覆盖学习目标：{outcome_id}")
+
+    blocks_by_module: dict[str, int] = {module_id: 0 for module_id in module_ids}
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        block_label = f"{label.rsplit('.', 1)[0]}.blocks[{index}]"
+        module_id = block.get("moduleId")
+        if not isinstance(module_id, str) or not _ID_RE.fullmatch(module_id):
+            errors.append(f"{block_label}.moduleId 必须为 kebab-case")
+        elif module_id not in module_ids:
+            errors.append(f"{block_label}.moduleId 引用了不存在的教学模块：{module_id}")
+        else:
+            blocks_by_module[module_id] += 1
+        if block.get("depth") not in _TEXTBOOK_LEARNING_DEPTHS:
+            errors.append(f"{block_label}.depth 必须是 core/support/advanced")
+    for module_id, block_count in blocks_by_module.items():
+        if block_count == 0:
+            errors.append(f"{label}.modules 中的模块没有内容块：{module_id}")
+
+    return errors, outcome_ids, module_ids
+
+
+def _validate_textbook_learning_assets(
+    value: Any,
+    label: str,
+    *,
+    outcome_ids: set[str],
+    module_ids: set[str],
+    blocks: list[Any],
+    block_index_by_id: dict[str, int],
+    grounded_by_id: dict[str, bool],
+) -> list[str]:
+    """Validate learner-facing assets without weakening source grounding."""
+
+    errors: list[str] = []
+    if not isinstance(value, list) or not value:
+        return [f"{label} 必须是非空数组"]
+    seen_ids: set[str] = set()
+    block_by_id = {
+        block.get("id"): block
+        for block in blocks
+        if isinstance(block, dict) and isinstance(block.get("id"), str)
+    }
+    for index, asset in enumerate(value):
+        asset_label = f"{label}[{index}]"
+        if not isinstance(asset, dict):
+            errors.append(f"{asset_label} 必须是对象")
+            continue
+        required_keys = {
+            "id",
+            "type",
+            "anchorBlockId",
+            "outcomeRefs",
+            "learningPurpose",
+            "grounding",
+            "fallback",
+        }
+        allowed_keys = required_keys | {
+            "title",
+            "moduleId",
+            "depth",
+            "animationType",
+            "caption",
+            "config",
+        }
+        missing = sorted(required_keys - set(asset))
+        extra = sorted(set(asset) - allowed_keys)
+        if missing:
+            errors.append(f"{asset_label} 缺少字段：{', '.join(missing)}")
+        if extra:
+            errors.append(f"{asset_label} 包含未知字段：{', '.join(extra)}")
+
+        asset_id = asset.get("id")
+        if not isinstance(asset_id, str) or not _ID_RE.fullmatch(asset_id):
+            errors.append(f"{asset_label}.id 必须为 kebab-case")
+        elif asset_id in seen_ids:
+            errors.append(f"{asset_label}.id 重复：{asset_id}")
+        else:
+            seen_ids.add(asset_id)
+        asset_type = asset.get("type")
+        if not isinstance(asset_type, str) or not _ID_RE.fullmatch(asset_type):
+            errors.append(f"{asset_label}.type 必须为 kebab-case")
+        for text_field in ("learningPurpose", "title", "animationType", "caption"):
+            if text_field in asset and (
+                not isinstance(asset.get(text_field), str)
+                or not asset[text_field].strip()
+            ):
+                errors.append(f"{asset_label}.{text_field} 必须是非空字符串")
+
+        anchor_id = asset.get("anchorBlockId")
+        if not isinstance(anchor_id, str) or not _ID_RE.fullmatch(anchor_id):
+            errors.append(f"{asset_label}.anchorBlockId 必须为 kebab-case")
+            anchor_index = None
+        elif anchor_id not in block_index_by_id:
+            errors.append(
+                f"{asset_label}.anchorBlockId 引用了不存在的内容块：{anchor_id}"
+            )
+            anchor_index = None
+        else:
+            anchor_index = block_index_by_id[anchor_id]
+
+        reference_errors, references = _validate_textbook_id_list(
+            asset.get("outcomeRefs"), f"{asset_label}.outcomeRefs"
+        )
+        errors.extend(reference_errors)
+        for outcome_id in references:
+            if outcome_id not in outcome_ids:
+                errors.append(
+                    f"{asset_label}.outcomeRefs 引用了不存在的学习目标：{outcome_id}"
+                )
+
+        if "moduleId" in asset:
+            module_id = asset.get("moduleId")
+            if not isinstance(module_id, str) or not _ID_RE.fullmatch(module_id):
+                errors.append(f"{asset_label}.moduleId 必须为 kebab-case")
+            elif module_id not in module_ids:
+                errors.append(
+                    f"{asset_label}.moduleId 引用了不存在的教学模块：{module_id}"
+                )
+            elif anchor_id in block_by_id and block_by_id[anchor_id].get(
+                "moduleId"
+            ) != module_id:
+                errors.append(
+                    f"{asset_label}.moduleId 必须与 anchorBlockId 所属模块一致"
+                )
+        if "depth" in asset and asset.get("depth") not in _TEXTBOOK_LEARNING_DEPTHS:
+            errors.append(f"{asset_label}.depth 必须是 core/support/advanced")
+        if "config" in asset and not isinstance(asset.get("config"), dict):
+            errors.append(f"{asset_label}.config 必须是对象")
+
+        grounding = asset.get("grounding")
+        if not isinstance(grounding, dict):
+            errors.append(f"{asset_label}.grounding 必须是对象")
+        else:
+            if set(grounding) != {"basedOnBlockIds"}:
+                errors.append(
+                    f"{asset_label}.grounding 必须严格包含 basedOnBlockIds"
+                )
+            grounding_errors, grounding_ids = _validate_textbook_id_list(
+                grounding.get("basedOnBlockIds"),
+                f"{asset_label}.grounding.basedOnBlockIds",
+            )
+            errors.extend(grounding_errors)
+            for block_id in grounding_ids:
+                if block_id not in block_index_by_id:
+                    errors.append(
+                        f"{asset_label}.grounding 引用了不存在的内容块：{block_id}"
+                    )
+                elif not grounded_by_id.get(block_id, False):
+                    errors.append(
+                        f"{asset_label}.grounding 的内容块不能追溯到教材：{block_id}"
+                    )
+                elif anchor_index is not None and block_index_by_id[block_id] > anchor_index:
+                    errors.append(
+                        f"{asset_label}.grounding 只能引用 anchorBlockId 之前或自身的内容块：{block_id}"
+                    )
+
+        fallback = asset.get("fallback")
+        if not isinstance(fallback, dict) or not fallback:
+            errors.append(f"{asset_label}.fallback 必须是非空对象")
+        else:
+            allowed_fallback_keys = {
+                "type",
+                "blockId",
+                "markdown",
+                "caption",
+                "mode",
+                "content",
+            }
+            extra_fallback = sorted(set(fallback) - allowed_fallback_keys)
+            if extra_fallback:
+                errors.append(
+                    f"{asset_label}.fallback 包含未知字段：{', '.join(extra_fallback)}"
+                )
+            for text_field, text_value in fallback.items():
+                if not isinstance(text_value, str) or not text_value.strip():
+                    errors.append(
+                        f"{asset_label}.fallback.{text_field} 必须是非空字符串"
+                    )
+            fallback_block_id = fallback.get("blockId")
+            if isinstance(fallback_block_id, str) and fallback_block_id not in block_index_by_id:
+                errors.append(
+                    f"{asset_label}.fallback.blockId 引用了不存在的内容块：{fallback_block_id}"
+                )
+            if not ({"type", "mode"} & set(fallback)):
+                errors.append(f"{asset_label}.fallback 必须声明 type 或 mode")
+            if not ({"blockId", "markdown", "caption", "content"} & set(fallback)):
+                errors.append(f"{asset_label}.fallback 必须提供可用的降级内容")
+            if isinstance(fallback.get("markdown"), str):
+                errors.extend(
+                    _validate_textbook_markdown(
+                        fallback["markdown"], f"{asset_label}.fallback.markdown"
+                    )
+                )
+    return errors
+
+
+def _validate_textbook_content_point(point: dict[str, Any], label: str) -> list[str]:
+    """Validate the published representation of a textbook-content/2.0 point."""
+
+    errors: list[str] = []
+    legacy_fields = sorted(_LEGACY_POINT_CONTENT_FIELDS.intersection(point))
+    if legacy_fields:
+        errors.append(f"{label}: v2 正文不允许同时保存旧字段：{', '.join(legacy_fields)}")
+    if point.get("origin") not in {"textbook", "llm-extension", "user"}:
+        errors.append(f"{label}: origin 必须是 textbook/llm-extension/user")
+
+    content = point.get("content")
+    if not isinstance(content, dict):
+        return [*errors, f"{label}: content 必须是对象"]
+    required_content_keys = {"schema_version", "blocks"}
+    allowed_content_keys = required_content_keys | {"learningDesign", "learningAssets"}
+    missing_content_keys = sorted(required_content_keys - set(content))
+    extra_content_keys = sorted(set(content) - allowed_content_keys)
+    if missing_content_keys:
+        errors.append(
+            f"{label}: content 缺少字段：{', '.join(missing_content_keys)}"
+        )
+    if extra_content_keys:
+        errors.append(
+            f"{label}: content 包含未知字段：{', '.join(extra_content_keys)}"
+        )
+    if content.get("schema_version") != _TEXTBOOK_CONTENT_SCHEMA:
+        errors.append(f"{label}: content.schema_version 必须是 {_TEXTBOOK_CONTENT_SCHEMA}")
+    blocks = content.get("blocks")
+    if not isinstance(blocks, list):
+        return [*errors, f"{label}: content.blocks 必须是数组"]
+
+    seen_ids: set[str] = set()
+    block_index_by_id: dict[str, int] = {}
+    grounded_by_id: dict[str, bool] = {}
+    derived_source_spans: list[dict[str, Any]] = []
+    seen_source_spans: set[str] = set()
+    textbook_blocks = 0
+    model_blocks = 0
+    required_block_keys = {"id", "kind", "markdown", "provenance"}
+    allowed_block_keys = required_block_keys | {"title", "moduleId", "depth"}
+    for index, block in enumerate(blocks):
+        block_label = f"{label}: content.blocks[{index}]"
+        if not isinstance(block, dict):
+            errors.append(f"{block_label} 必须是对象")
+            continue
+        missing_block_keys = sorted(required_block_keys - set(block))
+        extra_block_keys = sorted(set(block) - allowed_block_keys)
+        if missing_block_keys:
+            errors.append(f"{block_label} 缺少字段：{', '.join(missing_block_keys)}")
+        if extra_block_keys:
+            errors.append(f"{block_label} 包含未知字段：{', '.join(extra_block_keys)}")
+        block_id = block.get("id")
+        if not isinstance(block_id, str) or not _ID_RE.fullmatch(block_id):
+            errors.append(f"{block_label}.id 必须为 kebab-case")
+        elif block_id in seen_ids:
+            errors.append(f"{block_label}.id 重复：{block_id}")
+        else:
+            seen_ids.add(block_id)
+            block_index_by_id[block_id] = index
+        if block.get("kind") not in _TEXTBOOK_BLOCK_KINDS:
+            errors.append(f"{block_label}.kind 不是允许的教材内容块类型")
+        if "title" in block and (
+            not isinstance(block.get("title"), str) or not block["title"].strip()
+        ):
+            errors.append(f"{block_label}.title 必须是非空字符串")
+        if "moduleId" in block and (
+            not isinstance(block.get("moduleId"), str)
+            or not _ID_RE.fullmatch(block["moduleId"])
+        ):
+            errors.append(f"{block_label}.moduleId 必须为 kebab-case")
+        if "depth" in block and block.get("depth") not in _TEXTBOOK_LEARNING_DEPTHS:
+            errors.append(f"{block_label}.depth 必须是 core/support/advanced")
+        if not isinstance(block.get("markdown"), str) or not block["markdown"].strip():
+            errors.append(f"{block_label}.markdown 必须是非空字符串")
+        else:
+            errors.extend(
+                _validate_textbook_markdown(block["markdown"], f"{block_label}.markdown")
+            )
+        provenance = block.get("provenance")
+        if not isinstance(provenance, dict):
+            errors.append(f"{block_label}.provenance 必须是对象")
+            continue
+
+        origin = provenance.get("origin")
+        block_spans = provenance.get("sourceSpans")
+        if isinstance(block_spans, list):
+            for span in block_spans:
+                if not isinstance(span, dict):
+                    continue
+                span_key = json.dumps(
+                    span,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if span_key not in seen_source_spans:
+                    seen_source_spans.add(span_key)
+                    derived_source_spans.append(span)
+        if origin == "textbook":
+            textbook_blocks += 1
+            required_provenance_keys = {"origin", "representation", "sourceSpans"}
+            missing = sorted(required_provenance_keys - set(provenance))
+            extra = sorted(set(provenance) - required_provenance_keys)
+            if missing:
+                errors.append(f"{block_label}.provenance 缺少字段：{', '.join(missing)}")
+            if extra:
+                errors.append(f"{block_label}.provenance 包含未知字段：{', '.join(extra)}")
+            if provenance.get("representation") not in {"quote", "paraphrase"}:
+                errors.append(f"{block_label}.provenance.representation 必须是 quote/paraphrase")
+            spans = provenance.get("sourceSpans")
+            errors.extend(
+                _validate_textbook_source_spans(
+                    spans,
+                    f"{block_label}.provenance.sourceSpans",
+                    require_non_empty=True,
+                )
+            )
+            if isinstance(block_id, str):
+                grounded_by_id[block_id] = True
+        elif origin == "model":
+            model_blocks += 1
+            required_provenance_keys = {"origin", "basedOnBlockIds"}
+            allowed_provenance_keys = required_provenance_keys | {"sourceSpans"}
+            missing = sorted(required_provenance_keys - set(provenance))
+            extra = sorted(set(provenance) - allowed_provenance_keys)
+            if missing:
+                errors.append(f"{block_label}.provenance 缺少字段：{', '.join(missing)}")
+            if extra:
+                errors.append(f"{block_label}.provenance 包含未知字段：{', '.join(extra)}")
+            based_on = provenance.get("basedOnBlockIds")
+            grounded = False
+            if (
+                not isinstance(based_on, list)
+                or not based_on
+                or any(not isinstance(item, str) or not _ID_RE.fullmatch(item) for item in based_on)
+                or len(set(based_on)) != len(based_on)
+            ):
+                errors.append(
+                    f"{block_label}.provenance.basedOnBlockIds "
+                    "必须是非空、不重复的 kebab-case 字符串数组"
+                )
+            else:
+                references_are_valid = True
+                referenced_indexes: list[int] = []
+                for referenced_id in based_on:
+                    if referenced_id not in seen_ids or referenced_id == block_id:
+                        references_are_valid = False
+                        errors.append(f"{block_label} 只能引用排在当前块之前的 block：{referenced_id}")
+                    else:
+                        referenced_indexes.append(block_index_by_id[referenced_id])
+                        if grounded_by_id.get(referenced_id):
+                            grounded = True
+                if references_are_valid and referenced_indexes:
+                    last_reference_index = max(referenced_indexes)
+                    crosses_textbook_block = any(
+                        isinstance(candidate, dict)
+                        and isinstance(candidate.get("provenance"), dict)
+                        and candidate["provenance"].get("origin") == "textbook"
+                        for candidate in blocks[last_reference_index + 1 : index]
+                    )
+                    if crosses_textbook_block:
+                        errors.append(
+                            f"{block_label} 必须紧跟最后一个直接依据，不能跨过后续教材块"
+                        )
+            if not grounded:
+                errors.append(f"{block_label} 必须追溯到至少一个教材块")
+            if "sourceSpans" in provenance:
+                errors.extend(
+                    _validate_textbook_source_spans(
+                        provenance.get("sourceSpans"),
+                        f"{block_label}.provenance.sourceSpans",
+                        require_non_empty=False,
+                    )
+                )
+            if isinstance(block_id, str):
+                grounded_by_id[block_id] = grounded
+        else:
+            errors.append(f"{block_label}.provenance.origin 必须是 textbook/model")
+
+    if textbook_blocks < 1:
+        errors.append(f"{label}: content.blocks 至少需要一个教材块")
+    if model_blocks < 1:
+        errors.append(f"{label}: content.blocks 至少需要一个模型补充块")
+
+    outcome_ids: set[str] = set()
+    module_ids: set[str] = set()
+    if "learningDesign" in content:
+        design_errors, outcome_ids, module_ids = _validate_textbook_learning_design(
+            content.get("learningDesign"),
+            f"{label}: content.learningDesign",
+            blocks=blocks,
+            block_index_by_id=block_index_by_id,
+        )
+        errors.extend(design_errors)
+    elif any(
+        isinstance(block, dict) and ({"moduleId", "depth"} & set(block))
+        for block in blocks
+    ):
+        errors.append(
+            f"{label}: content.blocks 的 moduleId/depth 需要 content.learningDesign"
+        )
+
+    if "learningAssets" in content:
+        if "learningDesign" not in content:
+            errors.append(
+                f"{label}: content.learningAssets 需要 content.learningDesign"
+            )
+        errors.extend(
+            _validate_textbook_learning_assets(
+                content.get("learningAssets"),
+                f"{label}: content.learningAssets",
+                outcome_ids=outcome_ids,
+                module_ids=module_ids,
+                blocks=blocks,
+                block_index_by_id=block_index_by_id,
+                grounded_by_id=grounded_by_id,
+            )
+        )
+    if "sourceSpans" in point and point["sourceSpans"] != derived_source_spans:
+        errors.append(f"{label}: 顶层 sourceSpans 必须与 content.blocks 派生值一致")
+    if "modelEnriched" in point and (
+        not isinstance(point["modelEnriched"], bool)
+        or point["modelEnriched"] != (model_blocks > 0)
+    ):
+        errors.append(f"{label}: 顶层 modelEnriched 必须与 content.blocks 派生值一致")
+    return errors
 
 
 class CourseDataError(RuntimeError):
@@ -429,6 +1428,40 @@ class CourseStore:
 
         point_ids = set(points)
         indexed_ids = set(index_by_id)
+        canonical_next_by_id: dict[str, str | None] | None = None
+        sequences = index.get("sequences")
+        if sequences is not None:
+            if not isinstance(sequences, dict) or set(sequences) != {"cluster", "point"}:
+                result.errors.append(
+                    f"{prefix}: index.json.sequences 必须严格包含 cluster 和 point"
+                )
+            else:
+                cluster_sequence_valid = self._validate_sequence_edges(
+                    sequences.get("cluster"),
+                    cluster_ids,
+                    f"{prefix}: 知识簇顺序",
+                    result,
+                )
+                point_sequence_valid = self._validate_sequence_edges(
+                    sequences.get("point"),
+                    indexed_ids,
+                    f"{prefix}: 知识点顺序",
+                    result,
+                )
+                if cluster_sequence_valid and point_sequence_valid:
+                    canonical_point_order = self._canonical_point_order(
+                        clusters,
+                        indexed_points,
+                        sequences,
+                    )
+                    canonical_next_by_id = {
+                        point_id: (
+                            canonical_point_order[position + 1]
+                            if position + 1 < len(canonical_point_order)
+                            else None
+                        )
+                        for position, point_id in enumerate(canonical_point_order)
+                    }
         for missing in sorted(indexed_ids - point_ids):
             result.errors.append(f"{prefix}: index 中的知识点缺少详情文件：{missing}")
         for extra in sorted(point_ids - indexed_ids):
@@ -466,7 +1499,57 @@ class CourseStore:
                         message = f"{prefix}: 知识点 {pid} 的前置引用不存在：{prerequisite}"
                         (result.errors if strict_details else result.warnings).append(message)
 
-            if strict_details:
+            # ``strict_details=False`` exists so historical courses with
+            # incomplete legacy fields remain readable.  A point that carries
+            # the versioned ``content`` envelope is different: its declared
+            # contract must never be reduced to a best-effort warning merely
+            # because the caller is using the legacy-compatible validation
+            # mode.  Checking for the key (rather than only a valid schema
+            # value) also reports a damaged or downgraded v2 envelope.
+            if "content" in detail:
+                result.errors.extend(
+                    _validate_textbook_content_point(detail, f"{prefix}: 知识点 {pid}")
+                )
+                content = detail.get("content")
+                learning_design = (
+                    content.get("learningDesign")
+                    if isinstance(content, dict)
+                    else None
+                )
+                completion = (
+                    learning_design.get("completion")
+                    if isinstance(learning_design, dict)
+                    else None
+                )
+                next_point_id = (
+                    completion.get("nextPointId")
+                    if isinstance(completion, dict)
+                    and "nextPointId" in completion
+                    else None
+                )
+                if (
+                    isinstance(next_point_id, str)
+                    and _ID_RE.fullmatch(next_point_id)
+                ):
+                    if next_point_id not in indexed_ids:
+                        result.errors.append(
+                            f"{prefix}: 知识点 {pid}.content.learningDesign.completion."
+                            f"nextPointId 引用了本课程不存在的知识点：{next_point_id}"
+                        )
+                    elif canonical_next_by_id is not None and pid in canonical_next_by_id:
+                        expected_next = canonical_next_by_id[pid]
+                        if expected_next is None:
+                            result.errors.append(
+                                f"{prefix}: 知识点 {pid} 位于规范学习顺序末尾，"
+                                "不应声明 content.learningDesign.completion.nextPointId"
+                            )
+                        elif next_point_id != expected_next:
+                            result.errors.append(
+                                f"{prefix}: 知识点 {pid}.content.learningDesign.completion."
+                                "nextPointId 必须指向规范学习顺序中的直接下一点 "
+                                f"{expected_next}，实际为 {next_point_id}"
+                            )
+            elif strict_details:
                 if not isinstance(detail.get("coreIdea"), str) or not detail["coreIdea"].strip():
                     result.errors.append(f"{prefix}: 知识点 {pid} 缺少非空 coreIdea")
                 for content_field in ("principles", "applications"):
@@ -475,6 +1558,161 @@ class CourseStore:
                         result.errors.append(f"{prefix}: 知识点 {pid}.{content_field} 必须是非空字符串数组")
 
         return result
+
+    @staticmethod
+    def _validate_sequence_edges(
+        value: Any,
+        known_ids: set[str],
+        label: str,
+        result: ValidationResult,
+    ) -> bool:
+        """Validate optional directed reading-order edges independently of prerequisites."""
+
+        if not isinstance(value, list):
+            result.errors.append(f"{label}必须是数组")
+            return False
+        valid = True
+        edges: set[tuple[str, str]] = set()
+        adjacency: dict[str, list[str]] = {item: [] for item in known_ids}
+        for index, edge in enumerate(value):
+            if not isinstance(edge, dict) or set(edge) != {"fromId", "toId"}:
+                result.errors.append(
+                    f"{label}[{index}] 必须严格包含 fromId/toId"
+                )
+                valid = False
+                continue
+            source = edge.get("fromId")
+            target = edge.get("toId")
+            if not isinstance(source, str) or not isinstance(target, str):
+                result.errors.append(
+                    f"{label}[{index}] 的 fromId/toId 必须是字符串"
+                )
+                valid = False
+                continue
+            if source not in known_ids or target not in known_ids:
+                result.errors.append(f"{label}[{index}] 包含悬空引用")
+                valid = False
+                continue
+            if source == target:
+                result.errors.append(f"{label}[{index}] 不允许自环")
+                valid = False
+                continue
+            pair = (source, target)
+            if pair in edges:
+                result.errors.append(f"{label}[{index}] 与已有顺序边重复")
+                valid = False
+                continue
+            edges.add(pair)
+            adjacency[source].append(target)
+
+        state: dict[str, int] = {item: 0 for item in known_ids}
+
+        def visit(node: str) -> bool:
+            state[node] = 1
+            for target in adjacency[node]:
+                if state[target] == 1:
+                    return True
+                if state[target] == 0 and visit(target):
+                    return True
+            state[node] = 2
+            return False
+
+        if any(state[node] == 0 and visit(node) for node in sorted(known_ids)):
+            result.errors.append(f"{label}不能形成环")
+            valid = False
+        return valid
+
+    @staticmethod
+    def _stable_topological_order(
+        ids: list[str],
+        edges: list[dict[str, Any]],
+    ) -> list[str]:
+        """Mirror the reader's deterministic topological order with source-order ties."""
+
+        known_ids = set(ids)
+        position = {item: index for index, item in enumerate(ids)}
+        adjacency: dict[str, list[str]] = {item: [] for item in ids}
+        indegree: dict[str, int] = {item: 0 for item in ids}
+        for edge in edges:
+            source = edge["fromId"]
+            target = edge["toId"]
+            if source not in known_ids or target not in known_ids:
+                continue
+            adjacency[source].append(target)
+            indegree[target] += 1
+
+        ready = [item for item in ids if indegree[item] == 0]
+        ordered: list[str] = []
+        while ready:
+            ready.sort(key=position.__getitem__)
+            current = ready.pop(0)
+            ordered.append(current)
+            for target in adjacency[current]:
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    ready.append(target)
+        return ordered
+
+    @classmethod
+    def _canonical_point_order(
+        cls,
+        clusters: list[Any],
+        indexed_points: list[Any],
+        sequences: dict[str, Any],
+    ) -> list[str]:
+        """Linearise canonical cluster/point sequences exactly as the reader does."""
+
+        cluster_ids: list[str] = []
+        seen_cluster_ids: set[str] = set()
+        for cluster in clusters:
+            cluster_id = cluster.get("id") if isinstance(cluster, dict) else None
+            if isinstance(cluster_id, str) and cluster_id not in seen_cluster_ids:
+                seen_cluster_ids.add(cluster_id)
+                cluster_ids.append(cluster_id)
+        cluster_order = cls._stable_topological_order(
+            cluster_ids,
+            sequences["cluster"],
+        )
+
+        points_by_cluster: dict[str, list[str]] = {
+            cluster_id: [] for cluster_id in cluster_ids
+        }
+        source_point_ids: list[str] = []
+        seen_point_ids: set[str] = set()
+        for point in indexed_points:
+            if not isinstance(point, dict):
+                continue
+            point_id = point.get("id")
+            if not isinstance(point_id, str) or point_id in seen_point_ids:
+                continue
+            seen_point_ids.add(point_id)
+            source_point_ids.append(point_id)
+            cluster_id = point.get("clusterId")
+            if cluster_id in points_by_cluster:
+                points_by_cluster[cluster_id].append(point_id)
+
+        ordered: list[str] = []
+        point_edges = sequences["point"]
+        for cluster_id in cluster_order:
+            cluster_point_ids = points_by_cluster[cluster_id]
+            cluster_point_set = set(cluster_point_ids)
+            cluster_edges = [
+                edge
+                for edge in point_edges
+                if edge["fromId"] in cluster_point_set
+                and edge["toId"] in cluster_point_set
+            ]
+            ordered.extend(
+                cls._stable_topological_order(cluster_point_ids, cluster_edges)
+            )
+
+        ordered_ids = set(ordered)
+        ordered.extend(
+            point_id
+            for point_id in source_point_ids
+            if point_id not in ordered_ids
+        )
+        return ordered
 
     def _load_course_objects(self, root: Path, course_id: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, dict[str, Any]]]:
         directory = self._course_dir(course_id, root=root)
@@ -857,9 +2095,10 @@ class CourseStore:
         result.setdefault("keyTerms", [])
         result.setdefault("pos", [0, 0])
         result.setdefault("scale", 1.0)
-        result.setdefault("coreIdea", "")
-        result.setdefault("principles", [])
-        result.setdefault("applications", [])
+        if not _is_textbook_content_point(result):
+            result.setdefault("coreIdea", "")
+            result.setdefault("principles", [])
+            result.setdefault("applications", [])
         result.setdefault("prerequisites", [])
         # Explicitly reference the local variable so static type checkers know
         # that the ID validation above is intentional.
@@ -874,6 +2113,7 @@ class CourseStore:
         points: dict[str, dict[str, Any]],
         *,
         strict_point_ids: Iterable[str] = (),
+        strict_textbook_content_ids: Iterable[str] = (),
         require_complete_points: bool = False,
         strict_prerequisites: bool = False,
         allowed_legacy_metadata_mismatches: dict[str, set[str]] | None = None,
@@ -885,6 +2125,8 @@ class CourseStore:
             course_id, course, index, points, strict_details=False
         )
         strict_ids = set(strict_point_ids)
+        strict_textbook_ids = set(strict_textbook_content_ids)
+        strict_ids.update(strict_textbook_ids)
         if strict_ids:
             index_by_id = {
                 item.get("id"): item
@@ -920,7 +2162,17 @@ class CourseStore:
                                 validation.errors.append(
                                     f"课程 {course_id}: 知识点 {point_id} 的前置引用不存在：{prerequisite}"
                                 )
-                if require_complete_points:
+                is_textbook_content = _is_textbook_content_point(detail)
+                if point_id in strict_textbook_ids and not is_textbook_content:
+                    validation.errors.append(
+                        f"课程 {course_id}: 知识点 {point_id} 已使用 {_TEXTBOOK_CONTENT_SCHEMA}，"
+                        "修改后不允许降级或移除 v2 content"
+                    )
+                # Versioned content envelopes were already validated by
+                # ``_validate_course_objects`` even in legacy-compatible mode.
+                # This branch only supplies the completeness checks that have
+                # no declared schema for legacy points.
+                if not is_textbook_content and require_complete_points:
                     if not isinstance(detail.get("coreIdea"), str) or not detail["coreIdea"].strip():
                         validation.errors.append(f"课程 {course_id}: 知识点 {point_id} 缺少非空 coreIdea")
                     for content_field in ("principles", "applications"):
@@ -1079,6 +2331,7 @@ class CourseStore:
             current = points.get(point_id)
             if current is None:
                 raise CourseNotFoundError(f"知识点不存在：{point_id}")
+            was_textbook_content = _is_textbook_content_point(current)
             if "id" in patch and patch["id"] != point_id:
                 raise CourseDataError("知识点 id 不可修改，以免破坏前置关系")
             current = _deepcopy_json(current)
@@ -1099,6 +2352,11 @@ class CourseStore:
                 index,
                 points,
                 strict_point_ids={point_id},
+                strict_textbook_content_ids=(
+                    {point_id}
+                    if was_textbook_content or _is_textbook_content_point(current)
+                    else set()
+                ),
                 strict_prerequisites="prerequisites" in patch,
             )
             self._write_package(course_id, course, index, points)
@@ -1375,6 +2633,12 @@ class CourseStore:
 
             for point_id in sorted(changed_ids & set(after_points)):
                 is_new = point_id not in before_points
+                was_textbook_content = _is_textbook_content_point(
+                    before_points.get(point_id)
+                )
+                is_textbook_content = _is_textbook_content_point(
+                    after_points[point_id]
+                )
                 prerequisites_changed = (
                     is_new
                     or before_points.get(point_id, {}).get("prerequisites")
@@ -1402,6 +2666,11 @@ class CourseStore:
                         after_index,
                         after_points,
                         strict_point_ids={point_id},
+                        strict_textbook_content_ids=(
+                            {point_id}
+                            if was_textbook_content or is_textbook_content
+                            else set()
+                        ),
                         require_complete_points=is_new,
                         strict_prerequisites=prerequisites_changed,
                         allowed_legacy_metadata_mismatches={point_id: legacy_mismatches},

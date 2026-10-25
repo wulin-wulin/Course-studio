@@ -15,7 +15,7 @@ description: 端到端编排 v2 课程知识流水线：生成完整课程内容
 pipeline/<course-id>/
 ├── course-content/
 ├── clustered-graph.json
-└── textbook-outline.json  # 仅教材 PDF 模式
+└── textbook-outline.json  # 仅教材模式（PDF 或 Markdown）
 ```
 
 确定一种模式：
@@ -60,12 +60,16 @@ pipeline/<course-id>/
 
 ### G1_INDEX
 
-- 只生成 `course.json`、`generation/manifest.json` 和完整 `index.json`。
+- 普通课程只生成 `course.json`、`generation/manifest.json` 和完整 `index.json`。
+- 绑定 `material.json/full.md` 的教材课程只由模型生成 `course.json`、完整 `index.json` 和
+  `textbook-outline.json`；随后调用 `sync-textbook-manifest`，由受信脚本生成完整 manifest。
+  不得用 `write` 手工展开 sources、pointEvidence 或 sourceSpans。
 - 冻结 index 的 `id`、`title` 和数组顺序；`pointEvidence` 必须同序。
 - 不生成详情、动画实现、知识簇、关系或布局字段。
 - 调用 `validate-index`，失败则修复后重跑。
-- 教材模式必须先用 `textbook-outline.json` 决定完整点集，调用 `validate-textbook-outline` 后才可调用 `validate-index`；不得从内容反向聚类出教材结构。
-- 教材模式在 G1 只确定 PDF 提供的章节包含关系和教材点顺序；不得在这一阶段生成或使用 `prerequisites`、`related` 或 cluster 关系来重构教材树。
+- 教材模式必须先用 `textbook-outline.json` 决定完整点集，依次调用
+  `sync-textbook-manifest`、`validate-textbook-outline`、`validate-index`；不得从内容反向聚类出教材结构。
+- 教材模式在 G1 只确定解析结果提供的章节包含关系和教材点顺序；不得在这一阶段生成或使用 `prerequisites`、`related` 或 cluster 关系来重构教材树。
 
 ### G2_IDENTITY_REVIEW
 
@@ -78,6 +82,16 @@ pipeline/<course-id>/
 
 - 先调用 `init-points`；该 action 会验证 G2 回执，无有效回执时必须阻断。
 - 按内容 Skill 的文件所有权和自适应拆分规则，让内容子智能体生成各自的 `points/<id>.json` 和同名动画请求。
+- 每个内容任务的提示必须要求子智能体先加载 `candidate-knowledge-point-generator` Skill，
+  再完整读取 session-local 的 `data-contract.md`、`animation-contract.md`、
+  `schemas/point.schema.json` 和 `schemas/animation-request.schema.json`；教材模式还要读取
+  `schemas/textbook-content.schema.json`。必须传完整索引项 JSON，不得用主智能体手写的不完整
+  字段摘要代替合同。教材模式还必须从受信 manifest 原样注入对应点的
+  `manifest.pointEvidence` 完整单项 JSON；`sourceSpans` 不得省略、摘要或重建。
+- 第一波只覆盖合计 3–5 个知识点作为 canary。每个任务返回后立即调用
+  `validate-point-drafts`，失败则把完整原始错误（包括 JSON parse error）发回原 worker 就地修复；
+  原 worker 无法继续时只能转交拥有同一组互斥文件的 repair task。主智能体不得用 `edit`/`write`
+  直接修改 worker 文件；一波全部通过后才启动下一波。
 - 子智能体不得修改共享 index、manifest、清单或注册文件。
 - 全局复核正文区分度、事实、前置引用与 DAG 后，依次调用：
 
@@ -86,11 +100,26 @@ pipeline/<course-id>/
   3. `validate-points`
 
 - 教材模式中，G3 生成的 `prerequisites` 只能作为基于内容的候选语义关系；它们不改变 G1 冻结的章节、顺序、教材点身份或章节归属。
+- 教材 Markdown 模式中，每个详情任务必须使用受信 manifest 中该点的 source spans，并读取
+  `material.json/full.md` 中对应正文，传入点级证据包；manifest 声明
+  `contentContract: "textbook-content/2.0"` 并保存
+  `pointEvidence.origin/sourceSpans`。material 的 `chunk-*` ID 只用于分批读取，不能替换 manifest
+  中的 `block-*` section ID。point 以有序 `content.blocks` 分开保存教材依据和模型补充；教材块
+  的 spans 按块/数组顺序首次出现去重后必须与注入的 `pointEvidence.sourceSpans` 深度相等且
+  顺序一致，模型块用 `basedOnBlockIds` 向前引用且不得引入清单外 span。教材点和受控扩展点都必须有
+  非空教材锚点以及至少一个模型块；顶层 `sourceSpans/modelEnriched` 从 blocks 派生，不重复持久化。
+  不得只根据目录标题自行编写全部正文。
+- 内容 worker 写 JSON 后必须用 `read` 回读 point 和 animation request。文件中的 LaTeX 反斜杠
+  必须编码成合法 JSON 的 `\\`，例如运行时 `\delta` 写成 `"\\delta"`；可优先使用
+  `$...$`/`$$...$$`，但 LaTeX 命令仍须转义。
 
 ### G4_ANIMATIONS
 
 - 调用 `init-animation-manifest` 后归并动画请求，只有真实动态机制才进入动画清单。
 - 清单确定后调用 `init-animations`，再让动画子智能体按互斥所有权实现 TSX/CSS。
+- 每个动画任务必须先加载候选内容 Skill 并完整读取 session-local `animation-contract.md`，同时获得完整
+  manifest 单项和绑定知识点正文。第一个动画组件作为 canary；每个任务返回后立即调用
+  `validate-animation-drafts`，失败则把原始错误交回同一任务修复。canary 通过后才启动其余组件。
 - 串行调用 `build-animation-registry`；清单为空也必须执行。
 
 ### G5_CONTENT_READY
@@ -102,12 +131,18 @@ pipeline/<course-id>/
 ### G6_GRAPH
 
 - 仅在 G5 通过后读取完整内容包并写 `clustered-graph.json`。
-- 点集及 index 顺序不变，全部正文原样透传。
+- 点集及 index 顺序不变。普通课程沿用现有图装配；声明 `textbook-content/2.0` 的教材课程使用
+  `clustered-graph/3.0` 薄图，point 只保存
+  `id/title/origin/clusterIds/role/prerequisites/related`，正文留在 canonical point 文件并由发布器读取。
 - `prerequisites` 默认透传；每条增删必须与审核记录一一对应。
 - 新增 `clusters / clusterIds / role / related`，不生成布局。
+- `related` 必须双向声明，只表达横向联系；同一对点只要任一方向存在 prerequisite，就不得再写 related。
 - 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
 - 教材模式不执行自由聚类：章节一一成为 cluster，点的首个 `clusterIds` 固定为所属章节。完成上述装配检查后再调用 `validate-textbook-graph`。
-- G6 的关系工作是对内容完成后的 `prerequisites`、`related`、`role` 和次要簇做补充、审计和去环；它不能把语义关系反向当作教材树，也不能用聚类结果覆盖 PDF 章节结构。
+- G6 的关系工作是对内容完成后的 `prerequisites`、`related`、`role` 和次要簇做补充、审计和去环；它不能把语义关系反向当作教材树，也不能用聚类结果覆盖已冻结的教材章节结构。
+- 图顶层使用 `sequences.cluster/point[{fromId,toId}]` 保存显式阅读顺序。章节相邻顺序写入
+  cluster edges，同一章节内的点顺序写入 point edges；该关系独立于 prerequisites/related，
+  必须无悬空引用、重复、自环和有向环。
 
 ### G6_GRAPH_REVIEW
 
@@ -137,6 +172,10 @@ pipeline/<course-id>/
 
 ## 固定校验 action
 
+- `sync-textbook-manifest`：只在绑定 material/full.md 的教材 G1 调用；校验输入后确定性生成
+  v2 manifest、教材来源和逐点 source spans，避免模型手写大 JSON。
+- `validate-point-drafts`：G3 每个详情任务返回后校验所有已开始的 point/request，跳过尚未开始的 `{}` 占位；不能替代最终 `validate-points`。
+- `validate-animation-drafts`：G4 每个动画任务返回后校验已开始的 TSX/CSS，跳过成对 `{}` 占位并拒绝单侧完成；不能替代注册构建后的 `validate-all`。
 - `check-content-all`：只校验内容包。
 - `check-pipeline-json`：检查图谱交接并返回机器结果。
 - `check-pipeline-all` / `check-pipeline-all-json`：执行最终全量门禁。

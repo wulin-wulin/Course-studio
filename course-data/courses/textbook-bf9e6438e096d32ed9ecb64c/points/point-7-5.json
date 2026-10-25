@@ -1,0 +1,526 @@
+{
+  "id": "point-7-5",
+  "title": "多频率序列的重采样与时间对齐",
+  "shortSummary": "把不同采样率的序列对齐到统一时间网格，处理聚合口径、窗口边界和时间错位问题。",
+  "keyTerms": [
+    "重采样",
+    "时间对齐",
+    "多频率",
+    "聚合口径",
+    "窗口边界",
+    "插值"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-7-3",
+    "point-7-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的网格定义、聚合口径、质量码优先级与边界条件，按“定网格—选算子—传质量码—连接验证—故障回退”的操作顺序重排讲解，补充算子对照表、SQL 走查与可执行检查表。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "choose-operator",
+          "text": "给定多条异频序列与一个下游指标，能选定目标网格的锚点、步长与每类量的算子，并说明这套口径为什么能回答该指标。"
+        },
+        {
+          "id": "diagnose-alignment",
+          "text": "能根据网格行数、每桶样本数、派生质量码与对齐状态定位网格错位、算子错配或质量码丢失，并给出可执行的修复与复验动作。"
+        }
+      ],
+      "misconceptions": [
+        "把不同频率的表直接按时间字段连接，就认为完成了对齐；缺少目标网格、聚合口径与质量码传播，结果既不可比也不可复现。",
+        "对门磁等状态量取区间均值；0.5 既不是开也不是关，状态量只能用前向填充或多数表决。",
+        "把插值生成的点当作原始观测并沿用 GOOD 质量码，会让下游把虚构精度当成真实采样。"
+      ],
+      "modules": [
+        {
+          "id": "grid-and-frequency",
+          "title": "频率差异与目标网格",
+          "role": "problem-framing",
+          "description": "先明确“同一时刻”指哪个区间，再决定锚点、步长与左闭右开边界。",
+          "outcomeRefs": [
+            "choose-operator"
+          ],
+          "order": 0
+        },
+        {
+          "id": "downsampling",
+          "title": "降采样与聚合口径",
+          "role": "mechanism",
+          "description": "按物理语义选择均值、最大值或末值，并规定质量码继承规则。",
+          "outcomeRefs": [
+            "choose-operator"
+          ],
+          "order": 1
+        },
+        {
+          "id": "upsampling-state",
+          "title": "上采样与状态量规则化",
+          "role": "mechanism",
+          "description": "区分连续量的插值与状态量的前向填充，明确状态未知区间的边界。",
+          "outcomeRefs": [
+            "choose-operator",
+            "diagnose-alignment"
+          ],
+          "order": 2
+        },
+        {
+          "id": "sql-alignment",
+          "title": "多表对齐实现与边界验证",
+          "role": "worked-example",
+          "description": "用目标网格作左表完成连接，并用行数与样本数验证对齐结果。",
+          "outcomeRefs": [
+            "choose-operator",
+            "diagnose-alignment"
+          ],
+          "order": 3
+        },
+        {
+          "id": "failure-diagnosis",
+          "title": "故障排查与可重复性",
+          "role": "troubleshooting",
+          "description": "按网格错位、算子错配、质量码丢失三类症状定位问题并回退。",
+          "outcomeRefs": [
+            "diagnose-alignment"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "summary",
+          "description": "用检查题验证口径判断，并把决策固化为版本化配置。",
+          "outcomeRefs": [
+            "choose-operator",
+            "diagnose-alignment"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "choose-operator",
+          "diagnose-alignment"
+        ],
+        "method": "完成本点的口径判断题，并针对给定的一小时窗口写出网格设置、各量算子与两项验证检查。",
+        "successCriteria": [
+          "能说明目标网格锚点与步长的选择依据，并写出左闭右开区间",
+          "能为连续量与状态量分别给出正确算子，并指出插值点的质量码处理方式",
+          "能用行数与每桶样本数判断对齐结果是否可信，并说明异常时的排查方向"
+        ],
+        "nextPointId": "point-7-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-grid-scope",
+        "moduleId": "grid-and-frequency",
+        "depth": "core",
+        "kind": "definition",
+        "title": "本节要解决的问题",
+        "markdown": "教材把**多频率序列的重采样与时间对齐**单列为一节。问题背景是：工业现场的温湿度、压缩机电流、门磁等物理量各自按不同节奏产生观测，一旦要计算联合指标，或向统一时间轴的可视化面板供数，就必须先把它们映射到同一套时间网格上。\n\n这一步回答的不是“怎么把两张表拼起来”，而是“同一时刻指哪个区间、用哪种口径代表这个区间”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000255"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "多频率序列的重采样与时间对齐"
+              ],
+              "lineStart": 4634,
+              "lineEnd": 4635,
+              "assetRefs": [],
+              "excerptSha256": "368bdad00728d04cb3b9be117b3bdbee8ad597a5c69a4289d01cd71bce7eba6c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-frequency-gap",
+        "moduleId": "grid-and-frequency",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "频率差异与目标网格的定义",
+        "markdown": "澄湾冷链示范仓的三条序列频率并不相同：温湿度 30 s 采样，压缩机电流 5 s 采样，门磁只在状态翻转与 60 s 心跳时上报。频率不同意味着“同一时刻”没有天然定义，重采样（resampling）就是把这些不规则或异频序列映射到**规则目标网格**（target grid）。\n\n教材把该过程拆成三类决策：\n\n1. 目标网格的锚点 $t_0$ 与步长 $\\Delta t$；\n2. 聚合或插值算子的选择；\n3. 对齐后质量码的传播规则。\n\n目标网格用左闭右开区间描述：给定 UTC 锚点 $t_0$、步长 $\\Delta t$ 与区间数 $N$，\n\n$$G_k = [t_0 + k\\Delta t,\\; t_0 + (k+1)\\Delta t),\\quad k = 0,1,\\dots,N-1$$\n\n每个区间对应一个期望输出行。$\\Delta t = 30\\,\\text{s}$ 时 1 小时窗口期望 $\\lfloor 3600/30 \\rfloor = 120$ 个点，与原始采样一致；若 $\\Delta t = 5\\,\\text{s}$ 则期望 720 点，其中 600 点由插值生成。\n\n需要同时警惕两个方向的失真：把高频电流直接降采样为低频均值，可能抹平压缩机启动尖峰；把低频温度线性上采样到 5 s 网格，则在两次真实采样之间制造 29 个虚构点，其不确定度必须显式标记。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000256"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "多频率序列的重采样与时间对齐",
+                "重采样的核心问题与频率差异"
+              ],
+              "lineStart": 4636,
+              "lineEnd": 4645,
+              "assetRefs": [],
+              "excerptSha256": "a8ede13a37d0f51cafad4ac74dd5ead15e16bc0547e409fbca0c5a4725bacf63"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-align",
+        "moduleId": "grid-and-frequency",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "先问清三个问题，再动手对齐",
+        "markdown": "先别急着选算子。对齐的目标是让下游问题可回答，因此建议把“同一时刻”还原为三个必须先写清的问题：\n\n- **给谁用**：联合负载–温度指标看平均负载，保护逻辑看瞬时峰值，两者口径不同；\n- **多细**：目标步长由业务分辨率决定，而不是由最高频序列决定；\n- **异常怎么传**：某条原始记录带异常码时，聚合后的这个区间还能不能被当作正常值使用。\n\n这三项分别对应网格、算子与质量码。任缺一项，就会出现“数值对得上、结论不可用”的对齐结果。后面的操作流程都围绕这三项展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-grid-scope",
+            "tb-frequency-gap"
+          ]
+        }
+      },
+      {
+        "id": "tb-downsample",
+        "moduleId": "downsampling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "降采样：从高频到低频的聚合",
+        "markdown": "把 5 s 的压缩机电流对齐到 30 s 温度网格属于**降采样**（downsampling）。教材强调聚合算子必须匹配物理语义：30 s 均值反映平均负载，最大值捕捉启动冲击，末值适合与瞬时保护阈值比对。\n\n设区间 $G_k$ 内落入的原始记录索引集合为 $\\mathcal{I}_k = \\{i \\mid \\text{event\\_time}_i \\in G_k\\}$，均值聚合为\n\n$$\\bar{I}_k = \\frac{1}{|\\mathcal{I}_k|}\\sum_{i\\in\\mathcal{I}_k} I_i,\\quad |\\mathcal{I}_k|\\geq 1$$\n\n若 $|\\mathcal{I}_k| = 0$，该区间输出 `value = null`、`quality_code = MISSING`，而不是补一个 0。质量码按优先级继承：聚合结果为 `GOOD` 当且仅当区间内全部原始记录均为 `GOOD`；只要出现异常，就继承最高优先级的异常码，优先级为 `OUT_OF_RANGE` > `CLOCK_SUSPECT` > `LATE` > `GOOD`。\n\n降采样的隐蔽风险是**区间边界偏移**：若网格锚点与设备时钟相差 15 s，同一物理事件会被拆到相邻两个区间，均值随之失真。工程检查方法是对连续 24 小时数据统计每个区间的原始点数方差——5 s 采样落入 30 s 区间本应恒为 6 点，方差接近 0；方差显著变大就要核查锚点是否整点对齐、是否存在时钟漂移造成的边界抖动。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000257"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "多频率序列的重采样与时间对齐",
+                "降采样：从高频到低频的聚合策略"
+              ],
+              "lineStart": 4646,
+              "lineEnd": 4655,
+              "assetRefs": [],
+              "excerptSha256": "a7969ea8c8f4ba420cc8deda8311cf66be62512f98f321b45b090958593446a1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-operator-fit",
+        "moduleId": "downsampling",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "同一段数据，三种算子回答三个问题",
+        "markdown": "同一段 30 s 数据，选哪个算子取决于下游要回答的问题，而不是哪个算子“更准”：\n\n| 算子 | 适合回答 | 典型误用 |\n|:---|:---|:---|\n| 均值 | 区间内的平均负载、能耗估算 | 用均值判断是否发生过启动冲击 |\n| 最大值 | 启动电流、峰值是否越限 | 用最大值代表稳态工况 |\n| 末值 | 与瞬时保护阈值比对 | 用末值代表区间平均 |\n\n质量码要跟着数值一起走。设想某个 30 s 桶里落入 6 条 5 s 电流记录，其中 1 条为 `OUT_OF_RANGE`：均值仍可计算，但该桶的派生质量码必须是 `OUT_OF_RANGE`，下游据此决定标注、隔离还是拒绝参与统计。若先把异常记录过滤再求均值并标 `GOOD`，异常就被静默洗掉了。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-downsample"
+          ]
+        }
+      },
+      {
+        "id": "tb-upsample",
+        "moduleId": "upsampling-state",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "上采样与不规则序列的规则化",
+        "markdown": "把 30 s 的温度对齐到 5 s 电流网格属于**上采样**（upsampling）。线性插值在两次真实采样之间生成直线过渡，但冷库温度受压缩机启停与开门扰动，实际动态并非线性，因此插值点的不确定度高于原始采样点。教材给出的边界是：插值生成的非空值不得冒充原始 `GOOD`，只能标记为派生状态；只有对齐后的派生序列才允许插入 `MISSING` 占位行。\n\n门磁这类不规则序列更极端。设某小时内上报时刻为 $t_1 = 00{:}00{:}03$（开门）、$t_2 = 00{:}05{:}17$（关门），此后只有 60 s 心跳直到 $00{:}30{:}00$。对齐到 30 s 网格时要解决两个问题：心跳期间的 `door_state` 语义，以及长间隙中的状态保持。\n\n对状态量（stateful metric），前向填充（forward fill）是唯一物理可信的策略：在 $[t_j, t_{j+1})$ 内维持最近一次观测值。它的失效边界是**状态未知区间**——若最后一次上报是 00:30:00 的心跳，而网格延伸到 00:31:00，则 00:30:00 之后的区间必须输出 `MISSING`，不得无限前向填充。心跳携带的是当前实际状态而非“无变化”占位，且心跳与状态变化都会递增 `sequence_no`，因此只能靠 `sequence_no` 缺口识别漏报，不能把心跳推断成“状态未变”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000258"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "多频率序列的重采样与时间对齐",
+                "上采样与不规则序列的规则化"
+              ],
+              "lineStart": 4656,
+              "lineEnd": 4663,
+              "assetRefs": [],
+              "excerptSha256": "b0850b9df1b506479ee01ef6c109440b62dd3e9b35b96250f70a3ea677b6345a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fill-rules",
+        "moduleId": "upsampling-state",
+        "depth": "support",
+        "kind": "table",
+        "title": "按量类型选择对齐方式的速查表",
+        "markdown": "把规则压缩成一张按量类型查的表，可以避免在流水线里对每个点位临时拍脑袋：\n\n| 量类型 | 对齐方式 | 质量码 | 边界条件 |\n|:---|:---|:---|:---|\n| 连续量（温度） | 线性插值或取末值 | 插值点标派生，不写原始 `GOOD` | 不越过首末真实采样向外推 |\n| 状态量（门磁） | 前向填充 | 沿用最近一次观测的质量码 | 超过最后一次观测即输出 `MISSING` |\n| 无任何观测的区间 | 占位行 | `MISSING` | 占位行只能出现在派生序列 |\n\n判断口诀：能插值的是“两点之间可以合理过渡”的连续量；状态量在两次观测之间只能假设“保持”，一旦假设失去依据，就必须承认缺失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-upsample"
+          ]
+        }
+      },
+      {
+        "id": "tb-sql-alignment",
+        "moduleId": "sql-alignment",
+        "depth": "core",
+        "kind": "code",
+        "title": "目标网格与多表对齐的参考实现",
+        "markdown": "教材给出 TimescaleDB 的参考写法：先用 `generate_series` 显式造出目标网格，再分别聚合电流、取温度末值，最后以网格为左表连接。核心结构可以压缩成下面这段（省略了部分列与过滤条件）：\n\n```sql\nWITH target_grid AS (\n    SELECT generate_series(\n        '2024-01-15 00:00:00'::timestamptz,\n        '2024-01-15 01:00:00'::timestamptz - interval '30 seconds',\n        interval '30 seconds'\n    ) AS bucket_start\n),\ncurrent_agg AS (\n    SELECT time_bucket(interval '30 seconds', event_time) AS bucket_start,\n           AVG(value) AS avg_current, MAX(value) AS max_current,\n           COUNT(*) AS sample_count,\n           CASE\n               WHEN BOOL_OR(quality_code = 'OUT_OF_RANGE') THEN 'OUT_OF_RANGE'\n               WHEN BOOL_OR(quality_code = 'CLOCK_SUSPECT') THEN 'CLOCK_SUSPECT'\n               WHEN BOOL_OR(quality_code = 'LATE') THEN 'LATE'\n               ELSE 'GOOD'\n           END AS derived_qc\n    FROM coldchain.raw_telemetry\n    WHERE device_id = 'Z1-COMP-01' AND metric = 'compressor_current'\n      AND event_time >= '2024-01-15 00:00:00'::timestamptz\n      AND event_time <  '2024-01-15 01:00:00'::timestamptz\n    GROUP BY bucket_start\n),\ntemp_last AS (\n    SELECT DISTINCT ON (time_bucket(interval '30 seconds', event_time))\n           time_bucket(interval '30 seconds', event_time) AS bucket_start,\n           value AS temp_value, quality_code AS temp_qc\n    FROM coldchain.raw_telemetry\n    WHERE device_id = 'Z1-TEMP-01' AND metric = 'temperature'\n    ORDER BY bucket_start, event_time DESC\n)\nSELECT g.bucket_start, t.temp_value, c.avg_current, c.sample_count,\n       CASE\n           WHEN t.temp_value IS NULL THEN 'TEMP_MISSING'\n           WHEN c.avg_current IS NULL THEN 'CURRENT_MISSING'\n           ELSE 'JOINT_OK'\n       END AS alignment_status\nFROM target_grid g\nLEFT JOIN temp_last t ON g.bucket_start = t.bucket_start\nLEFT JOIN current_agg c ON g.bucket_start = c.bucket_start\nORDER BY g.bucket_start;\n```\n\n教材同时给出边界验证要点：1 小时窗口的 `target_grid` 应产生 120 行；`current_agg` 的 `sample_count` 应恒为 6，出现 5 或 7 要检查时钟漂移或重复投递；`temp_last` 用 `DISTINCT ON` 取区间末值，若同一区间出现多条温度记录，说明存在 `DUPLICATE` 或时钟回退，需要人工复核。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000259"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "多频率序列的重采样与时间对齐",
+                "多表对齐的 SQL 实现与边界验证"
+              ],
+              "lineStart": 4664,
+              "lineEnd": 4727,
+              "assetRefs": [],
+              "excerptSha256": "432aa1ecd8b55b885a98fc1ce052034d7547ac8c155473b36d6f020bb1662d13"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sql-walkthrough",
+        "moduleId": "sql-alignment",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "按执行顺序走查这段 SQL",
+        "markdown": "按执行顺序走一遍，可以看出每一层各自在防什么错：\n\n1. **造网格**：`generate_series` 先固定 120 个桶起点，保证“没有数据的时间段也有行”，否则缺失会被整体吞掉；\n2. **桶内聚合**：`current_agg` 在同一个 `time_bucket` 里同时算均值和最大值，并用 `BOOL_OR` 汇总质量码——先过滤异常再聚合会丢掉单条异常的证据；\n3. **取末值**：`temp_last` 用 `DISTINCT ON` 每桶只留一条，符合温度 30 s 固定周期，也顺手暴露重复投递；\n4. **左连接**：以 `target_grid` 为左表，缺测才会显式变成 `NULL`；反过来以原始表为左表，整段缺失会让行直接消失；\n5. **对齐状态**：`alignment_status` 区分 `TEMP_MISSING`、`CURRENT_MISSING` 与 `JOINT_OK`，让下游知道这一行能不能参与联合指标。\n\n注意 `sample_count` 在这里不是展示字段，而是诊断字段：它偏离 6 时，问题通常不在聚合，而在时间边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sql-alignment"
+          ]
+        }
+      },
+      {
+        "id": "tb-failure-modes",
+        "moduleId": "failure-diagnosis",
+        "depth": "core",
+        "kind": "warning",
+        "title": "常见故障与可重复性保障",
+        "markdown": "多频率对齐有三类典型故障，教材要求逐项排查：\n\n- **网格错位**：目标 `bucket_start` 与设备整点不一致。例如误用 `date_trunc('minute', event_time)` 而不是 `time_bucket`，00:00:15 的采样可能被划进 00:00:00 或 00:01:00 区间，跨设备可比性随之破坏。检查方法是固定设备在已知时刻注入测试脉冲，验证输出区间的归属。\n- **算子错配**：对门磁状态量取均值（0.5 既非开也非关），或对温度做末值聚合后声称它代表区间平均。状态量必须用前向填充或多数表决，连续量则按下游用途选择均值、积分或极值。\n- **质量码丢失**：派生序列的异常码在连接或写出环节被覆盖，下游把带病数据当正常值使用。\n\n可重复性方面，教材要求同一原始数据在任意时间重跑都输出比特级一致的结果：目标网格锚点 $t_0$ 写入配置表而不是动态计算；聚合算子与质量码优先级编码为版本化规则；`ingest_time` 不参与对齐逻辑，避免 late arrival 改变历史网格内容；流水线版本号作为派生表元数据持久保存，并与原始事实表分离，不覆盖 `raw_telemetry`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000260"
+              ],
+              "headingPath": [
+                "清洗、重采样与插值",
+                "多频率序列的重采样与时间对齐",
+                "常见故障与可重复性保障"
+              ],
+              "lineStart": 4728,
+              "lineEnd": 4735,
+              "assetRefs": [],
+              "excerptSha256": "cb9332c422834f720794ea56b7c5ff41feb5a1545b9ca044f02f5992ae300b0c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-alignment-checklist",
+        "moduleId": "failure-diagnosis",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "多频率对齐检查表",
+        "markdown": "把上述规则落成可执行的对齐流程，建议按下面的检查表推进，每一步失败都有明确的回退方向。\n\n**前置条件**\n\n- 已确定目标网格锚点 $t_0$（UTC）与步长 $\\Delta t$，并写入配置表；\n- 已按量类型登记算子（均值 / 最大值 / 末值 / 前向填充）；\n- 已确认质量码优先级与派生码写法，版本号可追溯。\n\n**步骤与分支**\n\n1. 生成网格并核对行数：1 小时 30 s 网格应为 120 行；行数不符先查区间是否左闭右开。\n2. 检查每桶原始点数量：电流应为 6；出现 5 或 7，转去核查时钟漂移与重复投递。\n3. 检查聚合口径：连续量是否按用途选算子，状态量是否误用了均值；有疑问回到算子表重选。\n4. 传播质量码：任一原始记录异常即提升为派生异常码；若全为 `GOOD` 但包含插值点，说明派生标记缺失。\n5. 以网格为左表完成连接，核对 `alignment_status` 分布；若 `*_MISSING` 异常集中，检查是否越过最后一次观测做了前向填充。\n6. 记录流水线版本号并留存本次配置快照，供回灌比对。\n\n**错误恢复**\n\n配置回退到上一版本即可重跑；边界归属争议用测试脉冲定位；重跑后与上一次输出逐行比对，差异必须能由配置变更解释。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sql-alignment",
+            "tb-failure-modes"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "三句话收束与下一点衔接",
+        "markdown": "这一点的结论可以压成三句话：\n\n1. 先定网格（锚点、步长、左闭右开），再谈连接；网格决定了“同一时刻”的含义。\n2. 算子跟着物理语义与下游用途走：连续量可均值或取极值，状态量只能前向填充或多数表决，插值点永远标派生。\n3. 质量码与版本必须随数值一起传播，否则对齐结果看起来整齐，却无法复现、无法追责。\n\n把这些决策从一次性脚本提升为配置与版本化规则，正是下一点“可重复清洗流水线与边界测试”要解决的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-failure-modes",
+            "model-alignment-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-operator-and-fill",
+        "type": "formative-check",
+        "anchorBlockId": "model-alignment-checklist",
+        "moduleId": "failure-diagnosis",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-operator",
+          "diagnose-alignment"
+        ],
+        "learningPurpose": "检查学习者能否把网格、算子与质量码三项决策同时应用到连续量和状态量混合的对齐场景，而不是只记住某一种填充方式。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-failure-modes",
+            "model-alignment-checklist"
+          ]
+        },
+        "config": {
+          "prompt": "把 30 s 温度、5 s 电流与门磁心跳对齐到 5 s 网格，下列做法组合正确的是？",
+          "options": [
+            "三类量统一使用线性插值，插值点沿用原始记录的 GOOD 质量码",
+            "电流保留原始 5 s 记录，温度线性插值并标派生质量码，门磁前向填充且不超过最后一次观测",
+            "三类量统一使用前向填充，这样温度与门磁都不会出现 MISSING",
+            "门磁取 5 s 均值，温度取末值代表区间平均，电流取最大值"
+          ],
+          "answerIndex": 1,
+          "explanation": "连续量在两点之间可以插值，但插值点必须标派生而非原始 GOOD；状态量在两次观测之间只能前向填充，一旦越过最后一次观测就必须输出 MISSING；高频电流本身已落在 5 s 网格上，无需插值。对门磁取均值会得到既非开也非关的 0.5。",
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别写出温度、电流、门磁三种量对齐到 5 s 网格时的算子、质量码处理方式和一条边界条件，并说明门磁为什么不能取均值。"
+        }
+      }
+    ]
+  },
+  "subtitle": "清洗、重采样与插值",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000255"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "多频率序列的重采样与时间对齐"
+      ],
+      "lineStart": 4634,
+      "lineEnd": 4635,
+      "assetRefs": [],
+      "excerptSha256": "368bdad00728d04cb3b9be117b3bdbee8ad597a5c69a4289d01cd71bce7eba6c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000256"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "多频率序列的重采样与时间对齐",
+        "重采样的核心问题与频率差异"
+      ],
+      "lineStart": 4636,
+      "lineEnd": 4645,
+      "assetRefs": [],
+      "excerptSha256": "a8ede13a37d0f51cafad4ac74dd5ead15e16bc0547e409fbca0c5a4725bacf63"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000257"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "多频率序列的重采样与时间对齐",
+        "降采样：从高频到低频的聚合策略"
+      ],
+      "lineStart": 4646,
+      "lineEnd": 4655,
+      "assetRefs": [],
+      "excerptSha256": "a7969ea8c8f4ba420cc8deda8311cf66be62512f98f321b45b090958593446a1"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000258"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "多频率序列的重采样与时间对齐",
+        "上采样与不规则序列的规则化"
+      ],
+      "lineStart": 4656,
+      "lineEnd": 4663,
+      "assetRefs": [],
+      "excerptSha256": "b0850b9df1b506479ee01ef6c109440b62dd3e9b35b96250f70a3ea677b6345a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000259"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "多频率序列的重采样与时间对齐",
+        "多表对齐的 SQL 实现与边界验证"
+      ],
+      "lineStart": 4664,
+      "lineEnd": 4727,
+      "assetRefs": [],
+      "excerptSha256": "432aa1ecd8b55b885a98fc1ce052034d7547ac8c155473b36d6f020bb1662d13"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000260"
+      ],
+      "headingPath": [
+        "清洗、重采样与插值",
+        "多频率序列的重采样与时间对齐",
+        "常见故障与可重复性保障"
+      ],
+      "lineStart": 4728,
+      "lineEnd": 4735,
+      "assetRefs": [],
+      "excerptSha256": "cb9332c422834f720794ea56b7c5ff41feb5a1545b9ca044f02f5992ae300b0c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1559,
+    1643
+  ],
+  "scale": 0.93
+}

@@ -14,8 +14,9 @@ before(async () => {
         'export * from "./src/features/reviews/types.ts";',
         'export * from "./src/features/reviews/resumeDelivery.ts";',
         'export * from "./src/features/courseCreation/setup.ts";',
+        'export { buildCourseDirectory, buildCourseReadingOrder, buildSceneInputs, normalizeForestIndex } from "./src/course/forest/forestAdapter.ts";',
         'export * from "./src/utils/latestRequest.ts";',
-        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldPauseGenerationAfterAgentDone, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
+        'export { isPersistableLiveGenerationConversationId, normalizePersistedRun, shouldCompleteCourseCreationAfterAgentDone, shouldPauseGenerationAfterAgentDone, shouldRestoreCourseCreationWorkflow, useCourseGenerationStore } from "./src/course/generation/generationStore.ts";',
       ].join("\n"),
       resolveDir: frontendRoot,
       sourcefile: "review-contract-entry.ts",
@@ -110,6 +111,157 @@ test("knowledge graph parser preserves multi-cluster, prerequisites, and related
   assert.deepEqual(review.points[1].prerequisites, ["a"]);
   assert.deepEqual(review.points[0].related, ["c"]);
   assert.equal(review.clusters.length, 2);
+});
+
+test("course index parser preserves canonical cluster and point sequence edges", () => {
+  const index = contracts.normalizeForestIndex({
+    clusters: [
+      { id: "cluster-a", title: "A" },
+      { id: "cluster-b", title: "B" },
+    ],
+    points: [
+      { id: "point-a", title: "A1", clusterId: "cluster-a" },
+      { id: "point-b", title: "B1", clusterId: "cluster-b" },
+    ],
+    sequences: {
+      cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
+      point: [{ fromId: "point-a", toId: "point-b" }],
+    },
+  });
+
+  assert.deepEqual(index.sequences, {
+    cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
+    point: [{ fromId: "point-a", toId: "point-b" }],
+  });
+});
+
+test("course reader follows explicit chapter and point order across chapter boundaries", () => {
+  const index = {
+    clusters: [
+      { id: "chapter-b", title: "第二章" },
+      { id: "chapter-a", title: "第一章" },
+    ],
+    points: [
+      { id: "b-2", title: "B2", clusterId: "chapter-b" },
+      { id: "a-2", title: "A2", clusterId: "chapter-a" },
+      { id: "b-1", title: "B1", clusterId: "chapter-b" },
+      { id: "a-1", title: "A1", clusterId: "chapter-a" },
+    ],
+    sequences: {
+      cluster: [{ fromId: "chapter-a", toId: "chapter-b" }],
+      point: [
+        { fromId: "a-1", toId: "a-2" },
+        { fromId: "b-1", toId: "b-2" },
+      ],
+    },
+  };
+
+  assert.deepEqual(
+    contracts.buildCourseReadingOrder(index).map((point) => point.id),
+    ["a-1", "a-2", "b-1", "b-2"],
+  );
+  assert.deepEqual(
+    contracts.buildCourseDirectory(index).map((group) => ({
+      cluster: group.cluster.id,
+      points: group.points.map((point) => point.id),
+    })),
+    [
+      { cluster: "chapter-a", points: ["a-1", "a-2"] },
+      { cluster: "chapter-b", points: ["b-1", "b-2"] },
+    ],
+  );
+});
+
+test("course reader keeps legacy source order and does not drop cyclic sequence items", () => {
+  const legacy = {
+    clusters: [{ id: "chapter", title: "章节" }],
+    points: [
+      { id: "one", title: "一", clusterId: "chapter" },
+      { id: "two", title: "二", clusterId: "chapter" },
+    ],
+  };
+  assert.deepEqual(
+    contracts.buildCourseReadingOrder(legacy).map((point) => point.id),
+    ["one", "two"],
+  );
+
+  const cyclic = {
+    ...legacy,
+    sequences: {
+      cluster: [],
+      point: [
+        { fromId: "one", toId: "two" },
+        { fromId: "two", toId: "one" },
+      ],
+    },
+  };
+  assert.deepEqual(
+    contracts.buildCourseReadingOrder(cyclic).map((point) => point.id),
+    ["one", "two"],
+  );
+});
+
+test("forest scene adapter preserves textbook point origins and legacy absence", () => {
+  const scene = contracts.buildSceneInputs({
+    clusters: [{ id: "cluster-a", title: "A", accent: "#2f7567" }],
+    points: [
+      {
+        id: "textbook-point",
+        title: "教材点",
+        clusterId: "cluster-a",
+        origin: "textbook",
+        pos: [100, 100],
+      },
+      {
+        id: "extension-point",
+        title: "扩展点",
+        clusterId: "cluster-a",
+        origin: "llm-extension",
+        pos: [200, 100],
+      },
+      {
+        id: "legacy-point",
+        title: "旧课程点",
+        clusterId: "cluster-a",
+        pos: [300, 100],
+      },
+    ],
+  });
+
+  assert.equal(scene.data.kpById["textbook-point"].origin, "textbook");
+  assert.equal(scene.data.kpById["extension-point"].origin, "llm-extension");
+  assert.equal(scene.data.kpById["legacy-point"].origin, undefined);
+});
+
+test("course index parser keeps old courses readable and filters malformed sequence edges", () => {
+  const legacy = contracts.normalizeForestIndex({
+    clusters: [{ id: "cluster-a", title: "A" }],
+    points: [{ id: "point-a", title: "A1", clusterId: "cluster-a" }],
+  });
+  assert.equal(legacy.sequences, undefined);
+
+  const compatible = contracts.normalizeForestIndex({
+    clusters: [
+      { id: "cluster-a", title: "A" },
+      { id: "cluster-b", title: "B" },
+    ],
+    points: [
+      { id: "point-a", title: "A1", clusterId: "cluster-a" },
+      { id: "point-b", title: "B1", clusterId: "cluster-b" },
+    ],
+    sequence: {
+      cluster_ids: ["cluster-a", "cluster-b"],
+      point_edges: [
+        { from_id: "point-a", to_id: "point-b" },
+        { from_id: "point-a", to_id: "missing" },
+        { from_id: "point-a", to_id: "point-a" },
+      ],
+    },
+  });
+  assert.deepEqual(compatible.sequences, {
+    cluster: [{ fromId: "cluster-a", toId: "cluster-b" }],
+    point: [{ fromId: "point-a", toId: "point-b" }],
+  });
 });
 
 test("knowledge point parser preserves a textbook chapter tree and structure hash", () => {
@@ -241,6 +393,16 @@ test("resume outbox survives remount and removes only acknowledged work", () => 
   );
   assert.equal(
     contracts.reviewResumeDeliveryOutcome(item, {
+      type: "agent_question",
+      payload: {
+        conversation_id: "conversation-1",
+        request_id: "question-g7",
+      },
+    }),
+    "consumed",
+  );
+  assert.equal(
+    contracts.reviewResumeDeliveryOutcome(item, {
       type: "agent_review_resolved",
       payload: {
         conversation_id: "conversation-1",
@@ -350,7 +512,7 @@ test("course creation starts with the confirmed topic in the first message", () 
   assert.equal(request.displayContent, "创建课程：软件工程");
 });
 
-test("PDF course creation preserves the document identity and structure-first instruction", () => {
+test("textbook course creation preserves identity and requires grounded content", () => {
   assert.equal(
     contracts.preparePdfCourseCreationRequest({ id: "", filename: "教材.pdf" }),
     null,
@@ -363,7 +525,124 @@ test("PDF course creation preserves the document identity and structure-first in
   assert.equal(request.filename, "数据结构教材.pdf");
   assert.equal(request.displayContent, "根据教材创建课程：数据结构教材.pdf");
   assert.match(request.message, /章节 → 知识点/);
+  assert.match(request.message, /material\.json/);
+  assert.match(request.message, /full\.md/);
+  assert.match(request.message, /不得只根据标题编写内容/);
+  assert.match(request.message, /textbook-content\/2\.0/);
+  assert.match(request.message, /教材块记录 sourceSpans/);
+  assert.match(request.message, /模型补充块通过 basedOnBlockIds/);
+  assert.match(request.message, /顶层 sourceSpans\/modelEnriched 只在发布时由 blocks 派生/);
+  assert.match(request.message, /平衡重编/);
+  assert.match(request.message, /教材约束事实、定义、公式、适用条件和知识覆盖/);
+  assert.match(request.message, /重新安排讲解顺序/);
+  assert.match(request.message, /adaptationLevel 默认使用 balanced/);
+  assert.match(request.message, /learningDesign\.editorialPolicy 用于记录本知识点的教学重编原则/);
+  assert.match(request.message, /通常为 4 至 7 个/);
+  assert.match(request.message, /不要在正文重复顶部已经展示的完整学习目标列表/);
+  assert.match(request.message, /estimatedMinutes 需要计入正文、公式表格、互动和练习的总学习时间/);
+  assert.doesNotMatch(request.message, /不要求逐段还原教材正文/);
   assert.match(request.message, /不得重新聚类或改变已确认的章节归属/);
+});
+
+test("textbook upload accepts compatible PDF and Markdown file descriptors", () => {
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.PDF", type: "application/pdf" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.pdf", type: "" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.pdf", type: "application/x-pdf" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.MD", type: "text/plain" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.markdown", type: "text/markdown" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.md", type: "binary/octet-stream" }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.md", type: "application/pdf" }),
+    false,
+  );
+  assert.equal(
+    contracts.isSupportedTextbookFile({ name: "教材.txt", type: "text/plain" }),
+    false,
+  );
+  assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /application\/pdf/);
+  assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /text\/markdown/);
+  assert.match(contracts.TEXTBOOK_FILE_ACCEPT, /\.md/);
+});
+
+test("dedicated Markdown import rejects PDFs and accepts MinerU full.md", () => {
+  assert.equal(
+    contracts.isSupportedMarkdownTextbookFile({
+      name: "full.md",
+      type: "text/markdown; charset=utf-8",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedMarkdownTextbookFile({
+      name: "教材.markdown",
+      type: "application/octet-stream",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedMarkdownTextbookFile({
+      name: "教材.pdf",
+      type: "application/pdf",
+    }),
+    false,
+  );
+  assert.match(contracts.MARKDOWN_TEXTBOOK_FILE_ACCEPT, /text\/markdown/);
+  assert.match(contracts.MARKDOWN_TEXTBOOK_FILE_ACCEPT, /\.markdown/);
+});
+
+test("dedicated PDF creation rejects Markdown files", () => {
+  assert.equal(
+    contracts.isSupportedPdfTextbookFile({
+      name: "教材.pdf",
+      type: "application/pdf",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedPdfTextbookFile({
+      name: "教材.pdf",
+      type: "",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedPdfTextbookFile({
+      name: "full.md",
+      type: "text/markdown",
+    }),
+    false,
+  );
+  assert.match(contracts.PDF_TEXTBOOK_FILE_ACCEPT, /application\/pdf/);
+  assert.match(contracts.PDF_TEXTBOOK_FILE_ACCEPT, /\.pdf/);
+});
+
+test("dedicated Markdown creation describes the graph generation action", () => {
+  const request = contracts.prepareMarkdownCourseCreationRequest({
+    id: "document-markdown-1",
+    filename: "full.md",
+  });
+  assert.equal(request.documentId, "document-markdown-1");
+  assert.equal(request.displayContent, "根据 Markdown 生成知识图谱：full.md");
+  assert.match(request.message, /material\.json/);
+  assert.match(request.message, /full\.md/);
 });
 
 test("stale conversation reconciliation prefers the next pending review", () => {
@@ -377,6 +656,56 @@ test("stale conversation reconciliation prefers the next pending review", () => 
   });
   assert.equal(decision.kind, "pending-review");
   assert.equal(decision.review.id, "review-2");
+});
+
+test("a downstream native question consumes the stale review resume", () => {
+  const decision = contracts.reconcileReviewResume("review-1", {
+    pending_question: {
+      request_id: "question-g7",
+      conversation_id: "conversation-1",
+      questions: [
+        {
+          header: "G7_RELEASE_READY",
+          question: "确认发布？",
+          options: [{ label: "确认发布", description: "生成正式课程" }],
+        },
+      ],
+    },
+    pending_review: null,
+    pending_review_resume: pointer({
+      status: "resolved",
+      resume_pending: true,
+      resume_message: "continue pipeline",
+      display_content: "已确认知识图谱",
+    }),
+  });
+
+  assert.deepEqual(decision, { kind: "consumed" });
+});
+
+test("a restored G7 question clears a failed generation and waits for input", () => {
+  const conversationId = "generation-waiting-for-g7";
+  const store = contracts.useCourseGenerationStore;
+
+  store.getState().startLive(conversationId);
+  store.getState().markLiveError(conversationId, "stale duplicate resume error");
+  store.getState().markAwaitingInput(conversationId, {
+    gate: "G7_RELEASE_READY",
+    label: "等待发布确认",
+    detail: "请在右侧选择是否发布。",
+  });
+
+  const run = store.getState().liveRuns[conversationId];
+  assert.equal(run.status, "awaiting-input");
+  assert.equal(run.error, null);
+  assert.equal(run.gate, "G7_RELEASE_READY");
+  assert.equal(run.phaseLabel, "等待发布确认");
+  assert.equal(
+    contracts.normalizePersistedRun(run).status,
+    "awaiting-input",
+  );
+
+  store.getState().removeLive(conversationId);
 });
 
 test("stale resume reconciliation adopts the server canonical review", () => {
@@ -485,6 +814,77 @@ test("agent done preserves a live generation that is waiting for review", () => 
   );
   assert.equal(
     contracts.shouldPauseGenerationAfterAgentDone({}, undefined),
+    false,
+  );
+});
+
+test("course creation unlocks only after a successful published agent turn", () => {
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 0 },
+      { published: true, status: "completed" },
+    ),
+    true,
+  );
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 0, awaiting_review: true },
+      { published: false, status: "awaiting-input" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 1 },
+      { published: true, status: "completed" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldCompleteCourseCreationAfterAgentDone(
+      { return_code: 0 },
+      undefined,
+    ),
+    false,
+  );
+});
+
+test("reopening history keeps only unfinished course creation workflows locked", () => {
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: true, status: "completed" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: false, status: "completed" },
+    ),
+    false,
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: false, status: "awaiting-input" },
+    ),
+    true,
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "course-create",
+      { published: true, status: "completed" },
+      true,
+    ),
+    true,
+    "a pending review or native question takes precedence over persisted completion",
+  );
+  assert.equal(
+    contracts.shouldRestoreCourseCreationWorkflow(
+      "default",
+      { published: false, status: "running" },
+    ),
     false,
   );
 });

@@ -15,6 +15,40 @@ function boxDistance(left, right) {
   return Math.hypot(dx, dy);
 }
 
+function distance(first, second) {
+  return Math.hypot(first[0] - second[0], first[1] - second[1]);
+}
+
+function orientation(first, second, third) {
+  return (second[0] - first[0]) * (third[1] - first[1])
+    - (second[1] - first[1]) * (third[0] - first[0]);
+}
+
+function segmentsCross(firstStart, firstEnd, secondStart, secondEnd) {
+  return orientation(firstStart, firstEnd, secondStart) * orientation(firstStart, firstEnd, secondEnd) < 0
+    && orientation(secondStart, secondEnd, firstStart) * orientation(secondStart, secondEnd, firstEnd) < 0;
+}
+
+function assertPathDoesNotCross(pointsById, edges) {
+  for (let left = 0; left < edges.length; left += 1) {
+    for (let right = left + 1; right < edges.length; right += 1) {
+      const first = edges[left];
+      const second = edges[right];
+      if (new Set([first.fromId, first.toId, second.fromId, second.toId]).size < 4) continue;
+      assert.equal(
+        segmentsCross(
+          pointsById.get(first.fromId).pos,
+          pointsById.get(first.toId).pos,
+          pointsById.get(second.fromId).pos,
+          pointsById.get(second.toId).pos,
+        ),
+        false,
+        `${first.fromId} -> ${first.toId} 与 ${second.fromId} -> ${second.toId} 不应相交`,
+      );
+    }
+  }
+}
+
 test("课程簇分类升级后自动回退通用布局，不依赖旧版专用锚点", () => {
   const index = {
     schema_version: "1.0",
@@ -131,4 +165,131 @@ test("九簇课程采用均衡紧凑岛屿布局，并为不同大小的树保�
     rolesById,
     seed: "nine-cluster-course:alternate-seed",
   }));
+});
+
+test("知识簇按稳定课程顺序蛇形排布，换行后从相邻一侧继续", () => {
+  const sequenceIds = Array.from({ length: 8 }, (_, index) => `cluster-${index + 1}`);
+  const sourceIds = [
+    "cluster-4",
+    "cluster-1",
+    "cluster-7",
+    "cluster-2",
+    "cluster-8",
+    "cluster-3",
+    "cluster-6",
+    "cluster-5",
+  ];
+  const clusters = sourceIds.map((id, index) => ({ id, title: id, order: index }));
+  const points = sourceIds.map((clusterId) => ({
+    id: `point-${clusterId}`,
+    title: clusterId,
+    clusterId,
+    importance: 0.9,
+  }));
+  const clusterEdges = sequenceIds.slice(1).map((toId, index) => ({
+    fromId: sequenceIds[index],
+    toId,
+  }));
+  const options = {
+    courseId: "sequence-layout-test",
+    index: {
+      schema_version: "1.0",
+      courseId: "sequence-layout-test",
+      clusters,
+      points,
+      sequences: { cluster: clusterEdges, point: [] },
+    },
+    rolesById: Object.fromEntries(points.map((point) => [point.id, "trunk"])),
+    seed: "cluster-snake",
+  };
+
+  const first = createCourseMapLayout(options).index;
+  const second = createCourseMapLayout(options).index;
+  const byId = new Map(first.clusters.map((cluster) => [cluster.id, cluster]));
+  const label = (id) => byId.get(id).labelPos;
+
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.clusters.map((cluster) => cluster.id), sourceIds);
+  assert.ok(label("cluster-1")[0] < label("cluster-2")[0]);
+  assert.ok(label("cluster-2")[0] < label("cluster-3")[0]);
+  assert.ok(label("cluster-4")[0] > label("cluster-5")[0]);
+  assert.ok(label("cluster-5")[0] > label("cluster-6")[0]);
+  assert.ok(label("cluster-7")[0] < label("cluster-8")[0]);
+  assert.ok(label("cluster-1")[1] > label("cluster-4")[1]);
+  assert.ok(label("cluster-4")[1] > label("cluster-7")[1]);
+  assert.ok(label("cluster-4")[1] < label("cluster-3")[1]);
+  assert.ok(label("cluster-7")[1] < label("cluster-6")[1]);
+
+  const firstRowWidth = label("cluster-3")[0] - label("cluster-1")[0];
+  const secondRowWidth = label("cluster-4")[0] - label("cluster-6")[0];
+  assert.ok(
+    Math.abs(label("cluster-4")[0] - label("cluster-3")[0]) < firstRowWidth * 0.35,
+    "第一处换行应从右侧相邻槽位继续",
+  );
+  assert.ok(
+    Math.abs(label("cluster-7")[0] - label("cluster-6")[0]) < secondRowWidth * 0.35,
+    "第二处换行应从左侧相邻槽位继续",
+  );
+  assertPathDoesNotCross(
+    new Map(first.clusters.map((cluster) => [cluster.id, { pos: cluster.labelPos }])),
+    clusterEdges,
+  );
+});
+
+test("簇内知识点沿顺序边形成确定且不自交的自然路径", () => {
+  const sequenceIds = Array.from({ length: 8 }, (_, index) => `point-${index + 1}`);
+  const sourceIds = [
+    "extra-2",
+    "point-4",
+    "point-1",
+    "point-7",
+    "extra-1",
+    "point-2",
+    "point-8",
+    "point-3",
+    "point-6",
+    "point-5",
+  ];
+  const points = sourceIds.map((id) => ({
+    id,
+    title: id,
+    clusterId: "cluster-1",
+    importance: id === "point-1" || id === "point-2" ? 0.91 : 0.84,
+  }));
+  const pointEdges = sequenceIds.slice(1).map((toId, index) => ({
+    fromId: sequenceIds[index],
+    toId,
+  }));
+  const rolesById = Object.fromEntries(points.map((point) => [
+    point.id,
+    point.id === "point-1" || point.id === "point-2"
+      ? "trunk"
+      : point.id.startsWith("extra-") ? "leaf" : "branch",
+  ]));
+  const options = {
+    courseId: "point-sequence-layout-test",
+    index: {
+      schema_version: "1.0",
+      courseId: "point-sequence-layout-test",
+      clusters: [{ id: "cluster-1", title: "知识簇", order: 0 }],
+      points,
+      sequences: { cluster: [], point: pointEdges },
+    },
+    rolesById,
+    seed: "path-17",
+  };
+
+  const first = createCourseMapLayout(options).index;
+  const second = createCourseMapLayout(options).index;
+  const pointsById = new Map(first.points.map((point) => [point.id, point]));
+
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.points.map((point) => point.id), sourceIds);
+  assert.ok(sourceIds.every((id) => pointsById.has(id)), "无顺序边的知识点也必须稳定补位");
+  assertPathDoesNotCross(pointsById, pointEdges);
+
+  const pathLength = pointEdges.reduce((total, edge) => (
+    total + distance(pointsById.get(edge.fromId).pos, pointsById.get(edge.toId).pos)
+  ), 0);
+  assert.ok(pathLength < 2_200, `学习路径不应在簇内无谓折返: ${pathLength}`);
 });

@@ -1,0 +1,617 @@
+{
+  "id": "point-15-4",
+  "title": "质量、清洗与特征流水线实现",
+  "shortSummary": "把质量规则、清洗步骤与特征工程组成可重复流水线，并验证输出可追溯、可回归。",
+  "keyTerms": [
+    "质量规则",
+    "清洗",
+    "特征流水线",
+    "可追溯",
+    "可回归",
+    "工程实现"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-7-6",
+    "point-8-6",
+    "point-15-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-branches-and-checklist",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三层边界、序列校验、迟到判定、对齐与特征公式及其数值配置，按“前置条件—分步实现—分支与错误恢复—检查表”重排讲解顺序，补充实现约束、处置分支与回归步骤，不改变教材事实与适用条件。",
+      "estimatedMinutes": 28,
+      "outcomes": [
+        {
+          "id": "design-layering",
+          "text": "能按原始接入、质量评估、清洗特征三层划分职责，并说明派生修正为什么不能回写原始事实行。"
+        },
+        {
+          "id": "implement-verify",
+          "text": "能实现序列校验、迟到判定、对齐插值与特征计算的流水线，并用分层元数据与回归对比证明输出可追溯、可复现。"
+        }
+      ],
+      "misconceptions": [
+        "把清洗理解为修改原始记录，发现量程配置错误后直接更新历史行的质量码。",
+        "用 ingest_time 与 event_time 的固定差值判断迟到，忽略下游水位线与消费进度。",
+        "对门磁这类事件型序列套用固定频率期望点数公式，把心跳间隙误判为采样缺失。",
+        "为对齐时间网格把低频温度上采样到高频，制造出原始观测中不存在的细节。"
+      ],
+      "modules": [
+        {
+          "id": "preconditions-and-boundaries",
+          "title": "前置条件与三层职责边界",
+          "role": "preconditions",
+          "description": "先确定契约与只读约束，再进入实现步骤。",
+          "outcomeRefs": [
+            "design-layering"
+          ],
+          "order": 0
+        },
+        {
+          "id": "integrity-checks",
+          "title": "序列完整性校验与重复检测",
+          "role": "procedure",
+          "description": "按序列号连续性与时间单调性识别缺口、重复与时钟可疑。",
+          "outcomeRefs": [
+            "design-layering",
+            "implement-verify"
+          ],
+          "order": 1
+        },
+        {
+          "id": "late-and-watermark",
+          "title": "迟到判定与水位线",
+          "role": "branching-rule",
+          "description": "用允许迟到边界与水位线判定 LATE，并分流处理。",
+          "outcomeRefs": [
+            "design-layering",
+            "implement-verify"
+          ],
+          "order": 2
+        },
+        {
+          "id": "align-interpolate-encode",
+          "title": "对齐、插值与状态编码",
+          "role": "procedure",
+          "description": "在统一网格上降采样、限制插值并把离散状态转为事件特征。",
+          "outcomeRefs": [
+            "implement-verify"
+          ],
+          "order": 3
+        },
+        {
+          "id": "rolling-and-proxy-features",
+          "title": "滚动特征与跨设备代理指标",
+          "role": "worked-example",
+          "description": "按边界条件计算滚动特征，并处理代理指标与降级分支。",
+          "outcomeRefs": [
+            "implement-verify"
+          ],
+          "order": 4
+        },
+        {
+          "id": "dag-and-observability",
+          "title": "DAG 编排、可观测性与回归",
+          "role": "procedure",
+          "description": "用不可变数据集引用编排三层，并以元数据和回归比对验收。",
+          "outcomeRefs": [
+            "design-layering",
+            "implement-verify"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "design-layering",
+          "implement-verify"
+        ],
+        "method": "完成一次端到端重跑：从固定输入出发，逐层比对行数、质量码分布与特征 null 率，并解释任一处差异。",
+        "successCriteria": [
+          "三层职责与只读约束表述正确",
+          "迟到与缺口判定能引用水位线与序列号证据",
+          "重跑结果与基线一致或差异可解释",
+          "派生结果可追溯到规则版本与原始行"
+        ],
+        "summaryBlockId": "pipeline-summary",
+        "nextPointId": "point-15-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "pipeline-engineering-goal",
+        "moduleId": "preconditions-and-boundaries",
+        "depth": "core",
+        "kind": "note",
+        "title": "工程实现环节的目标",
+        "markdown": "教材把这一节定位为综合项目中的工程实现环节：前几章分别给出了质量维度、缺失与重复识别、迟到判定、去重排序、插值与特征构造等规则，本节要把它们组织成一条可重复运行、可追溯、可回归的流水线。\n\n流水线的产出不是“修好的原始数据”，而是分层的新数据集：原始事实行保持只读；质量评估层产出修正后的 `quality_code` 与 `MISSING` 占位行；清洗特征层再产出对齐矩阵、事件特征与窗口特征向量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000544"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现"
+              ],
+              "lineStart": 10071,
+              "lineEnd": 10072,
+              "assetRefs": [],
+              "excerptSha256": "55098054596dd30e7f3664ea6f4276e63b9246943a22bf207b3be3e3f50c5005"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-contracts-first",
+        "moduleId": "preconditions-and-boundaries",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "动手前先写三份契约",
+        "markdown": "实现顺序上，先把三份契约写清楚，再写任何转换代码：\n\n1. 输入契约：原始事实行的字段、单位、主键、质量码枚举与设备白名单。\n2. 输出契约：每层产物的数据集名、版本号、分区键、字段含义，以及哪些列是派生列。\n3. 运行契约：调度周期、重跑方式、幂等键、失败重试与告警接收人。\n\n三份契约分别回答三个可检查的问题：读的是不是同一批原始行、产物能否被下游按版本解释、重跑后结果是否一致。缺少其中任何一份，“清洗正确”都只是口头结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pipeline-engineering-goal"
+          ]
+        }
+      },
+      {
+        "id": "boundary-three-layers",
+        "moduleId": "preconditions-and-boundaries",
+        "depth": "core",
+        "kind": "table",
+        "title": "三层操作边界",
+        "markdown": "原始事实表一旦持久化即不可覆盖，所有质量判定只能产生新的派生标记。案例的 `quality_code` 枚举固定八种语义，三层操作的边界如下：\n\n| 层级 | 输入 | 输出 | 允许操作 |\n|:---|:---|:---|:---|\n| 原始接入层 | ADC 换算后的物理量 | 含 `quality_code=GOOD` 的原始事实行 | 字段校验、量程边界检查、写入 `ingest_time` |\n| 质量评估层 | 原始事实行序列 | 修正后的 `quality_code` 或派生 `MISSING` 占位行 | 重复检测、时钟可疑判定、迟到判定、序列缺口识别 |\n| 清洗特征层 | 质量评估后的时序 | 对齐矩阵、特征向量、窗口聚合 | 插值、降采样、状态编码、滚动统计 |\n\n`OUT_OF_RANGE` 应在原始接入层就标出；但若下游发现量程配置错误，不得回溯修改已持久化记录的 `quality_code`，只能通过新的派生字段或版本化配置表记录该判定失效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000545"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现",
+                "质量评估与清洗策略的分层边界"
+              ],
+              "lineStart": 10073,
+              "lineEnd": 10084,
+              "assetRefs": [],
+              "excerptSha256": "1bed8a8979ec26b5e095fec6da53d65c6df719a02e8f035dff447c41f0b47561"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-no-rewrite-constraints",
+        "moduleId": "preconditions-and-boundaries",
+        "depth": "core",
+        "kind": "warning",
+        "title": "把“不可回写”落成两条实现约束",
+        "markdown": "只读约束需要写成可检查的工程规则，否则很容易在补数据时被绕过：\n\n- 所有修正写新表、新列或新分区，对原始事实行只做插入，不做按行的质量码更新。\n- 每次派生写入都携带配置版本与规则版本，便于回答“这条 `MISSING` 是哪一版规则产生的”。\n\n如果事后发现量程配置错误，正确处置是新增配置版本并重算派生层，同时保留原始行与其原始质量码。这样审计时既能还原当时的判定，也能说明该判定为何失效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "boundary-three-layers"
+          ]
+        }
+      },
+      {
+        "id": "sequence-and-time-checks",
+        "moduleId": "integrity-checks",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "序列号与事件时间的双重校验",
+        "markdown": "对同一 `device_id` 与 `metric` 组合，按 `event_time` 排序得到序列 $(s_i, t_i)$，需同时检验两个独立条件：\n\n- 序列号连续性：$s_i - s_{i-1} = 1$ 表示正常；差值 $k \\geq 2$ 表示缺 $k-1$ 个点，需要插入 `quality_code=MISSING` 的占位行；差值 $\\leq 0$ 则转入 `CLOCK_SUSPECT` 或 `DUPLICATE` 的进一步判定。\n- 时间单调性：$t_i > t_{i-1}$。若 $t_i \\leq t_{i-1}$ 而 $s_i > s_{i-1}$，独立证据确认时钟异常，标 `CLOCK_SUSPECT`；若 $s_i = s_{i-1}$ 且整行哈希一致，标 `DUPLICATE`。\n\n以 30 秒采样周期、1 小时窗口为例，期望点数为\n\n$$N_{\\text{expect}} = \\left\\lfloor \\frac{3600}{30} \\right\\rfloor = 120$$\n\n缺口数满足\n\n$$N_{\\text{gap}} = N_{\\text{expect}} - N_{\\text{actual}} - N_{\\text{filled}}$$\n\n其中 $N_{\\text{filled}}$ 是已插入占位行的缺口，可用于校验清洗逻辑自洽。门磁这类事件型序列不能套用固定频率公式：状态变化与 60 秒心跳都是合法新观测，完整性检验只依赖序列号单调性与最大心跳间隔（案例配置 90 秒，用于检测通信中断而非采样缺失）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000546"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现",
+                "序列完整性校验与重复检测"
+              ],
+              "lineStart": 10085,
+              "lineEnd": 10110,
+              "assetRefs": [],
+              "excerptSha256": "c27da8fd2beb02041fa2d8ab1862cc0cbfe2ff6fc7867cea68726fb1d1ddb752"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-integrity-steps",
+        "moduleId": "integrity-checks",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "按固定顺序实现校验",
+        "markdown": "校验逻辑按固定顺序实现，避免边写边改导致口径漂移：\n\n1. 按 `(device_id, metric)` 分区，按 `event_time` 排序；\n2. 计算相邻序列号差与时间差，分别标记正常、缺口、重复、时钟可疑；\n3. 对缺口写入 `MISSING` 占位行：保留期望时间与派生标记，但不复制上一条观测值；\n4. 输出每小时缺口数、重复数与时钟可疑数，供后续回归比对。\n\n分支上必须区分设备类型：固定频率量用期望点数公式核对；门磁这类事件量只用序列号单调性和最大心跳间隔，不能因为“1 小时没有 120 条”就判为缺失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "sequence-and-time-checks"
+          ]
+        }
+      },
+      {
+        "id": "late-and-watermark-rule",
+        "moduleId": "late-and-watermark",
+        "depth": "core",
+        "kind": "formula",
+        "title": "迟到判定与水位线耦合",
+        "markdown": "`LATE` 的判定不能依赖固定的传输时延阈值，必须与下游消费的水位线耦合。设当前水位线为 $W(t)$，允许迟到边界 $\\delta_{\\text{late}} = 5$ 分钟，则到达记录 $r$ 满足\n\n$$t_{\\text{event}}(r) < W(t) - \\delta_{\\text{late}} \\;\\Rightarrow\\; q(r) \\leftarrow \\text{LATE}$$\n\n即标为迟到，且水位线不因迟到记录推进。水位线推进还要考虑设备时钟差异：已标 `CLOCK_SUSPECT` 的设备应被排除或降权（教材伪代码取权重 0.1），避免污染整体时间基准。\n\n常见误区是用 `ingest_time - event_time` 的固定阈值（例如 10 秒）判迟到：该差值包含网络抖动与队列延迟，与下游是否已处理到该时刻无关；若下游尚未处理到该事件时间附近，即使差值很大也不应标 `LATE`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000547"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现",
+                "迟到判定与水位线机制"
+              ],
+              "lineStart": 10111,
+              "lineEnd": 10152,
+              "assetRefs": [],
+              "excerptSha256": "e4ecce4dba225707c5d51ebab23b53c06924d9369d87cb5eaff0a063429d0d5f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-late-branches",
+        "moduleId": "late-and-watermark",
+        "depth": "advanced",
+        "kind": "procedure",
+        "title": "迟到记录的三种处置分支",
+        "markdown": "迟到标记只是判定，处置要按窗口是否已输出分流，而不是统一丢弃：\n\n| 情形 | 处置 | 记录位置 |\n|:---|:---|:---|\n| 窗口未关闭 | 回填并重算窗口结果 | 派生层原分区 |\n| 窗口已输出且在允许迟到内 | 写入更正结果并触发下游更新 | 更正表 + 血缘记录 |\n| 超出允许迟到或时钟不可信 | 进入隔离区，等待人工判定 | 隔离区 + 审计表 |\n\n无论走哪条分支，都要保留原始记录与判定依据（当时的水位线值、$\\delta_{\\text{late}}$、设备时钟状态）。这样一次结果变化才能被解释为“数据到达”还是“规则版本变化”，而不是只能看到最终数字。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "late-and-watermark-rule"
+          ]
+        }
+      },
+      {
+        "id": "align-interpolate-encode",
+        "moduleId": "align-interpolate-encode",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "对齐、插值与状态编码",
+        "markdown": "清洗只作用于质量评估后的派生结构，原始事实表保持只读。四温区监测需要统一时间网格，以 30 秒为基频：5 秒采样的压缩机电流先降采样聚合，而不是把温度上采样到 5 秒。降采样取窗口内有效 `GOOD` 记录的均值：\n\n$$\\bar{I}_{\\text{comp}}(t_k) = \\frac{1}{m_k} \\sum_{j: t_j \\in [t_k, t_k+30)} I_j \\cdot \\mathbb{1}[q_j = \\text{GOOD}]$$\n\n其中 $m_k$ 为窗口内有效点数；$m_k = 0$ 时插入 `MISSING` 占位行。温度插值只在缺口不超过 3 个周期（90 秒）时允许线性插值，更大缺口保持 `MISSING`，插值结果必须标记为派生，避免制造虚假连续性。门磁 `door_state` 是离散状态量，清洗时转换为事件间隔而非插值：\n\n$$\\tau_{\\text{open}}^{(n)} = t_{\\text{close}}^{(n)} - t_{\\text{open}}^{(n)}$$\n\n其中 $t_{\\text{open}}^{(n)}$ 是第 $n$ 次由 0 跳变为 1 的事件时间，$t_{\\text{close}}^{(n)}$ 是对应的 1 跳变为 0；心跳期间状态未变不产生新事件，也不更新持续时长。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000548"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现",
+                "清洗流水线：对齐、插值与状态编码"
+              ],
+              "lineStart": 10153,
+              "lineEnd": 10170,
+              "assetRefs": [],
+              "excerptSha256": "8afb8b0ddd84bb93573d083e2ec88d5dfc5a5a954419827af227182fabab8771"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cleaning-branches",
+        "moduleId": "align-interpolate-encode",
+        "depth": "support",
+        "kind": "table",
+        "title": "按输入形态分支的清洗参数",
+        "markdown": "清洗步骤按输入形态分支，参数要显式写进配置，而不是散落在代码里：\n\n| 输入形态 | 对齐动作 | 输出标记 | 失败处理 |\n|:---|:---|:---|:---|\n| 30 秒温度 | 落到 30 秒网格 | `GOOD` 或 `MISSING` | 缺口大于 90 秒不插值 |\n| 5 秒电流 | 窗口内 `GOOD` 均值降采样 | 派生聚合列 | $m_k = 0$ 时写占位行 |\n| 门磁状态 | 跳变转事件并计算开启时长 | 事件记录 | 心跳不产生事件 |\n| 时钟可疑设备 | 隔离或降权后再对齐 | `CLOCK_SUSPECT` | 跨设备特征降级 |\n\n最常见的实现错误是“为了补齐网格把温度上采样到 5 秒”，这会在图上制造原始观测中不存在的细节，也让所有下游统计失去可信度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "align-interpolate-encode"
+          ]
+        }
+      },
+      {
+        "id": "rolling-and-proxy-features",
+        "moduleId": "rolling-and-proxy-features",
+        "depth": "core",
+        "kind": "table",
+        "title": "滚动特征与跨设备代理指标",
+        "markdown": "特征在对齐矩阵上计算，输出供监测模型使用的宽表。温度 10 分钟窗口等于 20 个 30 秒周期：\n\n| 特征名 | 计算定义 | 边界条件 |\n|:---|:---|:---|\n| `temp_mean_10m` | 20 个周期内 `GOOD` 点的均值 | 有效点 $n_{\\text{eff}} < 10$ 时输出 `null` |\n| `temp_range_10m` | 有效点的最大值减最小值 | 有效点少于 2 个时输出 `null` |\n| `temp_trend_10m` | 最小二乘斜率 $\\hat{\\beta}$，时间以小时计 | 有效点少于 10 个时输出 `null` |\n\n斜率单位为 Cel/h，直观含义是每小时温度变化趋势；$|\\hat{\\beta}| > 2$ Cel/h 且连续两个窗口成立时触发趋势异常告警。\n\n跨设备代理指标用压缩机电流与温度联合计算负载代理，它不是 COP：\n\n$$\\rho_{Z1}(t_k) = \\frac{\\bar{I}_{\\text{comp}}(t_k) - \\mu_I}{\\sigma_I} \\cdot \\text{sign}\\left(T_{Z1}(t_k) - T_{\\text{setpoint}}\\right)$$\n\n$\\mu_I, \\sigma_I$ 取历史 7 天同季节点的统计量，$T_{\\text{setpoint}} = -18$ Cel。当 $\\rho_{Z1} > 2$ 表示压缩机高电流而温度未达设定点，提示制冷效率衰减或热负荷突增，需人工复核。若某区温度传感器批量标 `CLOCK_SUSPECT`，跨设备特征应降级为单设备模式；案例以每小时该标记占比超过 30% 作为降级开关，并记入运维日志。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000549"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现",
+                "特征工程：滚动统计与跨设备代理指标"
+              ],
+              "lineStart": 10171,
+              "lineEnd": 10192,
+              "assetRefs": [],
+              "excerptSha256": "4402f2359b09931432a67b2e2bf9e9ed71d6fc3a09fabbf5bef14c001ce8b740"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-feature-pitfalls",
+        "moduleId": "rolling-and-proxy-features",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "特征实现的三个返工点",
+        "markdown": "特征实现有三处最容易返工：\n\n- 输入必须是清洗后的对齐矩阵，而不是原始行；否则 `null` 边界与窗口长度都对不上。\n- `null` 是有效信息，表示样本不足；不要用 0 或前值填充来“消灭空值”，否则趋势特征会被系统性压低。\n- 代理指标 $\\rho_{Z1}$ 只能解释为负载代理，不能当作 COP 或能效结论；它触发的是人工复核，而不是自动停机。\n\n降级开关同样要留痕：记录触发时间、受影响设备列表以及降级前后使用的特征集合，否则事后无法判断某段曲线是业务变化还是计算降级。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rolling-and-proxy-features"
+          ]
+        }
+      },
+      {
+        "id": "dag-orchestration-observability",
+        "moduleId": "dag-and-observability",
+        "depth": "core",
+        "kind": "code",
+        "title": "DAG 编排、窗口边界与分层可观测性",
+        "markdown": "质量、清洗、特征三层以有向无环图编排，节点之间传递不可变数据集引用而不是数据副本。教材给出的 SQL 片段在 30 秒对齐网格上计算 10 分钟滚动均值，窗口边界严格左闭右开：\n\n```sql\nWITH aligned AS (\n  SELECT time_bucket('30 seconds', event_time) AS bucket_time,\n         AVG(value) FILTER (WHERE quality_code = 'GOOD') AS temp_avg,\n         COUNT(*) FILTER (WHERE quality_code = 'GOOD') AS n_good\n  FROM coldchain.cleaned_temperature\n  WHERE device_id = 'Z1-TEMP-01'\n    AND bucket_time >= '2024-01-15 08:00:00'::timestamptz\n    AND bucket_time <  '2024-01-15 09:00:00'::timestamptz\n  GROUP BY bucket_time\n)\nSELECT bucket_time,\n       AVG(temp_avg) OVER w10 AS temp_mean_10m,\n       SUM(n_good) OVER w10 AS n_eff\nFROM aligned\nWINDOW w10 AS (ORDER BY bucket_time\n               RANGE BETWEEN INTERVAL '9 minutes 30 seconds' PRECEDING\n                         AND CURRENT ROW);\n```\n\n10 分钟窗口包含当前行与前 19 行共 20 个周期，因此 `PRECEDING` 取 9 分 30 秒而不是 10 分钟；`n_eff >= 10` 对应 50% 有效点下限。\n\n可观测性要求每层输出输入行数、输出行数、`quality_code` 分布变化与特征 `null` 率；这些元数据写入独立监控表，不参与业务分析，专供流水线健康度巡检。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000550"
+              ],
+              "headingPath": [
+                "综合项目：冷链仓储智能监测",
+                "质量、清洗与特征流水线实现",
+                "流水线编排与可观测性"
+              ],
+              "lineStart": 10193,
+              "lineEnd": 10236,
+              "assetRefs": [],
+              "excerptSha256": "f9e2dad79fb1b529c9a96c21d36f69d34250f1ea68b9eb3d3f81ce6bb9301f4f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-regression-runbook",
+        "moduleId": "dag-and-observability",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "跑通与回归的操作顺序",
+        "markdown": "把流水线跑通并证明可回归，按下面顺序执行：\n\n1. 冻结三份契约与全部规则配置，记录版本号；\n2. 用固定种子的模拟数据或固定时间片作为输入，保证每次运行起点相同；\n3. 逐层运行，比对输入行数、输出行数、质量码分布与特征 `null` 率；\n4. 抽查窗口边界，确认左闭右开与 20 个周期口径一致；\n5. 记录每层产物的血缘与配置版本；\n6. 修改任一规则后重跑全链路，与基线逐层对比并解释差异。\n\n检查表只需回答四个问题：数据是否完整覆盖预期时间范围、异常是否被正确分类、特征口径是否与文档一致、重跑结果是否完全一致。四个问题都答得上，才算完成本环节的工程验收。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "dag-orchestration-observability"
+          ]
+        }
+      },
+      {
+        "id": "pipeline-summary",
+        "moduleId": "dag-and-observability",
+        "depth": "support",
+        "kind": "summary",
+        "title": "交付清单与下一节桥接",
+        "markdown": "本点的交付物可以归纳为一张清单：三层职责与只读约束、序列与时间双重校验、迟到与水位线规则、对齐插值与事件编码、滚动特征与跨设备代理、DAG 编排与分层可观测性。满足这张清单，流水线才同时具备可追溯（每条派生结果能追到规则版本和原始行）与可回归（同一输入重跑得到同一输出）。\n\n下一节把这些稳定输出接入告警、异常检测与预测，联合形成监测闭环；届时流水线产出的质量码、特征与元数据，就是判断信号是否可信的依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-regression-runbook"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pipeline-boundary-check",
+        "type": "formative-check",
+        "anchorBlockId": "pipeline-summary",
+        "moduleId": "dag-and-observability",
+        "depth": "core",
+        "title": "找出实现说明中的四处错误",
+        "outcomeRefs": [
+          "design-layering",
+          "implement-verify"
+        ],
+        "learningPurpose": "检查学习者能否把三层边界、迟到判定、事件型序列与对齐口径迁移到新的实现描述中，并指出正确处置。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "boundary-three-layers",
+            "late-and-watermark-rule",
+            "sequence-and-time-checks",
+            "model-regression-runbook",
+            "pipeline-summary"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "下面四句实现说明各违背了本点的哪条约束？请给出正确做法。",
+          "items": [
+            {
+              "id": "a",
+              "statement": "发现量程配置错误后，直接更新历史原始行的质量码。",
+              "answer": "违背原始事实只读约束；应新增配置版本并重算派生层，保留原始行。"
+            },
+            {
+              "id": "b",
+              "statement": "用 ingest_time 与 event_time 相差超过 10 秒判定 LATE。",
+              "answer": "违背水位线耦合；应比较事件时间与当前水位线减去允许迟到边界。"
+            },
+            {
+              "id": "c",
+              "statement": "门磁一小时只有 62 条记录，按 30 秒期望 120 条插入 MISSING。",
+              "answer": "门磁是事件型序列，只用序列号单调性与最大心跳间隔判断，不套用固定频率公式。"
+            },
+            {
+              "id": "d",
+              "statement": "为了统一网格，把 30 秒温度上采样到 5 秒后再算滚动均值。",
+              "answer": "应把 5 秒电流降采样到 30 秒基频；上采样会制造不存在的细节并破坏统计口径。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请列出本点的三层职责与两条只读约束，并说明：当迟到记录到达时窗口已输出，应如何处置、需要保留哪些判定依据？"
+        }
+      }
+    ]
+  },
+  "subtitle": "综合项目：冷链仓储智能监测",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000544"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现"
+      ],
+      "lineStart": 10071,
+      "lineEnd": 10072,
+      "assetRefs": [],
+      "excerptSha256": "55098054596dd30e7f3664ea6f4276e63b9246943a22bf207b3be3e3f50c5005"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000545"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现",
+        "质量评估与清洗策略的分层边界"
+      ],
+      "lineStart": 10073,
+      "lineEnd": 10084,
+      "assetRefs": [],
+      "excerptSha256": "1bed8a8979ec26b5e095fec6da53d65c6df719a02e8f035dff447c41f0b47561"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000546"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现",
+        "序列完整性校验与重复检测"
+      ],
+      "lineStart": 10085,
+      "lineEnd": 10110,
+      "assetRefs": [],
+      "excerptSha256": "c27da8fd2beb02041fa2d8ab1862cc0cbfe2ff6fc7867cea68726fb1d1ddb752"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000547"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现",
+        "迟到判定与水位线机制"
+      ],
+      "lineStart": 10111,
+      "lineEnd": 10152,
+      "assetRefs": [],
+      "excerptSha256": "e4ecce4dba225707c5d51ebab23b53c06924d9369d87cb5eaff0a063429d0d5f"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000548"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现",
+        "清洗流水线：对齐、插值与状态编码"
+      ],
+      "lineStart": 10153,
+      "lineEnd": 10170,
+      "assetRefs": [],
+      "excerptSha256": "8afb8b0ddd84bb93573d083e2ec88d5dfc5a5a954419827af227182fabab8771"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000549"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现",
+        "特征工程：滚动统计与跨设备代理指标"
+      ],
+      "lineStart": 10171,
+      "lineEnd": 10192,
+      "assetRefs": [],
+      "excerptSha256": "4402f2359b09931432a67b2e2bf9e9ed71d6fc3a09fabbf5bef14c001ce8b740"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000550"
+      ],
+      "headingPath": [
+        "综合项目：冷链仓储智能监测",
+        "质量、清洗与特征流水线实现",
+        "流水线编排与可观测性"
+      ],
+      "lineStart": 10193,
+      "lineEnd": 10236,
+      "assetRefs": [],
+      "excerptSha256": "f9e2dad79fb1b529c9a96c21d36f69d34250f1ea68b9eb3d3f81ce6bb9301f4f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1070,
+    573
+  ],
+  "scale": 0.93
+}

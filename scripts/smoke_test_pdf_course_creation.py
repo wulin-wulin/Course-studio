@@ -159,7 +159,29 @@ async def main_async(args):
             outline = response.json()
             write_json(args.output / "parsed-outline.json",outline)
             verify_outline(outline,oracle,extensions=False)
-            print(f"PDF parse passed: {state['document_id']} / 2 chapters / 10 original points",flush=True)
+            markdown_response = await client.get(
+                f"/documents/{state['document_id']}/markdown"
+            )
+            markdown_response.raise_for_status()
+            markdown = markdown_response.text
+            assert markdown.strip(), "parsed Markdown is empty"
+            content_type = markdown_response.headers.get("content-type", "")
+            assert content_type.lower().startswith("text/markdown"), (
+                f"unexpected Markdown content type: {content_type}"
+            )
+            (args.output / "parsed-full.md").write_text(markdown, encoding="utf-8")
+            state["markdown_sha256"] = hashlib.sha256(
+                markdown.encode("utf-8")
+            ).hexdigest()
+            state["markdown_chars"] = len(markdown)
+            chapter_count = len(outline["chapters"])
+            point_count = sum(len(chapter["points"]) for chapter in outline["chapters"])
+            print(
+                f"PDF parse passed: {state['document_id']} / "
+                f"{chapter_count} chapters / {point_count} original points / "
+                f"{len(markdown)} Markdown chars",
+                flush=True,
+            )
             write_json(args.output / "run.json",state)
             initial = ("开始根据已绑定的 PDF 教材《数组与查找入门》创建课程，这是一次真实全链路验收。"
                 "采用教材模式，严格遵守绑定的 course_id 和 textbook-outline-generator、knowledge-pipeline-orchestrator。"

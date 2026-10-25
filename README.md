@@ -66,6 +66,8 @@ OPENCODE_PROVIDER_BASE_URL=
 OPENCODE_TERMINAL_TIMEOUT_SECONDS=3600
 # 创建课程会生成大量内容和动画，使用独立的六小时主动处理上限
 COURSE_CREATE_TERMINAL_TIMEOUT_SECONDS=21600
+# OpenCode 1.18 不暴露工具参数流式进度；持续 pending 且 input/raw 为空超过该保守上限才中止
+OPENCODE_EMPTY_TOOL_CALL_TIMEOUT_SECONDS=600
 COURSE_DATA_DIR=course-data/courses
 # Docker only: host-side absolute path to generated/course_agent_sessions
 OPENCODE_COURSE_HOST_ROOT=
@@ -75,7 +77,9 @@ BACKEND_PORT=8000
 # Comma-separated local frontend origins permitted to call the API.
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 VITE_API_URL=http://127.0.0.1:8000
-VITE_WS_URL=ws://127.0.0.1:8000
+# Optional: only set this when the browser must bypass the frontend /api proxy.
+# The URL must be reachable by the browser, including browsers on other devices.
+# VITE_WS_URL=wss://course.example.com
 
 # 教材 PDF 导入（可选；下面是默认值）
 # 上传的原始 PDF 和解析纲要保存在 generated/document_library，
@@ -94,6 +98,12 @@ MINERU_API_BASE=https://mineru.net/api/v4
 MINERU_API_TOKEN=
 MINERU_TIMEOUT_SECONDS=300
 MINERU_MODEL_VERSION=vlm
+# 章节结构第二阶段校验：off=完全本地，auto=仅在规则候选有歧义时调用模型，required=每次都要求模型提案
+DOCUMENT_STRUCTURE_LLM_MODE=auto
+# 可选；留空时使用 models.json 的 default
+DOCUMENT_STRUCTURE_LLM_MODEL=
+DOCUMENT_STRUCTURE_LLM_MAX_INPUT_CHARS=120000
+DOCUMENT_STRUCTURE_LLM_MAX_OUTPUT_TOKENS=8000
 ```
 
 在根目录创建 `models.json`，每个模型都需要完整的 `id`、`base_url` 和
@@ -223,16 +233,39 @@ pdftotext -v
 `DOCUMENT_PARSER=auto` 在存在 Token 时选择 MinerU，否则使用本地解析。
 显式选择 MinerU 后的鉴权、网络或解析错误会返回明确失败，方便重试。
 
-后端先申请签名上传链接、上传 PDF、轮询结果，再下载 Markdown 与结构化 JSON。
-使用 JSON 的原 PDF 页码恢复目录，仍输出相同的 `textbook-outline/1.0`，
+后端将超过 100 页的 PDF 按原页序拆成每段最多 100 页，最多 5 段并行调用 MinerU。
+500 页会拆成 5 段，每段 100 页。每段先申请签名上传链接、上传 PDF、轮询结果，
+再下载 Markdown 与结构化 JSON；全部成功后按原页序合并正文，并将内容块页码还原到原 PDF。
+目录优先读取原 PDF 的文本层，以保留目录引导点和章节编号；没有可识别的文本目录时，
+使用 MinerU JSON 按原 PDF 页码恢复目录。目录文字会做 Unicode 兼容归一化，
+仍输出相同的 `textbook-outline/1.0`，
 G2–G7 继续复用原流水线。原始结果保存在文档资料库的 `mineru-vlm/` 或
-`mineru-pipeline/` 下，包括 `full.md`、`content-list.json`、`result.zip` 和任务摘要；
+`mineru-pipeline/` 下，包括完整教材 `full.md`、`content-list.json` 和 `task.json`；
+分段时，各段的原始 ZIP、Markdown、JSON 和图片保存在 `parts/part-0001/` 等子目录中，
+合并后的 Markdown 引用对应子目录中的图片。100 页以内的原始 ZIP 仍直接保存为 `result.zip`。
+任一段失败则整次解析报错，不生成部分合并结果；临时拆分 PDF 在解析结束后自动清理。产物
 不会进入正式课程包。更换解析器时会重新解析，之后的同解析器请求复用缓存。
 Token 仅保存在后端 `.env`；签名上传和下载请求不会携带 API 的鉴权头。
 
 按照 [MinerU 当前在线文档](https://mineru.net/apiManage/docs)，精准接口单文件最多
-200 页，200 MB。当前应用上传上限仍默认 100 MiB；超过 200 页的教材会提示先分段，
-自动分段及跨段合并尚未实现。`MINERU_TIMEOUT_SECONDS` 控制云端调用总时限。
+200 页，200 MB。当前应用上传上限仍默认 100 MiB；更大的教材可调高
+`DOCUMENT_MAX_UPLOAD_BYTES`，拆出的每段仍需满足云端大小限制。
+`MINERU_TIMEOUT_SECONDS` 控制每段云端解析的总时限，默认 300 秒，排队较久时可调高。
+
+MinerU 完成后不会直接把 Markdown 的一级标题当作章节。后端先读取原始
+`content-list.json`，生成带页码和原文引用的 `structure-candidate.json`，再把候选
+章节与只读的 `full.md` 标题映射成最终 `outline.json` 和 `material.json`。规则候选有
+歧义时，`DOCUMENT_STRUCTURE_LLM_MODE=auto` 才会调用 `models.json` 中的模型提出修正；
+模型只能引用原始块、调整候选标题和边界，不能修改 `full.md`、增加无证据章节或直接写入
+最终目录。提案无法通过证据校验时解析会失败并保留原始产物，避免静默生成错误章节。
+如果原始 Content List 完全没有可验证的章节证据，系统也会安全失败（不会让模型凭空猜章节）；
+此时需要人工检查 MinerU 输出或调整解析配置后重新上传。已有旧缓存若没有
+`structure-candidate.json`，首次读取会要求重新解析，以免继续使用旧的错误目录。
+
+本次保底支持未加密、页面清晰、带中文“目录”标题及阿拉伯数字章节编号（如 `1`、`1.1`）
+的 PDF 教材，目录需有可识别的页码，并位于 `DOCUMENT_TOC_SCAN_PAGES` 范围内。
+按固定页数拆分会保留整本教材的页序，切点可能位于章节内部。扫描件能否恢复目录取决于
+MinerU 的识别结果；无目录、模糊扫描件、特殊目录格式不在本次保证范围内。
 
 本地 `pdftotext` 对扫描件、图片目录、复杂多栏排版、目录页码跨行方式特殊的 PDF 仍可能无法
 恢复完整结构。此时接口会返回解析失败或漏项，可以先进行 OCR/版面转换，或切换
@@ -412,6 +445,10 @@ npm run build
 ```powershell
 packages\backend\.venv\Scripts\python.exe -u scripts\smoke_test_course_creation.py
 ```
+
+真实 PDF 流程还可以运行 `scripts\smoke_test_pdf_course_creation.py`；它会在解析阶段
+直接检查 `/documents/{id}/markdown`，把非空 `parsed-full.md`、纲要和 SHA-256 保存到
+验收输出目录。普通 pytest 不会调用 MinerU 或外部模型。
 
 测试会话的中间产物会保留在 `packages/backend/generated/course_agent_sessions/`，便于
 排查门禁和模型输出；该目录不会进入正式课程数据或 Git。

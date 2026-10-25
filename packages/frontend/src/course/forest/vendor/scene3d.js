@@ -79,6 +79,9 @@ export class Scene3D {
 
         // 3D 树
         this.highGroup = new THREE.Group(); this.scene.add(this.highGroup);
+        // 教材点与模型扩展点共用原有树形，仅以克制的树根光环区分来源。
+        // 单环表示教材原有，暖色双环表示模型扩展；旧课程不带 origin 时不绘制。
+        this.originMarkerGroup = new THREE.Group(); this.scene.add(this.originMarkerGroup);
         this.treeMeta = []; this._buildTrees();
 
         // Level sprites 层
@@ -94,6 +97,10 @@ export class Scene3D {
         this._learningPathIds = [];
         this._learningPathIdSet = new Set();
         this._pathLabelEls = [];
+
+        // 课程顺序关系与临时“学习路径”是两套数据。顺序层只负责展示后端
+        // 保存的簇间/点间有向边，因此切换它不会改变标签或相机状态。
+        this.sequenceGroup = new THREE.Group(); this.scene.add(this.sequenceGroup);
 
         this._needsVisRefresh = true;
         this._hoverId = null;
@@ -382,6 +389,33 @@ export class Scene3D {
         return "#" + c.getHexString();
     }
 
+    _createOriginMarker(origin, importance) {
+        if (origin !== "textbook" && origin !== "llm-extension") return null;
+        const marker = new THREE.Group();
+        const radius = 58 * Math.max(0.72, Math.min(1.35, importance || 1));
+        const color = origin === "textbook" ? 0x2f7567 : 0xb7791f;
+        const addRing = (inner, outer, opacity) => {
+            const ring = new THREE.Mesh(
+                new THREE.RingGeometry(inner, outer, 40),
+                new THREE.MeshBasicMaterial({
+                    color,
+                    transparent: true,
+                    opacity,
+                    side: THREE.DoubleSide,
+                    depthWrite: false,
+                    polygonOffset: true,
+                    polygonOffsetFactor: -1,
+                }),
+            );
+            ring.renderOrder = 8;
+            marker.add(ring);
+        };
+        addRing(radius * 0.82, radius, origin === "textbook" ? 0.68 : 0.88);
+        if (origin === "llm-extension") addRing(radius * 0.62, radius * 0.69, 0.72);
+        marker.userData = { type: "tree", origin };
+        return marker;
+    }
+
     /* ============ 3D 树 ============ */
     _buildTrees() {
         const posMap = {};
@@ -402,14 +436,27 @@ export class Scene3D {
             tree.userData = { type: "tree", id: kp.id };
             tree.traverse(c => { if (c.isMesh) c.castShadow = true; });  // 投影到地面
             this.highGroup.add(tree);
+            const originMarker = this._createOriginMarker(kp.origin, imp);
+            if (originMarker) {
+                originMarker.position.set(wx, wy, 2);
+                originMarker.userData.id = kp.id;
+                this.originMarkerGroup.add(originMarker);
+            }
             const short = kp.name_zh.length > 8 ? kp.name_zh.slice(0, 8) + "…" : kp.name_zh;
             const lbl = document.createElement("div");
             lbl.textContent = short;
-            lbl.title = kp.name_zh;
+            const originLabel = kp.origin === "textbook"
+                ? "教材原有知识点"
+                : kp.origin === "llm-extension"
+                    ? "模型扩展知识点"
+                    : "";
+            lbl.title = originLabel ? `${kp.name_zh} · ${originLabel}` : kp.name_zh;
             lbl.className = "forest-tree-label";
+            if (kp.origin === "textbook") lbl.classList.add("is-origin-textbook");
+            if (kp.origin === "llm-extension") lbl.classList.add("is-origin-extension");
             lbl.style.display = "none";
             this._labelLayer.appendChild(lbl);
-            this.treeMeta.push({ id: kp.id, catId: kp.category_id, pos: [wx, wy], mesh: tree, seed, scale: imp, domainColor: color, importance: kp.importance || 0.5, label: lbl });
+            this.treeMeta.push({ id: kp.id, catId: kp.category_id, pos: [wx, wy], mesh: tree, originMarker, seed, scale: imp, domainColor: color, importance: kp.importance || 0.5, label: lbl });
         }
     }
 
@@ -573,7 +620,10 @@ export class Scene3D {
         // 树大小 = 视口宽度 × 5%
         const visW = s.r * 0.7;
         const sf = Math.max(0.02, Math.min(1.0, visW * 0.07 / 300));
-        for (const m of this.treeMeta) if (m.mesh) m.mesh.scale.set(sf, sf, sf);
+        for (const m of this.treeMeta) {
+            if (m.mesh) m.mesh.scale.set(sf, sf, sf);
+            if (m.originMarker) m.originMarker.scale.set(sf, sf, sf);
+        }
 
         // DOM 标签跟随相机投影
         this._updateLabelPositions();
@@ -667,6 +717,7 @@ export class Scene3D {
             const forcePath = pathMode && this._learningPathIdSet.has(m.id);
             const show = visible.has(m.id) || forcePath;
             m.mesh.visible = show;
+            if (m.originMarker) m.originMarker.visible = show;
             if (m.label) {
                 const showLabel = !pathMode && show && (m.id === this._hoverId || this._batchLabelIds.has(m.id));
                 m.label.style.display = showLabel ? "" : "none";
@@ -836,6 +887,229 @@ export class Scene3D {
         this._updateCamera();
     }
 
+    setSequenceEdges(sequences) {
+        this.clearSequenceEdges();
+        const clusterEdges = sequences && Array.isArray(sequences.cluster) ? sequences.cluster : [];
+        const pointEdges = sequences && Array.isArray(sequences.point) ? sequences.point : [];
+
+        const pointById = new Map(this.treeMeta.map(meta => [meta.id, meta]));
+        const clusterById = new Map();
+        for (const cluster of this.layout.domains || []) {
+            const members = this.treeMeta.filter(meta => meta.catId === cluster.id);
+            if (members.length > 0) {
+                const center = members.reduce(
+                    (sum, member) => ({ x: sum.x + member.pos[0], y: sum.y + member.pos[1] }),
+                    { x: 0, y: 0 },
+                );
+                clusterById.set(cluster.id, {
+                    x: center.x / members.length,
+                    y: center.y / members.length,
+                    polygon: Array.isArray(cluster.polygon) ? cluster.polygon : [],
+                    members,
+                });
+            } else if (Array.isArray(cluster.label_pos)) {
+                clusterById.set(cluster.id, {
+                    x: cluster.label_pos[0],
+                    y: cluster.label_pos[1],
+                    polygon: Array.isArray(cluster.polygon) ? cluster.polygon : [],
+                    members: [],
+                });
+            }
+        }
+
+        clusterEdges.forEach((edge) => {
+            const from = clusterById.get(edge.fromId);
+            const to = clusterById.get(edge.toId);
+            if (!from || !to) return;
+            // The visible island uses a Catmull-Rom-smoothed version of the
+            // stored polygon. A little extra clearance keeps the route and
+            // arrow outside that rounded contour as well.
+            const start = this._sequenceClusterAnchor(from, to, 46);
+            const finish = this._sequenceClusterAnchor(to, from, 46);
+            this._addSequenceEdge(start, finish, {
+                color: 0x5b5bd6,
+                dashSize: 76,
+                gapSize: 52,
+                lineWidth: 1.5,
+                opacity: 0.68,
+                arrowOpacity: 0.78,
+                z: 7,
+                startTrim: 0,
+                endTrim: 0,
+                curve: 0.045,
+                maxBend: 82,
+                arrowRadius: 9,
+                arrowLength: 27,
+                renderOrder: 6,
+                bendCenter: { x: CANVAS_W / 2, y: CANVAS_H / 2 },
+            });
+        });
+
+        pointEdges.forEach((edge) => {
+            const from = pointById.get(edge.fromId);
+            const to = pointById.get(edge.toId);
+            if (!from || !to) return;
+            const clusterCenter = from.catId === to.catId ? clusterById.get(from.catId) : null;
+            this._addSequenceEdge(
+                { x: from.pos[0], y: from.pos[1] },
+                { x: to.pos[0], y: to.pos[1] },
+                {
+                    color: 0x2f73b7,
+                    dashSize: 34,
+                    gapSize: 29,
+                    lineWidth: 1,
+                    opacity: 0.46,
+                    arrowOpacity: 0.62,
+                    z: 10,
+                    startTrim: this._sequencePointClearance(from),
+                    endTrim: this._sequencePointClearance(to),
+                    curve: 0.026,
+                    maxBend: 28,
+                    arrowRadius: 5,
+                    arrowLength: 16,
+                    renderOrder: 7,
+                    bendCenter: clusterCenter || { x: CANVAS_W / 2, y: CANVAS_H / 2 },
+                },
+            );
+        });
+    }
+
+    clearSequenceEdges() {
+        if (this.sequenceGroup) this._clearGroup(this.sequenceGroup);
+    }
+
+    _sequencePointClearance(meta) {
+        const scale = Math.max(0.72, Math.min(1.35, meta && meta.scale ? meta.scale : 1));
+        return 58 * scale + 12;
+    }
+
+    _sequenceClusterAnchor(cluster, toward, padding) {
+        const dx = toward.x - cluster.x;
+        const dy = toward.y - cluster.y;
+        const distance = Math.hypot(dx, dy);
+        if (!Number.isFinite(distance) || distance < 1) return { x: cluster.x, y: cluster.y };
+        const direction = { x: dx / distance, y: dy / distance };
+        let clearance = this._sequencePolygonRayDistance(cluster, direction);
+
+        // Legacy courses may not carry a polygon. Derive a conservative edge
+        // from their trees so the route still starts outside the cluster.
+        if (!Number.isFinite(clearance)) {
+            clearance = 0;
+            for (const member of cluster.members || []) {
+                const offsetX = member.pos[0] - cluster.x;
+                const offsetY = member.pos[1] - cluster.y;
+                const projection = offsetX * direction.x + offsetY * direction.y;
+                clearance = Math.max(clearance, projection + this._sequencePointClearance(member));
+            }
+            clearance = Math.max(clearance, 96);
+        }
+
+        return {
+            x: cluster.x + direction.x * (clearance + padding),
+            y: cluster.y + direction.y * (clearance + padding),
+        };
+    }
+
+    _sequencePolygonRayDistance(cluster, direction) {
+        const polygon = cluster.polygon;
+        if (!Array.isArray(polygon) || polygon.length < 3) return NaN;
+        let nearest = Infinity;
+
+        for (let index = 0; index < polygon.length; index += 1) {
+            const first = polygon[index];
+            const second = polygon[(index + 1) % polygon.length];
+            if (!Array.isArray(first) || !Array.isArray(second)) continue;
+            const edgeX = second[0] - first[0];
+            const edgeY = second[1] - first[1];
+            const denominator = direction.x * edgeY - direction.y * edgeX;
+            if (Math.abs(denominator) < 1e-7) continue;
+
+            const relativeX = first[0] - cluster.x;
+            const relativeY = first[1] - cluster.y;
+            const rayDistance = (relativeX * edgeY - relativeY * edgeX) / denominator;
+            const edgePosition = (relativeX * direction.y - relativeY * direction.x) / denominator;
+            if (rayDistance >= 0 && edgePosition >= 0 && edgePosition <= 1) {
+                nearest = Math.min(nearest, rayDistance);
+            }
+        }
+
+        return Number.isFinite(nearest) ? nearest : NaN;
+    }
+
+    _addSequenceEdge(from, to, options) {
+        const start = new THREE.Vector3(from.x, from.y, options.z);
+        const finish = new THREE.Vector3(to.x, to.y, options.z);
+        const delta = finish.clone().sub(start);
+        const distance = delta.length();
+        if (!Number.isFinite(distance) || distance < 2) return;
+
+        const direction = delta.clone().normalize();
+        const maximumTrim = Math.max(0, distance * 0.32);
+        const startTrim = Math.min(options.startTrim || 0, maximumTrim);
+        const endTrim = Math.min(options.endTrim || 0, maximumTrim);
+        start.addScaledVector(direction, startTrim);
+        finish.addScaledVector(direction, -endTrim);
+
+        const span = finish.clone().sub(start);
+        const spanLength = span.length();
+        if (spanLength < 2) return;
+        const normal = new THREE.Vector3(-direction.y, direction.x, 0);
+        const center = options.bendCenter || { x: CANVAS_W / 2, y: CANVAS_H / 2 };
+        const rawMidpoint = start.clone().add(finish).multiplyScalar(0.5);
+        const outwardX = rawMidpoint.x - center.x;
+        const outwardY = rawMidpoint.y - center.y;
+        const side = normal.x * outwardX + normal.y * outwardY;
+        // Bend away from the local layout center. The dominant-axis fallback
+        // keeps perfectly centred edges deterministic without a hash.
+        const bendDirection = Math.abs(side) > 1e-4
+            ? Math.sign(side)
+            : (Math.abs(direction.x) >= Math.abs(direction.y)
+                ? (direction.x >= 0 ? 1 : -1)
+                : (direction.y >= 0 ? -1 : 1));
+        const bend = Math.min(options.maxBend, spanLength * options.curve) * bendDirection;
+        const midpoint = start.clone().add(finish).multiplyScalar(0.5).addScaledVector(normal, bend);
+        const curve = new THREE.QuadraticBezierCurve3(start, midpoint, finish);
+        const points = curve.getPoints(Math.max(20, Math.min(72, Math.ceil(spanLength / 42))));
+
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const material = new THREE.LineDashedMaterial({
+            color: options.color,
+            dashSize: options.dashSize,
+            gapSize: options.gapSize,
+            linewidth: options.lineWidth,
+            transparent: true,
+            opacity: options.opacity,
+            depthWrite: false,
+            depthTest: true,
+        });
+        const line = new THREE.Line(geometry, material);
+        line.computeLineDistances();
+        line.renderOrder = options.renderOrder;
+        this.sequenceGroup.add(line);
+
+        const arrowDirection = finish.clone().sub(points[points.length - 2]).normalize();
+        const arrowLength = Math.min(options.arrowLength, Math.max(8, spanLength * 0.16));
+        const arrowRadius = Math.min(options.arrowRadius, arrowLength * 0.34);
+        const arrowNormal = new THREE.Vector3(-arrowDirection.y, arrowDirection.x, 0);
+        const arrowBase = finish.clone().addScaledVector(arrowDirection, -arrowLength);
+        const arrowGeometry = new THREE.BufferGeometry().setFromPoints([
+            finish,
+            arrowBase.clone().addScaledVector(arrowNormal, arrowRadius),
+            arrowBase.clone().addScaledVector(arrowNormal, -arrowRadius),
+        ]);
+        const arrowMaterial = new THREE.MeshBasicMaterial({
+            color: options.color,
+            transparent: true,
+            opacity: options.arrowOpacity,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            depthTest: true,
+        });
+        const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+        arrow.renderOrder = options.renderOrder + 1;
+        this.sequenceGroup.add(arrow);
+    }
+
     focusLearningPath() {
         const metas = this._pathMetas(this._learningPathIds);
         if (!metas.length) return;
@@ -882,10 +1156,29 @@ export class Scene3D {
         this.renderer.render(this.scene, this.camera);
     }
     resize(w, h) {
+        const previousBest = this._best;
+        const wasOverview = previousBest && this._state
+            && Math.abs(this._state.r - previousBest.r) < 1
+            && Math.abs(this._state.target.x - previousBest.target.x) < 1
+            && Math.abs(this._state.target.y - previousBest.target.y) < 1
+            && Math.abs(this._state.theta - previousBest.theta) < 1e-5
+            && Math.abs(this._state.phi - previousBest.phi) < 1e-5;
         this.renderer.setSize(w, h);
         this.camera.aspect = w / h;
         this.camera.updateProjectionMatrix();
-        this._updateLabelPositions();
+        this._computeBestView();
+        if (wasOverview) {
+            const best = this._best;
+            this._state.theta = best.theta;
+            this._state.phi = best.phi;
+            this._state.r = best.r;
+            this._state.target.x = best.target.x;
+            this._state.target.y = best.target.y;
+            this._needsVisRefresh = true;
+            this._updateCamera();
+        } else {
+            this._updateLabelPositions();
+        }
     }
 
     raycast(sx, sy) {
@@ -897,7 +1190,7 @@ export class Scene3D {
         const rc = new THREE.Raycaster();
         rc.setFromCamera(new THREE.Vector2(mx, my), this.camera);
         // 先检测 3D 树
-        const treeHits = rc.intersectObjects([this.highGroup], true);
+        const treeHits = rc.intersectObjects([this.highGroup, this.originMarkerGroup], true);
         if (treeHits.length > 0) {
             let obj = treeHits[0].object;
             while (obj) { if (obj.userData && obj.userData.type === "tree") return obj.userData.id; obj = obj.parent; }

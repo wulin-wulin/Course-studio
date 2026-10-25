@@ -1,0 +1,596 @@
+{
+  "id": "point-4-4",
+  "title": "JSON、二进制编码与模式演进",
+  "shortSummary": "比较 JSON 与二进制编码的空间和兼容性，设计可演进的消息模式以及字段增删的版本策略。",
+  "keyTerms": [
+    "JSON",
+    "二进制编码",
+    "模式演进",
+    "兼容性",
+    "序列化",
+    "版本策略"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-4-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三维框架、字节量级、编号不朽原则与误区清单；围绕选型任务重排为“维度→两种编码→演进规则→验证→分层决策”，补充可复算的带宽预算与情境取舍表，事实与数值一律以教材为准。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-encoding-tradeoffs",
+          "text": "能用自描述性、紧凑性与模式演进弹性三个维度解释 JSON 与二进制编码的取舍，并根据记录大小与上行速率估算带宽占用。"
+        },
+        {
+          "id": "design-schema-evolution",
+          "text": "能针对字段新增或废弃，设计新旧两端都能安全解析的版本策略，并说明该策略在旧网关无法同步升级时的验证方法。"
+        }
+      ],
+      "misconceptions": [
+        "把 JSON 体积大直接等同于设计差，忽略它在调试、脚本解析和忽略未知键上的收益。",
+        "认为换成二进制编码就自动获得良好兼容性，忽视字段编号规划与类型稳定才是兼容性的来源。",
+        "用数组位置化长期承载演进，以为只省了字节而不影响解析安全。",
+        "把删除字段、改写同一键的数据类型当作轻量变更，未意识到旧解码器会崩溃或静默错位。"
+      ],
+      "modules": [
+        {
+          "id": "tradeoff-framework",
+          "title": "三维权衡与现场约束",
+          "role": "framing",
+          "description": "建立可读性、紧凑性、演进弹性三个正交维度，并把澄湾示范仓的采样率与链路带宽作为约束条件。",
+          "outcomeRefs": [
+            "explain-encoding-tradeoffs"
+          ],
+          "order": 0
+        },
+        {
+          "id": "json-boundaries",
+          "title": "JSON 的收益与冗余成本",
+          "role": "comparison",
+          "description": "看清自描述带来的调试便利，以及字段名冗余和数组位置化带来的演进风险。",
+          "outcomeRefs": [
+            "explain-encoding-tradeoffs"
+          ],
+          "order": 1
+        },
+        {
+          "id": "binary-encoding",
+          "title": "二进制编码的紧凑性来源",
+          "role": "comparison",
+          "description": "比较 MessagePack 与 protobuf 的空间来源与模式刚性，复算 28 字节的字段构成。",
+          "outcomeRefs": [
+            "explain-encoding-tradeoffs"
+          ],
+          "order": 2
+        },
+        {
+          "id": "schema-evolution",
+          "title": "模式演进的兼容规则",
+          "role": "procedure",
+          "description": "掌握编号不朽、忽略未知键与版本字段三类机制，并写成可检查的发布规则。",
+          "outcomeRefs": [
+            "design-schema-evolution"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pitfalls-verification",
+          "title": "误区与可执行验证",
+          "role": "check",
+          "description": "用教材的四个误区反推编码与责任边界检查项，形成可自动化的回归用例。",
+          "outcomeRefs": [
+            "design-schema-evolution"
+          ],
+          "order": 4
+        },
+        {
+          "id": "decision-path",
+          "title": "按链路状态做分层决策",
+          "role": "decision",
+          "description": "在统一维度下比较候选方案，给出情境化取舍与版本兜底。",
+          "outcomeRefs": [
+            "explain-encoding-tradeoffs",
+            "design-schema-evolution"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-encoding-tradeoffs",
+          "design-schema-evolution"
+        ],
+        "method": "完成一次“新增字段 + 链路受限 + 旧网关无法同时升级”的编码与演进方案选择，并写出依据、预算与验证项。",
+        "successCriteria": [
+          "能用三个维度而不只是体积解释选择理由",
+          "方案包含编号或版本字段等可验证的兼容机制",
+          "给出的带宽估算与记录字节数量级一致",
+          "验证项覆盖旧端解析、类型漂移与字段责任边界"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-4-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-framing",
+        "moduleId": "tradeoff-framework",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节要解决的问题",
+        "markdown": "教材第 4.4 节把编码问题界定为：**边缘网关向上游发送记录时，如何在自描述、紧凑与可演进之间取舍**，并明确不存在普遍最优的单一格式。因此本节不比较“哪个格式最好”，而是建立一套按约束条件选择并持续演进的判断方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000136"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进"
+              ],
+              "lineStart": 2520,
+              "lineEnd": 2521,
+              "assetRefs": [],
+              "excerptSha256": "c8e2ec9ee3082dbcf12aa48879c8695e83d373a83486632a1c7fb3a83f13bf7d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-three-dimensions",
+        "moduleId": "tradeoff-framework",
+        "depth": "core",
+        "kind": "definition",
+        "title": "三维权衡框架与现场约束",
+        "markdown": "编码决策使用三个正交维度：\n\n- **可读性**：人类调试与脚本快速解析的难易；\n- **紧凑性**：带宽受限场景下把字节数压到多小；\n- **模式演进弹性**：字段增删与语义变更时，新旧两端能否继续互操作。\n\nJSON、MessagePack、Protocol Buffers 与自研二进制帧各自占据这一空间的不同象限，没有 universally optimal 的单一格式。\n\n教材给出的澄湾示范仓约束是：温湿度每 30 秒采样、四门四区共 8 条流；压缩机电流每 5 秒采样、四区共 4 条流；门磁为事件驱动加 60 秒心跳。原始事实表包含 8 个字段（`event_time`、`ingest_time`、`device_id`、`metric`、`value`、`unit`、`quality_code`、`sequence_no`）。峰值上行不超过 12 条/秒，但 4G 备援链路可能把带宽压缩到 128 kbps，此时编码效率直接决定缓存溢出风险。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000137"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进",
+                "编码决策的三维权衡框架"
+              ],
+              "lineStart": 2522,
+              "lineEnd": 2527,
+              "assetRefs": [],
+              "excerptSha256": "c41b52c188591caca6b476698433893ef7d3001268eafc561058b86ce5b7f77a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dimension-matrix",
+        "moduleId": "tradeoff-framework",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "把三维折成一次可计算的比较",
+        "markdown": "| 维度 | 判断问题 | 对澄湾示范仓的直接含义 |\n|:---|:---|:---|\n| 可读性 | 排障时能否直接肉眼读、脚本直接解 | 主链路带宽充裕时可优先保留键名 |\n| 紧凑性 | 受限链路下每条记录占多少字节 | 4G 备援时字节数直接决定缓冲溢出概率 |\n| 演进弹性 | 字段增删、类型变更后新旧端能否继续互通 | 决定能否分批升级旧网关与云接入 |\n\n带宽预算可以当场算：JSON 单条约 180 字节，12 条/秒即 2160 字节/秒，约合 17.3 kbps；protobuf 单条约 28 字节，则约 336 字节/秒，约合 2.7 kbps。\n\n但 128 kbps 是链路总量，还要扣掉 TLS 握手、MQTT 保活、重传与突发批量头开销。因此“17.3 kbps 小于 128 kbps”只说明平均负载可行，不等于拥塞时仍有安全余量，这正是教材要保留批量压缩与溢出监控的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-framing",
+            "tb-three-dimensions"
+          ]
+        }
+      },
+      {
+        "id": "tb-json-baseline",
+        "moduleId": "json-boundaries",
+        "depth": "core",
+        "kind": "code",
+        "title": "JSON 的自描述红利与字段名冗余",
+        "markdown": "JSON 的优势是自描述与调试友好。教材示例记录刻意省略 `ingest_time`——该字段由云平台接入服务在首次持久接收时写入，边缘网关不得预填：\n\n```json\n{\n  \"event_time\": \"2024-01-15T08:30:00.000Z\",\n  \"device_id\": \"Z1-TEMP-01\",\n  \"metric\": \"temperature\",\n  \"value\": -18.5,\n  \"unit\": \"Cel\",\n  \"quality_code\": \"GOOD\",\n  \"sequence_no\": 1440\n}\n```\n\n这条记录经 UTF-8 编码约 180 字节，而有效载荷（数值与时间戳）只有约 24 字节，字段名是主要冗余来源。教材的缓解手段是字段名缩写、数组位置化与 gzip/deflate 流压缩；数组位置化能把记录压到约 90 字节，但必须由协议约定字段次序，也因此丧失自描述能力。\n\n关键边界：JSON 的演进依赖解析器“忽略未知键”，数组位置化破坏了这一机制——在 `value` 与 `unit` 之间插入新字段会让所有上下游解析逻辑必须同步变更，否则产生静默错位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000138"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进",
+                "JSON 的边界与工程实践"
+              ],
+              "lineStart": 2528,
+              "lineEnd": 2553,
+              "assetRefs": [],
+              "excerptSha256": "2746c5307feebe986ed9270b4ff0cce74c78ae0a913e52f6c0e9ef973030b229"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-json-overhead",
+        "moduleId": "json-boundaries",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "先算冗余占比，再决定是否牺牲可读性",
+        "markdown": "把教材的数字换成一个比值：180 字节里只有约 24 字节是有效载荷，有效率约 13%，也就是每传 1 字节数据要附带约 6.5 字节的键名与结构开销。\n\n由此得到一条实用规则：\n\n- 若链路平均占用不足可用带宽的三分之一，保留完整键名换取排障效率更划算；\n- 若链路经常逼近上限，先尝试批量压缩与缩短键名，而不是立刻改数组位置化；\n- 只有当字段次序能被协议层强约束、且所有解析方都受同一发布流程管理时，数组位置化才可接受。\n\n数组位置化省下的 90 字节并非免费：它把“未知键可忽略”的兼容性换成了“所有端同时发布”的组织约束。当现场存在无法同步升级的旧网关时，这笔交易通常不成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-json-baseline"
+          ]
+        }
+      },
+      {
+        "id": "tb-binary-schema",
+        "moduleId": "binary-encoding",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "MessagePack 与 protobuf：紧凑性与模式刚性",
+        "markdown": "带宽约束硬化时，二进制编码成为必要选择。教材讨论两种形态：schema-less 的 MessagePack 与 schema-bound 的 Protocol Buffers。\n\n- **MessagePack** 保留 JSON 的数据模型（键值对、数组、标量），用类型标记前缀做二进制序列化。同一温湿度记录约 110 字节，较 JSON 缩减约 40%，但仍携带完整键名；优点是不需预定义 schema、边缘网关可动态增删字段，缺点是大整数（如 Unix 毫秒时间戳）仍占 8 字节。\n- **protobuf** 用 `.proto` 强制定义 schema，按字段编号编码。教材的 `SensorReading` 定义包含 `fixed64 event_time_ms = 1`、`string device_id = 2`、枚举 `metric = 3`、`float value = 4`、枚举 `unit = 5`、枚举 `quality_code = 6`、`uint32 sequence_no = 7`。\n\n同一条记录经 protobuf 序列化约 28 字节，较 JSON 缩减约 84%。代价是模式刚性：新增字段必须更新 `.proto`、重新生成编解码代码，并部署至全部边缘网关与云接入服务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000139"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进",
+                "二进制编码的紧凑性与模式契约"
+              ],
+              "lineStart": 2554,
+              "lineEnd": 2575,
+              "assetRefs": [],
+              "excerptSha256": "0ae938d6ffb3e0b282c33bbcf36960693cc43188ac8a910542846f174fb44eff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-binary-budget",
+        "moduleId": "binary-encoding",
+        "depth": "support",
+        "kind": "table",
+        "title": "28 字节从哪里来",
+        "markdown": "| 字段 | 编码形式 | 约占用 | 说明 |\n|:---|:---|:---|:---|\n| `event_time_ms` | fixed64 | 8 字节 | 固定宽度，不随数值变化 |\n| `device_id` | 变长字符串 | 约 11 字节 | 设备号越长开销越大 |\n| `metric`/`unit`/`quality_code` | 枚举 | 各 1 字节 | 取值表由 schema 固定 |\n| `value` | float | 4 字节 | 单精度 |\n| `sequence_no` | uint32 变长 | 2–4 字节 | 典型值 2 字节 |\n\n合计约 28–31 字节，与教材的 28 字节量级一致。\n\n紧凑性是否值得，不取决于“省了多少百分比”，而取决于省下的字节能否换来更低的溢出概率：同一 12 条/秒负载下，占用从约 17.3 kbps 降到约 2.7 kbps，4G 备援链路才留出重传与批量突发的余量。\n\n另一个易忽略点：`ingest_time` 根本不在 protobuf 定义里，因为它由云平台写入。编码格式不会改变字段责任边界，schema 只是把边界写得更显式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-binary-schema"
+          ]
+        }
+      },
+      {
+        "id": "tb-evolution-rules",
+        "moduleId": "schema-evolution",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "编号不朽与忽略未知键",
+        "markdown": "工业物联网系统的生命周期常以十年计，传感器固件与云平台不可能同步升级。模式演进的核心问题是：旧版解码器如何安全处理新版数据，新版解码器如何兼容旧版数据。\n\nprotobuf 内置两种机制：**字段编号**与 `optional`/`repeated` 修饰。新增字段必须使用未使用过的编号，旧解码器按未知字段丢弃策略忽略它；字段废弃后编号永久冻结，防止未来误用导致解析错位，这一策略称为“编号不朽”。\n\n教材以新增 `sensor_firmware_version` 为例给出四步：分配新编号 8 并标记 `optional string` → 边缘网关升级后按固件能力条件填充 → 云接入服务升级后识别编号 8 并存入扩展列 → 全量升级完成后下游分析任务才可依赖该字段。对应风险依次是：复用已废弃编号导致旧解码器误解析、强制填充导致旧网关无法编码、服务未升级时数据暂不可见、提前依赖导致空值异常。\n\nJSON 的演进策略相反：依赖“忽略未知键”的解析器行为，但缺乏编号机制约束字段语义。若旧版系统 `value` 存字符串 `\"CLOSED\"`、新版改为整数 `0`，同一键名的类型漂移会引发解析崩溃。因此 JSON 的模式演进必须借助外部契约（如 JSON Schema 的版本字段）显式管控。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000140"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进",
+                "模式演进的兼容策略"
+              ],
+              "lineStart": 2576,
+              "lineEnd": 2592,
+              "assetRefs": [],
+              "excerptSha256": "553d9ddfd344c8ce5dd74b822c77d5bb8f921af236ac510cf875ab61f8753f3b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-evolution-checklist",
+        "moduleId": "schema-evolution",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把兼容性写成发布检查单",
+        "markdown": "1. **先定方向**：明确本次变更要求“新端读旧数据”（向后兼容）还是“旧端读新数据”（向前兼容）。工业现场通常两者都要，因为升级永远分批进行。\n2. **只增不改**：新字段占未使用编号并声明 `optional`；不改已有字段的类型、单位与语义；废弃字段只标记、不复用编号、不删除定义。\n3. **两端双读**：云接入先升级到能识别新字段并落扩展列，再放量升级网关；确认旧网关在缺失新字段时仍能正常编码。\n4. **版本兜底**：当变更无法平滑表达（例如整数范围扩容），用版本字段直接拒绝，而不是截断或猜测。教材的 `SCHEMA_V1=0`、`SCHEMA_V2=1` 就是这一层。\n5. **回滚演练**：准备一条带新字段的报文交给旧解码器，确认是“丢弃并继续”而不是崩溃，并保留可观察的版本拒绝日志。\n\n检查单的核心不是记住五步，而是每一步都能回答“如果不这样做，哪一端会先坏”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-evolution-rules"
+          ]
+        }
+      },
+      {
+        "id": "tb-pitfall-list",
+        "moduleId": "pitfalls-verification",
+        "depth": "support",
+        "kind": "warning",
+        "title": "四种编码与责任边界的误区",
+        "markdown": "1. **把 ADC 原始码直接写入二进制帧的 `value`**：违反原始事实表契约，`value` 必须是已换算的物理量。验证方法：抽查解码后 `value` 的量纲是否与 `unit` 匹配（temperature 对应 Cel，而非无量纲原始码）。\n2. **`sequence_no` 在设备重启后归零**：它是每个 `device_id` 与 `metric` 组合内持久保存的无符号整数，归零会被云平台判为重复或缺口。验证方法：模拟 Z1-TEMP-01 断电重启，首条上报应为断电前末值加 1。\n3. **用 `ingest_time` 计算采样间隔**：`event_time` 是设备完成数字观测并赋时的时刻，`ingest_time` 是云平台首次持久接收时刻，二者差值包含网络传输与队列延迟，不是采样周期。验证方法：连续记录 `event_time[i] - event_time[i-1]` 应稳定在 30000 ms ± 时钟容差。\n4. **把门磁心跳标记为 `DUPLICATE`**：状态变化上报与 60 秒心跳都是合法新观测，各自使用发送时刻作为 `event_time` 并递增 `sequence_no`。验证方法：门状态未变化时连续心跳的 `sequence_no` 应严格递增且 `quality_code` 为 `GOOD`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000141"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进",
+                "常见误区与验证方法"
+              ],
+              "lineStart": 2593,
+              "lineEnd": 2610,
+              "assetRefs": [],
+              "excerptSha256": "2f2cbec77e9e7d678b9992ecdae615694053ffc41f1a3d819174e8318eea4d6c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-verification-tests",
+        "moduleId": "pitfalls-verification",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "把误区转成三项回归用例",
+        "markdown": "| 用例 | 构造 | 期望结果 |\n|:---|:---|:---|\n| 未知字段 | 旧解码器读取含编号 8 的报文 | 丢弃未知字段后继续解码，不抛异常 |\n| 类型漂移 | `value` 先用 `\"CLOSED\"`、再用 `0` | 契约校验拒绝，并记录版本与设备号 |\n| 责任边界 | 网关编码后的报文 | 不含 `ingest_time`；`value` 量纲与 `unit` 一致；`sequence_no` 单调 |\n\n练习：选一条你熟悉的报文，写出它在上述三格中的具体检查命令或断言。若只能检查字节长度，说明你还没有覆盖语义与兼容性。\n\n提示：这三项都不需要等到全量升级完成，用一条构造报文加旧版本解码器即可提前发现大部分演进事故。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pitfall-list"
+          ]
+        }
+      },
+      {
+        "id": "tb-decision-table",
+        "moduleId": "decision-path",
+        "depth": "core",
+        "kind": "table",
+        "title": "按链路状态分层选择编码",
+        "markdown": "| 链路状态 | 推荐编码 | 关键配置 |\n|:---|:---|:---|\n| 有线以太网主链路，带宽充裕 | JSON，保留完整键名 | 启用 gzip 批压缩，批大小 100 条或 5 秒超时 |\n| 4G 备援链路，带宽受限 | protobuf，预定义 schema | 批大小 500 条，启用应用层重传（参见 4.5 节） |\n| 混合链路，动态切换 | 网关双编码器，按链路质量自适应 | RTT > 500 ms 或丢包率 > 5% 触发切换 |\n| 长期归档，冷存储 | parquet 列式（派生数据集） | 原始事实表仍按上述策略持久化，派生转换不得覆盖 |\n\n版本兜底：protobuf schema 的版本字段固定为 1 字节枚举（`SCHEMA_V1=0`、`SCHEMA_V2=1`），当前运行 `SCHEMA_V1`。未来若需突破 `uint32` 的 `sequence_no` 范围，可通过 `SCHEMA_V2` 升级为 `uint64`；旧解码器识别版本号后拒绝解析并触发告警，而不是静默截断。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+              "blockIds": [
+                "block-000142"
+              ],
+              "headingPath": [
+                "边缘采集与可靠传输",
+                "JSON、二进制编码与模式演进",
+                "编码选择的决策路径"
+              ],
+              "lineStart": 2611,
+              "lineEnd": 2623,
+              "assetRefs": [],
+              "excerptSha256": "b02aff88094280d783bf71e446f1e71371523ac475e9a12b8701929065fee315"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decision-scenario",
+        "moduleId": "decision-path",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "情境化取舍：新增字段该走哪条路径",
+        "markdown": "把维度落到一个具体决定上：澄湾要新增 `sensor_firmware_version`，4G 备援链路已常态化，且现场存在无法立即升级的旧网关。\n\n| 候选方案 | 空间 | 兼容性来源 | 运维成本 | 适用条件 |\n|:---|:---|:---|:---|:---|\n| 保留 JSON，加外部 JSON Schema 版本 | 约 180 字节，可 gzip | 忽略未知键 + 显式版本字段 | 低，无需代码生成 | 主链路为主、带宽有富余 |\n| protobuf 分配编号 8 并标 `optional` | 约 28 字节 | 编号不朽 + 未知字段丢弃 | 中，需重新生成并分批升级 | 受限链路常态化、字段长期演化 |\n| 数组位置化后插入新字段 | 约 90 字节 | 无，依赖所有端同时发布 | 后期极高 | 不适用于存在旧端的现场 |\n| 复用已废弃编号或改字段类型 | 约 28 字节 | 无，旧端误解析或崩溃 | 事故成本高 | 不应作为选项 |\n\n决策顺序：先看链路余量能否吸收 JSON 的冗余，再看是否存在无法同步升级的解码方。两者都指向二进制时，选 schema-bound 而非 schema-less——因为编号机制是唯一能让你在不联系旧设备的前提下安全增删字段的抓手。若两个条件都不成立，继续用 JSON 并压好批量窗口，往往比引入一套 schema 工具链更省事。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-decision-table"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "decision-path",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：没有最优格式，只有可验证的取舍",
+        "markdown": "- 编码决策同时受可读性、紧凑性、演进弹性约束，单看体积会做出错误结论。\n- JSON 的代价是字段名冗余（有效载荷约 13%）与缺乏编号约束；二进制用 schema 换来约 84% 空间缩减和编号兼容机制。\n- 演进策略可压缩成一句：**编号只增不复用、类型只稳不改、版本字段兜底、旧端先升级**。\n- 验证要覆盖未知字段、类型漂移与字段责任边界，而不只是字节长度。\n\n下一步进入断网恢复场景：编码与版本确定后，本地缓冲、重试退避与幂等写入决定数据会不会丢或重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-decision-scenario",
+            "tb-decision-table"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "encoding-decision-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-decision-scenario",
+        "moduleId": "decision-path",
+        "depth": "core",
+        "title": "为受限链路选择编码与演进方案",
+        "outcomeRefs": [
+          "explain-encoding-tradeoffs",
+          "design-schema-evolution"
+        ],
+        "learningPurpose": "检查学习者能否同时用空间预算与兼容机制做选择，而不是只凭“二进制更小”下结论。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-decision-table",
+            "tb-evolution-rules",
+            "tb-binary-schema"
+          ]
+        },
+        "config": {
+          "question": "澄湾的 4G 备援已成常态，需要新增 sensor_firmware_version，但部分旧网关半年内无法升级。哪种方案最稳妥？",
+          "options": [
+            {
+              "id": "a",
+              "text": "保留 JSON，改为数组位置化，并在 value 与 unit 之间插入新字段以节省键名。"
+            },
+            {
+              "id": "b",
+              "text": "在 protobuf 中分配未使用编号 8 并标记 optional string，旧解码器丢弃未知字段，网关按固件能力条件填充。"
+            },
+            {
+              "id": "c",
+              "text": "复用一条已废弃字段的编号，把 sensor_firmware_version 塞进去，避免新增编号。"
+            },
+            {
+              "id": "d",
+              "text": "把 sequence_no 从 uint32 改为 string，顺带容纳固件版本，减少字段数量。"
+            }
+          ],
+          "correctOptionId": "b",
+          "explanation": "受限链路优先考虑 protobuf 的空间收益；旧网关无法同步升级时，必须依靠编号不朽与未知字段丢弃来保证旧端可读，optional 允许新网关在固件不支持时不填充。数组位置化破坏忽略未知键，复用编号造成误解析，改字段类型属于类型漂移，都会让旧端崩溃或静默错位。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "情境：4G 备援常态化，需新增 `sensor_firmware_version`，部分旧网关半年内无法升级。请写出你的选择，并至少回答三点：\n\n1. 单条记录的大小与 12 条/秒时的带宽预算；\n2. 旧解码器遇到新字段时应发生什么；\n3. 为什么不能复用废弃编号或改变已有字段类型。\n\n参考答案要点：选择 schema-bound 二进制并新增未使用编号的 optional 字段；旧端丢弃未知字段继续解析；复用编号会误解析、改类型会造成类型漂移。"
+        }
+      }
+    ]
+  },
+  "subtitle": "边缘采集与可靠传输",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000136"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进"
+      ],
+      "lineStart": 2520,
+      "lineEnd": 2521,
+      "assetRefs": [],
+      "excerptSha256": "c8e2ec9ee3082dbcf12aa48879c8695e83d373a83486632a1c7fb3a83f13bf7d"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000137"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进",
+        "编码决策的三维权衡框架"
+      ],
+      "lineStart": 2522,
+      "lineEnd": 2527,
+      "assetRefs": [],
+      "excerptSha256": "c41b52c188591caca6b476698433893ef7d3001268eafc561058b86ce5b7f77a"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000138"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进",
+        "JSON 的边界与工程实践"
+      ],
+      "lineStart": 2528,
+      "lineEnd": 2553,
+      "assetRefs": [],
+      "excerptSha256": "2746c5307feebe986ed9270b4ff0cce74c78ae0a913e52f6c0e9ef973030b229"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000139"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进",
+        "二进制编码的紧凑性与模式契约"
+      ],
+      "lineStart": 2554,
+      "lineEnd": 2575,
+      "assetRefs": [],
+      "excerptSha256": "0ae938d6ffb3e0b282c33bbcf36960693cc43188ac8a910542846f174fb44eff"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000140"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进",
+        "模式演进的兼容策略"
+      ],
+      "lineStart": 2576,
+      "lineEnd": 2592,
+      "assetRefs": [],
+      "excerptSha256": "553d9ddfd344c8ce5dd74b822c77d5bb8f921af236ac510cf875ab61f8753f3b"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000141"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进",
+        "常见误区与验证方法"
+      ],
+      "lineStart": 2593,
+      "lineEnd": 2610,
+      "assetRefs": [],
+      "excerptSha256": "2f2cbec77e9e7d678b9992ecdae615694053ffc41f1a3d819174e8318eea4d6c"
+    },
+    {
+      "materialId": "doc-bf9e6438e096d32ed9ecb64c",
+      "blockIds": [
+        "block-000142"
+      ],
+      "headingPath": [
+        "边缘采集与可靠传输",
+        "JSON、二进制编码与模式演进",
+        "编码选择的决策路径"
+      ],
+      "lineStart": 2611,
+      "lineEnd": 2623,
+      "assetRefs": [],
+      "excerptSha256": "b02aff88094280d783bf71e446f1e71371523ac475e9a12b8701929065fee315"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3087,
+    2743
+  ],
+  "scale": 0.96
+}

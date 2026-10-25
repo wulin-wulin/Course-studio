@@ -1123,9 +1123,19 @@ async def _run_agent_turn_opencode_unlocked(
             })
             active_session["id"] = None
             return
-        course_agent_name = (
-            "course-creator" if identity_reviewed else "course-outline-creator"
+        textbook_course = bool(
+            textbook_document_id or binding_exists or textbook_binding is not None
         )
+        if textbook_course:
+            course_agent_name = (
+                "textbook-course-creator"
+                if identity_reviewed
+                else "textbook-outline-creator"
+            )
+        else:
+            course_agent_name = (
+                "course-creator" if identity_reviewed else "course-outline-creator"
+            )
 
     resume_claim_id: str | None = None
     resume_claim_active = False
@@ -1668,6 +1678,29 @@ _OPENCODE_TOOL_LABELS = {
     "list": "find_course_data",
 }
 
+# OpenCode emits a ``pending`` part with empty arguments while the provider is
+# generating a tool call. In OpenCode 1.18 the global event stream does not
+# expose those argument deltas, so only a deliberately conservative deadline
+# can distinguish an unusually long generation from a wedged provider stream.
+# Tools whose input is genuinely optional are deliberately absent.
+_OPENCODE_REQUIRED_INPUT_TOOLS = frozenset({
+    "apply_patch",
+    "bash",
+    "course_pipeline",
+    "edit",
+    "glob",
+    "grep",
+    "patch",
+    "question",
+    "read",
+    "skill",
+    "task",
+    "todowrite",
+    "webfetch",
+    "websearch",
+    "write",
+})
+
 
 def _map_tool_name(name: str) -> str:
     return _OPENCODE_TOOL_LABELS.get(name, name)
@@ -1696,6 +1729,17 @@ async def _run_opencode_prompt(
     part_types: dict[str, str] = {}
     waiting_question_ids: set[str] = set()
     terminal_wait_state_changed = asyncio.Event()
+    empty_pending_tools: dict[str, tuple[str, float, str]] = {}
+    empty_pending_tools_changed = asyncio.Event()
+
+    try:
+        empty_tool_timeout = float(
+            settings.opencode_empty_tool_call_timeout_seconds
+        )
+    except (TypeError, ValueError):
+        empty_tool_timeout = 600.0
+    if empty_tool_timeout <= 0:
+        empty_tool_timeout = 600.0
 
     async def fail_turn(message: str, *, abort: bool = False) -> None:
         result["ok"] = False
@@ -1711,6 +1755,80 @@ async def _run_opencode_prompt(
         else:
             waiting_question_ids.discard(request_id)
         terminal_wait_state_changed.set()
+
+    def track_empty_pending_tool(part: dict[str, Any]) -> None:
+        """Track required-input calls that have made no argument progress."""
+
+        part_id = str(part.get("id") or "").strip()
+        raw_name = str(part.get("tool") or "").strip()
+        call_id = str(part.get("callID") or "").strip()
+        part_session_id = str(part.get("sessionID") or "").strip()
+        state = part.get("state") or {}
+        if (
+            not part_id
+            or (part_session_id and part_session_id != session_id)
+            or not isinstance(state, dict)
+        ):
+            return
+        tool_input = state.get("input")
+        raw_input = state.get("raw")
+        is_empty_pending = (
+            raw_name in _OPENCODE_REQUIRED_INPUT_TOOLS
+            and state.get("status") == "pending"
+            and isinstance(tool_input, dict)
+            and not tool_input
+            and not str(raw_input or "").strip()
+        )
+        changed = False
+        if is_empty_pending:
+            if part_id not in empty_pending_tools:
+                empty_pending_tools[part_id] = (
+                    raw_name,
+                    asyncio.get_running_loop().time(),
+                    call_id,
+                )
+                changed = True
+        elif part_id in empty_pending_tools:
+            empty_pending_tools.pop(part_id, None)
+            changed = True
+        if changed:
+            empty_pending_tools_changed.set()
+
+    async def watch_empty_pending_tools() -> tuple[str, str]:
+        """Return the first required-input tool whose empty state expires."""
+
+        loop = asyncio.get_running_loop()
+        while True:
+            if not empty_pending_tools:
+                empty_pending_tools_changed.clear()
+                # No await occurred between the check and clear, but keep the
+                # second check explicit so future edits cannot lose a wake-up.
+                if empty_pending_tools:
+                    continue
+                await empty_pending_tools_changed.wait()
+                continue
+
+            part_id, (tool_name, started_at, call_id) = min(
+                empty_pending_tools.items(),
+                key=lambda item: item[1][1],
+            )
+            remaining = started_at + empty_tool_timeout - loop.time()
+            if remaining <= 0:
+                current = empty_pending_tools.get(part_id)
+                if current == (tool_name, started_at, call_id):
+                    return part_id, tool_name
+                continue
+
+            empty_pending_tools_changed.clear()
+            try:
+                await asyncio.wait_for(
+                    empty_pending_tools_changed.wait(),
+                    timeout=remaining,
+                )
+            except TimeoutError:
+                # Re-check the monotonic deadline and current part state in the
+                # next loop. Server/UI heartbeats never touch this event.
+                continue
 
     async def finish_text_segment(*, persist: bool) -> str:
         content = "".join(text_chunks).strip()
@@ -1817,6 +1935,39 @@ async def _run_opencode_prompt(
                     questions = _normalize_opencode_questions(properties.get("questions"))
                     if not request_id or not questions:
                         continue
+                    question_tool = properties.get("tool")
+                    question_call_id = (
+                        str(question_tool.get("callID") or "").strip()
+                        if isinstance(question_tool, dict)
+                        else ""
+                    )
+                    pending_question_parts = [
+                        part_id
+                        for part_id, (tool_name, _, call_id) in empty_pending_tools.items()
+                        if tool_name == "question"
+                        and question_call_id
+                        and call_id == question_call_id
+                    ]
+                    if not pending_question_parts and not question_call_id:
+                        oldest_question_part = min(
+                            (
+                                (part_id, started_at)
+                                for part_id, (
+                                    tool_name,
+                                    started_at,
+                                    _,
+                                ) in empty_pending_tools.items()
+                                if tool_name == "question"
+                            ),
+                            key=lambda item: item[1],
+                            default=None,
+                        )
+                        if oldest_question_part is not None:
+                            pending_question_parts = [oldest_question_part[0]]
+                    for part_id in pending_question_parts:
+                        empty_pending_tools.pop(part_id, None)
+                    if pending_question_parts:
+                        empty_pending_tools_changed.set()
                     set_question_waiting(request_id, True)
                     await finish_text_segment(persist=True)
                     await asyncio.to_thread(
@@ -1875,6 +2026,12 @@ async def _run_opencode_prompt(
                         or properties.get("part_id")
                         or ""
                     ).strip()
+                    if part_id in empty_pending_tools:
+                        # Keep this compatible with OpenCode versions that do
+                        # expose tool argument deltas. OpenCode 1.18's legacy
+                        # processor does not currently publish them.
+                        empty_pending_tools.pop(part_id, None)
+                        empty_pending_tools_changed.set()
                     part_type = part_types.get(part_id)
                     if part_type == "reasoning" or (
                         not part_id and field == "reasoning"
@@ -1901,6 +2058,7 @@ async def _run_opencode_prompt(
                         if part_id and part_type:
                             part_types[part_id] = part_type
                     if isinstance(part, dict) and part.get("type") == "tool":
+                        track_empty_pending_tool(part)
                         tool_error = await _handle_opencode_tool_part(
                             websocket, conversation_id, part, tool_started
                         )
@@ -1943,7 +2101,11 @@ async def _run_opencode_prompt(
         terminal_wait_state_changed.set()
         _clear_pending_questions_for_session(session_id)
 
-    async def wait_for_terminal(consume_task: asyncio.Task[None], timeout: float) -> None:
+    async def wait_for_terminal(
+        consume_task: asyncio.Task[None],
+        empty_tool_watchdog_task: asyncio.Task[tuple[str, str]],
+        timeout: float,
+    ) -> tuple[str, str] | None:
         """Wait for a terminal event, pausing the budget for native questions."""
 
         remaining = timeout
@@ -1951,7 +2113,13 @@ async def _run_opencode_prompt(
         while True:
             if consume_task.done():
                 await consume_task
-                return
+                return None
+            if empty_tool_watchdog_task.done():
+                stalled_tool = await empty_tool_watchdog_task
+                consume_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await consume_task
+                return stalled_tool
 
             terminal_wait_state_changed.clear()
             state_change_task = asyncio.create_task(terminal_wait_state_changed.wait())
@@ -1959,7 +2127,7 @@ async def _run_opencode_prompt(
             was_waiting_for_question = bool(waiting_question_ids)
             wait_timeout = None if was_waiting_for_question else remaining
             done, _ = await asyncio.wait(
-                {consume_task, state_change_task},
+                {consume_task, state_change_task, empty_tool_watchdog_task},
                 timeout=wait_timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
@@ -1971,7 +2139,16 @@ async def _run_opencode_prompt(
                 with contextlib.suppress(asyncio.CancelledError):
                     await state_change_task
                 await consume_task
-                return
+                return None
+            if empty_tool_watchdog_task in done:
+                state_change_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await state_change_task
+                stalled_tool = await empty_tool_watchdog_task
+                consume_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await consume_task
+                return stalled_tool
             if state_change_task in done:
                 continue
 
@@ -1981,6 +2158,7 @@ async def _run_opencode_prompt(
             raise TimeoutError
 
     heartbeat_task = asyncio.create_task(send_heartbeat())
+    empty_tool_watchdog_task = asyncio.create_task(watch_empty_pending_tools())
     try:
         consume_task = asyncio.create_task(consume())
         # Let the SSE stream attach before prompting so no early tool events are
@@ -2019,7 +2197,21 @@ async def _run_opencode_prompt(
         if timeout <= 0:
             timeout = 3600.0
         try:
-            await wait_for_terminal(consume_task, timeout)
+            stalled_tool = await wait_for_terminal(
+                consume_task,
+                empty_tool_watchdog_task,
+                timeout,
+            )
+            if stalled_tool is not None:
+                part_id, tool_name = stalled_tool
+                await fail_turn(
+                    f"OpenCode 工具 {tool_name}（{part_id}）在 {empty_tool_timeout:g} 秒内"
+                    "没有生成任何调用参数，已中止本轮操作；请在新会话中重试。",
+                    abort=True,
+                )
+                waiting_question_ids.clear()
+                terminal_wait_state_changed.set()
+                _clear_pending_questions_for_session(session_id)
         except TimeoutError:
             consume_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -2038,6 +2230,9 @@ async def _run_opencode_prompt(
         return bool(result["ok"]), response_text
     finally:
         in_flight["active"] = False
+        empty_tool_watchdog_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await empty_tool_watchdog_task
         heartbeat_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await heartbeat_task
