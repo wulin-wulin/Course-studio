@@ -221,6 +221,8 @@ prerequisites
 ### 教材课程 `textbook-content/2.0`
 
 教材详情保留索引 6 项、`animationType`、`prerequisites`，并新增顶层 `origin` 和 `content`。
+教材模式中 `prerequisites` 只表示明确的内容学习依赖；章节顺序、章内点顺序和点编号由图谱的
+`sequences` 表达，不能据此填写前置关系。没有明确依赖证据时必须写 `[]`。
 正文由 outcome-first 的 `content.learningDesign`、有序 `content.blocks` 和可选的
 `content.learningAssets` 组成；不得再写 `coreIdea/principles/formula/comparisons/applications/
 aliases/intuition/misconceptions/history/yearIntroduced/prosCons/qa/visualType/visualSuggestion`，也不在

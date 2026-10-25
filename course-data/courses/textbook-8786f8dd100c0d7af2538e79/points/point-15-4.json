@@ -1,0 +1,663 @@
+{
+  "id": "point-15-4",
+  "title": "内存数据库的关键技术",
+  "shortSummary": "讲解内存数据库的数据组织、索引结构、日志与恢复以及并发控制等关键技术。",
+  "keyTerms": [
+    "数据组织",
+    "索引",
+    "日志恢复",
+    "并发控制",
+    "快照"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-10-4",
+    "point-11-3",
+    "point-15-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对各项关键技术的定义与说明，围绕cache优化和并发恢复补充理解性例子。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-data-organization",
+          "text": "解释内存数据库的数据组织方式和索引技术特点。"
+        },
+        {
+          "id": "explain-query-optimization",
+          "text": "说明面向cache特性的查询处理与优化技术。"
+        },
+        {
+          "id": "explain-concurrency-recovery",
+          "text": "解释内存数据库的并发控制和恢复机制要点。"
+        }
+      ],
+      "misconceptions": [
+        "认为内存数据库的恢复机制比磁盘数据库简单。",
+        "忽视CPU缓存对内存数据库查询性能的关键影响。"
+      ],
+      "modules": [
+        {
+          "id": "mod-storage",
+          "title": "数据存储与查询优化",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-data-organization",
+            "explain-query-optimization"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mod-index",
+          "title": "索引与多核查询处理",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-query-optimization"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mod-recovery",
+          "title": "并发控制与恢复",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-concurrency-recovery"
+          ],
+          "order": 2
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-data-organization",
+          "explain-query-optimization",
+          "explain-concurrency-recovery"
+        ],
+        "method": "简述内存数据库在数据组织、查询优化和恢复三方面的关键技术要点。",
+        "successCriteria": [
+          "能区分cache-conscious与cache-oblivious优化",
+          "能说明恢复机制的基本目标"
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-tech-intro",
+        "moduleId": "mod-storage",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "关键技术概述",
+        "markdown": "内存数据库需要在数据组织、查询处理、索引构建、并发控制和故障恢复等方面进行专门设计，以充分发挥主存的高性能优势并解决其易失性带来的持久化挑战。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000794"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "内存数据库的关键技术"
+              ],
+              "lineStart": 12634,
+              "lineEnd": 12639,
+              "assetRefs": [],
+              "excerptSha256": "6f3c4fa6b6c059d416bdf471b229ca23b1e88b3438143f5398c46530459ee160"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-data-storage",
+        "moduleId": "mod-storage",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "数据存储",
+        "markdown": "内存数据库的数据组织需要兼顾访问效率和空间利用率。常见策略包括行式存储、列式存储以及混合存储，选择取决于工作负载以事务为主还是以分析为主。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000795"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "数据存储"
+              ],
+              "lineStart": 12640,
+              "lineEnd": 12684,
+              "assetRefs": [
+                "parts/part-0005/images/f16c3a0d2203734d1e23ac8e54b1086963c209c46ee6dfa0da65553379f193d8.jpg",
+                "parts/part-0005/images/62dd2f63765200d60c3599b26524e303d7c71fc9e0d7a66b20eea77516ab4475.jpg",
+                "parts/part-0005/images/f894dd37c33810fcd6317a06b3be7ea9759cc611e9037ea2ca2aa9fd0107d4bc.jpg",
+                "parts/part-0005/images/97316bcecc2777ac2b9419312a9958607bd04c70b2887d4a75fa91e7358e7f01.jpg"
+              ],
+              "excerptSha256": "1684b05a02f0f51ea4078b207593aff9c6c2f0478d8267f1d1cd577f26a359c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-query-opt",
+        "moduleId": "mod-storage",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "查询处理及优化",
+        "markdown": "内存数据库的查询优化不仅关注I/O成本，更需要关注CPU缓存命中率和计算效率。查询执行计划的设计需要适应内存访问模式，减少缓存未命中带来的性能损失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000796"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "查询处理及优化"
+              ],
+              "lineStart": 12685,
+              "lineEnd": 12697,
+              "assetRefs": [
+                "parts/part-0005/images/5bf7363ff18295906b484332408569d190545e0f99ef5411ff6643857eb696c1.jpg"
+              ],
+              "excerptSha256": "03d0686ae229868494b8ffabb1c20b5f0068eabbc605073d732b77171699067a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-cache-conscious",
+        "moduleId": "mod-storage",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "面向cache特性的查询处理与优化技术",
+        "markdown": "针对CPU缓存特性，内存数据库发展了多种优化技术：cache-conscious优化通过数据布局调整提高缓存命中率；cache-oblivious优化在不依赖具体缓存参数的情况下仍能获得较好的缓存性能；page-coloring优化则通过减少缓存冲突进一步提升效率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000797"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "面向cache特性的查询处理与优化技术"
+              ],
+              "lineStart": 12698,
+              "lineEnd": 12717,
+              "assetRefs": [
+                "parts/part-0005/images/6b9f937da627b59fe670c992f1a04d9a8148ef4ecb79c554bab8ce82fa742d0a.jpg"
+              ],
+              "excerptSha256": "30d15c75fb688413765b7ce6d82d6ed0362e7a63cc2674f01eeb1f287d17472b"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000798"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "(1) cache-conscious 优化技术"
+              ],
+              "lineStart": 12718,
+              "lineEnd": 12729,
+              "assetRefs": [
+                "parts/part-0005/images/eacb6875a9416fca5af8e94a740affe838724a46ea625e9de73e7b8d5fde4ae6.jpg"
+              ],
+              "excerptSha256": "d97f4464284ce3fcabdb2394b367d83fbabb2873251381fbe2943c14579201fc"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000799"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "(2) cache-oblivious 优化技术"
+              ],
+              "lineStart": 12730,
+              "lineEnd": 12733,
+              "assetRefs": [],
+              "excerptSha256": "01f0c416504de3c418575fceb0217326336605f8c89dd7f5e8ca2a3fb39e5fa6"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000800"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "(3) page-coloring 优化技术"
+              ],
+              "lineStart": 12734,
+              "lineEnd": 12750,
+              "assetRefs": [
+                "parts/part-0005/images/46ce63f59fb6701acd05a2e1140e5ac731eb82a640758f472db75ccfb7cd6094.jpg"
+              ],
+              "excerptSha256": "c2e276e7c87b874806f2b7bd9bd6991e70e5daac0b38f8358633bee5d7ff9676"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cache-intuition",
+        "moduleId": "mod-storage",
+        "depth": "support",
+        "kind": "example",
+        "title": "缓存优化的直觉理解",
+        "markdown": "CPU缓存就像办公桌上的便签区：如果常用数据（便签）就放在手边（L1/L2缓存），处理速度会极快；但如果每次都要去文件柜（主存）甚至仓库（磁盘）取资料，效率就会大幅下降。cache-conscious优化就是重新整理桌面，让最常用的资料最顺手。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cache-conscious"
+          ]
+        }
+      },
+      {
+        "id": "tb-index",
+        "moduleId": "mod-index",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "索引技术",
+        "markdown": "内存数据库的索引设计需要考虑内存访问特性和空间开销。与传统B+树索引相比，内存索引通常采用更紧凑的结构，减少指针跳转带来的缓存未命中，并充分利用SIMD指令加速搜索。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000801"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "索引技术"
+              ],
+              "lineStart": 12751,
+              "lineEnd": 12784,
+              "assetRefs": [
+                "parts/part-0005/images/ab8946fff82ce2804567c7f53e0288bb75b7eae572e0f12d549d6693680cee2f.jpg",
+                "parts/part-0005/images/8e3322901fadc4f6f5dd5bff4fb26cf1882dec1d847f8be3b606b46ce849421b.jpg",
+                "parts/part-0005/images/61d43224a3ce9925683ac41d6c1c2b865d59ad7256e5f32aae382b2ab9bda4f9.jpg"
+              ],
+              "excerptSha256": "2751f2b4814094367043c4b5b8bdc168d16cfa92dc061039a132fa2aa09f5e2f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-multicore",
+        "moduleId": "mod-index",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "面向多核的查询处理技术",
+        "markdown": "现代服务器通常配备数十甚至上百个CPU核心。内存数据库需要设计高效的并行查询算法，合理划分任务、减少线程间同步开销，并避免多核访问同一内存区域带来的竞争。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000802"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "面向多核的查询处理技术"
+              ],
+              "lineStart": 12785,
+              "lineEnd": 12820,
+              "assetRefs": [
+                "parts/part-0005/images/fe4294d97f88f7fb6722206d2acc7340df0162f8834518b344e2087d7b3494df.jpg",
+                "parts/part-0005/images/05c0c8be65a67c4f9a136f2de933297d18fdab17ce4ead4bf3ae4845c9488f13.jpg",
+                "parts/part-0005/images/f5be204bdef6485c6f2bfd28b3d66de64cc4f974a321a8c72de2359e316b7b53.jpg",
+                "parts/part-0005/images/d7aac604aadddb182b6f2db223fa67fb1a4af69ce260f30daa051a5067c4dace.jpg"
+              ],
+              "excerptSha256": "e4229b5e1c509fcf22ee00e029e4075d1eef60d31c04ed102326ed0432a9dbde"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-manycore",
+        "moduleId": "mod-index",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "面向众核的查询处理技术",
+        "markdown": "随着众核处理器（如GPU和Intel Xeon Phi）的发展，内存数据库开始探索利用海量轻量级核心加速数据分析任务。这要求重新设计数据并行算法，以适应众核架构的SIMT执行模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000803"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "面向众核的查询处理技术"
+              ],
+              "lineStart": 12821,
+              "lineEnd": 12833,
+              "assetRefs": [
+                "parts/part-0005/images/ce15f5d58d72a3e46a85c3a49a84d6cb5ba89951eaaddff26daab455335ddf12.jpg"
+              ],
+              "excerptSha256": "2ec753f5fbc60e6344aa3ba590b970799235263298694c2982c15e62f8776e25"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-concurrency-recovery",
+        "moduleId": "mod-recovery",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "并发与恢复",
+        "markdown": "内存数据库的并发控制和恢复机制面临独特挑战。由于数据驻留易失性内存，系统必须设计高效的日志记录、检查点和快照机制，以保证事务的持久性和系统故障后的快速恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000804"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "并发与恢复"
+              ],
+              "lineStart": 12834,
+              "lineEnd": 12835,
+              "assetRefs": [],
+              "excerptSha256": "0b730c45786644be64896cf374e6b5dcaa9501ace03595c6f277094ffb76ce30"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000805"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "并发控制"
+              ],
+              "lineStart": 12836,
+              "lineEnd": 12849,
+              "assetRefs": [],
+              "excerptSha256": "e417fe3739c09cea1cbc892284c98a71308d27afd6859b47e3e630b01adf09d2"
+            },
+            {
+              "materialId": "doc-8786f8dd100c0d7af2538e79",
+              "blockIds": [
+                "block-000806"
+              ],
+              "headingPath": [
+                "内存数据库系统",
+                "恢复机制"
+              ],
+              "lineStart": 12850,
+              "lineEnd": 12861,
+              "assetRefs": [],
+              "excerptSha256": "3e7a538bc904844a9395b8d4e637eef6e741f1983a291f05f4d6bf83efb0d696"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recovery-note",
+        "moduleId": "mod-recovery",
+        "depth": "support",
+        "kind": "note",
+        "title": "持久化策略的权衡",
+        "markdown": "常见的持久化策略包括预写日志（WAL）、定期快照和非易失性内存（NVM）。日志方式恢复粒度细但开销大；快照恢复快但可能丢失最近数据；NVM则有望在未来消除内存与持久化之间的鸿沟。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-concurrency-recovery"
+          ]
+        }
+      }
+    ]
+  },
+  "subtitle": "内存数据库系统",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [
+    "point-12-4",
+    "point-15-2"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000794"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "内存数据库的关键技术"
+      ],
+      "lineStart": 12634,
+      "lineEnd": 12639,
+      "assetRefs": [],
+      "excerptSha256": "6f3c4fa6b6c059d416bdf471b229ca23b1e88b3438143f5398c46530459ee160"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000795"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "数据存储"
+      ],
+      "lineStart": 12640,
+      "lineEnd": 12684,
+      "assetRefs": [
+        "parts/part-0005/images/f16c3a0d2203734d1e23ac8e54b1086963c209c46ee6dfa0da65553379f193d8.jpg",
+        "parts/part-0005/images/62dd2f63765200d60c3599b26524e303d7c71fc9e0d7a66b20eea77516ab4475.jpg",
+        "parts/part-0005/images/f894dd37c33810fcd6317a06b3be7ea9759cc611e9037ea2ca2aa9fd0107d4bc.jpg",
+        "parts/part-0005/images/97316bcecc2777ac2b9419312a9958607bd04c70b2887d4a75fa91e7358e7f01.jpg"
+      ],
+      "excerptSha256": "1684b05a02f0f51ea4078b207593aff9c6c2f0478d8267f1d1cd577f26a359c2"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000796"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "查询处理及优化"
+      ],
+      "lineStart": 12685,
+      "lineEnd": 12697,
+      "assetRefs": [
+        "parts/part-0005/images/5bf7363ff18295906b484332408569d190545e0f99ef5411ff6643857eb696c1.jpg"
+      ],
+      "excerptSha256": "03d0686ae229868494b8ffabb1c20b5f0068eabbc605073d732b77171699067a"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000797"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "面向cache特性的查询处理与优化技术"
+      ],
+      "lineStart": 12698,
+      "lineEnd": 12717,
+      "assetRefs": [
+        "parts/part-0005/images/6b9f937da627b59fe670c992f1a04d9a8148ef4ecb79c554bab8ce82fa742d0a.jpg"
+      ],
+      "excerptSha256": "30d15c75fb688413765b7ce6d82d6ed0362e7a63cc2674f01eeb1f287d17472b"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000798"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "(1) cache-conscious 优化技术"
+      ],
+      "lineStart": 12718,
+      "lineEnd": 12729,
+      "assetRefs": [
+        "parts/part-0005/images/eacb6875a9416fca5af8e94a740affe838724a46ea625e9de73e7b8d5fde4ae6.jpg"
+      ],
+      "excerptSha256": "d97f4464284ce3fcabdb2394b367d83fbabb2873251381fbe2943c14579201fc"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000799"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "(2) cache-oblivious 优化技术"
+      ],
+      "lineStart": 12730,
+      "lineEnd": 12733,
+      "assetRefs": [],
+      "excerptSha256": "01f0c416504de3c418575fceb0217326336605f8c89dd7f5e8ca2a3fb39e5fa6"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000800"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "(3) page-coloring 优化技术"
+      ],
+      "lineStart": 12734,
+      "lineEnd": 12750,
+      "assetRefs": [
+        "parts/part-0005/images/46ce63f59fb6701acd05a2e1140e5ac731eb82a640758f472db75ccfb7cd6094.jpg"
+      ],
+      "excerptSha256": "c2e276e7c87b874806f2b7bd9bd6991e70e5daac0b38f8358633bee5d7ff9676"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000801"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "索引技术"
+      ],
+      "lineStart": 12751,
+      "lineEnd": 12784,
+      "assetRefs": [
+        "parts/part-0005/images/ab8946fff82ce2804567c7f53e0288bb75b7eae572e0f12d549d6693680cee2f.jpg",
+        "parts/part-0005/images/8e3322901fadc4f6f5dd5bff4fb26cf1882dec1d847f8be3b606b46ce849421b.jpg",
+        "parts/part-0005/images/61d43224a3ce9925683ac41d6c1c2b865d59ad7256e5f32aae382b2ab9bda4f9.jpg"
+      ],
+      "excerptSha256": "2751f2b4814094367043c4b5b8bdc168d16cfa92dc061039a132fa2aa09f5e2f"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000802"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "面向多核的查询处理技术"
+      ],
+      "lineStart": 12785,
+      "lineEnd": 12820,
+      "assetRefs": [
+        "parts/part-0005/images/fe4294d97f88f7fb6722206d2acc7340df0162f8834518b344e2087d7b3494df.jpg",
+        "parts/part-0005/images/05c0c8be65a67c4f9a136f2de933297d18fdab17ce4ead4bf3ae4845c9488f13.jpg",
+        "parts/part-0005/images/f5be204bdef6485c6f2bfd28b3d66de64cc4f974a321a8c72de2359e316b7b53.jpg",
+        "parts/part-0005/images/d7aac604aadddb182b6f2db223fa67fb1a4af69ce260f30daa051a5067c4dace.jpg"
+      ],
+      "excerptSha256": "e4229b5e1c509fcf22ee00e029e4075d1eef60d31c04ed102326ed0432a9dbde"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000803"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "面向众核的查询处理技术"
+      ],
+      "lineStart": 12821,
+      "lineEnd": 12833,
+      "assetRefs": [
+        "parts/part-0005/images/ce15f5d58d72a3e46a85c3a49a84d6cb5ba89951eaaddff26daab455335ddf12.jpg"
+      ],
+      "excerptSha256": "2ec753f5fbc60e6344aa3ba590b970799235263298694c2982c15e62f8776e25"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000804"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "并发与恢复"
+      ],
+      "lineStart": 12834,
+      "lineEnd": 12835,
+      "assetRefs": [],
+      "excerptSha256": "0b730c45786644be64896cf374e6b5dcaa9501ace03595c6f277094ffb76ce30"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000805"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "并发控制"
+      ],
+      "lineStart": 12836,
+      "lineEnd": 12849,
+      "assetRefs": [],
+      "excerptSha256": "e417fe3739c09cea1cbc892284c98a71308d27afd6859b47e3e630b01adf09d2"
+    },
+    {
+      "materialId": "doc-8786f8dd100c0d7af2538e79",
+      "blockIds": [
+        "block-000806"
+      ],
+      "headingPath": [
+        "内存数据库系统",
+        "恢复机制"
+      ],
+      "lineStart": 12850,
+      "lineEnd": 12861,
+      "assetRefs": [],
+      "excerptSha256": "3e7a538bc904844a9395b8d4e637eef6e741f1983a291f05f4d6bf83efb0d696"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1412,
+    203
+  ],
+  "scale": 0.91
+}

@@ -59,6 +59,8 @@
   `fallback`。资产可以有类型自有的 `config`，但不能把 config 当作事实来源或绕过来源块。
 - 最终图必须把教材阅读顺序写入独立的 `sequences.cluster` 与 `sequences.point`；不要把顺序
   自动当成 prerequisites。
+- 教材模式下，章节顺序、章内点顺序、点编号和 `sequences` 都不能推导出
+  `prerequisites`；没有明确内容证据时保持 `prerequisites: []`。
 
 ## G0-G7 门禁
 
@@ -139,6 +141,8 @@ course_pipeline {"action":"init-points","courseId":"<course-id>"}
 course_pipeline {"action":"validate-point-drafts","courseId":"<course-id>"}
 ```
 
+- canary 通过后，内容详情 worker 默认按最多 10 个互斥任务一波并发启动；只有平台明确限流或任务失败时才降为更小波次，并在进度记录中说明原因。不要把正常批次固定为 4 个或 8 个。动画 worker 继续遵守首个 canary 通过后逐任务验收的规则。
+
 - 草稿校验失败时，把完整错误发回原 worker；若原 worker 无法继续，只能新建拥有同一组文件且
   无并发旧所有者的 repair task。父 Agent 不得直接使用 `edit`/`write` 修改 worker 文件。
   当前一波全部通过后才启动下一波。`validate-point-drafts` 不能替代全部详情完成后的 `validate-points`。
@@ -180,6 +184,8 @@ course_pipeline {"action":"validate-animation-drafts","courseId":"<course-id>"}
 
 - G5 通过后加载图谱 Skill，输出 `pipeline/<course-id>/clustered-graph.json`。
 - 先只填写每个点的 `id`、`clusterIds`（首项为主簇）、`role`、`related`，需要调整先修边时再填写 `prerequisites` 并记录审计信息；不要让模型手工复制或概括正文。
+- 教材模式默认原样透传 canonical point 的 `prerequisites`，不要因为 `sequences` 或章节阅读顺序新增边；没有明确语义证据时保持 `[]`。
+- `generation.refinedPrerequisiteEdges` 只记录相对 canonical point 的实际增删，不要把最终全部边重复列出。审计方向固定为 `from=dependent`（其 `prerequisites` 包含 `to`）、`to=prerequisite`；例如 `A.prerequisites=[B]` 写 `{ "from": "A", "to": "B" }`，不能写反。
 - `related` 必须在两端双向声明，且只表达横向联系；同一对点只要任一方向存在 `prerequisites`，两端都不得再写入 `related`。
 - 关系草稿完成后必须调用 `assemble-graph`，再调用 `assemble-graph-check` 确认没有装配漂移。
   普通课程沿用现有装配格式；声明 `textbook-content/2.0` 的教材课程使用

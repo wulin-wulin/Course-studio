@@ -162,6 +162,99 @@ class MinerUParserTest(unittest.TestCase):
         self.assertEqual(parse.call_args.args, (self.source,))
         self.assertEqual(parse.call_args.kwargs["page_count"], 100)
 
+    def test_complete_cached_result_is_reused_without_token_or_cloud_call(self):
+        """A post-processing retry must not spend another MinerU task."""
+
+        blocks = [
+            {
+                "type": "text",
+                "page_idx": 0,
+                "text": "目录\n1 数组 …… 2\n1.1 下标 …… 2\n2 查找 …… 3\n2.1 二分 …… 3",
+            },
+            {"type": "text", "page_idx": 1, "text": "正文"},
+            {"type": "text", "page_idx": 2, "text": "正文"},
+        ]
+        raw = self.root / "mineru-vlm"
+        raw.mkdir()
+        (raw / "full.md").write_text(
+            "# 教材\n\n## 1 数组\n\n### 1.1 下标\n\n## 2 查找\n\n### 2.1 二分\n",
+            encoding="utf-8",
+        )
+        (raw / "content-list.json").write_text(
+            json.dumps(blocks, ensure_ascii=False), encoding="utf-8"
+        )
+        (raw / "task.json").write_text(
+            json.dumps(
+                {
+                    "parser": "mineru-vlm",
+                    "sha256": "a" * 64,
+                    "page_count": 3,
+                    "batch_id": "cached-batch",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with (
+            patch.object(mineru.settings, "mineru_api_token", ""),
+            patch.object(
+                mineru,
+                "_parse_mineru_part",
+                side_effect=AssertionError("cached result should avoid a cloud call"),
+            ) as parse,
+        ):
+            outline = mineru.parse_mineru_pdf(
+                self.source,
+                document_id="doc-test",
+                filename="教材.pdf",
+                sha256="a" * 64,
+                scan_pages=40,
+                executable="unused",
+                timeout_seconds=180,
+            )
+
+        parse.assert_not_called()
+        self.assertEqual([chapter["number"] for chapter in outline["chapters"]], ["1", "2"])
+
+    def test_cached_result_with_different_source_digest_is_not_reused(self):
+        raw = self.root / "mineru-vlm"
+        raw.mkdir()
+        (raw / "full.md").write_text("# 教材", encoding="utf-8")
+        (raw / "content-list.json").write_text(
+            json.dumps([{"type": "text", "page_idx": 0, "text": "目录\n1 数组 …… 2\n1.1 下标 …… 2"}]),
+            encoding="utf-8",
+        )
+        (raw / "task.json").write_text(
+            json.dumps(
+                {
+                    "parser": "mineru-vlm",
+                    "sha256": "b" * 64,
+                    "page_count": 3,
+                }
+            ),
+            encoding="utf-8",
+        )
+        blocks = [{"type": "text", "page_idx": 0, "text": "目录\n1 数组 …… 2\n1.1 下标 …… 2"}]
+        with (
+            patch.object(mineru.settings, "mineru_api_token", "test-secret"),
+            patch.object(
+                mineru,
+                "_parse_mineru_part",
+                return_value=("# 教材".encode("utf-8"), blocks, {"batch_id": "fresh-batch"}),
+            ) as parse,
+        ):
+            mineru.parse_mineru_pdf(
+                self.source,
+                document_id="doc-test",
+                filename="教材.pdf",
+                sha256="a" * 64,
+                scan_pages=40,
+                executable="unused",
+                timeout_seconds=180,
+            )
+        parse.assert_called_once()
+
     def test_precision_upload_poll_download_and_page_mapping(self):
         blocks = [
             {"type": "text", "text": "目录", "page_idx": 0},
@@ -226,6 +319,60 @@ class MinerUParserTest(unittest.TestCase):
         self.assertNotIn("signature", task)
         self.assertFalse((self.root / "escaped.json").exists())
 
+    def test_mineru_http_timeout_uses_remaining_budget_over_one_minute(self):
+        """A slow upload/download may use the configured budget, not 60 s."""
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("full.md", "# Book")
+            output.writestr(
+                "book_content_list.json",
+                json.dumps([{"type": "text", "page_idx": 0, "text": "目录"}], ensure_ascii=False),
+            )
+        observed: list[dict[str, float]] = []
+
+        def handle(request):
+            observed.append(dict(request.extensions["timeout"]))
+            if request.method == "POST":
+                return httpx.Response(200, json={"code": 0, "data": {
+                    "batch_id": "batch-timeout",
+                    "file_urls": ["https://storage.test/upload"],
+                }})
+            if request.method == "PUT":
+                return httpx.Response(200)
+            if request.url.host == "storage.test":
+                return httpx.Response(200, content=archive.getvalue())
+            return httpx.Response(200, json={"code": 0, "data": {
+                "extract_result": [{
+                    "state": "done",
+                    "full_zip_url": "https://storage.test/result",
+                }],
+            }})
+
+        client_type = httpx.Client
+        with (
+            patch.object(mineru.settings, "mineru_api_token", "test-secret"),
+            patch.object(mineru.settings, "mineru_api_base", "https://api.test/api/v4"),
+            patch.object(mineru.settings, "mineru_model_version", "vlm"),
+            patch.object(mineru.settings, "mineru_timeout_seconds", 180.0),
+            patch.object(mineru.httpx, "Client", side_effect=lambda **kw: client_type(
+                transport=httpx.MockTransport(handle), **kw
+            )),
+        ):
+            mineru._parse_mineru_part(
+                self.source,
+                document_id="doc-timeout",
+                filename="教材.pdf",
+                sha256="a" * 64,
+                page_count=3,
+                directory=self.root / "mineru-vlm",
+            )
+
+        self.assertTrue(observed)
+        # The first request starts with almost the full 180-second budget. A
+        # hard-coded 60-second cap would make this assertion fail.
+        self.assertGreater(observed[0]["connect"], 60.0)
+        self.assertGreater(observed[0]["write"], 60.0)
+
     def test_archive_prefers_v1_content_list_when_v2_is_also_present(self):
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
@@ -282,18 +429,38 @@ class MinerUParserTest(unittest.TestCase):
     def test_content_list_accepts_wrapped_content_text(self):
         pages = mineru.content_list_to_pages(
             {
-                "content": [
-                    {"page_idx": 0, "content": "目录"},
-                    {
-                        "page_idx": 1,
-                        "type": "text",
-                        "content": [{"text": "第1章"}, {"content": "基础"}],
-                    },
-                ]
+                "data": {
+                    "content_list": [
+                        {"page_idx": 0, "content": "目录"},
+                        {
+                            "page_idx": 1,
+                            "type": "text",
+                            "content": [{"text": "第1章"}, {"content": "基础"}],
+                        },
+                    ]
+                }
             },
             2,
         )
         self.assertEqual(pages, ["目录", "第1章基础"])
+
+    def test_content_list_ignores_auxiliary_layout_records_without_page(self):
+        pages = mineru.content_list_to_pages(
+            [
+                {"type": "image", "img_path": "images/figure.png"},
+                {"type": "table", "content": "<table>"},
+                {"type": "text", "page_idx": 0, "text": "目录"},
+            ],
+            2,
+        )
+        self.assertEqual(pages, ["目录", ""])
+
+    def test_native_page_text_failure_is_tolerated(self):
+        class BrokenPage:
+            def extract_text(self, **_kwargs):
+                raise RuntimeError("broken page object")
+
+        self.assertEqual(mineru._extract_native_page_text(BrokenPage()), "")
 
     def test_changing_selected_parser_does_not_reuse_local_outline(self):
         store = DocumentStore(self.root / "library")
@@ -313,6 +480,31 @@ class MinerUParserTest(unittest.TestCase):
         self.assertEqual(result["document"]["parser"], "mineru-vlm")
         store.parse(upload["id"], parser=parse, parser_name="mineru-vlm")
         self.assertEqual(calls, ["local-pdftotext", "mineru-vlm"])
+
+    def test_failed_parse_metadata_preserves_selected_parser(self):
+        """A failed MinerU attempt must not be mislabeled as local parsing."""
+
+        store = DocumentStore(self.root / "failure-library")
+        upload = store.create_upload(
+            io.BytesIO(b"%PDF-1.7\nminimal test source\n"),
+            filename="教材.pdf",
+            content_type="application/pdf",
+        )
+
+        def failing_parser(*_args, **_kwargs):
+            raise DocumentParseError("MinerU Markdown cannot locate chapter 4")
+
+        with self.assertRaisesRegex(DocumentParseError, "chapter 4"):
+            store.parse(
+                upload["id"],
+                parser=failing_parser,
+                parser_name="mineru-vlm",
+            )
+
+        failed = store.get(upload["id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["parser"], "mineru-vlm")
+        self.assertIn("chapter 4", failed["error"])
 
     def test_mineru_rejects_mismatched_outline_without_content_evidence(self):
         store = DocumentStore(self.root / "library")

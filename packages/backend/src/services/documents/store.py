@@ -710,6 +710,18 @@ class DocumentStore:
             directory = self._document_dir(document_id)
             metadata = self._read_json(directory / "metadata.json")
             self._validate_metadata(metadata, expected_id=document_id)
+            # Keep the parser identity selected for this attempt available to
+            # every failure path.  ``metadata`` still contains the parser from
+            # the previous lifecycle state (or no parser for a fresh upload),
+            # so using it alone would incorrectly label a MinerU failure as
+            # ``local-pdftotext``.
+            requested_parser_name = parser_name or metadata.get("parser")
+            effective_parser_name = (
+                requested_parser_name.strip()
+                if isinstance(requested_parser_name, str)
+                and requested_parser_name.strip()
+                else LOCAL_PARSER_NAME
+            )
             source_path = self._source_path(directory, metadata)
             try:
                 self._verify_source_integrity(source_path, metadata)
@@ -717,7 +729,12 @@ class DocumentStore:
                 # Never feed a replacement file to the parser under the old
                 # upload identity.  Mark the document failed so retries see
                 # the integrity problem instead of a stale ready state.
-                self._record_failure(directory, metadata, exc)
+                self._record_failure(
+                    directory,
+                    metadata,
+                    exc,
+                    parser_name=effective_parser_name,
+                )
                 raise
             if metadata["status"] == "ready" and (
                 parser_name is None or metadata.get("parser") == parser_name
@@ -828,7 +845,7 @@ class DocumentStore:
                 **metadata,
                 "status": "parsing",
                 "updated_at": _now(),
-                "parser": parser_name or LOCAL_PARSER_NAME,
+                "parser": effective_parser_name,
                 "error": None,
                 "outline_summary": None,
             }
@@ -1036,14 +1053,29 @@ class DocumentStore:
                 "outline": deepcopy(outline),
             }
         except (DocumentParserUnavailableError, DocumentParseError, DocumentValidationError) as exc:
-            self._record_failure(directory, metadata, exc)
+            self._record_failure(
+                directory,
+                metadata,
+                exc,
+                parser_name=effective_parser_name,
+            )
             raise
         except DocumentError as exc:
-            self._record_failure(directory, metadata, exc)
+            self._record_failure(
+                directory,
+                metadata,
+                exc,
+                parser_name=effective_parser_name,
+            )
             raise DocumentParseError("教材目录解析失败") from exc
         except Exception as exc:
             safe_error = DocumentParseError("教材目录解析失败")
-            self._record_failure(directory, metadata, safe_error)
+            self._record_failure(
+                directory,
+                metadata,
+                safe_error,
+                parser_name=effective_parser_name,
+            )
             raise safe_error from exc
         finally:
             with self._lock:
@@ -1084,13 +1116,18 @@ class DocumentStore:
         directory: Path,
         metadata: dict[str, Any],
         error: DocumentError,
+        *,
+        parser_name: str | None = None,
     ) -> None:
         message = " ".join(str(error).split())[:500] or "教材目录解析失败"
+        selected_parser = parser_name or metadata.get("parser") or LOCAL_PARSER_NAME
+        if not isinstance(selected_parser, str) or not selected_parser.strip():
+            selected_parser = LOCAL_PARSER_NAME
         failed_metadata = {
             **metadata,
             "status": "failed",
             "updated_at": _now(),
-            "parser": LOCAL_PARSER_NAME,
+            "parser": selected_parser,
             "error": message,
             "outline_summary": None,
         }

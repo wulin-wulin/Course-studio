@@ -654,7 +654,7 @@ class CourseReviewStoreTest(unittest.TestCase):
         self.assertEqual(points["gamma"]["clusterIds"], ["practice", "core"])
         self.assertEqual(points["beta"]["prerequisites"], [])
         self.assertEqual(points["gamma"]["prerequisites"], ["beta"])
-        self.assertEqual(
+        self.assertCountEqual(
             graph["generation"]["refinedPrerequisiteEdges"],
             [
                 {

@@ -41,6 +41,7 @@ _AUXILIARY_RE = re.compile(
 _PAGE_SUFFIX_RE = re.compile(r"(?:[.·…]{2,}|\s{2,})\s*(?P<page>\d{1,4})\s*$")
 _TRAILING_PAGE_RE = re.compile(r"\s+(?P<page>\d{1,4})\s*$")
 _LEADING_MARK_RE = re.compile(r"^[\s:：.、\-—–]+|[\s:：.、\-—–]+$")
+_CONTENT_LIST_KEYS = ("content_list", "content", "items", "data", "result")
 
 _CHINESE_DIGITS = {
     "〇": 0,
@@ -61,6 +62,29 @@ _CHINESE_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000}
 
 class StructureCandidateError(ValueError):
     """The candidate structure is malformed or cannot be trusted."""
+
+
+def _unwrap_content_list(content: Any) -> Any:
+    """Unwrap nested MinerU response envelopes without trusting depth forever."""
+
+    value = content
+    for _ in range(5):
+        if isinstance(value, list):
+            return value
+        if not isinstance(value, dict):
+            break
+        next_value = next(
+            (
+                value.get(key)
+                for key in _CONTENT_LIST_KEYS
+                if isinstance(value.get(key), (list, dict))
+            ),
+            None,
+        )
+        if next_value is None or next_value is value:
+            break
+        value = next_value
+    return value
 
 
 def _normalize_text(value: str) -> str:
@@ -116,18 +140,19 @@ def _number_value(value: str) -> int | None:
 def _as_blocks(content: Any) -> list[dict[str, Any]]:
     """Normalize MinerU Content List V1 and common wrapper responses."""
 
-    value = content
-    if isinstance(value, dict):
-        for key in ("content_list", "content", "items", "data"):
-            candidate = value.get(key)
-            if isinstance(candidate, list):
-                value = candidate
-                break
+    value = _unwrap_content_list(content)
     if not isinstance(value, list):
         raise StructureCandidateError("MinerU content-list 必须是数组")
     blocks: list[dict[str, Any]] = []
     for index, raw in enumerate(value):
         if not isinstance(raw, dict):
+            continue
+        # Non-text layout records (images, tables, equations) are retained in
+        # the raw MinerU evidence but cannot create chapter candidates.  A few
+        # exporter versions omit page_idx on those records, so skip them before
+        # enforcing the textual page contract.
+        block_type = str(raw.get("type") or "text")
+        if block_type not in {"text", "header", "ref_text"}:
             continue
         page = raw.get("page_idx")
         if isinstance(page, bool) or not isinstance(page, int) or page < 0:
@@ -149,9 +174,6 @@ def _as_blocks(content: Any) -> list[dict[str, Any]]:
                 text = "".join(parts)
         if not isinstance(text, str) or not text.strip():
             continue
-        block_type = str(raw.get("type") or "text")
-        if block_type not in {"text", "header", "ref_text"}:
-            continue
         blocks.append(
             {
                 "index": index,
@@ -165,8 +187,8 @@ def _as_blocks(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
-def _split_candidate_lines(text: str) -> Iterable[str]:
-    """Yield lines, splitting compact OCR paragraphs at chapter markers."""
+def _split_candidate_lines_with_context(text: str) -> Iterable[tuple[str, int]]:
+    """Yield candidate lines and the marker count from their source line."""
 
     for raw_line in text.splitlines() or [text]:
         line = raw_line.strip()
@@ -174,13 +196,20 @@ def _split_candidate_lines(text: str) -> Iterable[str]:
             continue
         matches = list(_CHAPTER_RE.finditer(line))
         if len(matches) <= 1:
-            yield line
+            yield line, len(matches)
             continue
         for index, match in enumerate(matches):
             end = matches[index + 1].start() if index + 1 < len(matches) else len(line)
             piece = line[match.start():end].strip()
             if piece:
-                yield piece
+                yield piece, len(matches)
+
+
+def _split_candidate_lines(text: str) -> Iterable[str]:
+    """Yield lines, splitting compact OCR paragraphs at chapter markers."""
+
+    for line, _marker_count in _split_candidate_lines_with_context(text):
+        yield line
 
 
 def _clean_title(tail: str) -> tuple[str, int | None]:
@@ -201,6 +230,189 @@ def _clean_title(tail: str) -> tuple[str, int | None]:
     return tail, page
 
 
+def _looks_like_chapter_heading(line: str, match: re.Match[str], title: str) -> bool:
+    """Return whether a chapter marker is likely a section opener.
+
+    OCR content lists contain many perfectly valid references such as
+    ``本书第2～6章……``.  Treating every regex match as a boundary makes the
+    first occurrence of a chapter number jump backwards into a paragraph.
+    A heading must start the line and either be a bare marker or have a short,
+    punctuation-free title.  The caller separately uses the block type and
+    text level as additional evidence for repeated running headers.
+    """
+
+    if match.start() != 0:
+        return False
+    if _CHAPTER_RE.fullmatch(line.strip()):
+        return True
+    title = title.strip()
+    if not title or len(title) > 80:
+        return False
+    # Chapter summaries and prose references nearly always contain sentence
+    # punctuation; a genuine title in the scanned books does not.
+    return not any(char in title for char in "，,。；;：:！!？?（）()[]【】")
+
+
+def _initial_toc_end(
+    blocks: list[dict[str, Any]], toc_start: int | None
+) -> int | None:
+    """Find the contiguous TOC run at the beginning of a content list.
+
+    A later chapter may contain an introductory paragraph mentioning several
+    ``第 N 章`` strings.  Looking for the last multi-marker page globally (the
+    old behavior) therefore swallows real body pages.  Restrict the search to
+    the initial contiguous run following the first ``目录`` heading.
+    """
+
+    if toc_start is None:
+        return None
+    by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for block in blocks:
+        by_page[block["page_idx"]].append(block)
+
+    # A long TOC may contain one chapter marker on each continuation page.
+    # If MinerU also exposes a level-1/2 chapter opener, use that as the
+    # boundary instead of allowing the final TOC row to become a body start.
+    # Do not use ``type=header`` here: running headers are often emitted on
+    # every page and can occur after an untyped first chapter opener.
+    explicit_body_pages: list[int] = []
+    for page, page_blocks in by_page.items():
+        if page <= toc_start:
+            continue
+        for block in page_blocks:
+            level = block.get("text_level")
+            if not (
+                isinstance(level, int)
+                and not isinstance(level, bool)
+                and level <= 2
+            ):
+                continue
+            for line in block["normalized"].splitlines():
+                matches = list(_CHAPTER_RE.finditer(line))
+                if len(matches) != 1:
+                    continue
+                match = matches[0]
+                title, printed_page = _clean_title(line[match.end() :])
+                # A chapter marker followed by a printed page is a TOC row,
+                # even if OCR assigned it a heading level. Only a marker with
+                # no page suffix can terminate the front-matter run.
+                if printed_page is not None:
+                    continue
+                if _looks_like_chapter_heading(line, match, title):
+                    explicit_body_pages.append(page)
+                    break
+            if explicit_body_pages and explicit_body_pages[-1] == page:
+                break
+    if explicit_body_pages:
+        return min(explicit_body_pages) - 1
+
+    page_markers: dict[int, int] = {}
+    page_has_toc: dict[int, bool] = {}
+    for page, page_blocks in by_page.items():
+        page_markers[page] = sum(
+            len(list(_CHAPTER_RE.finditer(line)))
+            for block in page_blocks
+            for line in block["normalized"].splitlines()
+        )
+        page_has_toc[page] = any(
+            _TOC_RE.fullmatch(line)
+            for block in page_blocks
+            for line in block["normalized"].splitlines()
+        )
+
+    end = toc_start
+    previous_marker_count = page_markers.get(toc_start, 0)
+    page = toc_start + 1
+    while page in by_page:
+        marker_count = page_markers.get(page, 0)
+        # A TOC page normally has several chapter entries.  Permit a final
+        # one-entry page only when it directly follows such a page; this keeps
+        # split OCR blocks from prematurely ending the TOC while still
+        # stopping at the first ordinary body page.
+        is_toc_page = (
+            page_has_toc.get(page, False)
+            or marker_count >= 2
+            or (marker_count >= 1 and previous_marker_count >= 2)
+        )
+        if not is_toc_page:
+            break
+        end = page
+        previous_marker_count = marker_count
+        page += 1
+    return end
+
+
+def _infer_toc_bounds_without_label(
+    blocks: list[dict[str, Any]],
+) -> tuple[int | None, int | None]:
+    """Infer a front-matter TOC range when MinerU omitted ``目录``.
+
+    Some scanned books (including the computer-network sample) contain a
+    perfectly usable table of contents, but MinerU labels every row as plain
+    text and does not preserve the heading word.  Such rows still have two
+    strong signals: a chapter marker and a printed-page suffix (``…… 51``).
+    Require a short run of those rows before treating them as a TOC; this
+    avoids classifying an isolated body sentence or a later citation as the
+    beginning of the document outline.
+    """
+
+    by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for block in blocks:
+        by_page[block["page_idx"]].append(block)
+    if not by_page:
+        return None, None
+
+    printed_chapter_counts: dict[int, int] = {}
+    for page, page_blocks in by_page.items():
+        count = 0
+        for block in page_blocks:
+            for raw_line in block["normalized"].splitlines():
+                line = raw_line.strip()
+                matches = list(_CHAPTER_RE.finditer(line))
+                for index, match in enumerate(matches):
+                    next_start = (
+                        matches[index + 1].start()
+                        if index + 1 < len(matches)
+                        else len(line)
+                    )
+                    _title, printed_page = _clean_title(
+                        line[match.end() : next_start]
+                    )
+                    if printed_page is not None:
+                        count += 1
+        if count:
+            printed_chapter_counts[page] = count
+
+    candidate_pages = sorted(printed_chapter_counts)
+    if not candidate_pages:
+        return None, None
+
+    # A real TOC has multiple chapter rows close together.  The eight-page
+    # window accommodates OCR exports that split one row per PDF page.
+    toc_start: int | None = None
+    for page in candidate_pages:
+        nearby = [item for item in candidate_pages if page <= item < page + 8]
+        if len(nearby) >= 2:
+            toc_start = page
+            break
+    if toc_start is None:
+        return None, None
+
+    toc_end = toc_start
+    previous = toc_start
+    for page in candidate_pages:
+        if page <= toc_start:
+            continue
+        # Keep the initial physical run.  A missing content block/page marks
+        # the end rather than allowing a later chapter's printed reference to
+        # extend the inferred TOC indefinitely.
+        if page != previous + 1:
+            break
+        toc_end = page
+        previous = page
+    return toc_start, toc_end
+
+
 def _chapter_occurrences(
     blocks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int | None, int | None]:
@@ -211,38 +423,15 @@ def _chapter_occurrences(
     )
     toc_start = toc_pages[0] if toc_pages else None
 
-    # A bare header such as ``第4章`` marks the first body page in the real
-    # MinerU output.  Use it to separate the TOC from running headers.
-    body_marker_pages = [
-        block["page_idx"]
-        for block in blocks
-        if any(
-            _CHAPTER_RE.fullmatch(line.strip())
-            for line in block["normalized"].splitlines()
-        )
-        and (toc_start is None or block["page_idx"] > toc_start)
-    ]
-    first_body_page = min(body_marker_pages) if body_marker_pages else None
-    if first_body_page is not None:
-        toc_end = first_body_page - 1
-    elif toc_start is not None:
-        # Some MinerU exports do not label running headers. A TOC page usually
-        # contains several chapter markers in one block; use the last such
-        # page as the TOC boundary, while leaving single-marker body pages in
-        # the main text.
-        toc_marker_pages = [
-            block["page_idx"]
-            for block in blocks
-            if block["page_idx"] >= toc_start
-            and sum(
-                len(list(_CHAPTER_RE.finditer(line)))
-                for line in block["normalized"].splitlines()
-            )
-            >= 2
-        ]
-        toc_end = max(toc_marker_pages, default=toc_start)
+    # First isolate the initial TOC run.  The previous implementation searched
+    # for a bare ``第 N 章`` marker anywhere after the TOC and consequently
+    # treated a later chapter's prose/summary page as the TOC boundary.  That
+    # made the real chapter-1 heading disappear and let paragraph references
+    # determine chapter starts.
+    if toc_start is None:
+        toc_start, toc_end = _infer_toc_bounds_without_label(blocks)
     else:
-        toc_end = None
+        toc_end = _initial_toc_end(blocks, toc_start)
 
     occurrences: list[dict[str, Any]] = []
     for block in blocks:
@@ -262,7 +451,7 @@ def _chapter_occurrences(
         else:
             is_toc = False
             kind = "header" if block["type"] == "header" else "body"
-        for line in _split_candidate_lines(text):
+        for line, source_marker_count in _split_candidate_lines_with_context(text):
             matches = list(_CHAPTER_RE.finditer(line))
             for match_index, match in enumerate(matches):
                 number = _number_value(match.group("number"))
@@ -275,12 +464,28 @@ def _chapter_occurrences(
                 )
                 tail = line[match.end():next_start]
                 title, printed_page = _clean_title(tail)
+                # ``is_heading`` is deliberately an internal evidence flag;
+                # it is not persisted in source references.  It lets the
+                # builder distinguish a chapter opener from a sentence such
+                # as “本书第2～6章……”.
+                # A line containing multiple chapter markers is normally a
+                # prose summary or a TOC row (``第2章…第6章``), even when the
+                # split piece left by ``_split_candidate_lines`` happens to
+                # have a short, punctuation-free tail.
+                is_heading = (
+                    source_marker_count == 1
+                    and len(matches) == 1
+                    and _looks_like_chapter_heading(
+                        line, match, title
+                    )
+                )
                 occurrences.append(
                     {
                         "number": str(number),
                         "title": title,
                         "page_idx": block["page_idx"],
                         "kind": kind,
+                        "is_heading": is_heading,
                         "printed_page": printed_page,
                         "source_ref": {
                             "page_idx": block["page_idx"],
@@ -420,17 +625,38 @@ def build_mineru_structure_candidate(
     warnings: list[str] = []
     body_pages: dict[str, int] = {}
     for number, items in by_number.items():
+        # Prefer an explicit chapter-heading occurrence over arbitrary body
+        # paragraphs.  A paragraph can mention several future chapters and
+        # would otherwise move their boundaries back to an earlier page.
+        heading_items = [
+            item
+            for item in items
+            if item.get("is_heading")
+            and (toc_end is None or item["page_idx"] > toc_end)
+        ]
         body_items = [
             item
             for item in items
-            if item["kind"] == "header"
+            if (
+                item.get("is_heading")
+                and (toc_end is None or item["page_idx"] > toc_end)
+            )
+            or item["kind"] == "header"
             or (
                 item["kind"] == "body"
                 and (toc_end is None or item["page_idx"] > toc_end)
             )
         ]
-        if body_items:
-            body_pages[number] = min(item["page_idx"] for item in body_items)
+        if heading_items:
+            body_pages[number] = min(item["page_idx"] for item in heading_items)
+        else:
+            # Existing MinerU fixtures often expose only repeated running
+            # headers.  Keep those as a conservative fallback, and only then
+            # use a non-heading body occurrence.
+            header_items = [item for item in body_items if item["kind"] == "header"]
+            fallback_items = header_items or body_items
+            if fallback_items:
+                body_pages[number] = min(item["page_idx"] for item in fallback_items)
 
     numbers = sorted(int(number) for number in by_number)
     if numbers:
@@ -453,19 +679,34 @@ def build_mineru_structure_candidate(
         toc_items = [
             item for item in items if item["kind"] == "toc" and item["title"]
         ]
+        explicit_body_items = [
+            item
+            for item in items
+            if item.get("is_heading")
+            and (toc_end is None or item["page_idx"] > toc_end)
+            and item["title"]
+        ]
         header_items = [
             item for item in items if item["kind"] == "header" and item["title"]
         ]
         body_items = [
             item
             for item in items
-            if item["kind"] == "header"
+            if (
+                item.get("is_heading")
+                and (toc_end is None or item["page_idx"] > toc_end)
+            )
+            or item["kind"] == "header"
             or (
                 item["kind"] == "body"
                 and (toc_end is None or item["page_idx"] > toc_end)
             )
         ]
-        title_items = toc_items or header_items or body_items or items
+        # A body paragraph can start with “第 N 章 …” while discussing a
+        # later topic. Prefer an explicit heading (or the TOC/header evidence)
+        # before falling back to arbitrary body text so a single reference
+        # cannot rename an entire chapter.
+        title_items = toc_items or explicit_body_items or header_items or body_items or items
         title = title_items[0]["title"] if title_items else ""
         if not title and markdown_by_number[number]:
             title = markdown_by_number[number][0]

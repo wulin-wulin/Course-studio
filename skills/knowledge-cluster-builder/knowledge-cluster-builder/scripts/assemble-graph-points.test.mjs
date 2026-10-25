@@ -124,6 +124,84 @@ test('按 index 顺序机械补齐正文，并只覆盖关系字段和显式 pre
   assert.equal(JSON.parse(check.stdout).ok, true);
 });
 
+test('规范化前置关系审计的方向，并只保留相对 canonical 的增删差异', (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  value.graph.generation.refinedPrerequisiteEdges = [
+    // Visual prerequisite -> dependent direction; the canonical audit is the
+    // dependent point first, matching point.prerequisites and backend review.
+    {
+      op: 'remove',
+      from: 'first-point',
+      to: 'second-point',
+      reason: '模型草稿方向',
+    },
+    // A stale "all final edges" entry is ignored because it is not a delta.
+    {
+      op: 'add',
+      from: 'second-point',
+      to: 'first-point',
+      reason: '模型草稿列出最终边',
+    },
+  ];
+  writeJson(value.graphFile, value.graph);
+
+  assembleGraphPoints(value.contentRoot, value.graphFile);
+  const output = JSON.parse(readFileSync(value.graphFile, 'utf8'));
+  assert.deepEqual(output.generation.refinedPrerequisiteEdges, [{
+    op: 'remove',
+    from: 'second-point',
+    to: 'first-point',
+    reason: '模型草稿方向',
+  }]);
+});
+
+test('规范化破环审计并合并重复的前置关系记录', (t) => {
+  const value = fixture();
+  t.after(() => rmSync(value.root, { recursive: true, force: true }));
+  value.graph.generation.refinedPrerequisiteEdges = [
+    {
+      op: 'remove',
+      from: 'first-point',
+      to: 'second-point',
+      reason: '破环草稿方向',
+    },
+    {
+      op: 'remove',
+      from: 'second-point',
+      to: 'first-point',
+      reason: '重复的 canonical 记录',
+    },
+  ];
+  value.graph.generation.brokenCycleEdges = [
+    {
+      from: 'first-point',
+      to: 'second-point',
+      reason: '破环草稿方向',
+    },
+    {
+      from: 'unknown-point',
+      to: 'first-point',
+      reason: '过期记录',
+    },
+  ];
+  writeJson(value.graphFile, value.graph);
+
+  assembleGraphPoints(value.contentRoot, value.graphFile);
+  const output = JSON.parse(readFileSync(value.graphFile, 'utf8'));
+  assert.deepEqual(output.generation.refinedPrerequisiteEdges, [{
+    op: 'remove',
+    from: 'second-point',
+    to: 'first-point',
+    reason: '破环草稿方向',
+  }]);
+  assert.deepEqual(output.generation.brokenCycleEdges, [{
+    from: 'second-point',
+    to: 'first-point',
+    reason: '破环草稿方向',
+  }]);
+});
+
 test('自动丢弃图草稿对上游正文的改写', (t) => {
   const value = fixture();
   t.after(() => rmSync(value.root, { recursive: true, force: true }));

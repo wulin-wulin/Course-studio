@@ -2638,6 +2638,21 @@ class CourseReviewStore:
                     "to": prerequisite_id,
                     "reason": reason,
                 })
+        # Keep the review write byte-for-byte compatible with the graph
+        # assembler's canonical audit normalization.  The operation loop
+        # above intentionally handles removals before additions while
+        # applying a review, but the persisted audit is normalized by
+        # `assemble-graph-points.mjs` using the `(op, from, to)` order.  A
+        # no-op review must therefore not fail the subsequent
+        # `assemble-graph-check` merely because the audit entries were emitted
+        # in a different order.
+        audit.sort(
+            key=lambda item: (
+                item["op"],
+                item["from"],
+                item["to"],
+            )
+        )
         generation = graph.get("generation")
         if not isinstance(generation, dict):
             raise CourseReviewValidationError("graph.generation 必须是对象")

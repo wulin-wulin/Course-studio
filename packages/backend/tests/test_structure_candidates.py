@@ -235,6 +235,152 @@ class StructureCandidateTest(unittest.TestCase):
         self.assertEqual([item["number"] for item in candidate["chapters"]], ["1", "2"])
         self.assertEqual([item["page_start"] for item in candidate["chapters"]], [4, 6])
 
+    def test_ignores_layout_records_without_page_indices(self):
+        content = [
+            {"type": "image", "img_path": "images/figure.png"},
+            {"type": "table", "content": "<table>"},
+            {"type": "text", "page_idx": 0, "text": "目录\n第1章 基础 …… 2"},
+            {"type": "text", "page_idx": 1, "text": "第1章 基础"},
+        ]
+        markdown = "# 教材\n\n## 第1章 基础\n\n正文\n"
+
+        candidate = build_mineru_structure_candidate(content, markdown, page_count=2)
+
+        self.assertEqual([chapter["number"] for chapter in candidate["chapters"]], ["1"])
+
+    def test_unwraps_nested_content_list_envelopes(self):
+        content = {
+            "data": {
+                "content_list": [
+                    {"type": "text", "page_idx": 0, "text": "目录\n第1章 基础 …… 2"},
+                    {"type": "text", "page_idx": 1, "text": "第1章 基础"},
+                ]
+            }
+        }
+        markdown = "# 教材\n\n## 第1章 基础\n\n正文\n"
+
+        candidate = build_mineru_structure_candidate(content, markdown, page_count=2)
+
+        self.assertEqual([chapter["number"] for chapter in candidate["chapters"]], ["1"])
+
+    def test_ignores_chapter_references_in_front_matter_and_body_summaries(self):
+        """A textbook overview must not move later chapter boundaries backwards.
+
+        This is reduced from the database textbook that exposed the production
+        failure: chapter 1 starts after a multi-page TOC, chapter 2 has a bare
+        opener followed by a running header, and the surrounding prose names
+        chapters 2--6 and 8--9.
+        """
+
+        content = [
+            {
+                "type": "text",
+                "page_idx": 0,
+                "text": "目录\n第1章 绪论 …… 3\n第2章 关系数据库 …… 5\n第3章 SQL …… 8",
+            },
+            {"type": "text", "page_idx": 1, "text": "目录"},
+            {"type": "text", "page_idx": 3, "text": "第1章 绪论"},
+            {
+                "type": "text",
+                "page_idx": 4,
+                "text": "本书第2章和第3章将集中讨论相关问题。",
+            },
+            {"type": "text", "page_idx": 5, "text": "第2章"},
+            {"type": "text", "page_idx": 5, "text": "关系数据库"},
+            {"type": "header", "page_idx": 6, "text": "第2章 关系数据库"},
+            {"type": "text", "page_idx": 7, "text": "第3章 SQL"},
+            {"type": "header", "page_idx": 8, "text": "第3章 SQL"},
+        ]
+        markdown = "# 教材\n\n## 第1章 绪论\n\n## 第2章 关系数据库\n\n## 第3章 SQL\n"
+
+        candidate = build_mineru_structure_candidate(content, markdown, page_count=10)
+
+        self.assertEqual(
+            [chapter["number"] for chapter in candidate["chapters"]],
+            ["1", "2", "3"],
+        )
+        self.assertEqual(
+            [chapter["page_start"] for chapter in candidate["chapters"]],
+            [4, 6, 8],
+        )
+        self.assertEqual(candidate["diagnostics"]["toc_page_end"], 1)
+
+    def test_infers_unlabeled_toc_from_printed_page_suffixes(self):
+        """Some OCR exports omit the literal 目录 heading entirely."""
+
+        content = [
+            {"type": "text", "page_idx": 0, "text": "1 章 网络基础 …… 3"},
+            {"type": "text", "page_idx": 1, "text": "2 章 传输协议 …… 25"},
+            {"type": "text", "page_idx": 2, "text": "3 章 应用层 …… 48"},
+            {"type": "text", "page_idx": 4, "text": "第1章 网络基础"},
+            {"type": "header", "page_idx": 5, "text": "第1章"},
+            {"type": "text", "page_idx": 8, "text": "第2章 传输协议"},
+            {"type": "header", "page_idx": 9, "text": "第2章"},
+            {"type": "text", "page_idx": 12, "text": "第3章 应用层"},
+            {"type": "header", "page_idx": 13, "text": "第3章"},
+        ]
+        markdown = (
+            "# 教材\n\n## 第1章 网络基础\n\n"
+            "## 第2章 传输协议\n\n## 第3章 应用层\n"
+        )
+
+        candidate = build_mineru_structure_candidate(content, markdown, page_count=15)
+
+        self.assertEqual(candidate["diagnostics"]["toc_page_start"], 0)
+        self.assertEqual(candidate["diagnostics"]["toc_page_end"], 2)
+        self.assertEqual(
+            [chapter["page_start"] for chapter in candidate["chapters"]],
+            [5, 9, 13],
+        )
+        self.assertFalse(candidate["warnings"])
+
+    def test_keeps_multi_page_toc_before_explicit_body_heading(self):
+        """A one-marker-per-page TOC must not become a chapter boundary.
+
+        This mirrors the computer-network scan: the TOC occupies several
+        continuation pages, while the first real chapter is a level-2 text
+        block after the TOC.  Counting chapter markers per page alone used to
+        select the second TOC page as chapter 2's start.
+        """
+
+        content = [
+            {"type": "text", "page_idx": 0, "text": "目录"},
+            {
+                "type": "text",
+                "page_idx": 1,
+                "text": "第1章 网络基础 …… 3\n1.1 基础 …… 4",
+            },
+            {
+                "type": "text",
+                "page_idx": 2,
+                "text": "2 章 传输协议 …… 25\n2.1 TCP …… 26",
+            },
+            {
+                "type": "text",
+                "page_idx": 3,
+                "text": "3 章 应用层 …… 48\n3.1 HTTP …… 49",
+            },
+            {"type": "text", "text_level": 2, "page_idx": 4, "text": "第1章 网络基础"},
+            {"type": "header", "page_idx": 5, "text": "第1章 网络基础"},
+            {"type": "text", "text_level": 2, "page_idx": 6, "text": "第2章 传输协议"},
+            {"type": "header", "page_idx": 7, "text": "第2章 传输协议"},
+            {"type": "text", "text_level": 2, "page_idx": 8, "text": "第3章 应用层"},
+            {"type": "header", "page_idx": 9, "text": "第3章 应用层"},
+        ]
+        markdown = (
+            "# 教材\n\n## 第1章 网络基础\n\n"
+            "## 第2章 传输协议\n\n## 第3章 应用层\n"
+        )
+
+        candidate = build_mineru_structure_candidate(content, markdown, page_count=12)
+
+        self.assertEqual(candidate["diagnostics"]["toc_page_end"], 3)
+        self.assertEqual(
+            [chapter["page_start"] for chapter in candidate["chapters"]],
+            [5, 7, 9],
+        )
+        self.assertFalse(candidate["warnings"])
+
 
 if __name__ == "__main__":
     unittest.main()

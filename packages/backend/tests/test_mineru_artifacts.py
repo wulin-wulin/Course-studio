@@ -8,6 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from src.services.documents.markdown_parser import build_markdown_artifacts
+from src.services.documents.mineru_artifacts import (
+    _find_chapter_sections,
+    _is_auxiliary_boundary_title,
+)
 from src.services.documents.store import DocumentStore, DocumentValidationError
 
 
@@ -15,6 +20,133 @@ FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mineru" / "structure_cases"
 
 
 class MinerUArtifactIntegrationTest(unittest.TestCase):
+    def test_matching_ignores_numbered_cross_reference_before_real_chapter(self):
+        markdown = "\n".join(
+            [
+                "# Book",
+                "## 1. Introduction",
+                "## 1. Physical layer",
+                "## Physical layer",
+                "### 2.1 Physical layer protocols",
+            ]
+        )
+        _outline, material = build_markdown_artifacts(
+            markdown,
+            document_id="doc-heading-match",
+            filename="book.md",
+            sha256="0" * 64,
+            parser_name="mineru-vlm",
+        )
+        candidate = {
+            "chapters": [
+                {"number": "1", "title": "Introduction"},
+                {"number": "2", "title": "Physical layer"},
+            ]
+        }
+
+        matched = _find_chapter_sections(markdown, candidate, material["sections"])
+
+        self.assertEqual([item[1].line for item in matched], [2, 4])
+
+    def test_bare_chapter_marker_and_first_point_are_valid_fallbacks(self):
+        markdown = "\n".join(
+            [
+                "# Book",
+                "## 1. Introduction",
+                "### 1.1 Basics",
+                "## \u7b2c 2 \u7ae0",
+                "## 2.1 Physical layer protocols",
+            ]
+        )
+        _outline, material = build_markdown_artifacts(
+            markdown,
+            document_id="doc-heading-marker",
+            filename="book.md",
+            sha256="0" * 64,
+            parser_name="mineru-vlm",
+        )
+        candidate = {
+            "chapters": [
+                {"number": "1", "title": "Introduction"},
+                {"number": "2", "title": "Physical layer"},
+            ]
+        }
+
+        matched = _find_chapter_sections(markdown, candidate, material["sections"])
+
+        self.assertEqual([item[1].line for item in matched], [2, 4])
+
+    def test_body_index_heading_does_not_end_chapter_search(self):
+        self.assertFalse(
+            _is_auxiliary_boundary_title("\u7d22\u5f15\u7684\u5efa\u7acb\u4e0e\u5220\u9664")
+        )
+        self.assertTrue(_is_auxiliary_boundary_title("\u7d22\u5f15"))
+
+    def test_duplicate_title_prefers_anchor_followed_by_first_point(self):
+        markdown = "\n".join(
+            [
+                "# Book",
+                "## 1. Introduction",
+                "## Physical layer",
+                "## Physical layer",
+                "### 2.1 Physical layer protocols",
+                "## \u9644\u5f55",
+                "## Physical layer",
+            ]
+        )
+        _outline, material = build_markdown_artifacts(
+            markdown,
+            document_id="doc-heading-duplicate",
+            filename="book.md",
+            sha256="0" * 64,
+            parser_name="mineru-vlm",
+        )
+        candidate = {
+            "chapters": [
+                {"number": "1", "title": "Introduction"},
+                {"number": "2", "title": "Physical layer"},
+            ]
+        }
+
+        matched = _find_chapter_sections(markdown, candidate, material["sections"])
+
+        # The first identical heading is a cross-reference. The second one
+        # is immediately followed by 2.1 and must become the chapter anchor;
+        # the copy after the appendix is outside the searchable body.
+        self.assertEqual([item[1].line for item in matched], [2, 4])
+
+    def test_matching_backtracks_when_late_exact_copy_would_break_order(self):
+        markdown = "\n".join(
+            [
+                "# Book",
+                "## 1. Introduction",
+                "## 第 2 章",
+                "## 3. Transport",
+                "## 2. Physical layer",
+            ]
+        )
+        _outline, material = build_markdown_artifacts(
+            markdown,
+            document_id="doc-heading-order",
+            filename="book.md",
+            sha256="0" * 64,
+            parser_name="mineru-vlm",
+        )
+        candidate = {
+            "chapters": [
+                {"number": "1", "title": "Introduction"},
+                {"number": "2", "title": "Physical layer"},
+                {"number": "3", "title": "Transport"},
+            ]
+        }
+
+        matched = _find_chapter_sections(markdown, candidate, material["sections"])
+
+        # The later exact copy for chapter 2 scores higher locally, but it
+        # would make chapter 3 impossible. The global monotonic matcher falls
+        # back to the earlier bare chapter marker.
+        self.assertEqual([item[1].line for item in matched], [2, 3, 4])
+
     def test_store_promotes_evidence_checked_seven_chapter_structure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
