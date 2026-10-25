@@ -335,7 +335,7 @@ function validateCourse(course, errors) {
   checkDateString(course.updatedAt, `${label}.updatedAt`, errors);
 }
 
-function validateIndex(index, errors) {
+function validateIndex(index, errors, pointOrigins = new Map()) {
   const result = {
     hasPointArray: false,
     pointById: new Map(),
@@ -385,9 +385,16 @@ function validateIndex(index, errors) {
       const key = normalizedTitle(point.title);
       const owner = titleOwners.get(key);
       if (owner) {
-        errors.push(`index.points 中知识点标题重复: ${owner} 与 ${point.id}`);
+        const currentIsTextbook = pointOrigins?.get(point.id) === 'textbook';
+        if (owner.hasNonTextbook || !currentIsTextbook) {
+          errors.push(`index.points 中知识点标题重复: ${owner.id} 与 ${point.id}`);
+        }
+        owner.hasNonTextbook ||= !currentIsTextbook;
       } else {
-        titleOwners.set(key, point.id);
+        titleOwners.set(key, {
+          id: point.id,
+          hasNonTextbook: pointOrigins?.get(point.id) !== 'textbook',
+        });
       }
     }
   });
@@ -862,12 +869,24 @@ function validateIndexStage(root, errors) {
   const course = readJsonForValidation(coursePath, errors);
   const index = readJsonForValidation(indexPath, errors);
   const manifest = readJsonForValidation(manifestPath, errors);
+  const pointOrigins = new Map();
+  if (isRecord(manifest) && Array.isArray(manifest.pointEvidence)) {
+    for (const evidence of manifest.pointEvidence) {
+      if (
+        isRecord(evidence)
+        && typeof evidence.pointId === 'string'
+        && typeof evidence.origin === 'string'
+      ) {
+        pointOrigins.set(evidence.pointId, evidence.origin);
+      }
+    }
+  }
   findForbiddenClusterFiles(root, errors);
   validateAllJsonClusterLayout(root, errors);
 
   if (course !== null) validateCourse(course, errors);
   const indexContext = index !== null
-    ? validateIndex(index, errors)
+    ? validateIndex(index, errors, pointOrigins)
     : {
       hasPointArray: false,
       pointById: new Map(),

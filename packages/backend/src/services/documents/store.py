@@ -551,6 +551,91 @@ class DocumentStore:
             self._validate_metadata(metadata, expected_id=document_id)
             return deepcopy(metadata)
 
+    def _validate_mineru_structure_cache(
+        self,
+        directory: Path,
+        outline: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Validate the evidence sidecar before exposing a MinerU cache.
+
+        A legacy parser callback may not have a raw directory at all; that
+        remains compatible with unit tests. Once a real MinerU directory is
+        present, however, a missing or stale structure candidate must never be
+        exposed as a ready textbook.
+        """
+
+        parser_name = str(outline.get("source", {}).get("parser", ""))
+        if not parser_name.startswith("mineru-"):
+            return None
+        raw_directory = self._within_root(directory / parser_name)
+        if not raw_directory.exists():
+            return None
+        if raw_directory.is_symlink():
+            raise DocumentValidationError("MinerU 原始结果目录不允许符号链接")
+        raw_content_path = self._within_root(raw_directory / "content-list.json")
+        candidate_path = self._within_root(raw_directory / "structure-candidate.json")
+        raw_markdown_path = self._within_root(raw_directory / "full.md")
+        # A few legacy parser adapters persist only ``full.md`` under a
+        # MinerU-named directory.  That is not enough evidence to validate a
+        # real MinerU parse, but it is still a valid hand-written test cache.
+        # Treat the directory as legacy until a raw content-list is present;
+        # once content-list.json exists, enforce the complete evidence bundle.
+        if not raw_content_path.exists():
+            return None
+        if (
+            not raw_content_path.is_file()
+            or raw_content_path.is_symlink()
+            or not candidate_path.is_file()
+            or candidate_path.is_symlink()
+            or not raw_markdown_path.is_file()
+            or raw_markdown_path.is_symlink()
+        ):
+            raise DocumentValidationError(
+                "MinerU 缓存缺少结构候选或原始证据，需要重新解析"
+            )
+        from .structure_candidates import (
+            StructureCandidateError,
+            validate_structure_candidate,
+        )
+
+        try:
+            if raw_content_path.stat().st_size > _MAX_JSON_BYTES:
+                raise DocumentValidationError("MinerU content-list 文件过大")
+            raw_content = json.loads(raw_content_path.read_text(encoding="utf-8-sig"))
+            candidate = self._read_json(candidate_path)
+            if not isinstance(candidate, dict):
+                raise DocumentValidationError("MinerU 结构候选必须是 JSON 对象")
+            raw_markdown = raw_markdown_path.read_text(encoding="utf-8-sig")
+            diagnostics = candidate.get("diagnostics")
+            if not isinstance(diagnostics, dict) or not diagnostics.get("markdown_sha256") or not diagnostics.get("content_sha256"):
+                raise DocumentValidationError("MinerU 结构候选缺少原始产物摘要")
+            validate_structure_candidate(
+                candidate,
+                raw_content,
+                raw_markdown,
+                page_count=int(outline["source"]["page_count"]),
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, StructureCandidateError) as exc:
+            raise DocumentValidationError(
+                "MinerU 缓存原始证据或结构候选无效，需要重新解析"
+            ) from exc
+        if candidate.get("diagnostics", {}).get("needs_review"):
+            raise DocumentValidationError(
+                "MinerU 缓存中的结构候选仍需审核，需要重新解析"
+            )
+        outline_chapters = outline.get("chapters", [])
+        candidate_chapters = candidate.get("chapters", [])
+        if [str(chapter["number"]) for chapter in outline_chapters] != [
+            str(chapter["number"]) for chapter in candidate_chapters
+        ] or [str(chapter["title"]) for chapter in outline_chapters] != [
+            str(chapter["title"]) for chapter in candidate_chapters
+        ]:
+            raise DocumentValidationError(
+                "MinerU 缓存目录与结构候选不一致，需要重新解析"
+            )
+        return candidate
+
     def get_outline(self, document_id: str) -> dict[str, Any]:
         with self._lock:
             directory = self._document_dir(document_id)
@@ -563,6 +648,7 @@ class DocumentStore:
             self._verify_source_integrity(self._source_path(directory, metadata), metadata)
             outline = self._read_json(directory / "outline.json")
             self._validate_outline(outline, metadata)
+            self._validate_mineru_structure_cache(directory, outline, metadata)
             return deepcopy(outline)
 
     def get_material(self, document_id: str) -> dict[str, Any]:
@@ -577,6 +663,9 @@ class DocumentStore:
                     f"文档正文材料尚未就绪，当前状态：{metadata['status']}"
                 )
             self._verify_source_integrity(self._source_path(directory, metadata), metadata)
+            outline = self._read_json(directory / "outline.json")
+            self._validate_outline(outline, metadata)
+            self._validate_mineru_structure_cache(directory, outline, metadata)
             material = self._read_json(directory / "material.json")
             self._validate_material(material, metadata)
             return deepcopy(material)
@@ -593,6 +682,9 @@ class DocumentStore:
                     f"文档 Markdown 尚未就绪，当前状态：{metadata['status']}"
                 )
             self._verify_source_integrity(self._source_path(directory, metadata), metadata)
+            outline = self._read_json(directory / "outline.json")
+            self._validate_outline(outline, metadata)
+            self._validate_mineru_structure_cache(directory, outline, metadata)
             material = self._read_json(directory / "material.json")
             self._validate_material(material, metadata)
             markdown_path = self._within_root(directory / "full.md")
@@ -633,6 +725,95 @@ class DocumentStore:
                 try:
                     outline = self._read_json(directory / "outline.json")
                     self._validate_outline(outline, metadata)
+                    self._validate_mineru_structure_cache(directory, outline, metadata)
+                    if str(outline.get("source", {}).get("parser", "")).startswith("mineru-"):
+                        # Older MinerU parses could leave a valid outline and
+                        # valid material whose point ID sets came from
+                        # different parsers. Treat that as stale derived data
+                        # so an explicit parse request repairs it instead of
+                        # returning the inconsistent cache.
+                        material_path = directory / "material.json"
+                        if material_path.is_file():
+                            material = self._read_json(material_path)
+                            self._validate_material(material, metadata)
+                            outline_point_ids = {
+                                str(point["id"])
+                                for chapter in outline.get("chapters", [])
+                                if isinstance(chapter, dict)
+                                for point in chapter.get("points", [])
+                                if isinstance(point, dict) and isinstance(point.get("id"), str)
+                            }
+                            material_point_ids = {
+                                str(item["point_id"])
+                                for item in material.get("point_sources", [])
+                                if isinstance(item, dict) and isinstance(item.get("point_id"), str)
+                            }
+                            if outline_point_ids != material_point_ids:
+                                raise DocumentValidationError(
+                                    "MinerU outline and material point IDs are inconsistent"
+                                )
+                        parser_name_value = str(outline.get("source", {}).get("parser", ""))
+                        raw_directory = self._within_root(directory / parser_name_value)
+                        # Hand-written parser adapters used by legacy tests do
+                        # not persist a raw MinerU directory. Keep their valid
+                        # cache behavior; real MinerU output always has this
+                        # directory and therefore goes through the evidence
+                        # freshness checks below.
+                        if not raw_directory.exists():
+                            return {
+                                "document": deepcopy(metadata),
+                                "outline": deepcopy(outline),
+                            }
+                        raw_content_path = self._within_root(raw_directory / "content-list.json")
+                        candidate_path = self._within_root(raw_directory / "structure-candidate.json")
+                        raw_markdown_path = self._within_root(raw_directory / "full.md")
+                        if not raw_content_path.exists():
+                            return {
+                                "document": deepcopy(metadata),
+                                "outline": deepcopy(outline),
+                            }
+                        if (
+                            not raw_content_path.is_file()
+                            or raw_content_path.is_symlink()
+                            or not candidate_path.is_file()
+                            or candidate_path.is_symlink()
+                            or not raw_markdown_path.is_file()
+                            or raw_markdown_path.is_symlink()
+                        ):
+                            raise DocumentValidationError(
+                                "MinerU 缓存缺少结构候选或原始证据，需要重新解析"
+                            )
+                        from .structure_candidates import (
+                            StructureCandidateError,
+                            validate_structure_candidate,
+                        )
+
+                        try:
+                            raw_content = json.loads(
+                                raw_content_path.read_text(encoding="utf-8-sig")
+                            )
+                            candidate = self._read_json(candidate_path)
+                            raw_markdown = raw_markdown_path.read_text(encoding="utf-8-sig")
+                            validate_structure_candidate(
+                                candidate,
+                                raw_content,
+                                raw_markdown,
+                                page_count=int(outline["source"]["page_count"]),
+                            )
+                        except (OSError, UnicodeError, json.JSONDecodeError, StructureCandidateError) as exc:
+                            raise DocumentValidationError(
+                                "MinerU 缓存原始证据或结构候选无效，需要重新解析"
+                            ) from exc
+                        if candidate.get("diagnostics", {}).get("needs_review"):
+                            raise DocumentValidationError(
+                                "MinerU 缓存中的结构候选仍需审核，需要重新解析"
+                            )
+                        if [str(chapter["number"]) for chapter in outline["chapters"]] != [
+                            str(chapter["number"]) for chapter in candidate["chapters"]
+                        ]:
+                            raise DocumentValidationError(
+                                "MinerU 缓存目录与结构候选不一致，需要重新解析"
+                            )
                     return {
                         "document": deepcopy(metadata),
                         "outline": deepcopy(outline),
@@ -688,9 +869,24 @@ class DocumentStore:
 
             # MinerU already persists full.md beside its raw result. Promote a
             # normalized evidence map into the document root so later stages
-            # use the same contract as direct Markdown imports.
+            # use the same contract as direct Markdown imports.  When the raw
+            # Content List is available, the evidence-checked structure
+            # candidate is authoritative; the native TOC is never silently
+            # replaced by an unrelated Markdown-derived outline.
             if material is None and str(outline.get("source", {}).get("parser", "")).startswith("mineru-"):
                 from .markdown_parser import build_markdown_artifacts
+                from .mineru_artifacts import build_mineru_markdown_artifacts
+                from .structure_candidates import (
+                    StructureCandidateError,
+                    build_mineru_structure_candidate,
+                    merge_structure_proposal,
+                    validate_structure_candidate,
+                )
+                from .structure_llm import (
+                    StructureLLMError,
+                    propose_structure,
+                    structure_llm_mode,
+                )
 
                 parser_directory = directory / str(outline["source"]["parser"])
                 raw_markdown_path = self._within_root(parser_directory / "full.md")
@@ -700,13 +896,116 @@ class DocumentStore:
                     except (OSError, UnicodeError) as exc:
                         raise DocumentValidationError("MinerU Markdown 无法读取") from exc
                     markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
-                    _derived_outline, material = build_markdown_artifacts(
-                        markdown,
-                        document_id=document_id,
-                        filename=str(metadata["filename"]),
-                        sha256=str(metadata["sha256"]),
-                        parser_name=str(outline["source"]["parser"]),
-                    )
+                    raw_content_path = self._within_root(parser_directory / "content-list.json")
+                    candidate_path = self._within_root(parser_directory / "structure-candidate.json")
+                    candidate: dict[str, Any] | None = None
+                    if raw_content_path.is_file() and not raw_content_path.is_symlink():
+                        try:
+                            if raw_content_path.stat().st_size > _MAX_JSON_BYTES:
+                                raise DocumentValidationError(
+                                    "MinerU content-list 文件过大"
+                                )
+                            raw_content = json.loads(
+                                raw_content_path.read_text(encoding="utf-8-sig")
+                            )
+                            if not isinstance(raw_content, (list, dict)):
+                                raise DocumentValidationError(
+                                    "MinerU content-list 格式无效"
+                                )
+                            if candidate_path.is_file() and not candidate_path.is_symlink():
+                                candidate = self._read_json(candidate_path)
+                            if not isinstance(candidate, dict) or not isinstance(
+                                candidate.get("diagnostics"), dict
+                            ) or not candidate["diagnostics"].get("markdown_sha256") or not candidate["diagnostics"].get("content_sha256"):
+                                candidate = build_mineru_structure_candidate(
+                                    raw_content,
+                                    markdown,
+                                    page_count=int(outline["source"]["page_count"]),
+                                )
+                            validate_structure_candidate(
+                                candidate,
+                                raw_content,
+                                markdown,
+                                page_count=int(outline["source"]["page_count"]),
+                            )
+                        except (OSError, UnicodeError, StructureCandidateError, DocumentValidationError) as exc:
+                            raise DocumentValidationError(
+                                "MinerU 结构候选无法通过原始证据校验"
+                            ) from exc
+
+                        mode = structure_llm_mode()
+                        if mode == "required" or bool(
+                            candidate.get("diagnostics", {}).get("needs_review")
+                        ) and mode == "auto":
+                            try:
+                                proposal = propose_structure(
+                                    candidate,
+                                    model=None,
+                                    enabled=True,
+                                    required=mode == "required",
+                                )
+                            except StructureLLMError as exc:
+                                raise DocumentValidationError(
+                                    "MinerU 结构模型调用失败，未生成教材目录"
+                                ) from exc
+                            if proposal is None:
+                                raise DocumentValidationError(
+                                    "MinerU 结构存在歧义，未获得有效的结构模型提案"
+                                )
+                            try:
+                                candidate = merge_structure_proposal(
+                                    candidate,
+                                    proposal,
+                                    raw_content,
+                                    page_count=int(outline["source"]["page_count"]),
+                                )
+                            except StructureCandidateError as exc:
+                                raise DocumentValidationError(
+                                    "MinerU 结构模型提案未通过证据校验"
+                                ) from exc
+                        if candidate.get("diagnostics", {}).get("needs_review"):
+                            raise DocumentValidationError(
+                                "MinerU 结构仍存在歧义，未生成教材目录"
+                            )
+                        outline, material = build_mineru_markdown_artifacts(
+                            markdown,
+                            candidate,
+                            document_id=document_id,
+                            filename=str(metadata["filename"]),
+                            sha256=str(metadata["sha256"]),
+                            parser_name=str(outline["source"]["parser"]),
+                            page_count=int(outline["source"]["page_count"]),
+                            toc_pages=int(outline["source"]["toc_pages"]),
+                        )
+                        self._write_json_atomic(candidate_path, candidate)
+                    else:
+                        # Older hand-written test adapters may not provide a
+                        # Content List. They must still produce a matching
+                        # Markdown material map; an ID mismatch is an error,
+                        # never a reason to overwrite the native outline.
+                        derived_outline, material = build_markdown_artifacts(
+                            markdown,
+                            document_id=document_id,
+                            filename=str(metadata["filename"]),
+                            sha256=str(metadata["sha256"]),
+                            parser_name=str(outline["source"]["parser"]),
+                        )
+                        outline_point_ids = {
+                            str(point["id"])
+                            for chapter in outline.get("chapters", [])
+                            if isinstance(chapter, dict)
+                            for point in chapter.get("points", [])
+                            if isinstance(point, dict) and isinstance(point.get("id"), str)
+                        }
+                        material_point_ids = {
+                            str(item["point_id"])
+                            for item in material.get("point_sources", [])
+                            if isinstance(item, dict) and isinstance(item.get("point_id"), str)
+                        }
+                        if outline_point_ids != material_point_ids:
+                            raise DocumentValidationError(
+                                "MinerU 原始目录与 Markdown 教材点不一致；缺少 content-list 证据，拒绝自动覆盖"
+                            )
             self._validate_outline(outline, metadata)
             if material is not None:
                 self._validate_material(material, metadata)

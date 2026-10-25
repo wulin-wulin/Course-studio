@@ -141,7 +141,6 @@ export function syncIndexFromPoints(projectRoot, { check = false } = {}) {
   validateEvidenceIdentity(manifest, indexPoints, errors);
 
   const indexById = new Map();
-  const titleOwners = new Map();
   indexPoints.forEach((item, indexNumber) => {
     validateIndexItemIdentity(item, indexNumber, errors);
     if (!isRecord(item) || typeof item.id !== 'string') return;
@@ -149,16 +148,6 @@ export function syncIndexFromPoints(projectRoot, { check = false } = {}) {
       errors.push(`index.points 中知识点 ID 重复: ${item.id}`);
     } else {
       indexById.set(item.id, item);
-    }
-    if (typeof item.title === 'string') {
-      const normalized = item.title.trim().toLocaleLowerCase('zh-CN');
-      if (titleOwners.has(normalized)) {
-        errors.push(
-          `index.points 中知识点标题重复: ${titleOwners.get(normalized)} 与 ${item.id}`,
-        );
-      } else {
-        titleOwners.set(normalized, item.id);
-      }
     }
   });
 
@@ -181,6 +170,46 @@ export function syncIndexFromPoints(projectRoot, { check = false } = {}) {
       errors.push(`points/ 中知识点文件 ID 重复: ${fileId}`);
     } else {
       pointsByFileId.set(fileId, point);
+    }
+  }
+
+  const pointOrigins = new Map();
+  if (isRecord(manifest) && Array.isArray(manifest.pointEvidence)) {
+    for (const evidence of manifest.pointEvidence) {
+      if (
+        isRecord(evidence)
+        && typeof evidence.pointId === 'string'
+        && typeof evidence.origin === 'string'
+      ) {
+        pointOrigins.set(evidence.pointId, evidence.origin);
+      }
+    }
+  }
+  for (const [id, point] of pointsByFileId) {
+    if (isRecord(point) && typeof point.origin === 'string') {
+      pointOrigins.set(id, point.origin);
+    }
+  }
+
+  const titleOwners = new Map();
+  for (const item of indexPoints) {
+    if (!isRecord(item) || typeof item.id !== 'string') continue;
+    if (typeof item.title !== 'string') continue;
+    const normalized = item.title.trim().toLocaleLowerCase('zh-CN');
+    const owner = titleOwners.get(normalized);
+    if (owner) {
+      const currentIsTextbook = pointOrigins.get(item.id) === 'textbook';
+      if (owner.hasNonTextbook || !currentIsTextbook) {
+        errors.push(
+          `index.points 中知识点标题重复: ${owner.id} 与 ${item.id}`,
+        );
+      }
+      owner.hasNonTextbook ||= !currentIsTextbook;
+    } else {
+      titleOwners.set(normalized, {
+        id: item.id,
+        hasNonTextbook: pointOrigins.get(item.id) !== 'textbook',
+      });
     }
   }
 

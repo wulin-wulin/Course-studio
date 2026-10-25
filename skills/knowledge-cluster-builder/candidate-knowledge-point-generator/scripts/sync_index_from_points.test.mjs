@@ -139,3 +139,21 @@ test('修改 index title 时 validator 与同步器都拒绝', (t) => {
     /pointEvidence\[0\]\.title.*同序一致/,
   );
 });
+
+test('sync preserves duplicate titles for textbook-origin points', (t) => {
+  const { root } = createCourseFixture(t);
+  const index = readJson(root, 'src/data/index.json');
+  const manifest = readJson(root, 'generation/manifest.json');
+  index.points[1].title = index.points[0].title;
+  manifest.pointEvidence[1].title = manifest.pointEvidence[0].title;
+  const point = readJson(root, 'src/data/points/state-transition.json');
+  point.title = index.points[0].title;
+  manifest.pointEvidence.forEach((evidence) => {
+    evidence.origin = 'textbook';
+  });
+  writeJson(root, 'src/data/index.json', index);
+  writeJson(root, 'generation/manifest.json', manifest);
+  writeJson(root, 'src/data/points/state-transition.json', point);
+
+  assert.doesNotThrow(() => syncIndexFromPoints(root));
+});

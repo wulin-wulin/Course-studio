@@ -608,6 +608,32 @@ test("dedicated Markdown import rejects PDFs and accepts MinerU full.md", () => 
   assert.match(contracts.MARKDOWN_TEXTBOOK_FILE_ACCEPT, /\.markdown/);
 });
 
+test("dedicated PDF creation rejects Markdown files", () => {
+  assert.equal(
+    contracts.isSupportedPdfTextbookFile({
+      name: "教材.pdf",
+      type: "application/pdf",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedPdfTextbookFile({
+      name: "教材.pdf",
+      type: "",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedPdfTextbookFile({
+      name: "full.md",
+      type: "text/markdown",
+    }),
+    false,
+  );
+  assert.match(contracts.PDF_TEXTBOOK_FILE_ACCEPT, /application\/pdf/);
+  assert.match(contracts.PDF_TEXTBOOK_FILE_ACCEPT, /\.pdf/);
+});
+
 test("dedicated Markdown creation describes the graph generation action", () => {
   const request = contracts.prepareMarkdownCourseCreationRequest({
     id: "document-markdown-1",

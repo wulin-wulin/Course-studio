@@ -98,6 +98,12 @@ MINERU_API_BASE=https://mineru.net/api/v4
 MINERU_API_TOKEN=
 MINERU_TIMEOUT_SECONDS=300
 MINERU_MODEL_VERSION=vlm
+# 章节结构第二阶段校验：off=完全本地，auto=仅在规则候选有歧义时调用模型，required=每次都要求模型提案
+DOCUMENT_STRUCTURE_LLM_MODE=auto
+# 可选；留空时使用 models.json 的 default
+DOCUMENT_STRUCTURE_LLM_MODEL=
+DOCUMENT_STRUCTURE_LLM_MAX_INPUT_CHARS=120000
+DOCUMENT_STRUCTURE_LLM_MAX_OUTPUT_TOKENS=8000
 ```
 
 在根目录创建 `models.json`，每个模型都需要完整的 `id`、`base_url` 和
@@ -245,6 +251,16 @@ Token 仅保存在后端 `.env`；签名上传和下载请求不会携带 API �
 200 页，200 MB。当前应用上传上限仍默认 100 MiB；更大的教材可调高
 `DOCUMENT_MAX_UPLOAD_BYTES`，拆出的每段仍需满足云端大小限制。
 `MINERU_TIMEOUT_SECONDS` 控制每段云端解析的总时限，默认 300 秒，排队较久时可调高。
+
+MinerU 完成后不会直接把 Markdown 的一级标题当作章节。后端先读取原始
+`content-list.json`，生成带页码和原文引用的 `structure-candidate.json`，再把候选
+章节与只读的 `full.md` 标题映射成最终 `outline.json` 和 `material.json`。规则候选有
+歧义时，`DOCUMENT_STRUCTURE_LLM_MODE=auto` 才会调用 `models.json` 中的模型提出修正；
+模型只能引用原始块、调整候选标题和边界，不能修改 `full.md`、增加无证据章节或直接写入
+最终目录。提案无法通过证据校验时解析会失败并保留原始产物，避免静默生成错误章节。
+如果原始 Content List 完全没有可验证的章节证据，系统也会安全失败（不会让模型凭空猜章节）；
+此时需要人工检查 MinerU 输出或调整解析配置后重新上传。已有旧缓存若没有
+`structure-candidate.json`，首次读取会要求重新解析，以免继续使用旧的错误目录。
 
 本次保底支持未加密、页面清晰、带中文“目录”标题及阿拉伯数字章节编号（如 `1`、`1.1`）
 的 PDF 教材，目录需有可识别的页码，并位于 `DOCUMENT_TOC_SCAN_PAGES` 范围内。
@@ -429,6 +445,10 @@ npm run build
 ```powershell
 packages\backend\.venv\Scripts\python.exe -u scripts\smoke_test_course_creation.py
 ```
+
+真实 PDF 流程还可以运行 `scripts\smoke_test_pdf_course_creation.py`；它会在解析阶段
+直接检查 `/documents/{id}/markdown`，把非空 `parsed-full.md`、纲要和 SHA-256 保存到
+验收输出目录。普通 pytest 不会调用 MinerU 或外部模型。
 
 测试会话的中间产物会保留在 `packages/backend/generated/course_agent_sessions/`，便于
 排查门禁和模型输出；该目录不会进入正式课程数据或 Git。

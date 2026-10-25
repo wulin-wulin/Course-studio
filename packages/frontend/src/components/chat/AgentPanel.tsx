@@ -89,7 +89,7 @@ type AgentRunStatus = {
 type ConnectionState = "connecting" | "connected" | "disconnected";
 type AgentWorkflow = "default" | "course-create";
 type CourseCreationSource = "topic" | "pdf";
-type TextbookUploadFormat = "all" | "markdown";
+type TextbookUploadFormat = "all" | "pdf" | "markdown";
 
 type AgentQuestionOption = {
   label: string;
@@ -1012,14 +1012,14 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     stickToBottomRef.current = true;
   }, [isRunning, mode, workflow]);
 
-  const startMarkdownCourseCreation = useCallback(() => {
+  const startPdfCourseCreation = useCallback(() => {
     if (mode !== "agent" || isRunning || workflow === "course-create") return;
     setHistoryOpen(false);
     setModeInfoOpen(false);
     setCourseDeleteOpen(false);
     setCourseCreationSetupError("");
     setCourseCreationSource("pdf");
-    setTextbookUploadFormat("markdown");
+    setTextbookUploadFormat("pdf");
     setCourseCreationSetupOpen(true);
     stickToBottomRef.current = true;
   }, [isRunning, mode, workflow]);
@@ -1679,17 +1679,17 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={startMarkdownCourseCreation}
+                    onClick={startPdfCourseCreation}
                     disabled={isRunning || workflow === "course-create" || courseCreationSetupOpen}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                     title={
                       workflow === "course-create"
                         ? "当前对话正在创建课程"
-                        : "上传 MinerU Markdown 并生成知识森林图谱"
+                        : "上传 PDF 并生成知识森林图谱"
                     }
                   >
                     <FileText className="h-3.5 w-3.5" />
-                    Markdown 生成图谱
+                    PDF 生成图谱
                   </button>
                   <button
                     type="button"

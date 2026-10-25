@@ -1392,6 +1392,34 @@ test('model-only 与 researched 继续兼容不含 provenance 字段的旧产物
   );
 });
 
+test('textbook-origin points may preserve duplicate source titles', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const manifest = configureTextbookGroundedManifest(root);
+  const index = readJson(root, 'src/data/index.json');
+  index.points[1].title = index.points[0].title;
+  manifest.pointEvidence[1].title = manifest.pointEvidence[0].title;
+  writeJson(root, 'src/data/index.json', index);
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+
+  assert.deepEqual(result.errors, []);
+});
+
+test('non-textbook points still reject duplicate titles', (t) => {
+  const { root } = createCourseFixture(t, { includeDetails: false });
+  const index = readJson(root, 'src/data/index.json');
+  const manifest = readJson(root, 'generation/manifest.json');
+  index.points[1].title = index.points[0].title;
+  manifest.pointEvidence[1].title = manifest.pointEvidence[0].title;
+  writeJson(root, 'src/data/index.json', index);
+  writeJson(root, 'generation/manifest.json', manifest);
+
+  const result = validateProject(root, { phase: 'index' });
+
+  assert.ok(result.errors.some((error) => error.includes('知识点标题重复')));
+});
+
 test('普通主题模式仍允许显式 modelEnriched=false', (t) => {
   const { root } = createCourseFixture(t);
   const manifest = readJson(root, 'generation/manifest.json');

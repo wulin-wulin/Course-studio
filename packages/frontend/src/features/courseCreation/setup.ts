@@ -59,6 +59,12 @@ export const MARKDOWN_TEXTBOOK_FILE_ACCEPT = [
   ".markdown",
 ].join(",");
 
+export const PDF_TEXTBOOK_FILE_ACCEPT = [
+  "application/pdf",
+  "application/x-pdf",
+  ".pdf",
+].join(",");
+
 type TextbookFileDescriptor = {
   name: string;
   type?: string;
@@ -86,6 +92,19 @@ export function isSupportedTextbookFile(file: TextbookFileDescriptor): boolean {
     return PDF_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType);
   }
   return isSupportedMarkdownTextbookFile(file);
+}
+
+export function isSupportedPdfTextbookFile(
+  file: TextbookFileDescriptor,
+): boolean {
+  const filename = file.name.trim().toLowerCase();
+  const mediaType = ((file.type ?? "").split(";", 1)[0] ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    filename.endsWith(".pdf") &&
+    (PDF_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType))
+  );
 }
 
 export function isSupportedMarkdownTextbookFile(

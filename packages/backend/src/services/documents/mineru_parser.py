@@ -19,11 +19,43 @@ from pypdf import PdfReader, PdfWriter
 from ...config import settings
 from .local_parser import _pdf_page_count, _title_from_filename, _TOC_HEADING_RE, parse_toc_text
 from .store import OUTLINE_SCHEMA, DocumentParseError, DocumentParserUnavailableError
+from .structure_candidates import (
+    StructureCandidateError,
+    build_mineru_structure_candidate,
+)
 
 MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 512 * 1024 * 1024
 MAX_PART_PAGES = 100
 MAX_PARALLEL_PARTS = 5
+
+
+def _block_text(block: dict[str, Any]) -> str | None:
+    """Read text from MinerU V1 and common wrapped block shapes.
+
+    V1 normally exposes ``text``; a few compatible exporters use a string
+    ``content`` field or a list of inline objects.  Keeping this normalization
+    local lets page mapping and structure analysis see the same evidence.
+    """
+
+    text = block.get("text")
+    if isinstance(text, str) and text.strip():
+        return text
+    content = block.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                value = item.get("text") or item.get("content")
+                if isinstance(value, str):
+                    parts.append(value)
+        joined = "".join(parts)
+        return joined if joined.strip() else None
+    return None
 
 
 def content_list_to_pages(content: Any, page_count: int) -> list[str]:
@@ -33,6 +65,12 @@ def content_list_to_pages(content: Any, page_count: int) -> list[str]:
     page_idx fields are zero-based; printed TOC destination pages stay intact.
     Do not derive page numbers from the flattened Markdown document.
     """
+    if isinstance(content, dict):
+        for key in ("content_list", "content", "items", "data"):
+            candidate = content.get(key)
+            if isinstance(candidate, list):
+                content = candidate
+                break
     if not isinstance(content, list):
         raise DocumentParseError("MinerU content_list 不是有效的内容列表")
     pages: list[list[str]] = [[] for _ in range(page_count)]
@@ -42,8 +80,10 @@ def content_list_to_pages(content: Any, page_count: int) -> list[str]:
         page = block.get("page_idx")
         if isinstance(page, bool) or not isinstance(page, int) or not 0 <= page < page_count:
             raise DocumentParseError("MinerU 内容块缺少有效的原 PDF 页码")
-        if block.get("type") == "text" and isinstance(block.get("text"), str):
-            pages[page].append(block["text"])
+        if block.get("type") in {"text", "header", "ref_text", None}:
+            text = _block_text(block)
+            if text is not None:
+                pages[page].append(text)
     return ["\n".join(page) for page in pages]
 
 
@@ -72,7 +112,18 @@ def _read_artifacts(archive_bytes: bytes, directory: Path) -> tuple[bytes, bytes
             if len(files) > 10000 or sum(item.file_size for item in files) > MAX_EXTRACTED_BYTES:
                 raise DocumentParseError("MinerU 结果包超过解压大小限制")
             markdown = [item for item in files if Path(item.filename).name == "full.md"]
-            content = [item for item in files if item.filename.endswith("_content_list.json")]
+            content_candidates = [
+                item
+                for item in files
+                if Path(item.filename).name in {"content-list.json", "content_list.json"}
+                or item.filename.endswith("_content_list.json")
+            ]
+            v1_content = [
+                item
+                for item in content_candidates
+                if not Path(item.filename).stem.endswith("_v2")
+            ]
+            content = v1_content if len(v1_content) == 1 else content_candidates
             if len(markdown) != 1 or len(content) != 1:
                 raise DocumentParseError("MinerU 结果缺少唯一的 full.md 或 content_list.json")
             image_directory = Path(markdown[0].filename).parent / "images"
@@ -188,7 +239,7 @@ def _parse_mineru_part(
         _save_artifact(directory, "content-list.json", content_bytes)
         task = {
             "batch_id": batch_id, "parser": parser_name, "sha256": sha256,
-            "page_count": page_count, "elapsed_seconds": round(time.monotonic()-started, 2),
+            "page_count": page_count, "elapsed_seconds": round(time.monotonic() - started, 2),
         }
         _save_artifact(directory, "task.json", json.dumps(task, ensure_ascii=False, indent=2).encode("utf-8"))
         return markdown, content, task
@@ -266,6 +317,26 @@ def parse_mineru_pdf(
             "parser": parser_name, "sha256": sha256, "page_count": page_count,
             "parts": tasks, "elapsed_seconds": round(time.monotonic() - started, 2),
         }, ensure_ascii=False, indent=2).encode("utf-8"))
+    # Keep a separately auditable, evidence-only structure candidate beside
+    # the immutable MinerU files.  The legacy/native outline is still returned
+    # for API compatibility; DocumentStore promotes this candidate only after
+    # it has been joined to Markdown and contract-validated.
+    try:
+        markdown_text = (raw / "full.md").read_text(encoding="utf-8-sig")
+        candidate = build_mineru_structure_candidate(
+            content,
+            markdown_text,
+            page_count=page_count,
+        )
+    except (OSError, UnicodeError, StructureCandidateError):
+        candidate = None
+    if candidate is not None:
+        _save_artifact(
+            raw,
+            "structure-candidate.json",
+            json.dumps(candidate, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
+
     pages = content_list_to_pages(content, page_count)
     pages_to_scan = min(max(1, int(scan_pages)), page_count)
     reader = PdfReader(path)

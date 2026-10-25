@@ -11,7 +11,10 @@ import unittest
 from unittest.mock import patch
 
 from src.services.documents import binding
-from src.services.documents.markdown_parser import parse_markdown_document
+from src.services.documents.markdown_parser import (
+    build_markdown_artifacts,
+    parse_markdown_document,
+)
 from src.services.documents.store import DocumentStore
 from src.services.reviews import CourseReviewStore
 
@@ -428,20 +431,7 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
         self.assertEqual(submitted["review"]["status"], "resolved")
         return submitted
 
-    def test_small_mineru_markdown_reaches_published_forest_with_deterministic_llm_stub(self):
-        markdown = SMALL_MINERU_FIXTURE.read_bytes()
-        metadata = self.document_store.create_markdown_upload(
-            io.BytesIO(markdown),
-            filename="full.md",
-            content_type="text/markdown",
-        )
-        parsed = self.document_store.parse(
-            metadata["id"],
-            parser=parse_markdown_document,
-            parser_name="markdown-import",
-        )
-        self.assertEqual(parsed["document"]["parser"], "markdown-import")
-
+    def _run_published_forest_pipeline(self, metadata: dict) -> None:
         with patch.object(binding, "get_document_store", return_value=self.document_store):
             binding_result = binding.bind_textbook_workspace(
                 self.session_root,
@@ -570,6 +560,68 @@ class MarkdownPipelineEndToEndTest(unittest.TestCase):
                 [block["provenance"]["origin"] for block in detail["content"]["blocks"]],
                 ["textbook", "model"],
             )
+
+    def test_small_mineru_markdown_reaches_published_forest_with_deterministic_llm_stub(self):
+        markdown = SMALL_MINERU_FIXTURE.read_bytes()
+        metadata = self.document_store.create_markdown_upload(
+            io.BytesIO(markdown),
+            filename="full.md",
+            content_type="text/markdown",
+        )
+        parsed = self.document_store.parse(
+            metadata["id"],
+            parser=parse_markdown_document,
+            parser_name="markdown-import",
+        )
+        self.assertEqual(parsed["document"]["parser"], "markdown-import")
+        self._run_published_forest_pipeline(metadata)
+
+    def test_pdf_to_mineru_markdown_reaches_published_forest(self):
+        """Exercise the production PDF -> full.md promotion path end to end."""
+
+        markdown = SMALL_MINERU_FIXTURE.read_text(encoding="utf-8")
+        metadata = self.document_store.create_upload(
+            io.BytesIO(b"%PDF-1.7\nsynthetic textbook source"),
+            filename="教材.pdf",
+            content_type="application/pdf",
+        )
+
+        def mineru_stub(
+            path: Path,
+            *,
+            document_id: str,
+            filename: str,
+            sha256: str,
+            **_kwargs,
+        ) -> dict:
+            raw_directory = path.parent / "mineru-vlm"
+            raw_directory.mkdir(parents=True, exist_ok=True)
+            (raw_directory / "full.md").write_text(markdown, encoding="utf-8")
+            outline, _material = build_markdown_artifacts(
+                markdown,
+                document_id=document_id,
+                filename=filename,
+                sha256=sha256,
+                parser_name="mineru-vlm",
+            )
+            outline["source"]["page_count"] = 1
+            outline["source"]["toc_pages"] = 1
+            return outline
+
+        parsed = self.document_store.parse(
+            metadata["id"],
+            parser=mineru_stub,
+            parser_name="mineru-vlm",
+        )
+        self.assertEqual(parsed["document"]["content_type"], "application/pdf")
+        self.assertEqual(parsed["document"]["parser"], "mineru-vlm")
+        self.assertEqual(self.document_store.get_markdown(metadata["id"]), markdown)
+        self.assertEqual(
+            self.document_store.get_material(metadata["id"])["source"]["parser"],
+            "mineru-vlm",
+        )
+
+        self._run_published_forest_pipeline(metadata)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,7 @@ LaTeX 命令本身仍必须双写反斜杠。worker 写完 point 与 animation r
 
 - `course.id` 和 `point.id` 使用 ASCII kebab-case，匹配 `^[a-z0-9]+(?:-[a-z0-9]+)*$`。
 - `point.id` 在课程内唯一，并严格等于详情文件名。
+- 教材来源点（`origin: "textbook"`）必须保留教材原始标题，因此同一课程内教材点标题可以重复；非教材点之间，以及教材点与非教材点之间，标题仍必须唯一。
 - `prerequisites[]` 只引用同一课程已存在的 `point.id`，不能自引用、重复或形成环。
 - `animationType` 使用 ASCII lowerCamelCase，`none` 为保留值。
 - 动画组件名使用 PascalCase，并严格对应 `<Component>.tsx` 和 `<Component>.css`。

@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     document_pdftotext_executable: str = "pdftotext"
     document_parser: Literal["local", "mineru", "auto"] = "local"
 
+    # Structure analysis is a second, evidence-constrained pass after MinerU.
+    # ``auto`` lets the parser call the configured model only when the
+    # deterministic candidate reports ambiguity; ``off`` keeps parsing fully
+    # local; ``required`` fails closed when a valid model proposal cannot be
+    # obtained.  The model never receives permission to edit raw Markdown.
+    document_structure_llm_mode: Literal["off", "auto", "required"] = "auto"
+    document_structure_llm_model: str = ""
+    document_structure_llm_max_input_chars: int = 120_000
+    document_structure_llm_max_output_tokens: int = 8_000
+
     # Remote parser settings stay backend-only; the document API returns safe
     # status/errors and normalized outlines, never credentials or signed URLs.
     mineru_api_base: str = ""

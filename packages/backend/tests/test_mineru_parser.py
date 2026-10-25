@@ -15,6 +15,7 @@ from src.api import documents as api
 from src.services.documents import mineru_parser as mineru
 from src.services.documents.store import (
     DocumentParseError, DocumentParserUnavailableError, DocumentStore,
+    DocumentValidationError,
 )
 
 
@@ -225,6 +226,24 @@ class MinerUParserTest(unittest.TestCase):
         self.assertNotIn("signature", task)
         self.assertFalse((self.root / "escaped.json").exists())
 
+    def test_archive_prefers_v1_content_list_when_v2_is_also_present(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("full.md", "# Book")
+            archive.writestr(
+                "book_content_list.json",
+                json.dumps([{"type": "text", "page_idx": 0, "text": "v1"}]),
+            )
+            archive.writestr(
+                "book_content_list_v2.json",
+                json.dumps([[{"type": "text", "text": "v2"}]]),
+            )
+        output = self.root / "mineru"
+        output.mkdir()
+        markdown, content_bytes = mineru._read_artifacts(buffer.getvalue(), output)
+        self.assertEqual(markdown, b"# Book")
+        self.assertEqual(json.loads(content_bytes)[0]["text"], "v1")
+
     def test_native_toc_preserves_chapter_numbers_omitted_by_mineru(self):
         native_toc = "⽬录\n1 数组  2\n1.1 下标 …… 2\n2 查找  3\n2.1 二分 …… 3"
         blocks = [{"type": "text", "page_idx": 0,
@@ -260,6 +279,22 @@ class MinerUParserTest(unittest.TestCase):
             with self.subTest(page=page), self.assertRaises(DocumentParseError):
                 mineru.content_list_to_pages([{"type": "text", "page_idx": page, "text": "目录"}], 2)
 
+    def test_content_list_accepts_wrapped_content_text(self):
+        pages = mineru.content_list_to_pages(
+            {
+                "content": [
+                    {"page_idx": 0, "content": "目录"},
+                    {
+                        "page_idx": 1,
+                        "type": "text",
+                        "content": [{"text": "第1章"}, {"content": "基础"}],
+                    },
+                ]
+            },
+            2,
+        )
+        self.assertEqual(pages, ["目录", "第1章基础"])
+
     def test_changing_selected_parser_does_not_reuse_local_outline(self):
         store = DocumentStore(self.root / "library")
         upload = store.create_upload(io.BytesIO(b"%PDF-source"), filename="x.pdf", content_type="application/pdf")
@@ -278,6 +313,62 @@ class MinerUParserTest(unittest.TestCase):
         self.assertEqual(result["document"]["parser"], "mineru-vlm")
         store.parse(upload["id"], parser=parse, parser_name="mineru-vlm")
         self.assertEqual(calls, ["local-pdftotext", "mineru-vlm"])
+
+    def test_mineru_rejects_mismatched_outline_without_content_evidence(self):
+        store = DocumentStore(self.root / "library")
+        upload = store.create_upload(
+            io.BytesIO(b"%PDF-source"),
+            filename="textbook.pdf",
+            content_type="application/pdf",
+        )
+        markdown = """# Textbook
+
+## 1. Chapter one
+
+### 1.1 First point
+
+Evidence for the first point.
+
+### 1.2 Second point
+
+Evidence for the second point.
+"""
+
+        def parse(path, *, document_id, filename, sha256, **_kwargs):
+            raw = path.parent / "mineru-vlm"
+            raw.mkdir(parents=True, exist_ok=True)
+            (raw / "full.md").write_text(markdown, encoding="utf-8")
+            return {
+                "schema_version": "textbook-outline/1.0",
+                "document_id": document_id,
+                "title": "Textbook",
+                "source": {
+                    "filename": filename,
+                    "sha256": sha256,
+                    "parser": "mineru-vlm",
+                    "page_count": 1,
+                    "toc_pages": 1,
+                },
+                "chapters": [{
+                    "id": "chapter-0",
+                    "number": "0",
+                    "title": "目录",
+                    "page": 1,
+                    "order": 0,
+                    "points": [{
+                        "id": "point-0-1",
+                        "number": "0.1",
+                        "title": "错误目录点",
+                        "page": 1,
+                        "order": 0,
+                        "origin": "textbook",
+                    }],
+                }],
+            }
+
+        with self.assertRaises(DocumentValidationError):
+            store.parse(upload["id"], parser=parse, parser_name="mineru-vlm")
+        self.assertEqual(store.get(upload["id"])["status"], "failed")
 
     def test_explicit_mineru_mode_selects_cloud_parser(self):
         with (
