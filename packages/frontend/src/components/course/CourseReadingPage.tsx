@@ -90,6 +90,15 @@ type TextbookReadingModule = {
 
 const courseIndexCache = new Map<string, ForestIndex>();
 
+type Rgb = [number, number, number];
+
+const DEFAULT_CLUSTER_ACCENT = "#2f7567";
+const DEFAULT_CLUSTER_SOFT = "#e8f0e8";
+// 与 global.css @theme 的文字令牌保持一致，供运行时校验课程数据里的颜色。
+const TEXT_PRIMARY = "#2D3B2D";
+const TEXT_TERTIARY = "#5C695D";
+const MIN_TEXT_CONTRAST = 4.5;
+
 export function CourseReadingPage({
   course,
   pointId,
@@ -302,9 +311,7 @@ export function CourseReadingPage({
     };
   }, [navigationPoints, pointId]);
 
-  const accent = activeCluster?.accent ?? "#2f7567";
-  const soft = activeCluster?.soft ?? "#e8f0e8";
-  const readerStyle = { "--course-reader-accent": accent, "--course-reader-soft": soft } as CSSProperties;
+  const readerStyle = useMemo(() => readerPaletteStyle(activeCluster), [activeCluster]);
 
   return (
     <section
@@ -1816,10 +1823,16 @@ function CourseAnimationFrame({
 }
 
 function VisualGuide({ point, notes }: { point: CoursePointDetail; notes: string[] }) {
-  const visualColor = typeof point.visual?.color === "string" && /^#[0-9a-f]{6}$/i.test(point.visual.color)
+  const visualColor = typeof point.visual?.color === "string" && parseHexColor(point.visual.color)
     ? point.visual.color
     : undefined;
-  const style = visualColor ? { "--course-visual-accent": visualColor } as CSSProperties : undefined;
+  // 图示色只用于边框和浅底；标签文字按 .course-reader__visual-guide-head small 的 10% 浅底校验。
+  const style = visualColor
+    ? {
+        "--course-visual-accent": visualColor,
+        "--course-visual-accent-text": ensureReadable([visualColor], [tintHexColor(visualColor, 0.9)]),
+      } as CSSProperties
+    : undefined;
   return (
     <section id="section-visual-guide" className="course-reader__visual-guide course-reader__anchored-section" style={style}>
       <div className="course-reader__visual-guide-head">
@@ -2088,6 +2101,99 @@ function readerLayoutMode(width: number): ReaderLayoutMode {
   if (width <= 640) return "narrow";
   if (width <= 1120) return "compact";
   return "wide";
+}
+
+/**
+ * 知识簇颜色来自课程数据（常由模型生成），不能直接当文字色。
+ * soft 作为底色先提亮到元信息文字可读；簇色文字优先用数据里的 dark 色，
+ * 并在 soft 底、强调色 10% 浅底、视图切换灰底和白底上统一校验。强调色本身只用于装饰。
+ */
+function readerPaletteStyle(cluster: ForestCluster | null): CSSProperties {
+  const accent = cluster?.accent ?? DEFAULT_CLUSTER_ACCENT;
+  const soft = ensureReadableSurface(cluster?.soft ?? DEFAULT_CLUSTER_SOFT, TEXT_TERTIARY)
+    ?? DEFAULT_CLUSTER_SOFT;
+  const accentText = ensureReadable(
+    [cluster?.dark, accent],
+    [soft, tintHexColor(accent, 0.9), "#eef1ed", "#ffffff"],
+  );
+  return {
+    "--course-reader-accent": accent,
+    "--course-reader-soft": soft,
+    "--course-reader-accent-text": accentText,
+  } as CSSProperties;
+}
+
+/**
+ * 返回在所有背景上都达到 4.5:1 的文字色：按顺序尝试候选色，不达标时逐步混入黑色，
+ * 最多加深 60%；仍不达标就回退为正文色，避免把彩色压成近乎纯黑。
+ */
+function ensureReadable(
+  candidates: Array<string | undefined>,
+  backgrounds: Array<string | undefined>,
+  fallback = TEXT_PRIMARY,
+): string {
+  const surfaces = backgrounds.map(parseHexColor).filter((rgb): rgb is Rgb => rgb !== null);
+  for (const candidate of candidates) {
+    const rgb = parseHexColor(candidate);
+    const readable = rgb && adjustUntilReadable(rgb, [0, 0, 0], surfaces, 12);
+    if (readable) return formatHexColor(readable);
+  }
+  return fallback;
+}
+
+/** 背景色逐步混入白色，直到给定文字色在其上达到 4.5:1；颜色无法解析时返回 null。 */
+function ensureReadableSurface(background: string | undefined, text: string): string | null {
+  const rgb = parseHexColor(background);
+  const textRgb = parseHexColor(text);
+  if (!rgb || !textRgb) return null;
+  const readable = adjustUntilReadable(rgb, [255, 255, 255], [textRgb], 20);
+  return readable ? formatHexColor(readable) : null;
+}
+
+/** 以 5% 为步长把 color 向 toward 混合，返回第一个对 against 全部达标的颜色。 */
+function adjustUntilReadable(color: Rgb, toward: Rgb, against: Rgb[], maxSteps: number): Rgb | null {
+  for (let step = 0; step <= maxSteps; step += 1) {
+    const candidate = mixRgb(color, toward, step * 0.05);
+    if (against.every((other) => contrastRatio(candidate, other) >= MIN_TEXT_CONTRAST)) return candidate;
+  }
+  return null;
+}
+
+/** 等价于 CSS color-mix(in srgb, color (1 - whiteAmount), #fff)。 */
+function tintHexColor(color: string, whiteAmount: number): string | undefined {
+  const rgb = parseHexColor(color);
+  return rgb ? formatHexColor(mixRgb(rgb, [255, 255, 255], whiteAmount)) : undefined;
+}
+
+function parseHexColor(value: string | undefined): Rgb | null {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value?.trim() ?? "")?.[1];
+  if (!hex) return null;
+  const full = hex.length === 3 ? hex.replace(/./g, "$&$&") : hex;
+  return [0, 2, 4].map((offset) => Number.parseInt(full.slice(offset, offset + 2), 16)) as Rgb;
+}
+
+function formatHexColor(rgb: Rgb): string {
+  return `#${rgb.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * amount);
+  return [mix(from[0], to[0]), mix(from[1], to[1]), mix(from[2], to[2])];
+}
+
+/** WCAG 2.x 对比度。 */
+function contrastRatio(a: Rgb, b: Rgb): number {
+  const first = relativeLuminance(a);
+  const second = relativeLuminance(b);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+function relativeLuminance(rgb: Rgb): number {
+  const [r, g, b] = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  }) as Rgb;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 function unwrapForestIndex(payload: unknown): ForestIndex | null {

@@ -213,7 +213,7 @@ export function MineruSettingsDialog({
               <option value="mineru">在线 MinerU（必须配置 Token）</option>
               <option value="auto">自动选择（有 Token 时使用 MinerU）</option>
             </select>
-            <span className="mt-1 block text-[11px] leading-relaxed text-text-secondary">
+            <span className="mt-1 block text-xs leading-relaxed text-text-secondary">
               建议使用“在线 MinerU”获得教材结构和版面识别；没有 Token 时可暂时使用本地解析。
             </span>
           </label>
@@ -227,7 +227,7 @@ export function MineruSettingsDialog({
               inputMode="url"
               autoComplete="url"
               disabled={loading || saving}
-              className="h-10 w-full rounded-lg border border-border bg-cream/45 px-3 text-sm outline-none transition-colors placeholder:text-text-secondary/55 focus:border-primary/55 focus:bg-surface disabled:opacity-60"
+              className="h-10 w-full rounded-lg border border-border bg-cream/45 px-3 text-sm outline-none transition-colors placeholder:text-text-tertiary focus:border-primary/55 focus:bg-surface disabled:opacity-60"
             />
           </label>
 
@@ -242,7 +242,7 @@ export function MineruSettingsDialog({
                   placeholder={settings.tokenConfigured ? "已配置；输入新 Token 可替换" : "粘贴 MinerU Token"}
                   autoComplete="new-password"
                   disabled={loading || saving}
-                  className="h-10 w-full rounded-lg border border-border bg-cream/45 pl-3 pr-10 text-sm outline-none transition-colors placeholder:text-text-secondary/55 focus:border-primary/55 focus:bg-surface disabled:opacity-60"
+                  className="h-10 w-full rounded-lg border border-border bg-cream/45 pl-3 pr-10 text-sm outline-none transition-colors placeholder:text-text-tertiary focus:border-primary/55 focus:bg-surface disabled:opacity-60"
                 />
                 <button
                   type="button"
@@ -255,7 +255,7 @@ export function MineruSettingsDialog({
                 </button>
               </div>
             </label>
-            <div className="mt-1 flex items-start gap-1.5 text-[11px] leading-relaxed text-text-secondary">
+            <div className="mt-1 flex items-start gap-1.5 text-xs leading-relaxed text-text-secondary">
               <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
               <span>
                 {settings.tokenConfigured
@@ -316,7 +316,7 @@ export function MineruSettingsDialog({
             </div>
           )}
           {savedMessage && (
-            <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary-light px-3 py-2 text-xs leading-relaxed text-primary" role="status">
+            <div className="flex items-start gap-2 rounded-lg border border-primary/20 bg-primary-light px-3 py-2 text-xs leading-relaxed text-primary-text" role="status">
               <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>{savedMessage}</span>
             </div>

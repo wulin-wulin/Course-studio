@@ -177,9 +177,9 @@ function ModelDialog({
               placeholder="例如 gpt-4.1-mini"
               autoFocus
               autoComplete="off"
-              className="h-10 w-full rounded-lg border border-border bg-cream/45 px-3 text-sm outline-none transition-colors placeholder:text-text-secondary/55 focus:border-primary/55 focus:bg-surface"
+              className="h-10 w-full rounded-lg border border-border bg-cream/45 px-3 text-sm outline-none transition-colors placeholder:text-text-tertiary focus:border-primary/55 focus:bg-surface"
             />
-            <span className="mt-1 block text-[11px] text-text-secondary">支持字母、数字、点、下划线和连字符。</span>
+            <span className="mt-1 block text-xs text-text-secondary">支持字母、数字、点、下划线和连字符。</span>
           </label>
 
           <label className="block">
@@ -190,7 +190,7 @@ function ModelDialog({
               placeholder="https://api.example.com/v1"
               inputMode="url"
               autoComplete="url"
-              className="h-10 w-full rounded-lg border border-border bg-cream/45 px-3 text-sm outline-none transition-colors placeholder:text-text-secondary/55 focus:border-primary/55 focus:bg-surface"
+              className="h-10 w-full rounded-lg border border-border bg-cream/45 px-3 text-sm outline-none transition-colors placeholder:text-text-tertiary focus:border-primary/55 focus:bg-surface"
             />
           </label>
 
@@ -203,7 +203,7 @@ function ModelDialog({
                 onChange={(event) => setApiKey(event.target.value)}
                 placeholder="sk-..."
                 autoComplete="new-password"
-                className="h-10 w-full rounded-lg border border-border bg-cream/45 pl-3 pr-10 text-sm outline-none transition-colors placeholder:text-text-secondary/55 focus:border-primary/55 focus:bg-surface"
+                className="h-10 w-full rounded-lg border border-border bg-cream/45 pl-3 pr-10 text-sm outline-none transition-colors placeholder:text-text-tertiary focus:border-primary/55 focus:bg-surface"
               />
               <button
                 type="button"
