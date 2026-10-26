@@ -185,7 +185,7 @@ const MODE_COPY: Record<
   chat: {
     shortLabel: "只读问答",
     description: "Chat 只读取课程数据，用于查询、解释和学习建议，不会提交任何内容修改。",
-    bannerClass: "border-primary/15 bg-primary-light/70 text-primary",
+    bannerClass: "border-primary/15 bg-primary-light/70 text-primary-text",
     emptyTitle: "和课程知识对话",
     emptyDescription: "询问课程结构、知识点内容或学习路径。当前模式不会改动课程数据。",
     placeholder: "询问课程内容、概念或学习建议…",
@@ -193,7 +193,7 @@ const MODE_COPY: Record<
   agent: {
     shortLabel: "课程编辑",
     description: "Agent 可以修改课程 JSON；完成后仍需通过后端结构校验与冲突检查。",
-    bannerClass: "border-amber-200 bg-amber-50 text-amber-800",
+    bannerClass: "border-amber-200 bg-amber-50 text-warning-text",
     emptyTitle: "向 Agent 描述修改需求",
     emptyDescription: "创建课程、补充知识点或调整已有内容。执行过程和提交结果会显示在这里。",
     placeholder: "描述希望 Agent 对课程内容做出的修改…",
@@ -1249,15 +1249,15 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
           </div>
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold">课程助手</div>
-            <div className="truncate text-[11px] text-text-secondary">OpenCode · {modeCopy.shortLabel}</div>
+            <div className="truncate text-xs text-text-secondary">OpenCode · {modeCopy.shortLabel}</div>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
           <span
-            className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-md border ${
+            className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-md border ${
               isConnected
-                ? "border-primary/25 text-primary bg-primary-light"
-                : "border-warning/30 text-warning bg-warning/10"
+                ? "border-primary/25 text-primary-text bg-primary-light"
+                : "border-warning/30 text-warning-text bg-warning/10"
             }`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-primary" : "bg-warning"}`} />
@@ -1312,7 +1312,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               <h3 className="text-sm font-semibold text-text-primary">
                 {historyCourseOnly ? "清理旧课程流程" : "历史对话"}
               </h3>
-              <p className="mt-0.5 text-[11px] text-text-secondary">
+              <p className="mt-0.5 text-xs text-text-secondary">
                 {historyCourseOnly
                   ? "删除草稿流程时会同时清理私有文件与对话"
                   : "保存在本机后端，不依赖账号登录"}
@@ -1322,7 +1322,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               <button
                 type="button"
                 onClick={() => setHistoryCourseOnly((value) => !value)}
-                className="rounded-md px-2 py-1 text-[10px] font-medium text-text-secondary hover:bg-cream-dark hover:text-text-primary"
+                className="rounded-md px-2 py-1 text-xs font-medium text-text-secondary hover:bg-cream-dark hover:text-text-primary"
                 title={historyCourseOnly ? "显示全部历史对话" : "只显示课程创建流程"}
               >
                 {historyCourseOnly ? "全部对话" : "创建流程"}
@@ -1364,7 +1364,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 <p className="text-xs font-medium text-text-primary">
                   {historyCourseOnly ? "没有可清理的旧流程" : "还没有历史对话"}
                 </p>
-                <p className="mt-1 text-[11px]">
+                <p className="mt-1 text-xs">
                   {historyCourseOnly
                     ? "已发布课程不会出现在这里"
                     : "发送第一条消息后会自动保存"}
@@ -1397,15 +1397,15 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                             {conversation.title}
                           </span>
                           {conversation.workflow === "course-create" && (
-                            <span className="shrink-0 rounded bg-primary-light px-1.5 py-0.5 text-[9px] font-medium text-primary">
+                            <span className="shrink-0 rounded bg-primary-light px-1.5 py-0.5 text-xs font-medium text-primary-text">
                               创建课程
                             </span>
                           )}
                         </div>
-                        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-text-secondary">
+                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-secondary">
                           {conversation.preview || "暂无消息摘要"}
                         </p>
-                        <div className="mt-2 flex items-center gap-2 text-[10px] text-text-secondary/80">
+                        <div className="mt-2 flex items-center gap-2 text-xs text-text-tertiary">
                           <span>{conversation.mode === "chat" ? "Chat" : "Agent"}</span>
                           <span>·</span>
                           <span>{conversation.message_count} 条消息</span>
@@ -1489,14 +1489,14 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
             disabled={isRunning}
             title="配置 MinerU 教材解析"
             aria-label="配置 MinerU 教材解析"
-            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-2 text-[11px] font-medium text-text-secondary transition-colors hover:border-primary/30 hover:bg-primary-light hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-2 text-xs font-medium text-text-secondary transition-colors hover:border-primary/30 hover:bg-primary-light hover:text-primary-text disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ServerCog className="h-3.5 w-3.5" aria-hidden="true" />
             <span>MinerU 设置</span>
           </button>
         </div>
         {modeInfoOpen && (
-          <div className={`mt-2 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-[11px] leading-relaxed ${modeCopy.bannerClass}`}>
+          <div className={`mt-2 flex items-start gap-2 rounded-lg border px-2.5 py-2 text-xs leading-relaxed ${modeCopy.bannerClass}`}>
             {mode === "chat" ? <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <Database className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
             <span>{modeCopy.description}</span>
           </div>
@@ -1573,7 +1573,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
                   courseCreationSource === "topic"
-                    ? "bg-surface text-primary shadow-sm"
+                    ? "bg-surface text-primary-text shadow-sm"
                     : "text-text-secondary hover:text-text-primary"
                 }`}
               >
@@ -1591,7 +1591,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
                   courseCreationSource === "pdf"
-                    ? "bg-surface text-primary shadow-sm"
+                    ? "bg-surface text-primary-text shadow-sm"
                     : "text-text-secondary hover:text-text-primary"
                 }`}
               >
@@ -1667,7 +1667,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               }}
               placeholder={inputPlaceholder}
               rows={2}
-              className="max-h-40 min-h-14 flex-1 resize-none bg-transparent px-0 py-1.5 text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-secondary/60"
+              className="max-h-40 min-h-14 flex-1 resize-none bg-transparent px-0 py-1.5 text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-tertiary"
             />
             <button
               onClick={send}
@@ -1686,7 +1686,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                     type="button"
                     onClick={startCourseCreation}
                     disabled={isRunning || workflow === "course-create" || courseCreationSetupOpen}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary-light px-2 py-1 text-[11px] font-semibold text-primary transition-colors hover:border-primary/35 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary-light px-2 py-1 text-xs font-semibold text-primary-text transition-colors hover:border-primary/35 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
                     title={
                       workflow === "course-create"
                         ? "当前对话正在创建课程"
@@ -1702,7 +1702,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                     type="button"
                     onClick={startPdfCourseCreation}
                     disabled={isRunning || workflow === "course-create" || courseCreationSetupOpen}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-success-text transition-colors hover:border-emerald-300 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                     title={
                       workflow === "course-create"
                         ? "当前对话正在创建课程"
@@ -1716,7 +1716,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                     type="button"
                     onClick={startGenerationDemo}
                     disabled={isRunning || generationStatus !== "idle"}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-warning-text transition-colors hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                     title={
                       generationStatus === "idle"
                         ? "使用预定义数据播放课程生成过程"
@@ -1730,7 +1730,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                     type="button"
                     onClick={openCourseDeletion}
                     disabled={isRunning || workflow === "course-create"}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-error/20 bg-error/5 px-2 py-1 text-[11px] font-semibold text-error transition-colors hover:border-error/35 hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-error/20 bg-error/5 px-2 py-1 text-xs font-semibold text-error transition-colors hover:border-error/35 hover:bg-error/10 disabled:cursor-not-allowed disabled:opacity-50"
                     title={workflow === "course-create" ? "课程创建期间不能删除课程" : "选择并删除一门课程"}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -1739,7 +1739,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                   <button
                     type="button"
                     onClick={openWorkflowCleanup}
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-100"
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-text-secondary transition-colors hover:border-slate-300 hover:bg-slate-100"
                     title="删除旧课程流程、私有草稿和对应对话"
                   >
                     <History className="h-3.5 w-3.5" />
@@ -1747,11 +1747,11 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                   </button>
                 </>
               )}
-              <span className="truncate text-[11px] text-text-secondary">
+              <span className="truncate text-xs text-text-secondary">
                 {workflow === "course-create" ? "课程创建流程进行中" : "Enter 发送 · Shift+Enter 换行"}
               </span>
             </div>
-            <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${mode === "chat" ? "bg-primary-light text-primary" : "bg-amber-100 text-amber-700"}`}>
+            <span className={`rounded-md px-1.5 py-0.5 text-xs font-medium ${mode === "chat" ? "bg-primary-light text-primary-text" : "bg-amber-100 text-warning-text"}`}>
               {mode === "chat" ? "只读" : "可修改数据"}
             </span>
           </div>
@@ -1851,7 +1851,7 @@ function CourseDeleteDialog({ onClose }: { onClose: () => void }) {
             </div>
             <div className="min-w-0">
               <h2 id="course-delete-title" className="text-sm font-semibold text-text-primary">删除课程</h2>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-text-secondary">先选择课程，再进行最终确认</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-text-secondary">先选择课程，再进行最终确认</p>
             </div>
           </div>
           <button
@@ -1897,8 +1897,8 @@ function CourseDeleteDialog({ onClose }: { onClose: () => void }) {
             </div>
           ) : (
             <div className="space-y-2">
-              <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/10 px-3 py-2.5 text-[11px] leading-relaxed text-text-secondary">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <div className="mb-3 flex items-start gap-2 rounded-xl border border-warning/25 bg-warning/10 px-3 py-2.5 text-xs leading-relaxed text-text-secondary">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-text" />
                 <span>删除会移除课程元数据、知识点、地图布局和动画资源，当前界面不提供撤销。</span>
               </div>
               {courses.map((course) => {
@@ -1925,11 +1925,11 @@ function CourseDeleteDialog({ onClose }: { onClose: () => void }) {
                         <span className="flex items-center gap-2">
                           <span className="truncate text-xs font-semibold text-text-primary">{course.title}</span>
                           {course.invalid && (
-                            <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-medium text-warning">数据无效</span>
+                            <span className="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-xs font-medium text-warning-text">数据无效</span>
                           )}
                         </span>
-                        <span className="mt-1 block truncate font-mono text-[10px] text-text-secondary">{course.id}</span>
-                        <span className="mt-1.5 block text-[10px] text-text-secondary">
+                        <span className="mt-1 block truncate font-mono text-xs text-text-secondary">{course.id}</span>
+                        <span className="mt-1.5 block text-xs text-text-secondary">
                           {formatCourseMetric(course.clusters, "知识簇")} · {formatCourseMetric(course.points, "知识点")}
                         </span>
                       </span>
@@ -1955,7 +1955,7 @@ function CourseDeleteDialog({ onClose }: { onClose: () => void }) {
 
         {!deletedCourse && !isLoading && courses.length > 0 && (
           <footer className="flex items-center justify-between gap-3 border-t border-border bg-cream/35 px-4 py-3">
-            <span className="min-w-0 truncate text-[11px] text-text-secondary">
+            <span className="min-w-0 truncate text-xs text-text-secondary">
               {selectedCourse ? `将删除：${selectedCourse.title}` : "请选择要删除的课程"}
             </span>
             <div className="flex shrink-0 items-center gap-2">
@@ -2077,14 +2077,14 @@ function AgentQuestionCard({
             <CircleHelp className="h-4 w-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-primary">需要你的确认</div>
-            <div className="mt-0.5 truncate text-[11px] text-text-secondary">
+            <div className="text-xs font-semibold text-primary-text">需要你的确认</div>
+            <div className="mt-0.5 truncate text-xs text-text-secondary">
               {current.header}
               {request.questions.length > 1 && ` · ${activeIndex + 1}/${request.questions.length}`}
             </div>
           </div>
         </div>
-        <span className="shrink-0 rounded-md border border-primary/15 bg-surface/75 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+        <span className="shrink-0 rounded-md border border-primary/15 bg-surface/75 px-1.5 py-0.5 text-xs font-medium text-primary-text">
           不会被折叠
         </span>
       </div>
@@ -2092,7 +2092,7 @@ function AgentQuestionCard({
       <div className="space-y-3 p-3.5">
         <p className="text-sm font-medium leading-relaxed text-text-primary">{current.question}</p>
         {current.multiple && (
-          <p className="text-[11px] text-text-secondary">可以选择多个选项</p>
+          <p className="text-xs text-text-secondary">可以选择多个选项</p>
         )}
 
         <div className="grid gap-2">
@@ -2119,7 +2119,7 @@ function AgentQuestionCard({
                 <span className="min-w-0">
                   <span className="block text-xs font-semibold">{option.label}</span>
                   {option.description && (
-                    <span className="mt-0.5 block text-[11px] leading-relaxed text-text-secondary">
+                    <span className="mt-0.5 block text-xs leading-relaxed text-text-secondary">
                       {option.description}
                     </span>
                   )}
@@ -2131,14 +2131,14 @@ function AgentQuestionCard({
 
         {current.custom && (
           <label className="block">
-            <span className="mb-1.5 block text-[11px] font-medium text-text-secondary">自定义填写</span>
+            <span className="mb-1.5 block text-xs font-medium text-text-secondary">自定义填写</span>
             <textarea
               value={customValues[activeIndex] ?? ""}
               onChange={(event) => updateCustomValue(event.target.value)}
               disabled={submitting}
               rows={2}
               placeholder="如果上面的选项不合适，可以直接填写…"
-              className="max-h-28 min-h-16 w-full resize-y rounded-xl border border-border bg-surface px-3 py-2 text-xs leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-secondary/60 focus:border-primary/45 disabled:opacity-60"
+              className="max-h-28 min-h-16 w-full resize-y rounded-xl border border-border bg-surface px-3 py-2 text-xs leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-primary/45 disabled:opacity-60"
             />
           </label>
         )}
@@ -2154,7 +2154,7 @@ function AgentQuestionCard({
             type="button"
             onClick={onReject}
             disabled={submitting}
-            className="rounded-lg px-2 py-1.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-cream hover:text-text-primary disabled:opacity-50"
+            className="rounded-lg px-2 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-cream hover:text-text-primary disabled:opacity-50"
           >
             暂不回答
           </button>
@@ -2164,7 +2164,7 @@ function AgentQuestionCard({
                 type="button"
                 onClick={() => setActiveIndex((index) => Math.max(0, index - 1))}
                 disabled={submitting}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-xs font-medium text-text-secondary hover:border-primary/25 hover:text-primary disabled:opacity-50"
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-xs font-medium text-text-secondary hover:border-primary/25 hover:text-primary-text disabled:opacity-50"
               >
                 <ChevronLeft className="h-3.5 w-3.5" />
                 上一个
@@ -2732,11 +2732,11 @@ function AgentRunStatusView({
       <div className="flex items-center gap-2">
         <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span className="font-mono tabular-nums text-[11px] text-text-secondary/70">
+        <span className="font-mono tabular-nums text-xs text-text-tertiary">
           {formatElapsed(elapsedSeconds)}
         </span>
       </div>
-      {detail && <div className="mt-1 pl-5 text-[11px] text-text-secondary/80">{detail}</div>}
+      {detail && <div className="mt-1 pl-5 text-xs text-text-tertiary">{detail}</div>}
     </div>
   );
 }
@@ -2757,7 +2757,7 @@ const AgentEntryView = memo(function AgentEntryView({ entry }: { entry: AgentEnt
             maxChars={900}
             maxLines={12}
             previewClassName="whitespace-pre-wrap break-words"
-            buttonClassName="mt-2 border-white/25 bg-white/10 text-white/85 hover:border-white/40 hover:text-white"
+            tone="onPrimary"
           />
         </div>
       </div>
@@ -2781,7 +2781,7 @@ const AgentEntryView = memo(function AgentEntryView({ entry }: { entry: AgentEnt
     entry.role === "error"
       ? "text-error bg-red-50 border-red-100"
       : entry.status === "success"
-        ? "text-primary bg-primary-light border-primary/15"
+        ? "text-primary-text bg-primary-light border-primary/15"
         : "text-text-secondary bg-cream border-border";
 
   const contentClass = `rounded-md border px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words ${tone}`;
@@ -2792,7 +2792,7 @@ const AgentEntryView = memo(function AgentEntryView({ entry }: { entry: AgentEnt
         <Icon className="w-3.5 h-3.5" />
       </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-[11px] font-medium text-text-secondary">
+          <div className="flex items-center gap-2 text-xs font-medium text-text-secondary">
             <span className="truncate">{entry.title}</span>
             {entry.streaming && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
           </div>
@@ -2828,14 +2828,14 @@ function ThinkingEntryView({ entry }: { entry: AgentEntry }) {
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-1.5 text-[11px] font-medium text-text-secondary cursor-pointer hover:text-text-primary"
+          className="flex items-center gap-1.5 text-xs font-medium text-text-secondary cursor-pointer hover:text-text-primary"
         >
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           <span className="truncate">{entry.title}</span>
           {entry.streaming && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
         </button>
         {open && content && (
-          <div className="mt-1 rounded-md border border-border bg-cream px-2.5 py-2 text-[11px] leading-relaxed font-sans text-text-secondary/90 italic">
+          <div className="mt-1 rounded-md border border-border bg-cream px-2.5 py-2 text-xs leading-relaxed font-sans text-text-tertiary">
             <CollapsibleContent
               content={content}
               maxChars={900}
@@ -2860,7 +2860,6 @@ function AgentMarkdown({ content }: { content: string }) {
         renderContent={(value) => (
           <MarkdownContent
             content={value}
-            className="prose prose-sm max-w-full text-text-primary [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5 [&_code]:rounded [&_code]:bg-cream-dark [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:bg-cream-dark [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1"
           />
         )}
       />

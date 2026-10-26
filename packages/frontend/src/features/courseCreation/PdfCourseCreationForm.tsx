@@ -177,14 +177,14 @@ export function PdfCourseCreationForm({
           <FileText className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <div className="text-xs font-semibold text-primary">
+          <div className="text-xs font-semibold text-primary-text">
             {markdownOnly
               ? "从 Markdown 生成知识图谱"
               : pdfOnly
                 ? "上传 PDF 生成知识森林"
                 : "上传教材文件"}
           </div>
-          <div className="mt-0.5 text-[11px] leading-relaxed text-text-secondary">
+          <div className="mt-0.5 text-xs leading-relaxed text-text-secondary">
             {markdownOnly
               ? "上传 MinerU 输出的 full.md 或结构化 Markdown，系统将读取章节、知识点和正文内容。"
               : pdfOnly
@@ -212,7 +212,7 @@ export function PdfCourseCreationForm({
                   ? "选择 PDF 教材"
                   : "选择 PDF 或 Markdown 教材"}
             </strong>
-            <span className="text-[11px] text-text-secondary">选择后会自动上传并解析</span>
+            <span className="text-xs text-text-secondary">选择后会自动上传并解析</span>
           </button>
         ) : (
           <div className="rounded-xl border border-border bg-surface p-3">
@@ -224,7 +224,7 @@ export function PdfCourseCreationForm({
                 <strong className="block truncate text-xs text-text-primary">
                   {document?.filename || file.name}
                 </strong>
-                <span className="mt-0.5 block text-[11px] text-text-secondary">
+                <span className="mt-0.5 block text-xs text-text-secondary">
                   {formatFileSize(document?.sizeBytes ?? file.size)}
                 </span>
               </div>
@@ -244,8 +244,8 @@ export function PdfCourseCreationForm({
 
             {phase !== "error" && (
               <div className="mt-3">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="inline-flex items-center gap-1.5 font-medium text-primary">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-primary-text">
                     {busy ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
@@ -278,7 +278,7 @@ export function PdfCourseCreationForm({
                       ? "PDF 教材解析完成"
                       : "教材结构解析完成"}
                 </strong>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-secondary">
+                <p className="mt-1 text-xs leading-relaxed text-text-secondary">
                   {formatOutlineSummary(summary)}
                 </p>
               </div>
@@ -298,7 +298,7 @@ export function PdfCourseCreationForm({
             type="button"
             onClick={onCancel}
             disabled={busy}
-            className="rounded-lg px-2 py-1.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-cream hover:text-text-primary disabled:opacity-50"
+            className="rounded-lg px-2 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-cream hover:text-text-primary disabled:opacity-50"
           >
             取消
           </button>
@@ -308,7 +308,7 @@ export function PdfCourseCreationForm({
                 type="button"
                 onClick={retry}
                 disabled={disabled}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/25 bg-surface px-3 text-xs font-semibold text-primary hover:bg-primary-light disabled:opacity-50"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-primary/25 bg-surface px-3 text-xs font-semibold text-primary-text hover:bg-primary-light disabled:opacity-50"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
                 重试

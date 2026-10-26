@@ -94,7 +94,14 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       )
       assert.deepEqual(calls.at(-1).argv.slice(-2), ["manifest", "demo-course"])
 
-      for (const action of ["init-points", "review-knowledge-graph", "publish"]) {
+      for (const action of [
+        "init-points",
+        "prepare-content-tasks",
+        "finalize-point-drafts",
+        "prepare-animation-tasks",
+        "review-knowledge-graph",
+        "publish",
+      ]) {
         await assert.rejects(
           definition.execute({ action, courseId: "demo-course" }, context("course-outline-creator")),
           /无权执行/,
@@ -103,6 +110,7 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       for (const action of [
         "validate-index",
         "validate-point-drafts",
+        "finalize-point-drafts",
         "validate-animation-drafts",
       ]) {
         await assert.rejects(
@@ -120,6 +128,9 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
 
       const creatorCases = [
         ["init-points", "init-course-pipeline.mjs", ["demo-course", "--stage", "points"]],
+        ["prepare-content-tasks", "run-course-pipeline-step.mjs", ["prepare-content-tasks", "demo-course"]],
+        ["finalize-point-drafts", "run-course-pipeline-step.mjs", ["finalize-point-drafts", "demo-course"]],
+        ["prepare-animation-tasks", "run-course-pipeline-step.mjs", ["prepare-animation-tasks", "demo-course"]],
         ["validate-point-drafts", "run-course-pipeline-step.mjs", ["validate-point-drafts", "demo-course"]],
         ["validate-animation-drafts", "run-course-pipeline-step.mjs", ["validate-animation-drafts", "demo-course"]],
         ["review-knowledge-graph", "prepare-course-review.mjs", ["knowledge-graph", "demo-course"]],

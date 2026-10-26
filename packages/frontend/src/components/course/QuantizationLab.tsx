@@ -217,16 +217,18 @@ function QuantizationPlot({
   }).join(" ");
   return (
     <figure className="quantization-lab__plot">
-      <svg viewBox="0 0 480 184" role="img" aria-labelledby={`${idPrefix}-plot-title ${idPrefix}-plot-desc`}>
+      <svg viewBox="0 0 480 166" role="img" aria-labelledby={`${idPrefix}-plot-title ${idPrefix}-plot-desc`}>
         <title id={`${idPrefix}-plot-title`}>连续输入到离散输出的量化示意</title>
         <desc id={`${idPrefix}-plot-desc`}>输入值沿横轴移动，阶梯线表示离散量化输出。</desc>
         <line x1="24" y1="146" x2="456" y2="42" className="quantization-lab__ideal" />
         <path d={staircase} className="quantization-lab__stairs" />
         <line x1={inputX} y1="154" x2={inputX} y2={outputY} className={outOfRange ? "quantization-lab__cursor is-warning" : "quantization-lab__cursor"} />
         <circle cx={inputX} cy={outputY} r="5" className={outOfRange ? "quantization-lab__dot is-warning" : "quantization-lab__dot"} />
-        <text x="24" y="171">{formatNumber(rangeMin, 0)} {unit}</text>
-        <text x="456" y="171" textAnchor="end">{formatNumber(rangeMax, 0)} {unit}</text>
       </svg>
+      <div className="quantization-lab__axis">
+        <span>{formatNumber(rangeMin, 0)} {unit}</span>
+        <span>{formatNumber(rangeMax, 0)} {unit}</span>
+      </div>
       <figcaption>
         灰线表示理想连续关系，彩色阶梯是便于观察的局部示意；精确结果以指标为准。当前理论间隔为 {formatEngineering(step)} {unit}。
       </figcaption>

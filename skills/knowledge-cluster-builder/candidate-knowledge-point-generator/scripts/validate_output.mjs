@@ -46,6 +46,14 @@ import {
   isTextbookContentPoint,
 } from './lib/contracts.mjs';
 import {
+  buildSourceSpanRefMap,
+  collectUnexpandedSourceSpanRefs,
+} from './lib/source-span-refs.mjs';
+import {
+  formatPendingQueueHead,
+  resolveWorkerConcurrency,
+} from './lib/worker-plan.mjs';
+import {
   renderAnimationBlock,
   renderAnimationBlockCss,
   renderCourseKnowledge,
@@ -1125,6 +1133,64 @@ function checkPrerequisiteGraph(ids, prerequisitesById, errors) {
   }
 }
 
+// pointId → 可信 ref 映射；该点 pointEvidence 缺失或 ref 无法唯一派生时为 null。
+function trustedSourceSpanRefsByPoint(manifest) {
+  const result = new Map();
+  for (const evidence of Array.isArray(manifest?.pointEvidence) ? manifest.pointEvidence : []) {
+    if (
+      !isRecord(evidence)
+      || typeof evidence.pointId !== 'string'
+      || result.has(evidence.pointId)
+    ) {
+      continue;
+    }
+    const refErrors = [];
+    const refs = buildSourceSpanRefMap(evidence.sourceSpans, 'pointEvidence', refErrors);
+    result.set(evidence.pointId, refErrors.length === 0 ? refs : null);
+  }
+  return result;
+}
+
+// worker 草稿中内容块的 sourceSpans 可暂写任务包 ref 字符串，由 finalize-point-drafts 展开。
+// 按可信 manifest 区分未知 ref 与待展开 ref：只报告真正需要处理的问题，避免把合法 ref 也报成
+// 错误、诱导 worker 手写 span 对象。
+function reportUnexpandedSourceSpanRefs(point, label, trustedRefs, errors) {
+  const refs = collectUnexpandedSourceSpanRefs(point);
+  if (refs.length === 0) return;
+  const location = ({ blockIndex, spanIndex }) => (
+    `${label}.content.blocks[${blockIndex}].provenance.sourceSpans[${spanIndex}]`
+  );
+  if (trustedRefs === undefined) {
+    // 课程或详情未使用 textbook-content/2.0；契约不匹配已单独报告，ref 不会被展开。
+    errors.push(
+      `${label} 包含 ${refs.length} 个 sourceSpans ref 字符串（首个位于 ${location(refs[0])}）；`
+      + `只有声明 ${TEXTBOOK_CONTENT_SCHEMA} 的教材课程详情会由 finalize-point-drafts 展开 ref`,
+    );
+    return;
+  }
+  if (trustedRefs === null) {
+    errors.push(
+      `${label} 包含未展开的 sourceSpans ref，但 manifest.pointEvidence 中没有该点可唯一展开的 sourceSpans`,
+    );
+    return;
+  }
+  const unknown = refs.filter(({ ref }) => !trustedRefs.has(ref));
+  if (unknown.length > 0) {
+    for (const entry of unknown) {
+      errors.push(
+        `${location(entry)} 引用了未知 sourceSpans ref ${JSON.stringify(entry.ref)}`
+        + '（不在任务包 evidence.spans[].ref 中）：只能改成任务包中的合法 ref 字符串，不要手写 span 对象；'
+        + '修正前 finalize-point-drafts 不会展开本文件的任何 ref',
+      );
+    }
+    return;
+  }
+  errors.push(
+    `${label} 包含 ${refs.length} 个未展开的 sourceSpans ref`
+    + `（首个 ${JSON.stringify(refs[0].ref)} 位于 ${location(refs[0])}），请先运行 finalize-point-drafts`,
+  );
+}
+
 function validatePointsStage(
   indexContext,
   artifacts,
@@ -1135,16 +1201,19 @@ function validatePointsStage(
   const canonicalPointPosition = new Map(
     indexContext.orderedIds.map((id, index) => [id, index]),
   );
+  const expectsTextbookContentV2 = (
+    indexContext.manifest?.generation?.evidenceMode === 'textbook-grounded'
+    && indexContext.manifest?.generation?.contentContract
+      === TEXTBOOK_CONTENT_SCHEMA
+  );
+  const trustedRefsByPoint = expectsTextbookContentV2
+    ? trustedSourceSpanRefsByPoint(indexContext.manifest)
+    : new Map();
   for (const artifact of artifacts.pointArtifacts) {
     const point = artifact.value;
     const label = `src/data/points/${artifact.filename}`;
     if (!isRecord(point)) continue;
 
-    const expectsTextbookContentV2 = (
-      indexContext.manifest?.generation?.evidenceMode === 'textbook-grounded'
-      && indexContext.manifest?.generation?.contentContract
-        === TEXTBOOK_CONTENT_SCHEMA
-    );
     if (expectsTextbookContentV2 && !isTextbookContentPoint(point)) {
       errors.push(`${label} 必须使用 ${TEXTBOOK_CONTENT_SCHEMA}`);
     }
@@ -1155,6 +1224,14 @@ function validatePointsStage(
     }
     checkPoint(point, label, errors);
     collectForbiddenFields(point, label, errors);
+    reportUnexpandedSourceSpanRefs(
+      point,
+      label,
+      expectsTextbookContentV2 && isTextbookContentPoint(point)
+        ? (trustedRefsByPoint.get(artifact.fileId) ?? null)
+        : undefined,
+      errors,
+    );
     const completion = isTextbookContentPoint(point)
       ? point.content?.learningDesign?.completion
       : null;
@@ -1270,8 +1347,12 @@ function validateTextbookPointDetails(indexContext, artifacts, errors) {
           `textbook-grounded 模式下知识点详情 ${artifact.fileId}.origin 必须与 manifest.pointEvidence 一致`,
         );
       }
+      // 未展开的 ref 已单独报错；展开前比较派生 spans 只会制造噪声。
       const sourceSpans = derivePointSourceSpans(point);
-      if (!isDeepStrictEqual(sourceSpans, evidence.sourceSpans)) {
+      if (
+        collectUnexpandedSourceSpanRefs(point).length === 0
+        && !isDeepStrictEqual(sourceSpans, evidence.sourceSpans)
+      ) {
         errors.push(
           `textbook-grounded 模式下知识点详情 ${artifact.fileId} 从 blocks 派生的 sourceSpans 必须与 manifest.pointEvidence 一致`,
         );
@@ -1640,6 +1721,7 @@ function validateAnimationsStage(
     return {
       animationTypes: [],
       pendingAnimationTypes: [],
+      pendingAnimationComponents: [],
       manifest: null,
     };
   }
@@ -1765,6 +1847,8 @@ function validateAnimationsStage(
         ))
         .map((animation) => animation.type),
     )),
+    // 保持清单顺序，与 animation-plan.json 的调度顺序一致。
+    pendingAnimationComponents: pendingAnimations.map((animation) => animation.component),
     pendingAnimationTypes: sortStrings(new Set(
       pendingAnimations
         .filter((animation) => (
@@ -1814,7 +1898,11 @@ export function validateProject(projectRoot, options = {}) {
     orderedPoints: [],
   };
   let artifacts = null;
-  let animationResult = { animationTypes: [], pendingAnimationTypes: [] };
+  let animationResult = {
+    animationTypes: [],
+    pendingAnimationTypes: [],
+    pendingAnimationComponents: [],
+  };
   let outputIsSelfContained = true;
 
   try {
@@ -1923,6 +2011,7 @@ export function validateProject(projectRoot, options = {}) {
     pendingPoints: pendingPointIds.length,
     animationTypes: animationResult.animationTypes,
     pendingAnimationTypes: animationResult.pendingAnimationTypes,
+    pendingAnimationComponents: animationResult.pendingAnimationComponents,
     validatedAnimations: animationResult.animationTypes.length,
     pendingAnimations: animationResult.pendingAnimationTypes.length,
     counts: {
@@ -2014,15 +2103,21 @@ function main() {
   for (const warning of result.warnings) {
     console.warn(`警告: ${warning}`);
   }
+  // 并发数与 prepare-*-tasks 读取同一环境变量，队首长度因此与每条消息的派发上限一致。
+  const { concurrency } = resolveWorkerConcurrency(process.env);
   if (result.phase === 'point-drafts') {
     console.log(
       `草稿批次：已校验 ${result.validatedPoints} 个知识点；待生成 ${result.pendingPoints} 个知识点`,
     );
+    const head = formatPendingQueueHead('', result.pendingPointIds, concurrency);
+    if (head !== null) console.log(head);
   }
   if (result.phase === 'animation-drafts') {
     console.log(
       `动画草稿批次：已校验 ${result.validatedAnimations} 个组件；待生成 ${result.pendingAnimations} 个组件`,
     );
+    const head = formatPendingQueueHead('动画', result.pendingAnimationComponents, concurrency);
+    if (head !== null) console.log(head);
   }
   if (result.errors.length > 0) {
     console.error(`校验失败（${result.errors.length} 项）:`);

@@ -53,10 +53,13 @@ class TextbookBinding:
             material_context = (
                 f"只读正文材料索引：{self.input_material_path}\n"
                 f"只读规范化 Markdown：{self.input_markdown_path}\n"
-                "生成每个教材知识点内容时，必须先按 material.point_sources 和 sections/chunks "
-                "读取对应 Markdown 行范围；generation 声明 textbook-content/2.0，正文输出使用 "
+                "G1 由 sync-textbook-manifest 按 material.point_sources 和 sections 机械生成逐点 "
+                "source spans；G3 由 prepare-content-tasks 把每点证据写入只读任务包，内容 worker "
+                "按任务包 evidence.spans 的行号读取 Markdown，主智能体不读取正文、不在 task 提示中"
+                "粘贴或转述证据。generation 声明 textbook-content/2.0，正文输出使用 "
                 "content.blocks 分开保存教材块与模型块。教材点和受控扩展点都必须有非空教材 "
-                "source span 和模型补充；模型块用 basedOnBlockIds 引用前面的教材上下文，"
+                "source span 和模型补充；教材块写任务包 ref，由 finalize-point-drafts 展开；"
+                "模型块用 basedOnBlockIds 引用前面的教材上下文，"
                 "不得在 point 顶层重复写 sourceSpans/modelEnriched。\n"
             )
         return (

@@ -1,6 +1,6 @@
 ---
 name: candidate-knowledge-point-generator
-description: 从课程名或领域名生成可审查的课程内容中间包。先建立无知识簇和布局字段的全量 index.json，再用子智能体逐文件生成丰富的 points JSON，归并并实现必要的 React 教学动画，最后同步索引并执行全量校验。用于创建课程知识点内容、扩展候选知识点为完整详情，或为后续 CKDS 聚类与布局阶段准备数据。
+description: 从课程名或领域名生成可审查的课程内容中间包。先建立无知识簇和布局字段的全量 index.json，再由受信 action 为每个知识点生成只读任务包、让子智能体按波次并发生成丰富的 points JSON，归并并实现必要的 React 教学动画，最后同步索引并执行全量校验。用于创建课程知识点内容、扩展候选知识点为完整详情，或为后续 CKDS 聚类与布局阶段准备数据。
 ---
 
 # 候选知识点与课程内容生成
@@ -45,6 +45,8 @@ generated/<course-id>-course-content/
 8. `OUTPUT_ROOT` 必须是该中间包独占的目录，不得指向现有应用根目录，也不得含无关文件或符号链接；需要集成时先在独立目录通过校验再复制产物。
 
 完整字段见 [data-contract.md](data-contract.md)，调度规则见 [orchestration.md](orchestration.md)，动画规则见 [animation-contract.md](animation-contract.md)。
+详情 worker 与动画 worker 的执行规则分别见 [content-worker-brief.md](content-worker-brief.md) 和
+[animation-worker-brief.md](animation-worker-brief.md)。
 
 ## 输入解释
 
@@ -88,14 +90,16 @@ generated/<course-id>-course-content/
 
 当编排 Skill 提供绑定的教材 `material.json/full.md` 时，使用
 `evidenceMode: "textbook-grounded"` 和 `contentContract: "textbook-content/2.0"`，不再执行普通
-主题的外部检索流程。主智能体必须先从受信 `generation/manifest.json` 取得每个点完整的
-`pointEvidence` 单项，再按 material chunks 分批读取对应正文并构造证据包。chunk 只控制读取批次，
-不是可写入详情的来源标识；worker 必须原样使用 `pointEvidence.sourceSpans`，不得从 chunk 自行
-重建或替换 span。
+主题的外部检索流程。点级证据包由 `prepare-content-tasks` 从受信 `generation/manifest.json` 中每个点
+完整的 `manifest.pointEvidence` 单项机械生成，写入该点任务包的 `evidence`（`full.md` 路径和有序
+`spans[].ref/headingPath/lineStart/lineEnd/assetRefs`）；主智能体不再读取正文构造证据包。worker 按
+任务包行号读取对应正文。material 的 `chunk-*` ID 只控制读取批次，不是可写入详情的来源标识；
+worker 只能使用任务包 spans 的 ref，不得从 chunk 自行重建 span，也不得用 chunk ID 替换 `block-*`
+section ID。
 教材原有点必须按 `material.point_sources` 的顺序读取并覆盖全部 section 正文；不能用一个章节标题
 或局部摘录代表整个知识点。所有非教材点（`llm-extension` 或 `user`）必须有同章教材
 `anchor_point_id`，并只读取该锚点允许的非空相关子集。
-详情正文写入有序 `content.blocks`：教材块记录精确 span 和 `quote|paraphrase`，模型块通过
+详情正文写入有序 `content.blocks`：教材块用 span ref 登记依据并标明 `quote|paraphrase`，模型块通过
 `basedOnBlockIds` 指向前面的教材上下文。每个教材点和受控扩展点都必须同时包含教材块和模型
 补充块；扩展点也要有非空教材锚点 span。不得只根据标题生成内容，也不得把模型补充伪装成
 教材原文。
@@ -148,25 +152,29 @@ manifest 的 `pointEvidence` 中按 index 同序记录冻结的 `pointId/title`�
 
 索引阶段未通过前，不得生成详情。
 
-### 4. 自适应调度详情子智能体
+### 4. 按任务包并发调度详情子智能体
 
-按 [orchestration.md](orchestration.md) 生成任务清单：
+G2 通过并调用 `init-points` 后，由主智能体调用 `course_pipeline` 的 `prepare-content-tasks`。它为 index
+中每个知识点确定性生成一个只读任务包
+`pipeline/<course-id>/worker-tasks/content/<point-id>.json`，并生成每点一行的注册表
+`registry.json` 和只调度 `{}` 占位点的波次计划 `content-plan.json`。一任务一点，不再由模型自适应
+合批：任务粒度一致能均衡每波的尾部延迟，主智能体的 task 提示也保持 O(1) 长度；已开始的点也保留
+任务包，修复和返工时 repair task 始终有可信输入。
 
-- 核心、高难、公式密集、前置关系复杂或动画候选点：一任务一点；
-- 其他简单点：按依赖邻域组成 3–5 点小批次；
-- 每个任务仍必须逐文件输出和逐文件自检。
+每个任务包包含：
 
-每个子智能体必须获得：
+1. `course.json` 和范围契约（manifest `subject`，附 evidenceMode/contentContract）；
+2. 自己负责的完整冻结索引项与前后点序号；
+3. 全量 `id/title/difficulty/shortSummary` 注册表路径，worker 需要选择前置时自行读取；
+4. 按顺序列出的 session-local `SKILL.md`、[content-worker-brief.md](content-worker-brief.md)、数据契约、
+   动画契约、point Schema、animation-request Schema（教材 v2 另加内容块 Schema），worker 写文件前
+   必须完整读取；
+5. 教材模式下由对应点 `manifest.pointEvidence` 机械投影出的 `evidence`；普通 `researched` 课程则是
+   本点 `pointEvidence` 单项及其 `sourceRefs` 指向的来源记录 `sourceEvidence`；
+6. 明确的文件所有权 `ownership.write` 与禁止修改清单 `forbidden`。
 
-1. 范围契约和受众；
-2. 自己负责的冻结索引项；
-3. 全量 `id/title` 注册表；
-4. 全量合法 prerequisite ID 和建议前置候选；
-5. 相关来源与事实约束；
-6. session-local 的 `SKILL.md`、数据契约、动画契约、point Schema 和 animation-request Schema
-   的明确路径，并被要求在写文件前完整读取；
-7. 教材模式下对应点的 `manifest.pointEvidence` 完整单项 JSON，包括原样的 `sourceSpans`；
-8. 明确的文件所有权。
+主智能体不得把索引项、注册表、`pointEvidence`、合同正文或模板规则粘贴或转述进 task 提示；只使用
+[orchestration.md](orchestration.md) 中的固定短模板。
 
 子智能体只写自己负责的：
 
@@ -179,11 +187,16 @@ generation/animation-requests/<id>.json
 主智能体也不得用 `edit`/`write` 直接修改已分配给详情任务的文件；校验失败必须交回原 worker，
 或在原 worker 无法继续时交给拥有同一组互斥文件的 repair task。
 
-第一波只生成合计 3–5 个知识点作为 canary。每个详情任务返回后，主智能体立即调用
-`course_pipeline` 的 `validate-point-drafts`，把完整、未经摘要的校验错误发回原任务并在原文件
-所有权内修复；原任务无法继续时只能创建同所有权 repair task，主智能体不得代写；
-本波全部通过后才启动下一波。子智能体不得自行运行校验脚本，最终完整 `validate-points`
-仍是 G3 的硬门禁。
+第一波是 `content-plan.json` 的 canary（按索引顺序前 min(3, 待生成数) 个待生成点）。之后每一波最多
+k 个任务（k 来自 `COURSE_WORKER_CONCURRENCY`，默认 10），全部 task 调用都在同一条 assistant 消息里
+一次性发出。每波返回后主智能体只调用一次 `course_pipeline` 的 `finalize-point-drafts`：它先把教材块
+的 span ref 机械展开为可信 span，再执行与 `validate-point-drafts` 相同的草稿校验。canary 全部通过后
+才扩大并发，canary 有失败时下一条消息只含 canary 的修复调用。之后不等待整波通过：`waves` 按队列
+消费，失败点的完整、未经摘要的校验错误发回原 worker 会话，修复调用优先，新任务补足到 k 个，放
+不下的顺延；只有平台明确限流（如 429）时才降低 k。报告的“待生成队首”中出现本条消息已派发的点，
+说明 worker 没写文件，按失败处理。
+同一点连续两次失败时只能创建同所有权 repair task，主智能体不得代写。子智能体不得自行运行校验脚本，最终完整 `validate-points` 仍是 G3
+的硬门禁。
 
 ### 5. 按当前内容契约生成详情
 
@@ -222,25 +235,28 @@ generation/animation-requests/<id>.json
   阅读、公式与表格理解、互动活动和练习作答的总时间；
 - 每个 block 必须用 `moduleId` 命中一个 module，并用 `depth: core|support|advanced` 表示学习深度；
 - 块数组顺序就是阅读顺序，ID 在点内唯一；
-- 教材块至少一个，必须有非空精确 spans；
-- 教材块的 spans 按块顺序和数组顺序做首次出现去重后，必须与注入的完整
-  `manifest.pointEvidence.sourceSpans` 深度相等且顺序一致；不得使用 material 的 `chunk-*` ID
-  替换 manifest 中的 `block-*` section ID；
+- 教材块至少一个，必须有非空 spans；worker 草稿中教材块的 `provenance.sourceSpans` 只写任务包
+  `evidence.spans[].ref` 字符串（例如 `["block-000051"]`），不抄写 span 对象或哈希，由
+  `finalize-point-drafts` 机械展开为精确 span；
+- 教材块 ref 按块顺序和数组顺序的首次出现必须覆盖全部 ref 且与任务包 spans 顺序一致；展开后的
+  spans 做首次出现去重，必须与完整 `manifest.pointEvidence.sourceSpans` 深度相等且顺序一致；
+  不得使用 material 的 `chunk-*` ID 替换 manifest 中的 `block-*` section ID；
 - 模型块至少一个，只能引用排在前面的块，并最终追溯到教材块；
 - 模型块必须就近跟随它所依据的教材内容：单一锚点的补充放在该锚点之后，综合多个块的补充放在最后一个被引用块之后；不得先堆完全部教材块再集中追加所有模型块；
-- 模型块不得引入 `pointEvidence.sourceSpans` 之外的新 span；
+- 模型块不得引入 `pointEvidence.sourceSpans` 之外的新 span 或任务包之外的 ref；
 - 模型块可补充解释、推导、例子、对比或练习，但标题和呈现必须让来源清楚；
 - `learningAssets` 的每项必须有 anchor、目标引用、学习目的、可追溯 grounding 和无交互 fallback；
   类型自有参数放在 `config`，不得借此放入未经 provenance 支持的事实；
 - `completion.nextPointId` 可省略；需要下一点桥接时只能填写冻结 `index.points[]` 中紧随当前点的
-  稳定 ID，末点不得填写；
+  稳定 ID（即任务包 `sequence.nextPointId`），末点不得填写；
 - 点级 `sourceSpans` 和 `modelEnriched` 由校验器从 blocks 派生，不由任务重复填写。
 
 所有 point 和 animation request 都是 JSON 文件。LaTeX 的每个反斜杠在文件中必须编码为合法
 JSON 的 `\\`：例如运行时公式 `\delta` 要写成 `"\\delta"`，不能写成非法的 `"\delta"`；
 Markdown 正文统一使用 `$...$` 或 `$$...$$`，不得使用 `\(...\)`、`\[...\]`、未包裹的
 LaTeX 命令或可见的字面量 `\n\n`；`\frac` 等命令仍须写成 `\\frac`。worker 写完后必须用
-`read` 回读自己拥有的两个 JSON 文件，检查物理文本中的转义、字段和闭合结构后才能返回。
+`read` 回读自己拥有的两个 JSON 文件，检查物理文本中的转义、字段和闭合结构后才能返回。完整自检
+清单见 [content-worker-brief.md](content-worker-brief.md)。
 
 ### 6. 提交动画意图
 
@@ -256,7 +272,7 @@ LaTeX 命令或可见的字面量 `\n\n`；`\frac` 等命令仍须写成 `\\frac
 
 ### 7. 全局复核并同步索引
 
-所有详情完成后，串行检查：
+所有详情通过 `finalize-point-drafts` 后，串行检查：
 
 1. 标题、别名和缩写造成的重复（教材来源点保留原始标题时，同名教材点按 `point.id` 区分，不视为生成重复）；
 2. 模板化正文或同一句式批量替换；
@@ -264,6 +280,9 @@ LaTeX 命令或可见的字面量 `\n\n`；`\frac` 等命令仍须写成 `\\frac
 4. 悬空、自引用、重复或成环的前置关系；
 5. 难度、重要性和摘要与目标受众是否一致；
 6. 公式、历史、年份和事实归属是否可核实。
+
+发现问题时按 [orchestration.md](orchestration.md) 的修复消息或 repair task 模板交回拥有该文件的
+worker（任务包对全部点保留），修复后重新调用 `finalize-point-drafts`；主智能体不代写。
 
 由主智能体依次调用 `course_pipeline` 的 `validate-points`、`sync-index`、`validate-points`。子智能体不得自行运行脚本。
 
@@ -282,21 +301,29 @@ LaTeX 命令或可见的字面量 `\n\n`；`\frac` 等命令仍须写成 `\\frac
 
 ### 9. 实现动画组件
 
-按动画清单为每个唯一机制启动一个独立子智能体。每个任务只拥有：
+写好动画清单并调用 `init-animations` 后，由主智能体调用 `course_pipeline` 的
+`prepare-animation-tasks`，为清单中每个唯一机制生成只读任务包
+`pipeline/<course-id>/worker-tasks/animations/<Component>.json`，`animation-plan.json` 只调度 TSX/CSS
+仍是占位的组件，每个机制启动一个独立子智能体。每个任务只拥有：
 
 ```text
 src/animations/<Component>.tsx
 src/animations/<Component>.css
 ```
 
-每个动画任务提示必须要求子智能体先加载 `candidate-knowledge-point-generator` Skill，再完整读取
-session-local 的 [animation-contract.md](animation-contract.md)，并传入完整 animation manifest 单项和
-绑定知识点的相关正文块；只给路径或转述部分规则不算完成契约注入。组件使用 React、SVG 和 CSS，
-除非三维空间关系确实不可替代。不得让多个动画任务修改同一文件。
+每个动画任务提示使用 [orchestration.md](orchestration.md) 中的固定短模板，要求子智能体先加载
+`candidate-knowledge-point-generator` Skill，完整读取任务包，再按任务包 `contracts` 顺序完整读取
+`SKILL.md`、[animation-worker-brief.md](animation-worker-brief.md) 和 session-local 的
+[animation-contract.md](animation-contract.md)，并自行读取 `boundPoints[].pointFile` 中的绑定知识点。
+任务包原样携带完整 animation manifest 单项；主智能体不得把 manifest 单项、绑定知识点正文或合同
+正文粘贴进提示。组件使用 React、SVG 和 CSS，除非三维空间关系确实不可替代。不得让多个动画任务
+修改同一文件。
 
-第一个动画组件必须作为 canary。每个动画任务返回后，主智能体立即调用 `course_pipeline` 的
-`validate-animation-drafts`；失败时把完整错误发回原任务，在原 TSX/CSS 所有权内修复并重验。
-首个组件通过后才能启动其余组件；其余任务也必须逐个通过草稿校验。
+第一个动画组件必须作为 canary，单独派发；返回后主智能体调用 `course_pipeline` 的
+`validate-animation-drafts`，失败时把完整错误发回原任务，在原 TSX/CSS 所有权内修复并重验。
+canary 未通过前不派发其他组件。canary 通过后，其余组件按 `animation-plan.json` 每 k 个一波，在同一条
+assistant 消息里并发发出；每波返回后只调用一次 `validate-animation-drafts`，失败组件的修复调用优先
+并入下一条消息，新任务补足到 k 个。
 
 全部组件通过草稿校验后，由主智能体串行调用 `course_pipeline` 的 `build-animation-registry`。
 
@@ -326,7 +353,8 @@ session-local 的 [animation-contract.md](animation-contract.md)，并传入完�
 - 不输出旧版 `candidate-points.json`。
 - 不生成或暗含知识簇、章节归属和森林布局。
 - 不把该中间包描述为现有 AI 知识森林可直接加载的 CKDS 1.0 数据。
-- 不让并行子智能体修改共享文件。
+- 不让并行子智能体修改共享文件或 `worker-tasks/` 任务包。
+- 不在 task 提示中粘贴或转述索引项、注册表、`pointEvidence`、合同正文或模板规则。
 - 不把中文标题、路径或未来占位符写入 `prerequisites`。
 - 不为追求“丰富”生成重复、空泛或不可核实内容。
 - 不用漂移、闪烁、旋转等装饰运动冒充原理动画。

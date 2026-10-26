@@ -239,11 +239,11 @@ export function KnowledgeGraphReview({
                   <strong className="truncate text-sm text-text-primary">
                     {cluster.title}
                   </strong>
-                  <span className="rounded bg-primary-light px-1.5 py-0.5 text-[10px] text-primary">
+                  <span className="rounded bg-primary-light px-1.5 py-0.5 text-xs text-primary-text">
                     {count} 点
                   </span>
                 </div>
-                <code className="mt-1 block text-[10px] text-text-secondary">
+                <code className="mt-1 block text-xs text-text-secondary">
                   {cluster.id}
                 </code>
                 {cluster.description && (
@@ -295,17 +295,17 @@ export function KnowledgeGraphReview({
                     <h3 className="text-sm font-semibold text-text-primary">
                       {point.title}
                     </h3>
-                    <code className="text-[10px] text-text-secondary">{point.id}</code>
+                    <code className="text-xs text-text-secondary">{point.id}</code>
                   </div>
                   {point.role && (
-                    <span className="rounded bg-cream-dark px-2 py-1 text-[10px] text-text-secondary">
+                    <span className="rounded bg-cream-dark px-2 py-1 text-xs text-text-secondary">
                       {point.role}
                     </span>
                   )}
                 </div>
 
                 <fieldset className="mt-3">
-                  <legend className="text-[11px] font-semibold text-text-secondary">
+                  <legend className="text-xs font-semibold text-text-secondary">
                     知识簇归属
                   </legend>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -315,9 +315,9 @@ export function KnowledgeGraphReview({
                       return (
                         <label
                           key={cluster.id}
-                          className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${
+                          className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
                             checked
-                              ? "border-primary/30 bg-primary-light text-primary"
+                              ? "border-primary/30 bg-primary-light text-primary-text"
                               : "border-border text-text-secondary"
                           }`}
                         >
@@ -329,13 +329,13 @@ export function KnowledgeGraphReview({
                             className="h-3 w-3 accent-primary"
                           />
                           {cluster.title}
-                          {isTextbookPrimary && <span className="text-[10px] opacity-70">主章节</span>}
+                          {isTextbookPrimary && <span className="text-xs text-text-tertiary">主章节</span>}
                         </label>
                       );
                     })}
                   </div>
                   {selectedClusters.length === 0 && (
-                    <p className="mt-1 text-[11px] text-error">
+                    <p className="mt-1 text-xs text-error">
                       至少选择一个知识簇
                     </p>
                   )}
@@ -343,7 +343,7 @@ export function KnowledgeGraphReview({
 
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   <div>
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-text-secondary">
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
                       <GitBranch className="h-3.5 w-3.5 text-primary" />
                       prerequisites
                     </p>
@@ -417,7 +417,7 @@ export function KnowledgeGraphReview({
                               {pointsById.get(edge.prerequisiteId)?.title ??
                                 edge.prerequisiteId}
                             </p>
-                            <p className="mt-1 text-[10px] text-text-secondary">
+                            <p className="mt-1 text-xs text-text-secondary">
                               {edge.reason}
                             </p>
                           </div>
@@ -444,7 +444,7 @@ export function KnowledgeGraphReview({
                   </div>
 
                   <div>
-                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-text-secondary">
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
                       <Link2 className="h-3.5 w-3.5" />
                       related（只读）
                     </p>
@@ -452,7 +452,7 @@ export function KnowledgeGraphReview({
                       {point.related.map((relatedId) => (
                         <span
                           key={relatedId}
-                          className="rounded-full border border-border bg-cream px-2.5 py-1 text-[11px] text-text-secondary"
+                          className="rounded-full border border-border bg-cream px-2.5 py-1 text-xs text-text-secondary"
                         >
                           {pointsById.get(relatedId)?.title ?? relatedId}
                         </span>
@@ -532,7 +532,7 @@ export function KnowledgeGraphReview({
             <button
               type="submit"
               disabled={disabled || !pointId || !prerequisiteId || !reason.trim()}
-              className="ml-auto inline-flex h-10 items-center gap-2 rounded-md border border-primary/30 px-4 text-sm font-semibold text-primary hover:bg-primary-light disabled:opacity-45"
+              className="ml-auto inline-flex h-10 items-center gap-2 rounded-md border border-primary/30 px-4 text-sm font-semibold text-primary-text hover:bg-primary-light disabled:opacity-45"
             >
               <Plus className="h-4 w-4" />
               添加关系

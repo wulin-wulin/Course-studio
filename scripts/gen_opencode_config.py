@@ -12,6 +12,9 @@ management skills safe to add without granting access to application code.
 
 Usage: gen_opencode_config.py <output_path>
 Reads models.json from the project root; falls back to env vars when absent.
+A model entry may declare ``"limit": {"context": n, "output": n}``; it is
+validated with the same rules as packages/backend/src/services/ai/model_config.py
+and forwarded to OpenCode unchanged.
 """
 
 from __future__ import annotations
@@ -33,7 +36,10 @@ MODEL_CAPS = {
 
 # OpenCode cannot infer token limits for our custom OpenAI-compatible
 # providers. Without an explicit limit it reports ``context: 0`` and cannot
-# calculate a safe automatic-compaction threshold.
+# calculate a safe automatic-compaction threshold. A ``limit`` declared in
+# models.json always wins; when absent, only the verified Kimi K2 window gets a
+# default. Other vendors stay unset rather than guessed.
+LIMIT_KEYS = ("context", "output")
 KIMI_256K_MODEL_IDS = frozenset({
     "kimi-k2.5",
     "kimi-k2.6",
@@ -51,9 +57,39 @@ COMPACTION = {
 }
 
 
-def _model_caps(model_id: str) -> dict:
+def _parse_limit(value: object) -> dict[str, int] | None:
+    """Validate an optional ``limit`` declaration from ``models.json``.
+
+    Returns ``None`` when nothing is declared and raises ``ValueError`` with a
+    readable reason when the declaration cannot be forwarded to OpenCode.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("limit 必须是包含 context 与 output 的对象")
+    unknown = sorted(str(key) for key in value if key not in LIMIT_KEYS)
+    if unknown:
+        raise ValueError(f"limit 只支持 context 与 output，不支持：{', '.join(unknown)}")
+    limit: dict[str, int] = {}
+    for key in LIMIT_KEYS:
+        number = value.get(key)
+        # JSON true is a Python int; it must not become a one-token window.
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            raise ValueError(f"limit.{key} 必须是正整数")
+        limit[key] = number
+    # OpenCode compacts against ``context - output``; a non-positive budget
+    # would make every turn overflow.
+    if limit["output"] >= limit["context"]:
+        raise ValueError("limit.output 必须小于 limit.context")
+    return limit
+
+
+def _model_caps(model_id: str, limit: dict | None = None) -> dict:
     capabilities = dict(MODEL_CAPS)
-    if model_id in KIMI_256K_MODEL_IDS:
+    if limit is not None:
+        capabilities["limit"] = dict(limit)
+    elif model_id in KIMI_256K_MODEL_IDS:
         capabilities["limit"] = dict(KIMI_256K_LIMIT)
     return capabilities
 
@@ -232,10 +268,20 @@ def _models_from_file(data: dict) -> list[dict]:
         mid = (item.get("id") or "").strip()
         if not mid:
             continue
+        try:
+            limit = _parse_limit(item.get("limit"))
+        except ValueError as exc:
+            # Match the backend: keep the model usable, but make the ignored
+            # budget visible. Use stdout because PowerShell launchers running
+            # with ErrorActionPreference=Stop may turn native stderr into a
+            # terminating error.
+            print(f"警告：模型 {mid} 的 limit 无效，已忽略：{exc}")
+            limit = None
         out.append({
             "id": mid,
             "base_url": (item.get("base_url") or "").strip(),
             "api_key": (item.get("api_key") or "").strip(),
+            "limit": limit,
         })
     return out
 
@@ -281,7 +327,7 @@ def _build_config(models: list[dict], default_id: str) -> dict:
                 "baseURL": model["base_url"],
                 "apiKey": model["api_key"],
             },
-            "models": {model_id: _model_caps(model_id)},
+            "models": {model_id: _model_caps(model_id, model.get("limit"))},
         }
 
     return {
@@ -326,6 +372,15 @@ def main() -> int:
     out_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
     ids = ", ".join(m["id"] for m in models)
     print(f"opencode 配置已生成：{out_path}（默认={default_id}，模型=[{ids}]）")
+    unbounded = [
+        m["id"] for m in models
+        if "limit" not in config["provider"][m["id"]]["models"][m["id"]]
+    ]
+    if unbounded:
+        print(
+            f"提示：模型 [{', '.join(unbounded)}] 没有 limit，OpenCode 会把上下文报告为 0"
+            "且不会自动压缩；请在 models.json 中按厂商文档填写 limit。"
+        )
     return 0
 
 

@@ -23,6 +23,51 @@ function loadPolicy() {
   return JSON.parse(result.stdout);
 }
 
+function buildProviders(document) {
+  const source = [
+    "import contextlib, importlib.util, io, json, sys",
+    "spec = importlib.util.spec_from_file_location('course_config', sys.argv[1])",
+    "module = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(module)",
+    "document = json.loads(sys.argv[2])",
+    "with contextlib.redirect_stdout(io.StringIO()) as output:",
+    "    models = module._models_from_file(document)",
+    "config = module._build_config(models, document['default'])",
+    "print(json.dumps({'provider': config['provider'], 'output': output.getvalue()}, ensure_ascii=False))",
+  ].join("\n");
+  const result = spawnSync("python", ["-c", source, CONFIG_SCRIPT, JSON.stringify(document)], {
+    cwd: PROJECT_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+function modelEntry(id, extra = {}) {
+  return { id, base_url: "https://model.example/v1", api_key: "test-key", ...extra };
+}
+
+test("declared model limits win while undeclared non-Kimi models stay unset", () => {
+  const declared = { context: 131072, output: 8192 };
+  const { provider, output } = buildProviders({
+    default: "deepseek-v4-flash",
+    models: [
+      modelEntry("deepseek-v4-flash", { limit: declared }),
+      modelEntry("kimi-k2.6"),
+      modelEntry("kimi-k2.5", { limit: { context: 200000, output: 16000 } }),
+      modelEntry("custom-model"),
+      modelEntry("broken-model", { limit: { context: 131072, output: 0 } }),
+    ],
+  });
+  const limitOf = (id) => provider[id].models[id].limit;
+  assert.deepEqual(limitOf("deepseek-v4-flash"), declared);
+  assert.deepEqual(limitOf("kimi-k2.6"), { context: 262144, output: 32768 });
+  assert.deepEqual(limitOf("kimi-k2.5"), { context: 200000, output: 16000 });
+  assert.equal(limitOf("custom-model"), undefined);
+  assert.equal(limitOf("broken-model"), undefined);
+  assert.match(output, /警告：模型 broken-model 的 limit 无效，已忽略：limit\.output 必须是正整数/);
+});
+
 test("outline agent stops at the G2 structured review boundary", () => {
   const { agents } = loadPolicy();
   const outline = agents["course-outline-creator"].permission;

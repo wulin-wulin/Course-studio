@@ -4,6 +4,9 @@
 
 在不牺牲全局一致性的前提下，把详情和动画实现拆成可并行、文件所有权互斥的任务。并行只用于独立文件；索引、清单、注册表和全量校验始终串行。
 
+任务上下文由受信 action 机械写入只读任务包，主智能体的每个 task 提示保持固定长度；这样全课程的
+派发成本随知识点数线性增长，而不是随“点数 × 注册表长度”平方增长。
+
 ## 阶段门
 
 严格按以下顺序推进：
@@ -12,11 +15,14 @@
 范围与证据
   → 规划 index
   → index 校验
-  → points 任务
+  → G2 审核通过后 init-points
+  → prepare-content-tasks
+  → points canary 波 → points 并发波（每波 finalize-point-drafts）
   → points 全局复核
   → index 同步
   → 动画请求归并
-  → 动画组件任务
+  → init-animations → prepare-animation-tasks
+  → 动画 canary → 动画并发波（每波 validate-animation-drafts）
   → 动画注册构建
   → 全量校验
 ```
@@ -37,6 +43,19 @@ generation/manifest.json
 generation/animation-manifest.json
 ```
 
+### 受信 action 独占
+
+```text
+pipeline/<course-id>/worker-tasks/registry.json
+pipeline/<course-id>/worker-tasks/content-plan.json
+pipeline/<course-id>/worker-tasks/content/<point-id>.json
+pipeline/<course-id>/worker-tasks/animation-plan.json
+pipeline/<course-id>/worker-tasks/animations/<Component>.json
+```
+
+`worker-tasks/` 与 `course-content/` 同级，不属于课程内容包。它只由 `prepare-content-tasks` 与
+`prepare-animation-tasks` 确定性生成；主智能体和全部 worker 只读，不得手写、修改或删除。
+
 ### 详情任务独占
 
 每个知识点由一个且仅一个任务拥有：
@@ -46,9 +65,11 @@ src/data/points/<point-id>.json
 generation/animation-requests/<point-id>.json
 ```
 
-一个小批次任务可以拥有 3–5 组上述文件，但不同任务的 ID 集合必须互斥。
+任务包 `ownership.write` 精确列出这两条会话相对路径；不同任务的点互斥。
 文件一旦分配给详情任务，主智能体不得用 `edit`/`write` 代替该任务修改它；需要返工时继续交给
-原 worker，或先结束旧所有权再创建拥有同一组文件的单一 repair task。
+原 worker，或先结束旧所有权再创建拥有同一组文件的单一 repair task。受信 action
+`finalize-point-drafts` 按 ref 机械展开 sourceSpans 时会原子写回 point 文件，这是确定性脚本的
+受控写入，不属于主智能体代写。
 
 ### 动画任务独占
 
@@ -61,222 +82,214 @@ src/animations/<Component>.css
 
 动画任务不得修改 points、动画清单、类型文件、注册组件或其他动画的文件。
 
-## 自适应拆分
+## 一点一任务
 
-### 一任务一点
+`prepare-content-tasks` 为 index 中每个知识点确定性生成一个任务包，`content-plan.json` 只调度仍是
+`{}` 占位的点；一个详情任务只负责一个知识点，不再由模型按重要性、难度或依赖邻域自行合批。理由：
 
-满足任一条件时单独分配：
+- 均衡尾部延迟：所有任务粒度相同，一波不会被某个多点批次拖住，修复也只影响单点；
+- 主智能体提示保持 O(1)：上下文全部在任务包中，task 提示是固定短模板，不随课程规模变长；
+- 拆分与所有权由脚本决定，可重现、可恢复，不依赖模型判断；
+- 已开始的点也保留任务包，修复、恢复、全局复核和 G5 返工时 repair task 始终有可信输入。
 
-- `importance >= 0.85`；
-- `difficulty` 为 `进阶`；
-- 需要严谨公式、证明、复杂流程或多步推导；
-- 预计有 3 个以上直接前置；
-- 是高出度基础点，错误会传播到大量后续内容；
-- 很可能需要机制动画；
-- 名称、边界或事实归属仍有争议。
+取舍：旧流程中主智能体为每个任务筛出的“建议前置候选”不再生成，worker 读取全量注册表自行
+判断最小必要前置；前置关系的全局质量由“全局 points 复核”兜底。
 
-### 3–5 点小批次
+不得把整门课程或多个知识点交给一个详情子智能体。
 
-仅当所有点都满足以下条件时合批：
+## 任务包与计划
 
-- 基础或中等难度；
-- 定义和边界稳定；
-- 正文不依赖长推导；
-- 共享相近的直接前置或比较语境；
-- 合批有助于避免重复，而不是仅因索引相邻。
+`prepare-content-tasks` 在 G2 回执有效且 `init-points` 之后调用，生成：
 
-一个任务最多 5 点。不得把整门课程交给一个详情子智能体。
+- `registry.json`：`course-worker-registry/1.0`，`points` 中每个知识点一行
+  `{id,title,difficulty,shortSummary}`，适配 `read` 工具的行数与单行长度限制；
+- `content/<point-id>.json`：`course-worker-task/1.0`、`kind: "content"`，index 中每个知识点一个；
+  重跑只改写内容有变化的任务包，只删除已不在 index 中的点的旧任务包；
+- `content-plan.json`：`course-worker-plan/1.0`，含 `concurrency`（k）、`canary`、`waves`、
+  `started`（已开始的点）与 `taskDir`；每一波占一行，大课程也不会超出 `read` 的行数上限。
 
-## 并发策略
+详情任务包字段：
 
-- 先生成全部任务清单和文件所有权映射，再启动并发。
-- 第一波必须是合计 3–5 个知识点的 canary；只有这一波全部通过草稿校验，才扩大并发。
-- canary 通过后，内容详情 worker 默认以 10 个互斥任务一波并发；只有平台明确限流或任务失败时才降为更小波次，并记录降级原因。动画任务仍须遵守首个 canary 通过后逐任务验收的规则。
-- 同一依赖邻域可并行写详情，因为前置 ID 已冻结；不得根据尚未完成的正文发明新 ID。
-- 每个任务返回后，主智能体立即调用 `validate-point-drafts`；失败时先让原任务按精确错误
-  就地修复。当前一波全部通过后，才启动下一波。
-- 子智能体失败不影响其他互斥任务；只重试失败任务。
+| 字段 | 内容 |
+|---|---|
+| `courseId` / `pointId` / `title` | 冻结身份 |
+| `ownership.write` | point 与 animation request 的会话相对路径 |
+| `forbidden` | 禁止修改的共享文件 |
+| `contracts` | 按顺序：session-local `SKILL.md`、`content-worker-brief.md`、`data-contract.md`、`animation-contract.md`、`schemas/point.schema.json`、`schemas/animation-request.schema.json`；教材 v2 追加 `schemas/textbook-content.schema.json` |
+| `course` | `course.json` 原样 |
+| `scope` | manifest 的 `subject`（受众、深度、范围、排除项、学习成果）原样，附 `evidenceMode/contentContract` |
+| `indexEntry` | 完整索引项 JSON 原样，不是主智能体手写的摘要 |
+| `sequence` | `order`、`previousPointId`、`nextPointId` |
+| `registryPath` | 全量注册表路径；worker 需要选择前置时自行读取 |
+| `evidence` | 仅 `textbook-grounded`：`origin`、`anchorPointId`、`markdownPath` 与有序 `spans` |
+| `sourceEvidence` | 仅 `researched`：本点 `manifest.pointEvidence` 单项原样，以及其 `sourceRefs` 指向的 `sources` 记录原样 |
 
-## 详情任务输入
+教材证据是受信 `generation/manifest.json` 中 `manifest.pointEvidence` 单项的机械投影：
 
-每个详情任务都必须获得以下完整上下文：
-
-1. `course.json`；
-2. manifest 中的受众、深度、范围、排除项和学习成果；
-3. 自己负责的完整索引项；
-4. 全量合法 prerequisite ID 与 `id → title` 注册表；
-5. 为本任务筛出的建议前置候选；
-6. 与负责知识点直接相关的来源记录；
-7. 完整的索引项 JSON，不得由主智能体手写省略字段的摘要；
-8. 教材模式下，从受信 `generation/manifest.json` 原样复制的本任务各点
-   `manifest.pointEvidence` 完整单项 JSON，尤其是完整、有序的 `sourceSpans`；
-9. session-local 的 [SKILL.md](SKILL.md)、[data-contract.md](data-contract.md)、
-   [animation-contract.md](animation-contract.md)、`schemas/point.schema.json` 和
-   `schemas/animation-request.schema.json` 的明确路径；教材模式还要提供
-   `schemas/textbook-content.schema.json`；
-10. 本任务可写文件的绝对或相对路径；
-11. 禁止修改的共享文件列表。
-
-任务提示必须明确要求子智能体先加载 `candidate-knowledge-point-generator` Skill，再完整读取
-上述合同/Schema（教材模式包含第五份内容块 Schema）；只给文件路径或转述部分字段都不算
-完成合同注入。子智能体没有
-`course_pipeline` 权限，正式校验由主智能体在每个任务返回后执行。
-
-教材 Markdown 模式还必须为每个任务提供点级证据包，而不是只给标题：
-
-- `origin` 与教材锚点；所有非教材点（`llm-extension` 或 `user`）必须提供同章教材
-  `anchor_point_id`；
-- 该点完整的 `manifest.pointEvidence` 单项 JSON；其中 `sourceSpans` 是 worker 唯一可写入
-  provenance 的 span 清单。教材原有点必须按受信 manifest 的既定顺序完整覆盖全部 section 及
-  正文行，所有非教材点必须使用受信 action 为 `anchor_point_id` 确定的非空证据子集；
-- span 对应的正文 section，以及必要的前后相邻 section；
-- section 的 heading path、行号、页码、资源引用和摘要哈希；
-- 哪些说明来自教材，哪些部分允许模型补充。
+- `spans` 严格按该单项 `sourceSpans` 的顺序排列，每项含 `ref/headingPath/lineStart/lineEnd/assetRefs`；
+  `blockIds` 只有一个时 `ref` 即该 ID，否则为 `blockIds.join("+")`，同一点内 ref 不唯一时 action
+  直接失败；
+- 教材原有点的 spans 按受信 manifest 的既定顺序完整覆盖全部 section 及正文行；所有非教材点
+  （`llm-extension` 或 `user`）都带同章教材 `anchorPointId`，spans 是受信 action 为该锚点确定的
+  非空证据子集；
+- `markdownPath` 指向会话内绑定的 `full.md`；worker 按 span 行号读取正文和必要的相邻 section，
+  不得自行扫描整本 Markdown，也不得把其他知识点的大段正文复制进当前上下文；
+- 长教材的 `chunk-*` ID 只用于定位读取批次，不是 canonical source span；详情任务不得用 chunk ID
+  替换 ref 中的 `block-*` section ID。
 
 manifest 声明 `contentContract: "textbook-content/2.0"` 时，扩展点也必须分配非空教材锚点
 span；该 span 对应的教材块只描述锚点上下文，扩展出来的新结论写入模型块。
 
-长教材按 `material.json.chunks` 分批读取。`chunk-*` ID 只用于定位读取批次，不是 canonical
-source span；详情任务不得用 chunk ID 替换 manifest 中的 `block-*` section ID，不得自行扫描
-整本 Markdown，也不得把其他知识点的大段正文复制进当前上下文。
+worker 草稿中教材块的 `provenance.sourceSpans` 只写 `evidence.spans[].ref` 字符串，首次出现顺序覆盖
+全部 ref 且与 spans 顺序一致，不再抄写 span 对象和哈希。`finalize-point-drafts` 按 ref 把字符串机械
+替换为可信 span 的深拷贝；展开后教材块 span 按块顺序和数组顺序首次出现去重的结果必须与
+`manifest.pointEvidence.sourceSpans` 深度相等且顺序一致。模型块不得引入清单外 span。
 
-不要把其他数百个知识点的完整正文塞入任务；全量注册表只提供 ID、标题、摘要和难度。
+主智能体不得把索引项、注册表、`pointEvidence`、合同正文或模板规则粘贴或转述进 task 提示；
+可信任务包就是契约注入载体。worker 的全部规则（Schema 快速核对、写作任务、教材 ref、LaTeX
+转义、`read` 回读自检、禁止修改清单和最终报告格式）集中在 [content-worker-brief.md](content-worker-brief.md)，
+worker 按任务包 `contracts` 顺序完整读取。子智能体没有 `course_pipeline` 权限，正式校验由主智能体
+执行。
+
+## 并发策略
+
+- 并发数 k 由 `prepare-content-tasks` 读取环境变量 `COURSE_WORKER_CONCURRENCY` 决定：整数 1–32，
+  默认 10；非法值回退到 10 并在输出中警告。主智能体使用 `content-plan.json` 的 `concurrency`，
+  不得自行把正常批次固定为更小或更大的值。
+- `canary` 是按索引顺序的前 min(3, 待生成数) 个待生成点；其余待生成点按索引顺序每 k 个一波。
+- 每一波（包括 canary 波）的全部 task 调用都必须在同一条 assistant 消息里一次性发出，才能真正并行；
+  不得逐条消息串行派发同一波任务。
+- canary 波全部返回后调用一次 `finalize-point-drafts`；只有 canary 全部通过，才扩大到后续波次。
+  canary 有失败时，下一条消息只包含 canary 的修复调用，不追加任何新任务；修复返回后再调用一次
+  `finalize-point-drafts`，直到 canary 全部通过。canary 中同一点连续两次失败仍按“失败与重试”新建
+  repair task；错误指向任务包、索引或合同本身时按“失败与重试”第 4 条处理，不扩大并发。
+- canary 通过后，`waves` 按顺序消费为待派发队列：每条消息先放入上一轮失败点的修复调用，再按队列
+  顺序补入新任务直到调用总数达到 k，放不下的新任务顺延到下一条消息。不等待失败点修好才启动下一
+  波；失败点的修复与新任务在同一条消息里并发。
+- 每条消息的全部调用返回后，只调用一次 `finalize-point-drafts`，据其报告确定下一条消息的修复集合。
+- 已派发但文件仍为 `{}` 占位的点视同失败。草稿校验会跳过成对占位，因此报告中的“校验通过”不代表
+  本轮任务都写了文件；报告另有一行“待生成队首”，按计划顺序列出最前面最多 k 个仍为占位的点。新
+  任务严格按计划顺序派发，本轮已派发却没写文件的点必然出现在队首：只要队首里有本条消息派发过的
+  点，就把它按失败处理（发回原 worker 会话），即使报告整体通过。canary 判定同样适用这条规则。
+- 只有平台明确限流（如 HTTP 429）时才降低 k，并在进度记录中写明原因；任务失败或校验失败不降低 k。
+- 同一依赖邻域可并行写详情，因为前置 ID 已冻结；不得根据尚未完成的正文发明新 ID。
+- 子智能体失败不影响其他互斥任务；只重试失败任务。
+- 恢复会话时先重跑 `prepare-content-tasks`：它幂等地保留全部任务包，只按剩余 `{}` 占位点重建计划。
+  再调用 `finalize-point-drafts`，已开始但未通过的点用其任务包交回原会话修复；原会话不可用时按
+  “失败与重试”新建拥有同一组文件的 repair task。之后按新计划继续，新计划的 canary 同样先单独验收。
+  任何情况下都不得改为在提示中粘贴证据。
 
 ## 详情任务提示模板
 
-将方括号替换为真实内容：
+将尖括号替换为真实 ID，其余文字保持不变，不得追加索引项、注册表、证据或规则正文：
 
 ```text
-你负责课程 [课程名] 的以下知识点详情：
-[索引项 JSON]
-
-受众与范围：
-[范围契约]
-
-全量知识点注册表：
-[id/title/shortSummary/difficulty 列表]
-
-可核对来源：
-[来源记录]
-
-教材点级证据（仅教材 Markdown 模式）：
-[manifest.pointEvidence 完整单项 JSON，包含 origin/sourceSpans]
-[sourceSpans 对应正文与相邻上下文]
-
-只允许写：
-[points 文件路径]
-[animation request 文件路径]
-
-开始写文件前必须依次完成：
-1. 加载 `candidate-knowledge-point-generator` Skill。
-2. 完整读取下列 session-local 文件：
-   - [data-contract.md 的路径]
-   - [animation-contract.md 的路径]
-   - [point.schema.json 的路径]
-   - [textbook-content.schema.json 的路径，仅教材模式]
-   - [animation-request.schema.json 的路径]
-
-Schema 快速核对（不能替代读取原文件）：
-- 普通课程 v1 的 `keyTerms`、`principles`、`applications`、`misconceptions` 都是非空字符串数组，
-  `qa` 是至少两项的 `{ "q": string, "a": string }[]`；
-- 教材 v2 不写旧正文栏目，改用 `content.schema_version="textbook-content/2.0"` 和有序 blocks；
-- 教材 v2 先写 outcome-first 的 `learningDesign`，默认 `adaptationLevel: "balanced"`；每个 block
-  用 `moduleId/depth` 接入教学模块，有明确学习目的的交互内容写入带 grounding 和 fallback 的
-  `learningAssets`；
-- 教材块必须带 `quote|paraphrase` 与非空 spans，模型块必须用 `basedOnBlockIds` 向前引用并
-  追溯到教材块；
-- 模型块按依据就近插入：单锚点补充紧跟锚点，多锚点补充放在最后一个被引用块之后；不得把所有
-  模型块集中堆在全部教材块末尾；
-- 教材块中的 spans 按块顺序和数组顺序首次出现去重后，必须与上方
-  `manifest.pointEvidence.sourceSpans` 深度相等且顺序一致；不得自行生成或改用 `chunk-*` ID；
-- JSON 文件中的 LaTeX 反斜杠必须写成合法的 `\\`，例如运行时 `\delta` 写作 `"\\delta"`；
-  可优先用 `$...$`/`$$...$$`，但命令中的反斜杠仍要转义；
-- `difficulty` 只能是 `基础`、`中等`、`进阶`；
-- 动画请求 `needed: true` 时，`mechanism` 恰好包含 `inputs/changingState/transitionRule/terminalState/replayMode`，并包含 `suggestion`；
-- 动画请求 `needed: false` 时不得出现 `mechanism` 或 `suggestion`。
-
-任务：
-1. 为每个索引项生成一个完整 points JSON。
-2. id、title 必须与索引完全一致；不得创建新知识点 ID。
-3. prerequisites 只能从全量注册表选择，并保持最小必要集合。
-4. 必填内容必须具体、可教学、非模板化；可选事实字段只在适用且可核实时生成。
-5. point 初稿写 animationType: "none"。
-6. 为每个 point 生成一个动画请求；只有真实动态机制才写 needed: true。
-7. 写完后必须用 `read` 回读自己拥有的 point 和 animation request，检查 JSON 结构与 LaTeX
-   反斜杠的物理转义；未回读不得结束。
-8. 教材模式下按 `textbook-content/2.0` 写 blocks：教材块保留精确 spans，模型块显式引用
-   前面的教材上下文并按依据就近插入，不得集中堆到正文末尾。教材块 span 的有序去重并集必须精确等于注入的完整
-   `manifest.pointEvidence.sourceSpans`；模型块不得引入清单外 span。不要把未读正文交给模型块
-   补齐引用。不要在 point 顶层重复写 sourceSpans/modelEnriched；校验器会派生并与 pointEvidence
-   的证据计划核对。不得把模型补充伪装成教材原文。
-9. 教材模式先按学习目标设计 outcomes、misconceptions、modules 与 completion，再组织 blocks。
-   默认 balanced，允许重排教学顺序、压缩重复、增加类比/案例/练习/动画/桥接；faithful 保留教材
-   术语和主要顺序，只做去重、澄清与必要检查；teaching-first 可围绕任务重建叙事、合并或拆分讲解。
-   三档都不能改变教材事实、定义、公式、数值、边界和完整覆盖。不要使用固定 token 百分比。学习资产必须声明
-   `anchorBlockId/outcomeRefs/learningPurpose/grounding/fallback`，引用不得悬空。
-   modules 按通用学习骨架和知识类型动态选择，通常为 4–7 个；概念型突出边界与正反例，定量型突出
-   变量/单位/假设/推导/参数实验，流程型突出条件/分支/错误恢复，比较型突出统一维度与取舍，诊断型
-   突出症状到修复的证据链，案例型突出决策、结果、反思与迁移。不要在正文重复顶部 outcomes。
-   estimatedMinutes 必须包含阅读、公式/表格、互动和练习的总用时。若填写
-   `completion.nextPointId`，只能使用冻结 index 中的直接下一点；末点省略。
-
-禁止修改 index、manifest、动画清单、注册文件和任何未授权路径。
-
-你返回后，主智能体会立即执行：
-`course_pipeline {"action":"validate-point-drafts","courseId":"[course-id]"}`。
-只有输出明确报告草稿校验通过、已校验知识点数和待生成数，任务才算验收；失败时主智能体会把
-完整原始校验错误（包括任何 JSON parse error）发回本任务，你必须只修复自己拥有的文件并重新
-等待验收；主智能体不会直接编辑这些文件。
-
-最终只报告：写入文件、使用的前置 ID、动画请求结论、仍有疑问的事实。
+你是课程 <course-id> 的内容 worker，只负责知识点 <point-id>。
+1. 先加载 `candidate-knowledge-point-generator` Skill。
+2. 完整读取任务包 `pipeline/<course-id>/worker-tasks/content/<point-id>.json`。
+3. 按任务包 `contracts` 的顺序完整读取每个合同与 Schema，并严格执行 `content-worker-brief.md`。
+4. 只写任务包 `ownership.write` 列出的两个文件；不得修改 `forbidden` 或任何其他路径。
+5. 完成后按 `content-worker-brief.md` 的“最终报告”格式返回。
 ```
 
-## 逐任务验收
+发回原 worker 会话的修复消息：
 
-每个详情任务返回后，主智能体必须立即调用：
+```text
+知识点 <point-id> 未通过 finalize-point-drafts，以下是涉及你所拥有文件的完整原始错误：
+<原样粘贴错误，不摘要、不改写，包括任何 JSON parse error>
+只在任务包 `ownership.write` 内修复；修复后按 `content-worker-brief.md` 回读自检并返回最终报告。
+```
+
+点已派发但仍为 `{}` 占位时，错误就写“任务包 ownership.write 中的两个文件仍是 {} 占位，尚未写入”，
+同样发回原会话。
+
+同一点连续两次失败后新建的 repair task：
+
+```text
+你是课程 <course-id> 知识点 <point-id> 的 repair task，接手原 worker 的全部文件所有权。
+1. 先加载 `candidate-knowledge-point-generator` Skill。
+2. 完整读取任务包 `pipeline/<course-id>/worker-tasks/content/<point-id>.json`，按其 `contracts` 顺序完整读取合同与 Schema。
+3. 完整读取 `ownership.write` 中的现有文件，只修复以下历次完整原始错误：
+<原样粘贴全部原始错误>
+4. 只写 `ownership.write`；完成后按 `content-worker-brief.md` 的“最终报告”格式返回。
+```
+
+## 逐波验收
+
+每一波的全部 task 返回后，主智能体调用一次：
+
+```text
+course_pipeline {"action":"finalize-point-drafts","courseId":"<course-id>"}
+```
+
+该动作先做溯源机械展开：仅在 manifest 声明 `textbook-content/2.0` 时，对每个已开始且可解析的点，
+把 blocks 中 `provenance.sourceSpans` 的字符串 ref 替换为该点 `manifest.pointEvidence.sourceSpans`
+中可信 span 的深拷贝，对象项保持不变；只有内容变化时才原子写回，不碰占位、动画请求或其他
+文件。随后执行与 `validate-point-drafts` 完全相同的草稿校验，打印同样格式的报告并附加 materialized
+摘要。存在未知 ref 或校验失败时退出码非 0。非教材课程跳过展开，只做校验。
+
+同一文件只要有一个 ref 不在该点 `evidence.spans[].ref` 中，finalize 就不改写这个文件；校验报告只对
+真正未知的 ref 逐项报错，并要求改成任务包中的合法 ref 字符串、不要手写 span 对象，同文件中合法的
+ref 不再报错。报告出现“请先运行 finalize-point-drafts”只说明尚未展开，此时直接调用 finalize 即可，
+不要转给 worker。
 
 ```text
 course_pipeline {"action":"validate-point-drafts","courseId":"<course-id>"}
 ```
 
-该动作跳过尚未开始的 `{}` 占位，只对已经开始的 point/request 成对执行正式 Schema 和
-一致性校验，并报告已校验数与待生成数。校验失败时，把完整错误和原文件所有权发回同一任务，
-修复并重新校验；主智能体不得直接 `edit`/`write` 详情文件，任何 JSON parse error 也必须原样
-交回有该文件所有权的 worker。不得等整门课程完成后一次性汇总错误。草稿校验通过后，主智能体还至少检查：
+`validate-point-drafts` 保留为只读检查：跳过尚未开始的 `{}` 占位，只对已经开始的 point/request 成对
+执行正式 Schema 和一致性校验，并报告已校验数与待生成数；遇到未展开的字符串 ref 会明确要求先运行
+`finalize-point-drafts`。
 
-- 两个预期文件都已生成；
+只有报告明确通过的点才算验收。校验失败时，把涉及该点文件的完整原始错误发回拥有该文件的
+同一 worker 会话修复并重新校验；主智能体不得直接 `edit`/`write` 详情文件，任何 JSON parse error
+也必须原样交回有该文件所有权的 worker。不得等整门课程完成后一次性汇总错误。
+
+finalize 的正式校验对每个已开始的点覆盖以下机械项，worker 也在回读自检中逐项确认；主智能体以
+报告为准，不为此逐文件通读正文：
+
+- point 与 animation request 成对开始，不允许只写一侧（两侧都仍为 `{}` 的点按上文“待生成队首”判定）；
 - 文件内部 ID 与文件名、冻结索引一致；
 - 没有 cluster/layout 或生成审查字段；
 - 必填数组达到下限且没有重复；
 - `prerequisites` 全部存在、无自引用；
 - 动画请求 `pointId` 一致；
-- `needed: true` 时五项机制信息完整；
-- 正文不是标题替换式模板。
+- `needed: true` 时五项机制信息完整。
+
+“正文不是标题替换式模板”等非机械质量项由 worker 自检，并在全局 points 复核中检查。
 
 结构错误可直接重试；事实边界错误应附上证据和明确修订要求。
 
 ## 失败与重试
 
-1. 第一次失败：把精确校验错误和原任务文件所有权发回同一子智能体。
-2. 第二次失败：缩小为一任务一点，并要求只修复列出的错误。
-3. 仍失败：结束原任务后创建一任务一点的 repair task，并转交同一文件所有权和全部原始错误；
-   主智能体不得直接编辑文件，也不得让两个任务同时拥有同一路径。
-4. 发现索引本身错误：暂停受影响任务，由主智能体串行修订索引和 manifest，再重新生成任务清单。
+1. 第一次失败：通过 task 的会话续接把精确、完整的原始校验错误发回原 worker 会话，在原文件
+   所有权内修复；canary 通过后，该修复调用并入下一条消息，与下一波新任务一起发出（canary 失败时
+   下一条消息只含 canary 修复，见“并发策略”）。
+2. 同一点连续第二次失败：结束原 worker 的所有权，新建拥有同一组文件的 repair task，转交任务包
+   路径和全部原始错误；主智能体不得直接编辑文件，也不得让两个任务同时拥有同一路径。
+3. repair task 失败时继续把完整错误发回该 repair task；错误指向任务包、索引或合同本身时按第 4 条
+   处理，不要反复重试。
+4. 发现索引本身错误：暂停受影响任务，由主智能体串行修订索引和 manifest，再重跑
+   `prepare-content-tasks` 生成任务包；`id`、`title` 或顺序变化会使 G2 回执失效，必须重新审核。
 
 不得用忽略校验、删除问题字段或把引用改为空数组来掩盖错误。
 
 ## 全局 points 复核
 
-逐任务校验不能替代全局复核。全部详情完成后检查：
+逐波校验不能替代全局复核。全部详情完成后检查：
 
 - 标题、英文名、缩写和别名的重复；
 - 普通点的 `coreIdea` 或教材点的 blocks 是否能清楚区分；
 - 摘要、难度和重要性是否使用统一尺度；
 - 前置关系是否为真正的学习依赖；
 - 是否存在环、孤立的高级点或缺失的基础点；
-- 高频模板句、空泛应用、虚构历史和伪精确年份；
-- 公式符号是否定义、JSON 和 LaTeX 是否正确转义；
+- 高频模板句、标题替换式正文、空泛应用、虚构历史和伪精确年份；
+- 公式符号是否定义、JSON 和 LaTeX 是否正确转义（如运行时 `\delta` 在文件中写作 `"\\delta"`）；
 - 所有点是否都提交了动画请求。
+
+全局复核或 G5 `validate-all` 发现某个点的问题时，同样不由主智能体改文件：按“修复消息”模板交回
+仍可用的原 worker 会话，否则按 repair task 模板新建拥有该点文件的 repair task；任务包对全部点保留，
+repair task 始终从任务包读取上下文。修复后重新调用 `finalize-point-drafts` 验收。
 
 只有全局复核完成后才同步 index。
 
@@ -295,38 +308,30 @@ course_pipeline {"action":"validate-point-drafts","courseId":"<course-id>"}
 
 动画规划器不能写组件源码。
 
-## 动画任务提示模板
+## 动画任务包与提示模板
+
+写好动画清单并调用 `init-animations` 后，主智能体调用 `prepare-animation-tasks`。它为清单中每个组件
+生成 `animations/<Component>.json`，`animation-plan.json`（`kind: "animation"`）只调度 TSX/CSS 仍是
+占位的组件：`canary` 是第一个待实现组件，其余每 k 个一波。动画任务包包含 `component`、animation manifest
+单项原样内容、`ownership.write`（TSX/CSS 的会话相对路径）、`forbidden`、
+`boundPoints[{id,title,pointFile}]`，以及按顺序的 `contracts`：session-local `SKILL.md`、
+[animation-worker-brief.md](animation-worker-brief.md)、[animation-contract.md](animation-contract.md)。
+
+动画 worker 自己读取任务包和绑定知识点文件；主智能体不得把 manifest 单项、绑定知识点正文或
+合同正文粘贴进提示。动画实现要求、源码自检和完成后说明集中在 animation-worker-brief.md。
 
 ```text
-你负责实现一个教学动画机制：
-[animation manifest 单项 JSON]
-
-引用它的知识点摘要：
-[绑定知识点的 title 与 v1 coreIdea/principles 或 v2 相关 content.blocks]
-
-只允许写：
-src/animations/[Component].tsx
-src/animations/[Component].css
-
-开始写文件前必须依次完成：
-1. 加载 `candidate-knowledge-point-generator` Skill。
-2. 完整读取 [animation-contract.md 的绝对路径]；只给路径或转述摘要不算读取合同。
-
-要求：
-1. 准确展示输入、关键中间状态、更新规则和终态/循环边界。
-2. 提供重播；涉及随机性时使用可复现 seed，并区分重播与重新生成。
-3. 使用响应式 SVG/React/CSS，提供 aria-label、role="img" 和 <title>。
-4. 支持 prefers-reduced-motion，静态终态仍可读。
-5. 清理全部定时器、动画帧、监听器、观察器和图形资源。
-6. CSS 类使用组件命名空间，不修改全局元素选择器。
-7. 不修改注册表、类型文件、points、manifest 或其他动画。
-
-完成后说明输入、变化状态、规则、终态和可自动复现的质量检查方式。
-
-你返回后，主智能体会立即执行：
-`course_pipeline {"action":"validate-animation-drafts","courseId":"[course-id]"}`。
-失败时主智能体会把原始校验错误发回本任务；你必须只修改自己拥有的 TSX/CSS 并等待重验。
+你是课程 <course-id> 的动画 worker，只负责组件 <Component>。
+1. 先加载 `candidate-knowledge-point-generator` Skill。
+2. 完整读取任务包 `pipeline/<course-id>/worker-tasks/animations/<Component>.json`。
+3. 按任务包 `contracts` 的顺序完整读取合同，并严格执行 `animation-worker-brief.md`。
+4. 完整读取任务包 `boundPoints[].pointFile` 列出的绑定知识点文件。
+5. 只写 `ownership.write` 列出的 TSX/CSS；完成后按 brief 的“完成后说明”返回。
 ```
+
+修复消息与 repair task 沿用详情任务的格式，把任务包路径换成动画任务包、把
+`finalize-point-drafts` 换成 `validate-animation-drafts`、把 brief 换成 animation-worker-brief.md；
+组件已派发但仍为占位时，错误写“任务包 ownership.write 中的 TSX/CSS 仍是 {} 占位，尚未写入”。
 
 ## 动画任务源码检查
 
@@ -339,20 +344,37 @@ src/animations/[Component].css
 - effect 清理覆盖所有副作用；
 - 机制与清单中所有绑定点都一致。
 
-第一个动画组件必须作为 canary，返回后立即执行 `validate-animation-drafts`；只有它通过后才启动其余组件。
-后续每个任务也在返回后立即校验，失败则交回原任务修复。该 action 跳过成对的 `{}` 占位，但拒绝只完成
-TSX/CSS 一侧，并对已开始组件执行完整源码契约检查。所有动画任务通过后，才由主智能体通过
-`course_pipeline` 固定 action 构建注册层。本检查不创建人工审核凭据。
+第一个动画组件必须作为 canary，单独派发；返回后执行：
+
+```text
+course_pipeline {"action":"validate-animation-drafts","courseId":"<course-id>"}
+```
+
+只有它通过后才启动其余组件；canary 失败时下一条消息只包含 canary 的修复调用，修复后再验，直到
+通过。其余组件按 `animation-plan.json` 的波次队列在同一条 assistant 消息里并发发出：修复调用优先，
+新任务补足到 k 个，放不下的顺延；每条消息返回后只调用一次 `validate-animation-drafts`，失败组件的
+完整原始错误发回原任务，在原 TSX/CSS 所有权内修复。同一组件连续两次失败时，按详情任务规则新建
+拥有同一组文件的 repair task。该 action 跳过成对的 `{}` 占位，但拒绝只完成 TSX/CSS 一侧，并对已
+开始组件执行完整源码契约检查；报告中的“动画待生成队首”出现本条消息已派发的组件时，按失败处理。
+所有动画任务通过后，才由主智能体通过 `course_pipeline` 固定 action 构建注册层。动画清单为空时没有
+动画任务，直接构建注册层。本检查不创建人工审核凭据。
 
 ## 最终串行步骤
 
 ```text
-course_pipeline: validate-point-drafts（每个详情任务返回后；只验收草稿）
+course_pipeline: init-points
+course_pipeline: prepare-content-tasks
+content task 波次（canary 后每波在同一条消息里并发）
+course_pipeline: finalize-point-drafts（每波返回后一次；展开 ref 并验收草稿）
 course_pipeline: validate-points
 course_pipeline: sync-index
+course_pipeline: validate-points
+course_pipeline: init-animation-manifest
 write animation-manifest
-animation component tasks
-course_pipeline: validate-animation-drafts（每个动画任务返回后；首个组件为 canary）
+course_pipeline: init-animations
+course_pipeline: prepare-animation-tasks
+animation task 波次（首个组件为 canary，之后每波在同一条消息里并发）
+course_pipeline: validate-animation-drafts（每波返回后一次）
 course_pipeline: build-animation-registry
 course_pipeline: validate-all
 course_pipeline: publish（G6 图谱审核通过后，内部执行生产构建）
