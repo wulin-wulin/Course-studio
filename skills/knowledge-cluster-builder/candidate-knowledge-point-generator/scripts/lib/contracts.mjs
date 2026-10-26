@@ -474,12 +474,15 @@ function checkProsCons(value, label, errors) {
   });
 }
 
-export function checkSourceSpans(value, label, errors) {
+// allowRefs 只用于 v2 内容块：worker 草稿可暂写任务包 ref 字符串，由 finalize-point-drafts 展开；
+// 字符串项在这里跳过，由 validate_output 结合 manifest.pointEvidence 给出“未知/未展开 ref”专用错误。
+export function checkSourceSpans(value, label, errors, { allowRefs = false } = {}) {
   if (!Array.isArray(value)) {
     errors.push(`${label} 必须是数组`);
     return;
   }
   value.forEach((span, index) => {
+    if (allowRefs && typeof span === 'string') return;
     const spanLabel = `${label}[${index}]`;
     const required = [
       'materialId', 'blockIds', 'headingPath', 'lineStart', 'lineEnd',
@@ -1009,6 +1012,7 @@ function checkTextbookContent(content, label, errors) {
         provenance.sourceSpans,
         `${blockLabel}.provenance.sourceSpans`,
         errors,
+        { allowRefs: true },
       );
       if (
         Array.isArray(provenance.sourceSpans)
@@ -1039,6 +1043,7 @@ function checkTextbookContent(content, label, errors) {
           provenance.sourceSpans,
           `${blockLabel}.provenance.sourceSpans`,
           errors,
+          { allowRefs: true },
         );
       }
       let grounded = false;

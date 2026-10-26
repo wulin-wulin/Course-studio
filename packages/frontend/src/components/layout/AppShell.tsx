@@ -418,7 +418,7 @@ export function AppShell() {
                   </span>
                   <button
                     type="button"
-                    className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-primary-light"
+                    className="rounded-md border border-border px-3 py-1.5 text-sm text-primary-text hover:bg-primary-light"
                     onClick={() => navigate("/")}
                   >
                     返回课程导览
@@ -580,7 +580,7 @@ function CourseWorkspace({
           <span className="text-sm">{error}</span>
           <button
             type="button"
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-primary hover:bg-primary-light"
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-primary-text hover:bg-primary-light"
             onClick={() => navigate("/")}
           >
             返回课程导览

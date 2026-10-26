@@ -14,6 +14,7 @@ const GROUND_COLOR = 0xf5f6ef;   // 地面改为协调淡白色
 const GROUND_RADIUS = 18000;     // 圆盘地面半径（跟随相机，永远延伸到地平线、形成干净圆形天际线）
 const PHI_MAX = 1.50;            // 俯仰角上限：接近 π/2，配合抬头视线可仰望天空
 const LABEL_ZOOM_R = 3600;       // 拉近/簇近景自动显示屏幕内全部小标签；默认全景仍保持干净
+const DOMAIN_LABEL_SHIFTS = [0, -1, 1, -2, 2]; // 簇名重叠时依次尝试的纵向错位（以标签行高为单位）
 
 export class Scene3D {
     constructor(container, layout, data) {
@@ -221,15 +222,13 @@ export class Scene3D {
         for (const dom of this.layout.domains) {
             const d = this.data.domById[dom.id];
             if (!d) continue;
+            // 簇色来自数据，任意取值都可能与深色底牌撞色：文字统一用浅色，
+            // 簇色只画成色点。样式（含与 --font-sans 一致的字体）见 courseForest.css。
             const el = document.createElement("div");
-            el.textContent = d.name_zh;
-            // 亮背景适配：簇色字压在深色半透明小底牌上，保留簇配色又清晰可读
-            el.style.cssText =
-                `position:absolute;color:${dom.color};font-size:18px;font-weight:700;` +
-                `font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;` +
-                `text-align:center;transform:translate(-50%,-50%);white-space:nowrap;` +
-                `padding:2px 10px;border-radius:999px;background:rgba(17,28,42,0.62);` +
-                `box-shadow:0 1px 6px rgba(0,0,0,0.25);text-shadow:0 1px 2px rgba(0,0,0,0.55);pointer-events:none;`;
+            el.className = "forest-domain-label";
+            const swatch = document.createElement("i");
+            swatch.style.backgroundColor = dom.color;
+            el.append(swatch, d.name_zh);
             this._labelLayer.appendChild(el);
             this._labelEls.push({ el, poly: dom.polygon, pos: dom.label_pos });
         }
@@ -240,7 +239,11 @@ export class Scene3D {
         const rect = this.container.getBoundingClientRect();
         const v3 = new THREE.Vector3();
         const domainBoxes = [];
-        // 域标签
+        const domainPlacements = [];
+        // 域标签：锚在簇中心。窄画布上相邻胶囊会互相盖住文字，所以按簇顺序摆放，
+        // 与已摆好的簇名重叠时依次上下错开一行；都放不下就先隐藏（与非悬停树标签的策略一致），
+        // 拉近后有空间会重新出现，图例里始终列着全部知识簇。
+        // 先统一读尺寸、算位置，最后再写样式，避免读写交替反复触发布局。
         for (const lbl of this._labelEls) {
             let sx = 0, sy = 0;
             if (Array.isArray(lbl.pos) && lbl.pos.length >= 2) {
@@ -258,19 +261,38 @@ export class Scene3D {
                 }
                 sx /= n; sy /= n;
             }
-            lbl.el.style.left = sx + "px";
-            lbl.el.style.top = sy + "px";
             const off = sx < -200 || sx > rect.width + 200 || sy < -200 || sy > rect.height + 200;
-            lbl.el.style.visibility = off ? "hidden" : "visible";
+            let top = sy;
+            let hidden = off;
             if (!off) {
-                const r = lbl.el.getBoundingClientRect();
-                domainBoxes.push({
-                    left: r.left - rect.left - 4,
-                    top: r.top - rect.top - 4,
-                    right: r.right - rect.left + 4,
-                    bottom: r.bottom - rect.top + 4,
+                // 标签以 translate(-50%, -50%) 居中在 (left, top)；外扩 4px 作为与树标签、其他簇名的间隙
+                const w = lbl.el.offsetWidth;
+                const h = lbl.el.offsetHeight;
+                const boxAt = (cy) => ({
+                    left: sx - w / 2 - 4,
+                    top: cy - h / 2 - 4,
+                    right: sx + w / 2 + 4,
+                    bottom: cy + h / 2 + 4,
                 });
+                let box = null;
+                for (const shift of DOMAIN_LABEL_SHIFTS) {
+                    const cy = sy + shift * (h + 8);
+                    const candidate = boxAt(cy);
+                    if (!domainBoxes.some(o => this._boxesOverlap(candidate, o))) {
+                        top = cy;
+                        box = candidate;
+                        break;
+                    }
+                }
+                if (box) domainBoxes.push(box);
+                else hidden = true;
             }
+            domainPlacements.push({ el: lbl.el, left: sx, top, hidden });
+        }
+        for (const p of domainPlacements) {
+            p.el.style.left = p.left + "px";
+            p.el.style.top = p.top + "px";
+            p.el.style.visibility = p.hidden ? "hidden" : "visible";
         }
         // 树标签：避开知识簇标题和已经摆好的树标签；悬停标签优先尝试多个方位
         const occupied = [...domainBoxes];
@@ -287,6 +309,12 @@ export class Scene3D {
 
     _boxesOverlap(a, b) {
         return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+    }
+
+    _overlapArea(a, b) {
+        const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        return w > 0 && h > 0 ? w * h : 0;
     }
 
     _candidateLabelBox(el, sx, sy, placement) {
@@ -321,16 +349,21 @@ export class Scene3D {
         const margin = 4;
         let chosen = null;
         let box = null;
+        // 四个方位都被占时，悬停/全部显示模式仍要显示标签：取遮挡面积最小、且尽量不出画布的方位
+        let fallback = null;
+        let fallbackCost = Infinity;
         for (const p of placements) {
             const b = this._candidateLabelBox(el, sx, sy, p);
             const off = b.left < margin || b.top < margin || b.right > rect.width - margin || b.bottom > rect.height - margin;
-            const hit = occupied.some(o => this._boxesOverlap(b, o));
-            if (!off && !hit) { chosen = p; box = b; break; }
+            const covered = occupied.reduce((sum, o) => sum + this._overlapArea(b, o), 0);
+            if (!off && covered === 0) { chosen = p; box = b; break; }
+            const cost = covered + (off ? 1e6 : 0);
+            if (cost < fallbackCost) { fallback = { p, b }; fallbackCost = cost; }
         }
         if (!chosen) {
             if (hovered || this._showAllTreeLabels) {
-                chosen = placements[0];
-                box = this._candidateLabelBox(el, sx, sy, chosen);
+                chosen = fallback.p;
+                box = fallback.b;
             } else {
                 el.style.visibility = "hidden";
                 return;

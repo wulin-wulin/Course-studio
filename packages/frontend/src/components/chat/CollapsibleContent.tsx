@@ -8,8 +8,15 @@ type CollapsibleContentProps = {
   maxLines?: number;
   previewClassName?: string;
   buttonClassName?: string;
+  /** onPrimary 用于品牌色底（用户消息气泡）上的展开按钮 */
+  tone?: "default" | "onPrimary";
   renderContent?: (content: string) => ReactNode;
 };
+
+const BUTTON_TONE_CLASS = {
+  default: "border-border bg-surface/70 text-text-secondary hover:border-primary/30 hover:text-primary-text",
+  onPrimary: "border-white/40 bg-primary-hover text-white hover:border-white/70",
+} as const;
 
 const DEFAULT_MAX_CHARS = 1200;
 const DEFAULT_MAX_LINES = 18;
@@ -20,6 +27,7 @@ export function CollapsibleContent({
   maxLines = DEFAULT_MAX_LINES,
   previewClassName = "whitespace-pre-wrap break-words",
   buttonClassName = "mt-2",
+  tone = "default",
   renderContent,
 }: CollapsibleContentProps) {
   const [expanded, setExpanded] = useState(false);
@@ -42,7 +50,7 @@ export function CollapsibleContent({
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className={`inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface/70 px-2 py-1 text-[11px] font-medium text-text-secondary hover:border-primary/30 hover:text-primary transition-colors ${buttonClassName}`}
+        className={`inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${BUTTON_TONE_CLASS[tone]} ${buttonClassName}`}
         title={expanded ? "收起内容" : "展开全部内容"}
       >
         {expanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}

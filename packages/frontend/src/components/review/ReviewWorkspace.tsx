@@ -191,7 +191,7 @@ export function ReviewWorkspace({
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div className="min-w-0 flex-1">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-primary-text">
               <ClipboardCheck className="h-3.5 w-3.5" />
               {reviewKindLabel(review.kind)} · {review.gate} · 版本 {review.revision}
             </p>
@@ -201,8 +201,8 @@ export function ReviewWorkspace({
           </div>
           <span className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${
             readOnly
-              ? "border-primary/25 bg-primary-light text-primary"
-              : "border-warning/30 bg-amber-50 text-amber-700"
+              ? "border-primary/25 bg-primary-light text-primary-text"
+              : "border-warning/30 bg-amber-50 text-warning-text"
           }`}>
             {readOnly ? "已完成" : "等待你的确认"}
           </span>
@@ -212,7 +212,7 @@ export function ReviewWorkspace({
 
       {state.phase === "stale" && (
         <div className="shrink-0 border-b border-warning/30 bg-amber-50 px-4 py-2.5" role="alert">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 text-sm text-amber-800">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 text-sm text-warning-text">
             <span className="flex items-center gap-2">
               <TriangleAlert className="h-4 w-4" />
               {state.error || "审核数据已更新，请重新加载最新版本"}
@@ -230,7 +230,7 @@ export function ReviewWorkspace({
       )}
 
       {readOnly && (
-        <div className="shrink-0 border-b border-primary/20 bg-primary-light/65 px-5 py-2.5 text-sm text-primary">
+        <div className="shrink-0 border-b border-primary/20 bg-primary-light/65 px-5 py-2.5 text-sm text-primary-text">
           <span className="mx-auto flex max-w-6xl items-center gap-2">
             <CheckCircle2 className="h-4 w-4" />
             审核已经提交，当前内容为只读版本。
@@ -287,7 +287,7 @@ function ReviewSummary({ review }: { review: ReviewResource }) {
         typeof value === "number" ? [[label, value] as const] : [],
       ).map(([label, value]) => (
         <div key={label} className="min-w-24 border-r border-border-light px-3 py-2 first:pl-0">
-          <dt className="text-[10px] text-text-secondary">{label}</dt>
+          <dt className="text-xs text-text-secondary">{label}</dt>
           <dd className="text-sm font-semibold text-text-primary">{value}</dd>
         </div>
       ))}

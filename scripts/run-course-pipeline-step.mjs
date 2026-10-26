@@ -51,6 +51,27 @@ const ACTIONS = new Map([
     },
   ]),
   [
+    "prepare-content-tasks",
+    {
+      script: [...CONTENT_SCRIPT_ROOT, "prepare_worker_tasks.mjs"],
+      args: ({ contentRoot }) => ["--root", contentRoot, "--kind", "content"],
+    },
+  ],
+  [
+    "finalize-point-drafts",
+    {
+      script: [...CONTENT_SCRIPT_ROOT, "finalize_point_drafts.mjs"],
+      args: ({ contentRoot }) => ["--root", contentRoot],
+    },
+  ],
+  [
+    "prepare-animation-tasks",
+    {
+      script: [...CONTENT_SCRIPT_ROOT, "prepare_worker_tasks.mjs"],
+      args: ({ contentRoot }) => ["--root", contentRoot, "--kind", "animations"],
+    },
+  ],
+  [
     "sync-index",
     {
       script: [...CONTENT_SCRIPT_ROOT, "sync_index_from_points.mjs"],

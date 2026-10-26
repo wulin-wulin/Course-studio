@@ -66,6 +66,9 @@ OPENCODE_PROVIDER_BASE_URL=
 OPENCODE_TERMINAL_TIMEOUT_SECONDS=3600
 # 创建课程会生成大量内容和动画，使用独立的六小时主动处理上限
 COURSE_CREATE_TERMINAL_TIMEOUT_SECONDS=21600
+# 课程生成每条消息最多并发派发的 worker 数（整数 1–32，默认 10；非法值回退到 10 并告警）。
+# 由 OpenCode 进程读取（opencode.sh / opencode-service.sh / opencode.ps1 都会加载 .env），修改后需重启 OpenCode。
+COURSE_WORKER_CONCURRENCY=10
 # OpenCode 1.18 不暴露工具参数流式进度；持续 pending 且 input/raw 为空超过该保守上限才中止
 OPENCODE_EMPTY_TOOL_CALL_TIMEOUT_SECONDS=600
 COURSE_DATA_DIR=course-data/courses
@@ -122,6 +125,41 @@ DOCUMENT_STRUCTURE_LLM_MAX_OUTPUT_TOKENS=8000
   ]
 }
 ```
+
+模型条目还可以声明可选的 `limit`，形状与 OpenCode 自身的模型配置一致，
+会原样写入生成的 OpenCode 配置：
+
+```json
+{
+  "id": "your-model-id",
+  "name": "Your Model",
+  "base_url": "https://your-openai-compatible-endpoint/v1",
+  "api_key": "your-api-key",
+  "limit": {
+    "context": 100000,
+    "output": 10000
+  }
+}
+```
+
+上面的数字只是占位，请按模型厂商文档填写：`context` 是上下文窗口的
+token 数，`output` 是单次输出上限，两者都必须是正整数，且 `output` 要小于
+`context`。自定义的 OpenAI 兼容模型没有 token 元数据，OpenCode 推断不出窗口
+大小：不声明 `limit` 时上下文会报告为 0，自动压缩也不会触发。创建课程的
+内容生成阶段（G3）会在一个长轮次里持续累积上下文，因此建议为实际使用的
+模型都填写 `limit`。
+
+- 声明了 `limit` 时总是以声明值为准。
+- 未声明时，`kimi-k2.5`、`kimi-k2.6`、`kimi-k2-0905-preview`、
+  `kimi-k2-turbo-preview` 沿用内置的 `{"context": 262144, "output": 32768}`；
+  其他模型不写 `limit`，项目不会猜测任何厂商的窗口大小。
+- `limit` 不合法（缺字段、非正整数、出现其他字段、`output` 不小于 `context`）
+  时会被忽略，按“未声明”处理；OpenCode 启动脚本会打印具体原因，并列出
+  仍然没有 `limit` 的模型。
+- 应用的模型配置界面不能编辑 `limit`，请直接修改 `models.json`；通过界面
+  新增模型、或通过 `PUT /api/settings` 更新接口地址与密钥时，已有条目的
+  `limit`（以及 `name`、`vision`）会保留。修改 `models.json` 后请重启
+  OpenCode，让启动脚本重新生成配置。
 
 `models.json` 与 `.env` 都被 Git 忽略，不要提交密钥。
 

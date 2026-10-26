@@ -58,15 +58,19 @@ class CourseReviewProvisionTest(unittest.TestCase):
         )
         for required_contract in (
             "加载 `candidate-knowledge-point-generator` Skill",
-            "data-contract.md 的路径",
-            "animation-contract.md 的路径",
-            "point.schema.json 的路径",
-            "animation-request.schema.json 的路径",
+            "worker-tasks/content/<point-id>.json",
+            "content-worker-brief.md",
+            "data-contract.md",
+            "animation-contract.md",
+            "schemas/point.schema.json",
+            "schemas/animation-request.schema.json",
+            "schemas/textbook-content.schema.json",
+            'course_pipeline {"action":"finalize-point-drafts"',
             'course_pipeline {"action":"validate-point-drafts"',
-            "合计 3–5 个知识点的 canary",
+            "前 min(3, 待生成数) 个待生成点",
             'course_pipeline {"action":"validate-animation-drafts"',
             "第一个动画组件必须作为 canary",
-            "10 个互斥任务一波并发",
+            "COURSE_WORKER_CONCURRENCY",
         ):
             self.assertIn(required_contract, orchestration)
 
@@ -82,13 +86,13 @@ class CourseReviewProvisionTest(unittest.TestCase):
             creator_prompt,
         )
         self.assertIn("不得用 `write` 手写", creator_prompt)
-        self.assertIn("当前一波全部通过后", creator_prompt)
+        self.assertNotIn("当前一波全部通过后", creator_prompt)
         self.assertIn(
             'course_pipeline {"action":"validate-animation-drafts"',
             creator_prompt,
         )
         self.assertIn("第一个动画组件作为 canary", creator_prompt)
-        self.assertIn("最多 10 个互斥任务一波并发", creator_prompt)
+        self.assertIn("COURSE_WORKER_CONCURRENCY", creator_prompt)
 
     def test_textbook_worker_handoff_contract_guards_spans_json_and_ownership(self):
         project_root = provision._PROJECT_ROOT

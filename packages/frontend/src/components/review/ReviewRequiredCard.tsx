@@ -18,7 +18,7 @@ export function ReviewRequiredCard({
           <ClipboardCheck className="h-4 w-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold text-primary">等待你的审核</p>
+          <p className="text-xs font-semibold text-primary-text">等待你的审核</p>
           <h3 className="mt-0.5 text-sm font-semibold text-text-primary">
             {reviewKindLabel(review.kind)}
           </h3>

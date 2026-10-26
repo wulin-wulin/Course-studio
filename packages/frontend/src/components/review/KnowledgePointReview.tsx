@@ -130,7 +130,7 @@ export function KnowledgePointReview({
               : "border-border bg-surface"
         }`}
       >
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary-light text-xs font-semibold text-primary">
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary-light text-xs font-semibold text-primary-text">
           {index + 1}
         </span>
         <div className="min-w-0 flex-1">
@@ -142,9 +142,9 @@ export function KnowledgePointReview({
             >
               {point.title}
             </strong>
-            <code className="text-[11px] text-text-secondary">{point.id}</code>
+            <code className="text-xs text-text-secondary">{point.id}</code>
             {issueCount > 0 && !deleted && (
-              <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">
+              <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-warning-text">
                 {issueCount} 项待复核
               </span>
             )}
@@ -155,7 +155,7 @@ export function KnowledgePointReview({
             </p>
           )}
           {point.keyTerms.length > 0 && (
-            <p className="mt-2 text-[11px] text-text-secondary">
+            <p className="mt-2 text-xs text-text-secondary">
               关键词：{point.keyTerms.join("、")}
             </p>
           )}
@@ -233,7 +233,7 @@ export function KnowledgePointReview({
               </p>
             </div>
             {review.textbookStructureSha256 && (
-              <code className="max-w-full truncate text-[10px] text-text-secondary" title={review.textbookStructureSha256}>
+              <code className="max-w-full truncate text-xs text-text-secondary" title={review.textbookStructureSha256}>
                 结构哈希 · {review.textbookStructureSha256.slice(0, 12)}…
               </code>
             )}
@@ -245,7 +245,7 @@ export function KnowledgePointReview({
                 className="flex items-center justify-between rounded-md border border-primary/10 bg-surface/70 px-3 py-2 text-xs"
               >
                 <span className="truncate text-text-primary">
-                  <span className="mr-1.5 text-primary">
+                  <span className="mr-1.5 text-primary-text">
                     {chapter.number && chapter.number !== "0"
                       ? `${chapter.number}.`
                       : chapter.number === "0"
@@ -283,7 +283,7 @@ export function KnowledgePointReview({
           : visible.map((point) => renderPointCard(point, review.points.indexOf(point)))}
         {structureLocked && unassignedVisible.length > 0 && (
           <section aria-label="未分配知识点">
-            <h3 className="mb-2 text-sm font-semibold text-warning">未绑定教材章节</h3>
+            <h3 className="mb-2 text-sm font-semibold text-warning-text">未绑定教材章节</h3>
             <div className="space-y-2 border-l-2 border-warning/25 pl-3">
               {unassignedVisible.map((point) =>
                 renderPointCard(point, review.points.findIndex((item) => item.id === point.id)),
@@ -309,7 +309,7 @@ export function KnowledgePointReview({
               <Plus className="h-4 w-4 text-primary" />
               <div className="min-w-0 flex-1">
                 <strong className="block truncate text-sm">{point.title}</strong>
-                <code className="text-[11px] text-text-secondary">{point.id}</code>
+                <code className="text-xs text-text-secondary">{point.id}</code>
               </div>
               {!readOnly && (
                 <button
@@ -362,7 +362,7 @@ export function KnowledgePointReview({
           <button
             type="submit"
             disabled={disabled || !newId.trim() || !newTitle.trim()}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-primary/30 px-4 text-sm font-semibold text-primary hover:bg-primary-light disabled:opacity-45"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-primary/30 px-4 text-sm font-semibold text-primary-text hover:bg-primary-light disabled:opacity-45"
           >
             <Plus className="h-4 w-4" />
             添加

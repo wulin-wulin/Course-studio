@@ -379,11 +379,20 @@ misconception | exercise | summary | note | other
 `$$...$$`。不要输出 `\(...\)`、`\[...\]`、未包裹的 LaTeX 命令或可见的字面量 `\n\n`；
 代码围栏和行内代码中的反斜杠示例不受此规则影响。
 
-教材模式 worker 的 span 唯一事实源是主智能体注入的完整 `manifest.pointEvidence` 单项 JSON。
-把所有教材块的 `provenance.sourceSpans` 按块顺序、数组顺序连接并按首次出现去重后，结果必须与
-该单项的 `sourceSpans` 深度相等且顺序一致。不得自行重建 span，不得用 `material.json.chunks`
-中的 `chunk-*` ID 替换受信 manifest 里的 `block-*` section ID；chunk 只用于分批读取正文。模型块
-不得引入该清单之外的新 span。
+教材模式的 span 唯一事实源是受信 manifest 中该点完整的 `manifest.pointEvidence` 单项。
+`prepare-content-tasks` 把它机械投影为任务包 `evidence.spans`，每项只含
+`ref/headingPath/lineStart/lineEnd/assetRefs`：`blockIds` 只有一个时 `ref` 即该 ID，否则为
+`blockIds.join("+")`。worker 草稿中块的 `provenance.sourceSpans` 只写这些 ref 字符串（例如
+`["block-000051"]`），不抄写 span 对象或哈希；主智能体每波调用 `finalize-point-drafts`，按 ref 把
+字符串替换为该单项可信 span 的深拷贝，对象项保持不变；同一文件含未知 ref 时整份文件不展开，
+校验器只对未知 ref 逐项报错。展开后，把所有教材块的
+`provenance.sourceSpans` 按块顺序、数组顺序连接并按首次出现去重，结果必须与该单项的
+`sourceSpans` 深度相等且顺序一致；等价地，草稿中教材块 ref 的首次出现顺序必须覆盖全部
+`evidence.spans[].ref` 且与之同序。上方示例是展开后的 canonical 形式；未展开的字符串 ref 不是
+canonical 格式，`validate-point-drafts` 与 `validate-points` 遇到合法但未展开的 ref 时报错并要求
+先运行 `finalize-point-drafts`。不得自行重建 span，不得用 `material.json.chunks` 中的 `chunk-*` ID 替换
+受信 manifest 里的 `block-*` section ID；chunk 只用于分批读取正文。模型块不得引入该清单之外的
+新 span 或 ref。
 
 `modelEnriched` 从是否存在模型块派生；点级 `sourceSpans` 从全部块的 span 按首次出现顺序去重
 派生。它们不是 canonical v2 文件中的人工字段；发布器可以在最终课程详情顶层暴露这两个派生值
@@ -436,6 +445,9 @@ misconception | exercise | summary | note | other
 
 `researched` 模式至少 3 个 locator 不重复的独立来源并覆盖至少 2 种来源类型，每个点至少 1 个 `sourceRefs`。`model-only` 模式来源和 `sourceRefs` 为空，`confidence` 不高于 `0.6`。
 
+`researched` 模式下，`prepare-content-tasks` 把每个点的 `pointEvidence` 单项及其 `sourceRefs` 指向的
+`sources` 记录原样写入该点任务包的 `sourceEvidence`；worker 据此核对事实，不在提示中转述来源。
+
 教材 Markdown 新生成模式使用 `evidenceMode: "textbook-grounded"`，并在 `generation` 中声明
 `contentContract: "textbook-content/2.0"`。`sources` 至少包含一个 `type: "textbook"` 的来源，
 locator 指向会话内绑定的 material/full.md 相对路径。`pointEvidence` 增加以下两个必填字段：
@@ -449,9 +461,12 @@ locator 指向会话内绑定的 material/full.md 相对路径。`pointEvidence`
 `lineEnd`、`assetRefs`、`excerptSha256`，有页码时可增加 `page`。行号与哈希定位原始
 Markdown 证据；不要把整段教材正文复制进 manifest。
 
-G3 派发任务时，主智能体必须原样注入与该 point 对应的完整 `pointEvidence` 单项 JSON，不能只给
-manifest 路径、口头摘要或从 material chunk 推导的新 spans。worker 可以依据 chunk 读取 span 所指
-正文，但写入教材块的 span 对象只能来自注入单项的 `sourceSpans`。
+G3 不由主智能体在 task 提示中注入或转述 `pointEvidence`：`prepare-content-tasks` 从本 manifest 生成
+只读任务包 `pipeline/<course-id>/worker-tasks/content/<point-id>.json`，其 `evidence` 是该点
+`pointEvidence` 单项的机械投影（`origin`、扩展点的 `anchorPointId`、会话内 `full.md` 相对路径和
+有序 spans），不能由口头摘要或从 material chunk 推导的新 spans 代替。worker 依据 spans 行号读取所指
+正文，写入教材块的只能是这些 spans 的 ref；最终 span 对象只能由 `finalize-point-drafts` 从本单项
+的 `sourceSpans` 深拷贝。
 
 教材原有点的 `sourceSpans` 按 `material.point_sources.section_ids` 的既定顺序完整覆盖所有
 section 及其正文行；只引用标题、只选择代表段落或打乱顺序均无效。所有非教材点
