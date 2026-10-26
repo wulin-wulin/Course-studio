@@ -1,0 +1,1464 @@
+{
+  "id": "point-6-9",
+  "title": "网络管理应用",
+  "shortSummary": "解释 SNMP 的管理站与代理模型、MIB 对象与 Trap 通知，说明网络管理如何实现状态采集与故障告警。",
+  "keyTerms": [
+    "SNMP",
+    "MIB",
+    "管理站",
+    "代理",
+    "Trap"
+  ],
+  "animationType": "snmpPollTrap",
+  "animationSuggestion": "逐步显示管理进程与代理之间的请求应答往返，并用不同标记区分周期性 Get 采集与事件触发的 Trap 上报，最后对比两条信息流在时间轴上的差别；允许重播回到初始状态。",
+  "difficulty": "中等",
+  "importance": 0.72,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-and-operation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材对网络管理五部分、SMI 命名树和 SNMP 操作的界定为事实边界，围绕角色分工与读写/告警操作重排讲解，补充类比、对比表和判定练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-mgmt-system",
+          "text": "解释网络管理的目标以及管理进程、被管对象、代理进程、管理协议和 MIB 的分工。"
+        },
+        {
+          "id": "map-mib-objects",
+          "text": "说明 SMI 对象命名树与 mib-2、enterprise 子树如何定位 MIB 对象，并列举常见对象组。"
+        },
+        {
+          "id": "apply-get-set-trap",
+          "text": "区分 Get、Set 轮询与 Trap 通知，判断给定管理任务应使用哪类操作并说明理由。"
+        }
+      ],
+      "misconceptions": [
+        "把网络管理等同于 SNMP 协议本身：SNMP 只是管理进程与代理进程交换管理信息的协议之一，管理进程、被管对象、代理和 MIB 缺一不可。",
+        "认为 Trap 可以替代轮询：Trap 只报告重要事件，常规状态采集仍依靠 Get 轮询。",
+        "把本地 MIB 当作整网中心数据库：每个代理只维护本地设备相关的变量，全网 MIB 由多个本地 MIB 共同构成。"
+      ],
+      "modules": [
+        {
+          "id": "mgmt-system",
+          "title": "网络管理目标与系统组成",
+          "role": "concept",
+          "description": "先建立网络管理的目标，再拆解五个组成部分及其分工。",
+          "outcomeRefs": [
+            "explain-mgmt-system"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mib-and-protocol",
+          "title": "管理协议与管理信息库",
+          "role": "concept",
+          "description": "说明协议规定交互规则，MIB 存放被管对象信息。",
+          "outcomeRefs": [
+            "explain-mgmt-system"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mgmt-functions",
+          "title": "五类网络管理功能",
+          "role": "comparison",
+          "description": "按 ISO 划分比较配置、性能、记账、故障和安全管理。",
+          "outcomeRefs": [
+            "explain-mgmt-system"
+          ],
+          "order": 2
+        },
+        {
+          "id": "snmp-architecture",
+          "title": "SNMP 体系结构与设计取向",
+          "role": "concept",
+          "description": "理解 SNMP 体系结构、外部代理以及名称中“简单”的含义。",
+          "outcomeRefs": [
+            "explain-mgmt-system",
+            "apply-get-set-trap"
+          ],
+          "order": 3
+        },
+        {
+          "id": "smi-and-naming",
+          "title": "SMI 与 MIB 对象定位",
+          "role": "worked-example",
+          "description": "用对象命名树确定标准对象与厂商专用对象的前缀。",
+          "outcomeRefs": [
+            "map-mib-objects"
+          ],
+          "order": 4
+        },
+        {
+          "id": "mib-groups-and-operations",
+          "title": "MIB 对象组与 SNMP 操作",
+          "role": "procedure",
+          "description": "识别常见 MIB 组，并按任务选择 Get、Set 或 Trap。",
+          "outcomeRefs": [
+            "map-mib-objects",
+            "apply-get-set-trap"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-mgmt-system",
+          "map-mib-objects",
+          "apply-get-set-trap"
+        ],
+        "method": "完成三个管理任务的操作类型判定，并说明角色分工与 MIB 对象定位依据。",
+        "successCriteria": [
+          "能为每个任务选出 Get、Set 或 Trap 并给出机制理由",
+          "能说明管理进程、代理与被管对象在任务中的各自职责",
+          "能根据对象前缀判断标准 MIB 对象或厂商专用对象"
+        ],
+        "exerciseBlockId": "model-ops-check"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tx-overview",
+        "moduleId": "mgmt-system",
+        "depth": "core",
+        "kind": "definition",
+        "title": "网络管理的目标与系统组成",
+        "markdown": "网络管理的目的是使网络资源得到有效利用，在网络出现故障时及时报告和处理，保证网络正常、高效地运行。\n\n网络管理系统通常由 5 部分组成：管理进程、被管对象、代理进程、网络管理协议和管理信息库。教材用图 6-31 表示这五部分的结构关系。其中管理进程是网络管理的主动实体，为网络管理员提供访问被管对象的界面，完成管理员指定的各项任务，读取或改变被管对象的管理信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000823"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理应用"
+              ],
+              "lineStart": 8407,
+              "lineEnd": 8408,
+              "assetRefs": [],
+              "excerptSha256": "865df0950241a7323a0eeee2251a08ced5d7d438dd8d3ac096639c1172bbcdc4"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000824"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理的概念"
+              ],
+              "lineStart": 8409,
+              "lineEnd": 8410,
+              "assetRefs": [],
+              "excerptSha256": "caf2f0320132d1e94f9486d575fed77f4d83e889b97f22b628a321c58b9febdc"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000825"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理系统的组成"
+              ],
+              "lineStart": 8411,
+              "lineEnd": 8419,
+              "assetRefs": [
+                "parts/part-0004/images/c1919233a71673a025a0f364c9c743ab20ed29e8b7bfb72076e1f607e7d6ca8a.jpg"
+              ],
+              "excerptSha256": "ca9fac1e0791a90e293ed182f65bd715989a2d3dbba0bfe9e4570aa038e7915e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-managed-object",
+        "moduleId": "mgmt-system",
+        "depth": "core",
+        "kind": "definition",
+        "title": "被管对象",
+        "markdown": "被管对象（managed object）指网络上的软硬件设备，例如计算机、服务器、路由器、交换机等。它们是管理活动所观察和改变的目标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000826"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "被管对象"
+              ],
+              "lineStart": 8420,
+              "lineEnd": 8423,
+              "assetRefs": [],
+              "excerptSha256": "29b29a5cad17899fe235bc906c5c0c874c5933f2b72f480cb0064a9be8f69084"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-agent",
+        "moduleId": "mgmt-system",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "代理进程",
+        "markdown": "代理进程执行管理进程下发的命令（例如系统配置、数据查询），并向管理进程报告本地出现的异常情况。\n\n在 SNMP 网络管理模型中，代理可分为两种类型：管理代理（management agent）是在被管设备中加入的执行 SNMP 的程序；外部代理（proxy agent）是在被管设备外部增加的执行 SNMP 的程序或设备。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000827"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "代理进程"
+              ],
+              "lineStart": 8424,
+              "lineEnd": 8427,
+              "assetRefs": [],
+              "excerptSha256": "1f65feb19d2b7a99a4bf48ae52ace43c97365cdc2a72659bf6ef839f89d894dc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-role-triangle",
+        "moduleId": "mgmt-system",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三个角色如何分工",
+        "markdown": "可以把网络管理看成一条分工链：管理进程是“指挥者”，为管理员提供界面并发起查询或修改；代理进程是设备侧的“执行者”，接收命令、读写本地 MIB，并在异常出现时上报；被管对象是“被观察的设备”。三者通过管理协议通信，缺一不可。\n\n被管对象是设备本身，MIB 是对这些设备状态的概念化数据组织，两者不能混为一谈。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-overview",
+            "tx-managed-object",
+            "tx-agent"
+          ]
+        }
+      },
+      {
+        "id": "tx-protocol",
+        "moduleId": "mib-and-protocol",
+        "depth": "core",
+        "kind": "definition",
+        "title": "网络管理协议",
+        "markdown": "网络管理协议规定管理进程与代理进程之间交互网络管理信息的格式、意义与过程。目前流行的网络管理协议主要有 TCP/IP 协议体系的简单网络管理协议（SNMP）与 OSI 参考模型的公共管理信息协议（CMIP）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000828"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理协议"
+              ],
+              "lineStart": 8428,
+              "lineEnd": 8431,
+              "assetRefs": [],
+              "excerptSha256": "143562af64c9ac0e3ee439787953b4c864dc3cf5dbc8a1ae550d955d7fdcc7a1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-mib",
+        "moduleId": "mib-and-protocol",
+        "depth": "core",
+        "kind": "definition",
+        "title": "管理信息库",
+        "markdown": "管理信息库（Management Information Base，MIB）用于存放被管对象的信息，是概念上的数据库。\n\n本地 MIB 仅包含与本地设备相关的信息，代理进程可以读取和修改本地 MIB 中的各种变量值。每个代理进程管理自己的本地 MIB，并与管理进程交换网络管理信息；多个本地 MIB 共同构成整个网络的 MIB。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000829"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "管理信息库"
+              ],
+              "lineStart": 8432,
+              "lineEnd": 8435,
+              "assetRefs": [],
+              "excerptSha256": "2bf7eda7657ed5a12e3fb9a22418d29ecdaf8faa5e5df6854ecf0a4cacc4e7e3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-local-mib",
+        "moduleId": "mib-and-protocol",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：为什么要强调“本地”MIB",
+        "markdown": "“本地”二字说明了数据归属：每个代理只维护与自己设备相关的变量集合，管理进程看到的全网视图是多个本地 MIB 的汇总，而不是一台中心数据库保存了所有设备的数据。这解释了为什么同一 MIB 组在不同设备上的取值不同，也解释了为什么代理离线时它那部分信息会缺失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-mib",
+            "tx-agent"
+          ]
+        }
+      },
+      {
+        "id": "tx-functions",
+        "moduleId": "mgmt-functions",
+        "depth": "core",
+        "kind": "note",
+        "title": "网络管理功能",
+        "markdown": "按照 ISO 相关文档规定，网络管理分为 5 部分：配置管理、性能管理、记账管理、故障管理和安全管理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000830"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理功能"
+              ],
+              "lineStart": 8436,
+              "lineEnd": 8439,
+              "assetRefs": [],
+              "excerptSha256": "b80af8f1845fc7402e167b5e6db092f79e27ce5bc948a2e3e49f0009477d0a5e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-config",
+        "moduleId": "mgmt-functions",
+        "depth": "support",
+        "kind": "definition",
+        "title": "配置管理",
+        "markdown": "配置管理监控网络中各个设备的配置信息，包括网络拓扑、各设备与链路的连接情况、每台设备的硬件和软件配置数据以及各种网络资源的分配情况。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000831"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "配置管理"
+              ],
+              "lineStart": 8440,
+              "lineEnd": 8443,
+              "assetRefs": [],
+              "excerptSha256": "9307ff3af5f86973ae04bd3030943b1d235769e956d46f467412782cddd08784"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-performance",
+        "moduleId": "mgmt-functions",
+        "depth": "support",
+        "kind": "definition",
+        "title": "性能管理",
+        "markdown": "性能管理测量与监控网络运行状态，监视、收集与统计网络运行性能数据；若某个参数值超过预先设定的阈值，就及时通知管理员处理。通过对一段时间内收集的数据进行统计分析，可以帮助管理员了解设备 CPU 利用率、内存利用率、各接口带宽利用率、I/O 吞吐率、应答时间等指标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000832"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "性能管理"
+              ],
+              "lineStart": 8444,
+              "lineEnd": 8447,
+              "assetRefs": [],
+              "excerptSha256": "d16be21db1a41ebf44b3447ca8cc34bcf87872c2f054203cdbf5568cb4f029ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-accounting",
+        "moduleId": "mgmt-functions",
+        "depth": "support",
+        "kind": "definition",
+        "title": "记账管理",
+        "markdown": "记账管理测量和收集各种网络资源的使用情况，通过对节点的发送、接收流量与使用时间进行统计分析，为按流量或按时间计费提供依据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000833"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "记账管理"
+              ],
+              "lineStart": 8448,
+              "lineEnd": 8451,
+              "assetRefs": [],
+              "excerptSha256": "2044ad9d2aaf43ceaf38acbc75c44f4719618b451d0aa7d3bc4a71f3910b8fbf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-fault",
+        "moduleId": "mgmt-functions",
+        "depth": "support",
+        "kind": "definition",
+        "title": "故障管理",
+        "markdown": "故障是指可能导致网络部分或全部中断、必须加以修复的错误。故障管理主要包括故障检测、跟踪、隔离与恢复，以及故障日志的生成和报告。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000834"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "故障管理"
+              ],
+              "lineStart": 8452,
+              "lineEnd": 8455,
+              "assetRefs": [],
+              "excerptSha256": "218ba3a174b55a847d629dc0b185a43a61fbbe8781bd90ec31d007218489a2dd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-security",
+        "moduleId": "mgmt-functions",
+        "depth": "support",
+        "kind": "definition",
+        "title": "安全管理",
+        "markdown": "为了保障网络正常工作，必须采取多项安全控制措施。安全管理通过设定若干规则，防止网络遭受有意或无意的破坏，同时限制用户对敏感资源的未授权访问。\n\n安全管理主要包括：建立访问权限并执行访问控制；建立安全审计并记录违规操作；出现安全事件时发出警告并生成安全报告。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000835"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "安全管理"
+              ],
+              "lineStart": 8456,
+              "lineEnd": 8459,
+              "assetRefs": [],
+              "excerptSha256": "5e6d7b41675fca54bbf2d6b0262dda7b81deb43c77f755e473126dc6cc7677a2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-functions-compare",
+        "moduleId": "mgmt-functions",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：五类管理功能的对比",
+        "markdown": "把五类功能放到同一组维度上比较，更容易判断一个具体需求归谁负责。\n\n| 功能 | 关注对象 | 典型输出 |\n|---|---|---|\n| 配置管理 | 拓扑、连接、软硬件配置与资源分配 | 配置清单与变更视图 |\n| 性能管理 | 利用率、吞吐率、应答时间与阈值 | 性能趋势与超阈值告警 |\n| 记账管理 | 发送/接收流量与使用时间 | 计费依据 |\n| 故障管理 | 检测、跟踪、隔离、恢复与日志 | 故障记录与恢复报告 |\n| 安全管理 | 访问权限、审计与安全事件 | 违规记录与安全告警 |\n\n表中只归并教材已列出的关注点，不改变各类功能的职责边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-functions",
+            "tx-config",
+            "tx-performance",
+            "tx-accounting",
+            "tx-fault",
+            "tx-security"
+          ]
+        }
+      },
+      {
+        "id": "tx-evolution",
+        "moduleId": "snmp-architecture",
+        "depth": "support",
+        "kind": "note",
+        "title": "网络管理技术发展",
+        "markdown": "理解网络管理系统与 SNMP 时需要注意两个问题：一是从 SNMP 的体系结构与协议本身两方面考虑，才能全面理解网络管理系统的意义；二是正确理解协议名称中的“简单”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000836"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理技术发展"
+              ],
+              "lineStart": 8460,
+              "lineEnd": 8463,
+              "assetRefs": [],
+              "excerptSha256": "09c983f3c1e236d3efa7a56fb2e1f9c7e6b811571e186fbe13ea164ad8a1c62e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-architecture",
+        "moduleId": "snmp-architecture",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "SNMP 体系结构与外部代理",
+        "markdown": "SNMP 体系结构通常由 5 部分组成：管理进程、被管对象、代理进程、管理信息库与网络管理协议（即 SNMP）。目前 SNMP 已成为主流的网络管理协议，多数网络管理系统基于 SNMP 实现。\n\n当一个被管对象不能与管理进程直接交换管理信息时，就需要使用外部代理。有些集线器、调制解调器、交换机和便携式设备的资源不支持 SNMP，需要为这类设备增加外部代理。外部代理使用 SNMP 与管理进程通信，还要与被管对象通信；一个外部代理应该能管理多个网络设备。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000837"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络管理体系结构"
+              ],
+              "lineStart": 8464,
+              "lineEnd": 8469,
+              "assetRefs": [],
+              "excerptSha256": "5c0a70e8d9f289837ac165b8fb00bf58364efbcc4256f3a2053d1a654df12289"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-simple",
+        "moduleId": "snmp-architecture",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "如何理解协议名称中的“简单”",
+        "markdown": "网络管理本身是一个困难问题，受网络拓扑、规模、设备类型和运行状态变化等因素影响，因此描述网络管理的模型和协议其实很复杂。网络中任何硬件与软件的增加、删除都会影响被管对象的变化，而网管系统要尽量减小这种影响。\n\n“简单”应理解为协议设计者的设计目标和设计路线：SNMP 的交互过程很简单，仅规定了 5 种管理消息；为简化通信过程、降低通信代价，SNMP 在传输层采用 UDP。\n\n标准演进方面：1988 年第一个 TCP/IP 网络管理协议 SNMPv1 发布并迅速获得产业界认可；1990 年 RFC 1155～1157 对 SNMPv1 进行修订。SNMPv1 在安全性上存在一定缺陷，1992 年 RFC 1351～1353 定义了安全 SNMP（SNMPsec）标准；1993 年 RFC 1441 发布 SNMPv3；1993—1996 年 IETF 多次修订 SNMPv2；2002 年 RFC 3410～3418 定义 SNMPv3 标准，其框架结构仍与 SNMPv1 基本保持一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000838"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "对协议名称中“简单”的理解"
+              ],
+              "lineStart": 8470,
+              "lineEnd": 8478,
+              "assetRefs": [
+                "parts/part-0004/images/1b500620fc957e25236c65b3c11b8c3dcf30b8a9db882b850bd828ad9ff2e05b.jpg"
+              ],
+              "excerptSha256": "825eabf8fe03a33b8c10b9ec54d578b9c6f3da793d376308802bbc5868847df3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-snmp-basics",
+        "moduleId": "smi-and-naming",
+        "depth": "core",
+        "kind": "note",
+        "title": "SNMP 的基本内容",
+        "markdown": "基于 SNMP 的网络管理主要解决 3 个问题：管理信息结构、管理信息库与 SNMP 标准。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000839"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "SNMP的基本内容"
+              ],
+              "lineStart": 8479,
+              "lineEnd": 8482,
+              "assetRefs": [],
+              "excerptSha256": "889829f6b737fa6da180f84bcf7d254c0f1791bfa983847d38891955273813dc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-smi",
+        "moduleId": "smi-and-naming",
+        "depth": "core",
+        "kind": "definition",
+        "title": "管理信息结构 SMI",
+        "markdown": "管理信息结构（Structure of Management Information，SMI）是 SNMP 的重要组成部分。SMI 需要解决 3 个基本问题：被管对象如何命名、存储的被管对象数据有哪些类型、管理进程与代理进程之间传输的数据如何编码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000840"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "管理信息结构"
+              ],
+              "lineStart": 8483,
+              "lineEnd": 8486,
+              "assetRefs": [],
+              "excerptSha256": "4c5137292ca34e53b73f8e616b09349da517d6ed383594de6f214e7764548984"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-naming-tree",
+        "moduleId": "smi-and-naming",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "对象命名树的结构",
+        "markdown": "SMI 规定了标识所有被管对象的对象命名树（object naming tree）方法。对象命名树没有根，节点标识符用小写英文字母表示。\n\n- 顶级有 3 个对象：ITU-T 标准（itu-t，标号 0）、ISO 标准（iso，标号 1）以及两者联合的标准（iso/itu，标号 2）。\n- 在 iso 之下，标号 3 的节点 org 分配给其他国际组织。\n- 在 org 之下，标号 6 的节点分配给美国国防部（dod）。\n- 在 dod 之下，标号 1 的节点分配给互联网（internet），表示为 iso.org.dod.internet 或 1.3.6.1。\n- 在 internet 之下，标号 2 的节点分配给网络管理（mgmt），表示为 iso.org.dod.internet.mgmt 或 1.3.6.1.2；标号 4 的节点分配给私有个体（private），表示为 iso.org.dod.internet.private 或 1.3.6.1.4。\n- 在 mgmt 之下，标号 1 的节点分配给管理信息库（mib-2）；教材此处文本在缩写处截断。\n- 在 enterprise 之下，标号 9 的节点分配给 Cisco 公司（cisco），所有 Cisco MIB 对象都从 1.3.6.1.4.1.9 开始。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000841"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "对象命名树的结构"
+              ],
+              "lineStart": 8487,
+              "lineEnd": 8509,
+              "assetRefs": [
+                "parts/part-0004/images/6ec50541d5c99189a02d74042529ed6f4ebd8872bef47808aeeb3ee51157746e.jpg"
+              ],
+              "excerptSha256": "32279778628fca154f4176b7786dfdd9cbcf0dd6bc56bd241a3da80eada31841"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-mib-locate",
+        "moduleId": "smi-and-naming",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "MIB 对象的定位",
+        "markdown": "所有 MIB 对象都以对象命名树中的两个分支来命名：\n\n- 常规 MIB 对象：不由硬件制造商创建，而是按 SNMP 标准创建，位于 mgmt 节点下的 mib-2 子树，即 1.3.6.1.2.1 中。\n- 专用 MIB 对象：由硬件制造商创建，专用于某个具体网络管理系统的设备制造商，位于 private 节点下的 enterprise 子树，即 1.3.6.1.4.1 中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000842"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "MIB对象的定位"
+              ],
+              "lineStart": 8510,
+              "lineEnd": 8517,
+              "assetRefs": [],
+              "excerptSha256": "97adcbad47ac1ba1b48531a1a9fe702ea960351fd88e6044dad9782ef1fd0177"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-naming-example",
+        "moduleId": "smi-and-naming",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：沿命名树读出一个对象前缀",
+        "markdown": "以 Cisco 设备的一个私有对象为例，路径为 iso(1) → org(3) → dod(6) → internet(1) → private(4) → enterprise(1) → cisco(9)，因此前缀是 1.3.6.1.4.1.9。\n\n同一条链上，常规对象走 iso(1) → org(3) → dod(6) → internet(1) → mgmt(2) → mib-2(1)，前缀为 1.3.6.1.2.1。\n\n判断时可先看开头：1.3.6.1.2.1 属于标准 MIB 对象，1.3.6.1.4.1 属于厂商专用对象。这样即使不知道具体对象名，也能判断它由标准定义还是由厂商定义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-naming-tree",
+            "tx-mib-locate"
+          ]
+        }
+      },
+      {
+        "id": "tx-mib-version",
+        "moduleId": "smi-and-naming",
+        "depth": "support",
+        "kind": "note",
+        "title": "管理信息库版本与对象组",
+        "markdown": "RFC 1066 首次定义管理信息库，它作为 SNMPv1 的一部分出现，后来出现过多个关于 MIB 的标准。RFC 1213 定义了 MIB 的第二个版本，即 mib-2，常规 MIB 对象都在 mib-2 子树（1.3.6.1.2.1）中。\n\nMIB 最早定义的对象数量较多，为了以逻辑方式组织这些对象，它们被安排在不同对象组中；经过几次修订，已经有部分对象组不再使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000843"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "管理信息库"
+              ],
+              "lineStart": 8518,
+              "lineEnd": 8525,
+              "assetRefs": [],
+              "excerptSha256": "b29b89aa61f3ff80bdf9455f5e5f21aebe0aeeee047907e45fdbc135517b595c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-system-group",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "support",
+        "kind": "definition",
+        "title": "system 组（1.3.6.1.2.1.1）",
+        "markdown": "system 组是最基本的组，包括被管对象的硬件、操作系统、网管系统厂商、节点的物理地址等常用信息。网管系统发现新的设备接入网络时，首先就会访问该组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000844"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "system 组"
+              ],
+              "lineStart": 8526,
+              "lineEnd": 8529,
+              "assetRefs": [],
+              "excerptSha256": "5050bd534f3a761e581459f7d87843bca340c541d49b10dad2da2821b03992e0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-interface-group",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "support",
+        "kind": "definition",
+        "title": "interface 组（1.3.6.1.2.1.2）",
+        "markdown": "interface 组包含设备接口相关的信息，例如网络接口的数量、类型、当前状态、当前速率估计值、递交高层协议的分组数、丢弃的分组数以及输出分组的队列长度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000845"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "interface 组"
+              ],
+              "lineStart": 8530,
+              "lineEnd": 8533,
+              "assetRefs": [],
+              "excerptSha256": "a53788f2531ca197d22000dcd0470c9d04f07bfde131c2557e3854f28cac42cf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-ip-group",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "support",
+        "kind": "definition",
+        "title": "ip 组（1.3.6.1.2.1.4）",
+        "markdown": "ip 组包含 IP 协议相关的信息，其中有 3 个表：\n\n- ipAddrTable：提供分配给节点的 IP 地址。\n- ipRouteTable：提供路由选择信息，用于路由器的配置检测与路由控制。\n- ipNetToMediaTable：提供 IP 地址与物理地址之间对应关系的地址转换表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000846"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ip 组"
+              ],
+              "lineStart": 8534,
+              "lineEnd": 8543,
+              "assetRefs": [],
+              "excerptSha256": "48f8ff09ff494d6ff65870c16e6e8572e29c62928ea1dbd3ba740a6faaeacac4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-icmp-tcp-group",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "support",
+        "kind": "definition",
+        "title": "icmp 组与 tcp 组（1.3.6.1.2.1.5、1.3.6.1.2.1.6）",
+        "markdown": "icmp 组包含 ICMP 相关的信息，例如发送或接收的 ICMP 报文数以及出错、目的地址……（扫描文本在此处截断，后接 tcp 组内容）。\n\ntcp 组包含 TCP 相关的信息，例如重传时间、支持的 TCP 连接数、接收或发送的报文段数、重传或出错的报文段数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000847"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "icmp 组"
+              ],
+              "lineStart": 8544,
+              "lineEnd": 8549,
+              "assetRefs": [],
+              "excerptSha256": "f55053912a80627f63d56f3d3c9c28956acbeeef25330f4bf740502e2faaa850"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-udp-group",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "support",
+        "kind": "definition",
+        "title": "udp 组（1.3.6.1.2.1.7）",
+        "markdown": "udp 组包含 UDP 相关的信息，例如已递交或无法递交 UDP 用户的数据报数、UDP 用户的本地 IP 地址与本地端口号等。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000848"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "udp 组"
+              ],
+              "lineStart": 8550,
+              "lineEnd": 8553,
+              "assetRefs": [],
+              "excerptSha256": "8829a601adc30cc4a792786d866f13d3ee0654bb7e1c44fb723c14a615a6bf9a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-egp-group",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "support",
+        "kind": "definition",
+        "title": "egp 组（1.3.6.1.2.1.8）",
+        "markdown": "egp 组包含 EGP 相关的信息，例如收到正确或错误的 EGP 报文数、相邻网关的 EGP 表，以及本 EGP 实体连接的自治系统数等。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000849"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "egp 组"
+              ],
+              "lineStart": 8554,
+              "lineEnd": 8557,
+              "assetRefs": [],
+              "excerptSha256": "4baec049544fb4057ffbbaaf381a2918b807e46ef1fc55883c0763866f3424bb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tx-operations",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "SNMP 的操作",
+        "markdown": "SNMP 采用轮询方式，周期性地通过读、写操作实现基本的网管功能：管理进程向代理进程发送 Get 报文检测被管对象状态，发送 Set 报文改变被管对象状态。\n\n除轮询方式之外，管理进程也允许被管对象在重要事件发生时使用 Trap 报文向管理进程报告。\n\nSNMPv3 的报文类型按操作划分：读操作用 GetRequest、GetNextRequest、GetBulkRequest；写操作用 SetRequest；代理用 Response 应答；通知用 Trap 或 InformRequest。Get 操作中，管理进程向代理发送 GetRequest-PDU 读取被管对象状态，代理以 Response-PDU 应答；Set 操作同样由代理应答。教材指出，这两个操作体现了 SNMP 以简单方法处理复杂问题的设计原则。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000850"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "SNMP 的操作"
+              ],
+              "lineStart": 8558,
+              "lineEnd": 8575,
+              "assetRefs": [
+                "parts/part-0004/images/14f54caeeb7208fd10698e1ca4fee607a8e171f8e5741e1f725d91ecc42feb41.jpg",
+                "parts/part-0004/images/4f631c1c196dea72f2f8c86a79bfd4cbb7e361e5950fd8f972e22d4fdfd15dc8.jpg"
+              ],
+              "excerptSha256": "c8aba9ca54495b055987f736b27439040044395be30bbbf06a7099abe1a9e21c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-poll-vs-trap",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：轮询与 Trap 的分工",
+        "markdown": "轮询与告警是互补关系，而不是替代关系。\n\n| 方式 | 发起方 | 时机 | 适合的任务 |\n|---|---|---|---|\n| Get 轮询 | 管理进程 | 按固定周期主动发起 | 持续采集状态、绘制趋势、核对基线 |\n| Set | 管理进程 | 需要修改时主动发起 | 改变配置或参数 |\n| Trap/Inform | 代理进程 | 重要事件发生时被动触发 | 故障、状态跃变的及时上报 |\n\nTrap 的优点是及时且不依赖下一次轮询，但没有事件时不会产生数据，因此不能用于持续观测；完整的方案通常是“平时轮询采集 + 关键事件 Trap 上报”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-operations",
+            "tx-performance",
+            "tx-fault"
+          ]
+        }
+      },
+      {
+        "id": "model-snmpv3-boundary",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "模型补充：SNMP 的安全边界",
+        "markdown": "教材明确记录了 SNMPv1 在安全性上存在缺陷，SNMPsec 是针对该问题的早期标准，SNMPv3 则是后续形成的标准框架。\n\n工程上有两个边界需要区分：其一，协议版本不等于授权策略，能读写 MIB 只说明操作可行，读取配置、修改参数仍必须受访问控制与审计约束；其二，安全能力要覆盖传输与记录两侧，既限制未授权访问，也保留违规操作的可追溯证据。因此不能仅凭“已启用 SNMP”假定系统安全，而应按安全管理的要求配置权限、审计与告警。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-simple",
+            "tx-security",
+            "tx-operations"
+          ]
+        }
+      },
+      {
+        "id": "model-ops-check",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：为任务选择操作",
+        "markdown": "判断下列任务应使用 Get 轮询、Set 还是 Trap，并说明理由：\n\n1. 每 5 分钟采集一次核心交换机各接口的带宽利用率，用于绘制趋势图。\n2. 管理员需要把某台路由器的系统描述字段改为机房编号。\n3. 某接口由 up 变为 down 时，希望管理站尽快收到通知。\n\n参考判断：任务 1 使用 Get 轮询，因为需要按周期重复读取并形成序列；任务 2 使用 Set，因为要改变被管对象的状态；任务 3 依赖 Trap，由代理在事件发生时主动上报，若要求更可靠的确认，可以再配合轮询核对。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tx-operations",
+            "model-poll-vs-trap"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "ops-matching",
+        "type": "matching",
+        "title": "管理操作匹配",
+        "anchorBlockId": "model-poll-vs-trap",
+        "moduleId": "mib-groups-and-operations",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-get-set-trap"
+        ],
+        "learningPurpose": "检查学习者能否把管理任务与 Get、Set、Trap 三类操作对应起来，并说明选择依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tx-protocol",
+            "tx-operations"
+          ]
+        },
+        "config": {
+          "pairs": [
+            {
+              "task": "周期性读取接口流量以绘制趋势",
+              "answer": "Get 轮询"
+            },
+            {
+              "task": "修改设备的配置参数",
+              "answer": "Set"
+            },
+            {
+              "task": "接口状态跃变时尽快通知管理站",
+              "answer": "Trap"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别为“读取接口流量趋势”“修改配置参数”“接口故障及时上报”选择 Get、Set 或 Trap，并各写一句理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "应用层",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-6-8"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000823"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理应用"
+      ],
+      "lineStart": 8407,
+      "lineEnd": 8408,
+      "assetRefs": [],
+      "excerptSha256": "865df0950241a7323a0eeee2251a08ced5d7d438dd8d3ac096639c1172bbcdc4"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000824"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理的概念"
+      ],
+      "lineStart": 8409,
+      "lineEnd": 8410,
+      "assetRefs": [],
+      "excerptSha256": "caf2f0320132d1e94f9486d575fed77f4d83e889b97f22b628a321c58b9febdc"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000825"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理系统的组成"
+      ],
+      "lineStart": 8411,
+      "lineEnd": 8419,
+      "assetRefs": [
+        "parts/part-0004/images/c1919233a71673a025a0f364c9c743ab20ed29e8b7bfb72076e1f607e7d6ca8a.jpg"
+      ],
+      "excerptSha256": "ca9fac1e0791a90e293ed182f65bd715989a2d3dbba0bfe9e4570aa038e7915e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000826"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "被管对象"
+      ],
+      "lineStart": 8420,
+      "lineEnd": 8423,
+      "assetRefs": [],
+      "excerptSha256": "29b29a5cad17899fe235bc906c5c0c874c5933f2b72f480cb0064a9be8f69084"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000827"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "代理进程"
+      ],
+      "lineStart": 8424,
+      "lineEnd": 8427,
+      "assetRefs": [],
+      "excerptSha256": "1f65feb19d2b7a99a4bf48ae52ace43c97365cdc2a72659bf6ef839f89d894dc"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000828"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理协议"
+      ],
+      "lineStart": 8428,
+      "lineEnd": 8431,
+      "assetRefs": [],
+      "excerptSha256": "143562af64c9ac0e3ee439787953b4c864dc3cf5dbc8a1ae550d955d7fdcc7a1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000829"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "管理信息库"
+      ],
+      "lineStart": 8432,
+      "lineEnd": 8435,
+      "assetRefs": [],
+      "excerptSha256": "2bf7eda7657ed5a12e3fb9a22418d29ecdaf8faa5e5df6854ecf0a4cacc4e7e3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000830"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理功能"
+      ],
+      "lineStart": 8436,
+      "lineEnd": 8439,
+      "assetRefs": [],
+      "excerptSha256": "b80af8f1845fc7402e167b5e6db092f79e27ce5bc948a2e3e49f0009477d0a5e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000831"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "配置管理"
+      ],
+      "lineStart": 8440,
+      "lineEnd": 8443,
+      "assetRefs": [],
+      "excerptSha256": "9307ff3af5f86973ae04bd3030943b1d235769e956d46f467412782cddd08784"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000832"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "性能管理"
+      ],
+      "lineStart": 8444,
+      "lineEnd": 8447,
+      "assetRefs": [],
+      "excerptSha256": "d16be21db1a41ebf44b3447ca8cc34bcf87872c2f054203cdbf5568cb4f029ba"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000833"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "记账管理"
+      ],
+      "lineStart": 8448,
+      "lineEnd": 8451,
+      "assetRefs": [],
+      "excerptSha256": "2044ad9d2aaf43ceaf38acbc75c44f4719618b451d0aa7d3bc4a71f3910b8fbf"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000834"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "故障管理"
+      ],
+      "lineStart": 8452,
+      "lineEnd": 8455,
+      "assetRefs": [],
+      "excerptSha256": "218ba3a174b55a847d629dc0b185a43a61fbbe8781bd90ec31d007218489a2dd"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000835"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "安全管理"
+      ],
+      "lineStart": 8456,
+      "lineEnd": 8459,
+      "assetRefs": [],
+      "excerptSha256": "5e6d7b41675fca54bbf2d6b0262dda7b81deb43c77f755e473126dc6cc7677a2"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000836"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理技术发展"
+      ],
+      "lineStart": 8460,
+      "lineEnd": 8463,
+      "assetRefs": [],
+      "excerptSha256": "09c983f3c1e236d3efa7a56fb2e1f9c7e6b811571e186fbe13ea164ad8a1c62e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000837"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络管理体系结构"
+      ],
+      "lineStart": 8464,
+      "lineEnd": 8469,
+      "assetRefs": [],
+      "excerptSha256": "5c0a70e8d9f289837ac165b8fb00bf58364efbcc4256f3a2053d1a654df12289"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000838"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "对协议名称中“简单”的理解"
+      ],
+      "lineStart": 8470,
+      "lineEnd": 8478,
+      "assetRefs": [
+        "parts/part-0004/images/1b500620fc957e25236c65b3c11b8c3dcf30b8a9db882b850bd828ad9ff2e05b.jpg"
+      ],
+      "excerptSha256": "825eabf8fe03a33b8c10b9ec54d578b9c6f3da793d376308802bbc5868847df3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000839"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "SNMP的基本内容"
+      ],
+      "lineStart": 8479,
+      "lineEnd": 8482,
+      "assetRefs": [],
+      "excerptSha256": "889829f6b737fa6da180f84bcf7d254c0f1791bfa983847d38891955273813dc"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000840"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "管理信息结构"
+      ],
+      "lineStart": 8483,
+      "lineEnd": 8486,
+      "assetRefs": [],
+      "excerptSha256": "4c5137292ca34e53b73f8e616b09349da517d6ed383594de6f214e7764548984"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000841"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "对象命名树的结构"
+      ],
+      "lineStart": 8487,
+      "lineEnd": 8509,
+      "assetRefs": [
+        "parts/part-0004/images/6ec50541d5c99189a02d74042529ed6f4ebd8872bef47808aeeb3ee51157746e.jpg"
+      ],
+      "excerptSha256": "32279778628fca154f4176b7786dfdd9cbcf0dd6bc56bd241a3da80eada31841"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000842"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "MIB对象的定位"
+      ],
+      "lineStart": 8510,
+      "lineEnd": 8517,
+      "assetRefs": [],
+      "excerptSha256": "97adcbad47ac1ba1b48531a1a9fe702ea960351fd88e6044dad9782ef1fd0177"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000843"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "管理信息库"
+      ],
+      "lineStart": 8518,
+      "lineEnd": 8525,
+      "assetRefs": [],
+      "excerptSha256": "b29b89aa61f3ff80bdf9455f5e5f21aebe0aeeee047907e45fdbc135517b595c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000844"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "system 组"
+      ],
+      "lineStart": 8526,
+      "lineEnd": 8529,
+      "assetRefs": [],
+      "excerptSha256": "5050bd534f3a761e581459f7d87843bca340c541d49b10dad2da2821b03992e0"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000845"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "interface 组"
+      ],
+      "lineStart": 8530,
+      "lineEnd": 8533,
+      "assetRefs": [],
+      "excerptSha256": "a53788f2531ca197d22000dcd0470c9d04f07bfde131c2557e3854f28cac42cf"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000846"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ip 组"
+      ],
+      "lineStart": 8534,
+      "lineEnd": 8543,
+      "assetRefs": [],
+      "excerptSha256": "48f8ff09ff494d6ff65870c16e6e8572e29c62928ea1dbd3ba740a6faaeacac4"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000847"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "icmp 组"
+      ],
+      "lineStart": 8544,
+      "lineEnd": 8549,
+      "assetRefs": [],
+      "excerptSha256": "f55053912a80627f63d56f3d3c9c28956acbeeef25330f4bf740502e2faaa850"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000848"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "udp 组"
+      ],
+      "lineStart": 8550,
+      "lineEnd": 8553,
+      "assetRefs": [],
+      "excerptSha256": "8829a601adc30cc4a792786d866f13d3ee0654bb7e1c44fb723c14a615a6bf9a"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000849"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "egp 组"
+      ],
+      "lineStart": 8554,
+      "lineEnd": 8557,
+      "assetRefs": [],
+      "excerptSha256": "4baec049544fb4057ffbbaaf381a2918b807e46ef1fc55883c0763866f3424bb"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000850"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "SNMP 的操作"
+      ],
+      "lineStart": 8558,
+      "lineEnd": 8575,
+      "assetRefs": [
+        "parts/part-0004/images/14f54caeeb7208fd10698e1ca4fee607a8e171f8e5741e1f725d91ecc42feb41.jpg",
+        "parts/part-0004/images/4f631c1c196dea72f2f8c86a79bfd4cbb7e361e5950fd8f972e22d4fdfd15dc8.jpg"
+      ],
+      "excerptSha256": "c8aba9ca54495b055987f736b27439040044395be30bbbf06a7099abe1a9e21c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1040,
+    1691
+  ],
+  "scale": 0.67
+}

@@ -232,6 +232,14 @@ export function reviewResumeRetryDelay(failureCount: number) {
   return RETRY_DELAYS[failureCount] ?? null;
 }
 
+/**
+ * A deleted or expired conversation cannot ever consume a review resume.
+ * Callers should drop the browser outbox item instead of retrying forever.
+ */
+export function isReviewResumeConversationGoneStatus(status: number) {
+  return status === 404 || status === 410;
+}
+
 export function reviewResumeRetryWindowMs() {
   return RETRY_DELAYS.slice(1).reduce((sum, delay) => sum + delay, 0);
 }

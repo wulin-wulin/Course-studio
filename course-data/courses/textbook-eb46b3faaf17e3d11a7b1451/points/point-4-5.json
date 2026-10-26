@@ -1,0 +1,1880 @@
+{
+  "id": "point-4-5",
+  "title": "互联网控制报文协议",
+  "shortSummary": "解释 ICMP 差错报告与查询报文的格式和用途，说明 ping 与 traceroute 如何借助 ICMP 完成连通性与路径诊断。",
+  "keyTerms": [
+    "ICMP",
+    "差错报告",
+    "ping",
+    "traceroute",
+    "网络诊断"
+  ],
+  "animationType": "ttlProbe",
+  "animationSuggestion": "逐步显示 TTL 从 1 开始递增，每一轮由对应跳的路由器返回超时报文并点亮该跳，最后目的主机返回回送应答；同时标出每跳的往返时间，并允许重播同一路径。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-4-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "采用故障诊断主线：保留教材对 ICMP 报文类型、代码和 ping/tracert 过程的完整叙述，按“症状—假设—证据—定位”重排讲解，补充判读规则，并把教材相邻的多播与 QoS 小节作为边界对照。",
+      "estimatedMinutes": 32,
+      "outcomes": [
+        {
+          "id": "diagnose-icmp",
+          "text": "解释 ICMP 差错报告与查询报文的结构、类型、代码和触发条件。"
+        },
+        {
+          "id": "interpret-diagnostics",
+          "text": "根据 ping 与 traceroute 的输出判读可达性、往返时延和逐跳路径。"
+        },
+        {
+          "id": "locate-boundaries",
+          "text": "识别 ICMP 诊断的过滤、限速等限制，并说明它与 IP 多播、QoS 等相邻网络层机制的分工。"
+        }
+      ],
+      "misconceptions": [
+        "把 ping 超时直接判定为主机宕机，忽略请求或应答被过滤、丢失的可能。",
+        "认为 traceroute 中某一跳显示星号就代表链路断开，忽略路由器不回复或对 ICMP 限速的情况。",
+        "把 ICMP 当作可靠传输协议，以为收到差错报告后网络会自动恢复。",
+        "以为往返时间一定随跳数增加，忽略网络流量与排队时延随时间变化。"
+      ],
+      "modules": [
+        {
+          "id": "icmp-problem",
+          "title": "ICMP 的定位与设计动机",
+          "role": "problem-framing",
+          "description": "从 IP 尽力而为服务的缺口出发，明确 ICMP 负责什么、不负责什么。",
+          "outcomeRefs": [
+            "diagnose-icmp"
+          ],
+          "order": 0
+        },
+        {
+          "id": "message-format",
+          "title": "报文结构与类型编码",
+          "role": "concept-explanation",
+          "description": "建立类型、代码、校验和与两类报文的解析框架。",
+          "outcomeRefs": [
+            "diagnose-icmp"
+          ],
+          "order": 1
+        },
+        {
+          "id": "error-reports",
+          "title": "差错报告与触发条件",
+          "role": "diagnostic-reference",
+          "description": "按五类差错报告整理触发条件、代码含义和故障线索。",
+          "outcomeRefs": [
+            "diagnose-icmp"
+          ],
+          "order": 2
+        },
+        {
+          "id": "query-and-tools",
+          "title": "查询报文与 ping/traceroute",
+          "role": "procedure-walkthrough",
+          "description": "理解查询报文配对机制，并逐跳跟踪 ping 与 traceroute 的探测过程。",
+          "outcomeRefs": [
+            "interpret-diagnostics"
+          ],
+          "order": 3
+        },
+        {
+          "id": "diagnosis-pitfalls",
+          "title": "诊断判读与限制",
+          "role": "failure-analysis",
+          "description": "区分可达、超时、过滤与限速，避免由单一输出下结论。",
+          "outcomeRefs": [
+            "interpret-diagnostics",
+            "locate-boundaries"
+          ],
+          "order": 4
+        },
+        {
+          "id": "multicast-context",
+          "title": "相邻小节：IP 多播",
+          "role": "context-boundary",
+          "description": "理解同章多播小节的组地址、IGMP 与隧道机制，划清与 ICMP 的分工。",
+          "outcomeRefs": [
+            "locate-boundaries"
+          ],
+          "order": 5
+        },
+        {
+          "id": "qos-context",
+          "title": "相邻小节：QoS 与 VPN",
+          "role": "context-boundary",
+          "description": "理解 RSVP、DiffServ、MPLS 与 VPN 的转发质量保障思路，并与 ICMP 对照。",
+          "outcomeRefs": [
+            "locate-boundaries"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "diagnose-icmp",
+          "interpret-diagnostics",
+          "locate-boundaries"
+        ],
+        "method": "完成一次诊断输出判读练习：根据 ping 与 traceroute 的结果判断可达性、故障层次与可能限制，并说明 ICMP 与多播、QoS 机制的区别。",
+        "successCriteria": [
+          "能按类型与代码解释差错报告的含义",
+          "能根据 ping/traceroute 输出区分可达、超时与过滤或限速",
+          "能说明 ICMP 与 IP 多播、QoS 机制各自负责的控制面"
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "id": "icmp-role",
+        "moduleId": "icmp-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "ICMP 要解决什么问题",
+        "markdown": "IP 提供尽力而为服务：设计简洁，但缺少差错控制与查询机制。分组发出后是否到达目的主机、在传输中出了什么错，源主机无从得知；路由器找不到目的网络、分组超过生存时间、分片没有全部到达等问题也缺少统一反馈渠道。ICMP 正是为差错报告、查询与控制而设计的网络层协议，对 IP 的可靠运行至关重要。\n\nICMP 有三个关键特点：它属于网络层协议，但报文并不直接交给数据链路层，而是先封装成 IP 分组；它不能脱离 IP 单独存在，是 IP 的组成部分；它的设计初衷是报告 IP 转发过程中的错误，主要由路由器向源主机报告出错原因，真正的差错处理仍由高层协议完成。\n\n因此，ICMP 是网络层的“信使”，不是可靠传输协议。它传递的是关于 IP 分组处理结果的反馈，而不负责重传或纠正错误。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000528"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "互联网控制报文协议"
+              ],
+              "lineStart": 5651,
+              "lineEnd": 5652,
+              "assetRefs": [],
+              "excerptSha256": "44321290d1893cd2c5a133e95fcfaa75420a164a11a0380ba44c805035c8cbbc"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 的作用与特点"
+              ],
+              "lineStart": 5653,
+              "lineEnd": 5654,
+              "assetRefs": [],
+              "excerptSha256": "83dfa1dbe820d93ad72d32daa826ba92311c95a16ba53f23fde77e60d70d17b4"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000530"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 的研究背景"
+              ],
+              "lineStart": 5655,
+              "lineEnd": 5658,
+              "assetRefs": [],
+              "excerptSha256": "06742327b085f7b98d29229ef047993b4732594f7759a9204d9187f9d573e9e8"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000531"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 的主要特点"
+              ],
+              "lineStart": 5659,
+              "lineEnd": 5668,
+              "assetRefs": [],
+              "excerptSha256": "d068557bc13f400b50c40f42569995809281a451a4929cf680f513b5846bba37"
+            }
+          ]
+        }
+      },
+      {
+        "id": "icmp-role-model",
+        "moduleId": "icmp-problem",
+        "depth": "support",
+        "kind": "note",
+        "title": "ICMP 不是可靠传输",
+        "markdown": "把 ICMP 放在 IP 旁边看，可以避免两个常见混淆。第一，ICMP 报文本身也要装进 IP 分组，所以 ICMP 消息同样可能丢失；它报告错误，但并不保证错误报告一定送达。第二，收到差错报告不等于网络已经修复，源主机或高层协议仍要决定是否重传、换路径或终止连接。\n\n从职责上说，ICMP 负责“告知发生了什么”，IP 负责“尽力转发”，TCP 等高层协议才负责“如何恢复”。这个分工也解释了为什么 ICMP 报文只带少量控制信息，而不承载应用数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "icmp-role"
+          ]
+        }
+      },
+      {
+        "id": "icmp-format",
+        "moduleId": "message-format",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "ICMP 报文结构与两类报文",
+        "markdown": "ICMP 报文封装在 IP 分组的数据部分，IP 分组头的协议字段值为 1 就表示数据部分是 ICMP 报文。ICMP 报文前 4 字节格式统一：第 1 字节是类型，第 2 字节是代码，第 3、4 字节是校验和，随后 4 字节的内容随类型而定，再往后是 ICMP 数据部分。\n\nICMP 报文分为差错报告报文与查询报文两大类。不同差错报告对应不同类型值，例如目的不可达的类型值为 3；查询报文由请求与应答成对组成，例如回送请求的类型值为 8，回送应答的类型值为 0。IP 分组头只校验分组头，不校验数据部分，而 ICMP 报文位于数据部分，因此 ICMP 报头单独设置校验和来保证报文传输的正确性。\n\n教材还特别列出不产生 ICMP 差错报告的情形，其中明确给出的例子是：具有特殊地址（127.0.0.0 或 0.0.0.0）的分组出错时，不产生 ICMP 差错报文。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000532"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 报文结构"
+              ],
+              "lineStart": 5669,
+              "lineEnd": 5689,
+              "assetRefs": [
+                "parts/part-0003/images/bb2de7da965468b156c670e4f32c6c01928cdfcb6a57c52b7e74eaeeeb3d55c4.jpg"
+              ],
+              "excerptSha256": "948fc690872c82f43c0e7625286dee290e9f5bf92503dc4a166d8089347b690c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "icmp-format-model",
+        "moduleId": "message-format",
+        "depth": "support",
+        "kind": "note",
+        "title": "类型、代码与校验和",
+        "markdown": "读 ICMP 报文时，可以先看“类型 + 代码”这一对字段：类型说明这是哪一类消息，代码在同一类中进一步区分具体原因。例如同为“目的不可达”，代码不同就对应网络、主机、协议、端口等不同故障层次。第四个 4 字节字段的含义依赖类型，不能脱离类型单独解释。\n\n校验和的位置也值得注意：它覆盖的是 ICMP 报文本身，而不是整个 IP 分组。这样即使 IP 只校验了分组头，接收端仍能发现 ICMP 数据部分的比特错误。\n\n对诊断而言，先识别类型，再读代码，最后看数据部分携带的上下文，比只记住类型编号更有用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "icmp-format"
+          ]
+        }
+      },
+      {
+        "id": "error-overview",
+        "moduleId": "error-reports",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "五类差错报告",
+        "markdown": "路由器或主机根据 IP 分组头协议字段为 1 判断数据部分是 ICMP 报文。ICMP 差错报告报文主要有 5 类：目的不可达、源抑制、超时、参数问题与重定向。\n\n这些报文都由发现问题的路由器或目的主机发往源主机，用来告诉源主机“这个分组为什么没有被正常交付”。差错报告只报告问题，不负责恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000533"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 报文类型"
+              ],
+              "lineStart": 5690,
+              "lineEnd": 5693,
+              "assetRefs": [],
+              "excerptSha256": "a32b893597cfdc029d86f6cb8f5dacb5c372596f30b86adea8ffa8fe4656edc3"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000534"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 差错报告报文"
+              ],
+              "lineStart": 5694,
+              "lineEnd": 5697,
+              "assetRefs": [],
+              "excerptSha256": "f5d244712476aa4c0ba51530e4c3f4c9aa87028899dc046aec922a6155418d83"
+            }
+          ]
+        }
+      },
+      {
+        "id": "unreachable-codes",
+        "moduleId": "error-reports",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "目的不可达的代码含义",
+        "markdown": "当路由器找不到下一跳路由器，或无法把分组交付给目的主机时，它会丢弃分组并向源主机发送目的不可达报文。代码字段进一步区分原因：网络不可达（代码 0）表示路由器寻址出错，下一跳路由器可能存在故障，只能由路由器产生；主机不可达（代码 1）表示网络寻址没有问题，但目的主机可能不工作或不存在，也只能由路由器产生；协议不可达（代码 2）表示目的主机没有运行分组所需的高层协议；端口不可达（代码 3）表示要交付的应用进程没有运行。\n\n此外还有源路由失败（代码 5）、目的网络不可知（代码 6）与目的主机不可知（代码 7）。网络不可达与目的网络不可知不同：前者知道目的网络存在但送不到，后者是路由器根本不知道目的网络的信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000535"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "目的不可达报文"
+              ],
+              "lineStart": 5698,
+              "lineEnd": 5713,
+              "assetRefs": [],
+              "excerptSha256": "d73221e83d3407fdf3ad1cab9846f2451ea6191f5ab8425a82664c44c623722b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "other-error-reports",
+        "moduleId": "error-reports",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "源抑制、超时、参数问题与重定向",
+        "markdown": "源抑制报文用于拥塞控制。IP 不提供流量控制，路由器的缓冲区队列有限；当接收速率大于转发速率、队列溢出而丢包时，路由器或目的主机向源主机发送源抑制报文。过程分为三阶段：发现拥塞并发出报文，源主机降低发送速率，拥塞解除后源主机恢复发送速率。\n\n超时报文有两种触发条件：路由器转发分组时把 TTL 减 1 后变为 0，就丢弃分组并向源主机发送超时报文；或者目的主机在计时器超时前没有收到同一分组的全部分片，丢弃已收到的分片并发送超时报文。\n\n参数问题报文用于除目的不可达、源抑制、超时和重定向之外的错误，例如分组头字段值非法。它指出被丢弃的分组头有错误，并用指针指向出错字节的起始位置。重定向报文则用于主机路由表不合理的情形：主机把分组发给默认路由器，而该路由器发现更优的下一跳，于是转发分组并向主机发送重定向报文，帮助主机更新路由表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000536"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "源抑制报文"
+              ],
+              "lineStart": 5714,
+              "lineEnd": 5723,
+              "assetRefs": [],
+              "excerptSha256": "5a1d1ec4e23cff7923691642dd0c43b9fde47a4d244e59d22e9a1c70fde49cc5"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000537"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "超时报文"
+              ],
+              "lineStart": 5724,
+              "lineEnd": 5731,
+              "assetRefs": [],
+              "excerptSha256": "336d86efba3219c18d862ddd0662071d8a6016cab5ba714f15df4e6d5a24663e"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000538"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "参数问题报文"
+              ],
+              "lineStart": 5732,
+              "lineEnd": 5735,
+              "assetRefs": [],
+              "excerptSha256": "0df62f9f811b7eb84978daaa76b18a7aa1ea8eab0222e49fcd28469fdd4f3193"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000539"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "重定向报文"
+              ],
+              "lineStart": 5736,
+              "lineEnd": 5742,
+              "assetRefs": [
+                "parts/part-0003/images/ee6c58bf01c5ae59190a71c67c7875bd032a4bca88fca7dca38968c3bcfabcbf.jpg"
+              ],
+              "excerptSha256": "f46d4254f4fb647aa90975a6a74e2568c0970cd608c69028f3f70fb91bebbda1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "error-report-model",
+        "moduleId": "error-reports",
+        "depth": "support",
+        "kind": "note",
+        "title": "把差错报告当作故障线索",
+        "markdown": "把五类差错报告当作故障定位线索，可以形成一张“症状—原因”表。目的不可达的代码把问题细分为网络、主机、协议、端口等层次：网络不可达更像路由或下一跳故障，主机不可达更像目的主机不在线，协议不可达说明目的主机缺少相应协议，端口不可达则指向应用进程未运行。超时报文既可能来自 TTL 耗尽，也可能来自分片重组超时，需要结合分组是否被分片来判断。参数问题报文指向分组头字段错误，重定向报文则提示主机选错了默认路由器。\n\n源抑制报文反映的是拥塞而不是地址或主机故障，它要求源主机降速，而不是立刻判断目的地不可达。\n\n这些报告都是“事后通知”：它们说明某个分组为什么失败，但不自动修复路径，也不保证后续分组一定成功。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "error-overview",
+            "unreachable-codes",
+            "other-error-reports"
+          ]
+        }
+      },
+      {
+        "id": "query-reports",
+        "moduleId": "query-and-tools",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "四类查询报文",
+        "markdown": "ICMP 查询报文是为网络故障诊断而设计的。差错报告报文单个出现，查询报文则双向、成对出现：一方发请求，另一方回应答。\n\n回送请求（类型 8）和回送应答（类型 0）用于检查目的节点是否可达，ping 命令就建立在这一对报文上。时间戳请求（类型 13）和应答（类型 14）提供一个简单的时钟同步手段，并利用初始时间戳、接收时间戳与发送时间戳确定分组往返所需时间。路由器询问（类型 15）和通告（类型 16）用于主机查询默认路由器地址；地址参数为 0x80000000 时对应默认路由器，路由器也会周期性发送通告。地址掩码请求（类型 17）和应答（类型 18）用于主机查询所在网络的子网掩码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000540"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ICMP 查询报文"
+              ],
+              "lineStart": 5743,
+              "lineEnd": 5746,
+              "assetRefs": [],
+              "excerptSha256": "bb9a0075a1507841c31d056cdf9d351dca029fa77d7ae53e4a8f3db0c3716d1f"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000541"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "回送请求和应答报文"
+              ],
+              "lineStart": 5747,
+              "lineEnd": 5750,
+              "assetRefs": [],
+              "excerptSha256": "660fe4e3c78e8c3b586a4036c863fca4b8b0fe119dc9f94b1647e5f54c9db9da"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000542"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "时间戳请求和应答报文"
+              ],
+              "lineStart": 5751,
+              "lineEnd": 5754,
+              "assetRefs": [],
+              "excerptSha256": "4f87bcd09e2357bc959ef8e7a429113a0d4e524d2cda3573cdb3f125d49b6f65"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000543"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由器询问和通告"
+              ],
+              "lineStart": 5755,
+              "lineEnd": 5758,
+              "assetRefs": [],
+              "excerptSha256": "68e9dc50367b3300e457ac37c47bd731234dbd1758aaf476d074d583556fb277"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000544"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "地址掩码请求和应答报文"
+              ],
+              "lineStart": 5759,
+              "lineEnd": 5762,
+              "assetRefs": [],
+              "excerptSha256": "988d5a76626d8b9d56ea79f5a261915738ac2a8e6475b4175d6f0c0fcf0d474b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "query-reports-model",
+        "moduleId": "query-and-tools",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "按问题类型记住查询报文",
+        "markdown": "这些查询报文可以按“问什么”来记：回送问“你是否可达”，时间戳问“往返要多久、两端时间差多少”，路由器询问问“默认网关是谁”，地址掩码询问问“本网掩码是什么”。\n\n它们都采用请求—应答配对，因此诊断时看到请求却没有应答，可能意味着对端不可达、请求被过滤，或应答在返回途中丢失；不能只凭单向报文下结论。\n\n与差错报告相比，查询报文是主动发起的探测，差错报告是转发过程中被动产生的通知。理解这一区别，才能正确使用 ping 和 traceroute。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "query-reports"
+          ]
+        }
+      },
+      {
+        "id": "ping-command",
+        "moduleId": "query-and-tools",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Ping 的探测过程",
+        "markdown": "Ping 是测试目的主机是否可达的通用方法。教材的例子中，本地主机 192.168.1.20 向 www.baidu.com（119.75.217.109）发送 4 个回送请求报文，目的主机回复 4 个回送应答报文，整个过程共使用 8 个 ICMP 报文。每个报文给出 3 个参数：报文长度（bytes）、主机响应时间（time）与生存时间（TTL）。\n\n因此，ping 的输出同时包含“是否收到应答”和“往返时延、TTL”等可用于判断链路状态的线索。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000545"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "Ping 与 Traceroute 命令"
+              ],
+              "lineStart": 5763,
+              "lineEnd": 5764,
+              "assetRefs": [],
+              "excerptSha256": "98886a0d654882a6e8d08e35196eb2a22df19a45b7934b072a4f678467b062eb"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000546"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "Ping 命令的应用"
+              ],
+              "lineStart": 5765,
+              "lineEnd": 5776,
+              "assetRefs": [
+                "parts/part-0003/images/c52251ab53c47c9099eaf248157e41dafe0485367c9221ac80c2dfd36c52ff98.jpg",
+                "parts/part-0003/images/067cce6d0fe840b82bc446884405fc2e74b573dcd81b484f432b12c29e425498.jpg"
+              ],
+              "excerptSha256": "741f56862801c58ee80275ba4c25fee9ed6a46c0c91df6a8b718c52b5f3ec128"
+            }
+          ]
+        }
+      },
+      {
+        "id": "ping-read-model",
+        "moduleId": "query-and-tools",
+        "depth": "support",
+        "kind": "note",
+        "title": "怎样读 Ping 输出",
+        "markdown": "读 ping 结果时，先把三类信息分开：有没有收到回送应答，说明当前时刻的往返可达性；time 是这次探测的往返时延；TTL 是分组还能经过的跳数预算，每经过一个路由器减 1，因此它反映剩余转发预算，而不是固定的路径长度。\n\n连续多次探测可以观察时延是否稳定、是否出现丢包。一次超时不足以证明主机宕机，因为请求或应答都可能在途中丢失，也可能被中间设备过滤。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ping-command"
+          ]
+        }
+      },
+      {
+        "id": "tracert-command",
+        "moduleId": "query-and-tools",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Tracert 的逐跳探测",
+        "markdown": "Tracert 是路由跟踪命令，Windows 中叫 Tracert，UNIX 中叫 Traceroute，用于获得从本地主机到目的主机的完整路径。它的基本做法是逐步增加回送请求报文的跳数：先发送跳数为 1 的请求，第 1 个路由器把跳数减到 0 后丢弃分组并返回超时报文，源主机由此获得第 1 跳路由器的 IP 地址；再发送跳数为 2 的请求，第 2 个路由器返回超时报文，源主机获得第 2 跳地址；如此重复，直到请求到达目的主机并收到回送应答，就得到完整路径。\n\n教材的例子中，本地主机向目的主机发送 4 个回送请求，中途路由器回复 3 个超时报文，目的主机回复 1 个回送应答，共使用 8 个 ICMP 报文。Tracert 对每个 TTL 值通常进行 3 次探测，并给出对应的往返时间。教材还指出，经过的路由器越多并不必然意味着往返时间越长：示例中到第 2 跳的往返时间是 4 ms，而到第 6 跳只有 1 ms，说明不同时间的网络流量会显著影响时延。Ping 与 Tracert 既是网络管理手段，也可能被用于漏洞探测和网络攻击，因此安全领域也会研究如何防范。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000547"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "Tracert 命令的应用"
+              ],
+              "lineStart": 5777,
+              "lineEnd": 5802,
+              "assetRefs": [
+                "parts/part-0003/images/03ef0240e9e10df1d22565a57168216edbec1ef82c1803af51747ef949d76874.jpg",
+                "parts/part-0003/images/750dfa7d7846eb2abdd3f3e97ad35dc960bf10b5a824307372a4284893eee02a.jpg"
+              ],
+              "excerptSha256": "ad2e68b63962e66ab41b87d517b670f424ecd6c32ef1b106593f32e510594483"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tracert-probe-model",
+        "moduleId": "query-and-tools",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "逐跳试探的状态推进",
+        "markdown": "Tracert 的核心不是让沿途路由器“记录”路径，而是利用 TTL 逐跳触发超时报文。源主机每一轮只把 TTL 增加 1：TTL 为 n 的探测会在第 n 跳被丢弃，该跳路由器返回超时报文，源主机就学到这一跳的地址；当 TTL 足够大、探测到达目的主机时，目的主机返回回送应答，探测结束。每一跳都执行 $TTL_{new}=TTL_{old}-1$，减到 0 就触发超时。\n\n因此，输出中的每一行对应一个 TTL 值，而不是一个持续记录的路径。看到某一跳返回超时报文，说明探测确实到达了该路由器；看到最终的回送应答，说明路径已走通。理解这个“逐跳试探”的状态推进，就能解释为什么 Tracert 需要多轮报文，也能解释每一跳为什么会出现多个往返时间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tracert-command"
+          ]
+        }
+      },
+      {
+        "id": "rtt-reading-model",
+        "moduleId": "diagnosis-pitfalls",
+        "depth": "core",
+        "kind": "note",
+        "title": "可达性、时延与路径的判读",
+        "markdown": "把 ping 与 traceroute 的输出放在一起，先回答三个问题：目标是否可达，时延大概是多少，路径在哪一跳发生变化。可达性看是否有回送应答；时延看 time 与重复探测的波动；路径看每跳返回超时报文的路由器地址。\n\n两个常见误读需要纠正。第一，ping 超时不一定等于主机宕机：请求、应答或超时报文都可能丢失，也可能被过滤。第二，traceroute 中某一跳显示超时或星号，不一定代表链路断开：该跳路由器可能不回复 ICMP，或对 ICMP 进行了限速。\n\n教材的例子还提醒我们，往返时间不是随跳数单调增加的：第 2 跳 4 ms、第 6 跳 1 ms，说明网络流量和排队时延会随时间变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ping-read-model",
+            "tracert-probe-model"
+          ]
+        }
+      },
+      {
+        "id": "icmp-limits-model",
+        "moduleId": "diagnosis-pitfalls",
+        "depth": "core",
+        "kind": "warning",
+        "title": "ICMP 诊断的边界",
+        "markdown": "ICMP 诊断的价值在于提供端到端的反馈，但它有几个边界。首先，ICMP 报文本身也可能被丢弃；其次，路由器或防火墙可能过滤 ICMP 请求、应答或差错报文，导致“探测不到”而不是“网络断了”；再次，设备可能对 ICMP 生成进行限速，使 traceroute 的某些跳只显示星号或时延异常。\n\n因此，正确判读要把“无响应”与“不可达”分开：无响应只说明这次探测没有收到预期报文，还需要结合其他跳、其他时间点和其他工具交叉验证。把 ping 或 traceroute 的单一结果当作最终结论，是最常见的误读。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rtt-reading-model",
+            "tracert-probe-model"
+          ]
+        }
+      },
+      {
+        "id": "multicast-basics",
+        "moduleId": "multicast-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "IP 多播与单播",
+        "markdown": "IP 多播解决一对多通信的效率问题。单播要把同一文件复制多份、分别封装成目的地址不同的分组；多播只准备一个副本，封装成一个多播分组，发送给多播组的所有成员。成员越多，多播节省的网络资源越明显。支持 IGMP 的路由器称为多播路由器。\n\n教材梳理了多播的发展：IP 多播概念于 1988 年提出，1989 年 RFC 1112 定义了互联网组管理协议 IGMP，1992 年开始试验多播主干网 Mbone，1997 年 IGMPv2（RFC 2236）成为互联网标准。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000548"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播的基本概念"
+              ],
+              "lineStart": 5803,
+              "lineEnd": 5804,
+              "assetRefs": [],
+              "excerptSha256": "4b644070050491a58829ad57aa64c45372e8626fb16283ae0c7855160a60d021"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000549"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播发展过程"
+              ],
+              "lineStart": 5805,
+              "lineEnd": 5810,
+              "assetRefs": [],
+              "excerptSha256": "db881b7a4f2d11ba1728a4b43ae4c7c10dbc90b3c7f46805ed33a8ec6c10b8f3"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000550"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播与单播的区别"
+              ],
+              "lineStart": 5811,
+              "lineEnd": 5814,
+              "assetRefs": [],
+              "excerptSha256": "b0ae789ea2156cde0401cccd393d518a0fc6c805952d427d454e23793878032f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "multicast-address",
+        "moduleId": "multicast-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "IP 多播地址与硬件多播地址",
+        "markdown": "IP 多播地址只用于目的地址，不能作为源地址。标准分类的 D 类地址用于多播，前 4 位为 1110，范围是 224.0.0.0～239.255.255.255，可标识大量多播组。多播地址分永久与临时两类：永久地址需向 IANA 申请，临时地址供一次会话使用。RFC 3330 还规定了一些保留范围，例如 224.0.0.1 供本网所有参加多播的主机使用，224.0.0.2 供本网所有参加多播的路由器使用，239.0.0.0～239.255.255.255 限制在一个组织内使用。\n\n在以太网中还要使用硬件多播地址。IANA 分配的以太网多播地址高 24 位是 00-00-5E，加上第一字节最低位为 1 的多播标志，范围是 01-00-5E-00-00-00～01-00-5E-FF-FF-FF。由于只使用 IP 多播地址的低 23 位映射到硬件地址后 23 位，映射是多对一的：不同 D 类地址可能映射到同一个硬件多播地址，因此主机必须检查收到的多播地址并丢弃不属于本组的分组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000551"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播地址"
+              ],
+              "lineStart": 5815,
+              "lineEnd": 5818,
+              "assetRefs": [],
+              "excerptSha256": "222fac0b3e98c70ca392663c11655972199499949b10edbd4f43304f3c7b06ca"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000552"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播地址的特点"
+              ],
+              "lineStart": 5819,
+              "lineEnd": 5851,
+              "assetRefs": [
+                "parts/part-0003/images/5380fa2b211a63dacf483ceb637adc874c774b11fb75924a480528d1f7af14f8.jpg",
+                "parts/part-0003/images/b70ad3a279356b6205e56ef8e61c73054b8de2c2448ee8653c658d7786dc8f44.jpg"
+              ],
+              "excerptSha256": "97f9b1d34fe64f8b44126b32300b6e4b6fb96ccb0504605a991c501a6b69a238"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000553"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "硬件多播地址的特点"
+              ],
+              "lineStart": 5852,
+              "lineEnd": 5868,
+              "assetRefs": [
+                "parts/part-0003/images/5582871b90a89619d04d1c6f05ac3d3dcbbbd3627f32e9cb84395d10df5568ca.jpg"
+              ],
+              "excerptSha256": "d585cb243937b1cb586fe4291f5bcb901b2e045e9a50d99c4f25635de6b6a31a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "igmp-membership",
+        "moduleId": "multicast-context",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "IGMP 的组成员管理",
+        "markdown": "IP 多播的基本思想是：用组地址标识一次会话；目的主机用多播地址通知路由器加入或退出；源主机只管用多播地址发送，不必了解目的主机的位置与状态；路由器建立一棵以源主机为根、延伸到所有含成员网络的多播树，并沿树转发分组。\n\nIGMP 负责组成员管理。主机加入新组时，向多播组地址发送 IGMP 报文声明成员身份，本地多播路由器再把组成员关系转发给其他多播路由器。多播路由器周期性查询本网络，确认是否还有成员；查询时只需向所有组发送一个查询报文，默认每 125 s 发送一次，同一组的主机监听响应并抑制重复应答。若主机在超过一定时间后仍不应答，路由器就把它从多播地址表中删除，主机由此自动离开多播组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000554"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IGMP的基本内容"
+              ],
+              "lineStart": 5869,
+              "lineEnd": 5870,
+              "assetRefs": [],
+              "excerptSha256": "724dabc356be9619b486a24918016516f922c060b394719f429aa81cdd90c3ee"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000555"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播的实现方法"
+              ],
+              "lineStart": 5871,
+              "lineEnd": 5882,
+              "assetRefs": [],
+              "excerptSha256": "f2f7b4536899f6059ff8961f74c16cd25fc1209a895b9b49c2fa6a513ea9540a"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000556"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IGMP 的功能"
+              ],
+              "lineStart": 5883,
+              "lineEnd": 5884,
+              "assetRefs": [],
+              "excerptSha256": "c1edd1611e9e73790861e52bd84e4e9951e8df612cf709d540a6cefb3d710bf1"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000557"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "加入一个多播组"
+              ],
+              "lineStart": 5885,
+              "lineEnd": 5888,
+              "assetRefs": [],
+              "excerptSha256": "8966f6ad9ee5e2826de8b13a635445555e5fc501a239db51c2f042e8d6171253"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000558"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "维护组成员关系"
+              ],
+              "lineStart": 5889,
+              "lineEnd": 5892,
+              "assetRefs": [],
+              "excerptSha256": "4c5be6bc5c4412db681e6717735cb1c7b0a423c0d1d35bb3ac8913406be025a7"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000559"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "查询组成员关系"
+              ],
+              "lineStart": 5893,
+              "lineEnd": 5896,
+              "assetRefs": [],
+              "excerptSha256": "96b210462b77d83bcc8f709c7df2c199b481bfb00401fd17027739fabc076d9f"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000560"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "离开一个多播组"
+              ],
+              "lineStart": 5897,
+              "lineEnd": 5900,
+              "assetRefs": [],
+              "excerptSha256": "1b4d1585bc083e1955925378e293f8162ed469ff720ba8b7f393d8cc326a1bd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "multicast-routing",
+        "moduleId": "multicast-context",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "多播路由与隧道",
+        "markdown": "多播分组跨越多个网络时，需要多播路由器完成转发。实现方式有两种：使用专用多播路由器，或在传统路由器上增加多播路由功能。多播传输的特点是，转发路径上任何一个网络都可能存在组成员，分组在传送过程中随时可能遇到目的主机。\n\n如果路径上遇到不支持多播协议的路由器或网络，就要使用隧道技术：把多播分组再次封装，加上普通 IP 分组头，变成单播分组，通过隧道送到另一端；对端路由器去掉外层 IP 分组头，恢复成原来的多播分组，再继续向多个目的主机转发。教材把这种方法称为 IP 中 IP 分组（IP-in-IP）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000561"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "多播路由器与 IP 多播中的隧道技术"
+              ],
+              "lineStart": 5901,
+              "lineEnd": 5902,
+              "assetRefs": [],
+              "excerptSha256": "d803bba5990b0f8e01eb10d60a2c0f92c04dab6af772cc1c16239138ca186f56"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000562"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "多播路由器"
+              ],
+              "lineStart": 5903,
+              "lineEnd": 5908,
+              "assetRefs": [],
+              "excerptSha256": "71d022d90b3c3495db3fa3329919f5e3378e3c8240780974fde5b5851bd2eb51"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000563"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 多播中的隧道技术"
+              ],
+              "lineStart": 5909,
+              "lineEnd": 5917,
+              "assetRefs": [
+                "parts/part-0003/images/b0b99f3d04c8412ff53488e78b57d7d49633ad6c3a494b82d67f7cff452cc5fb.jpg"
+              ],
+              "excerptSha256": "ededf312006aaf6005708b4689d1bce051fe650e42163b1b58d6e0fbd49a8df6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "multicast-context-model",
+        "moduleId": "multicast-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "ICMP 与多播控制的分工",
+        "markdown": "这一组教材小节处理的是“一对多”的组通信，与 ICMP 的定位不同：ICMP 主要是单播的差错与查询信令，发给分组的源主机；多播则用组地址把同一份数据送给多个接收者，并用 IGMP 管理组成员。\n\n两者的联系在于都依赖 IP 的尽力而为服务：多播分组同样可能丢失，ICMP 也不会为多播提供可靠传输。区别在于控制信息：ICMP 报告单个分组的处理结果，IGMP 维护“谁还在组里”的状态。把这两个层次分开，可以避免把“多播不通”简单归因于 ICMP 故障。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "multicast-basics",
+            "multicast-address",
+            "igmp-membership",
+            "multicast-routing"
+          ]
+        }
+      },
+      {
+        "id": "qos-rsvp-diffserv",
+        "moduleId": "qos-context",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "RSVP 与 DiffServ",
+        "markdown": "网络层 QoS 主要关注带宽与传输延时。IP 的尽力而为服务不适合多媒体应用，因此需要资源分配机制，防止个别应用独占共享资源。\n\nRSVP 的核心是为一个应用会话的数据流提供端到端 QoS 保证：会话开始前建立连接，路径上的所有路由器预留带宽与缓冲区。它基于单个数据流，调度、缓冲区和状态维护复杂、开销大，难以在大型网络中推广。DiffServ 则按应用类别提供服务，而不是按单个流；它只要求一组路由器（如 ISP 网络中的路由器）支持，协议更简单、可扩展，适合骨干网。教材用 IP 电话说明两者区别：RSVP 为一对通话预留资源，DiffServ 则为“IP 电话”这类应用整体打标记并提供相应服务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000564"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "资源预留协议与区分服务"
+              ],
+              "lineStart": 5918,
+              "lineEnd": 5921,
+              "assetRefs": [],
+              "excerptSha256": "39b40f55a082dfff6c69376253a518caaf3c31b460320bde576bc71f5a0de777"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000565"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "RSVP 的基本概念"
+              ],
+              "lineStart": 5922,
+              "lineEnd": 5927,
+              "assetRefs": [],
+              "excerptSha256": "64165b7c984f36a7761a6c3107a23be3a9e5fd55a33285f2fc0b7893bce071bd"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000566"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DiffServ 的基本概念"
+              ],
+              "lineStart": 5928,
+              "lineEnd": 5939,
+              "assetRefs": [],
+              "excerptSha256": "18d7ff7f4ebd06009b8a364cfe44e5efb3dfe0186ef0360bb15eb1652a43be68"
+            }
+          ]
+        }
+      },
+      {
+        "id": "mpls-label-switching",
+        "moduleId": "qos-context",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "MPLS 的标记转发",
+        "markdown": "MPLS 把数据链路层的第二层交换技术引入网络层，用标记实现快速转发。MPLS 域中的路由器是标记交换路由器 LSR，域边缘连接其他子网的是边界标记交换路由器 E-LSR；E-LSR 之间建立标记交换路径 LSP，思路与 ATM 虚电路相似。\n\nMPLS 借鉴 ATM 面向连接与保证 QoS 的思想，在 IP 网络中提供面向连接的服务，并支持流量工程与 VPN。其工作过程是：IP 分组进入 MPLS 域入口时，E-LSR 为其添加标记，并按标记转发表转发；域内 LSR 不再逐跳查目的 IP 地址，而是根据标记用硬件交换快速转发；到达出口 E-LSR 时除去标记，再按路由表把 IP 分组交付出去。核心是“路由仍用第三层协议，交换用第二层硬件”，从而减少每个路由器逐包查表的工作量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000567"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "多协议标记交换"
+              ],
+              "lineStart": 5940,
+              "lineEnd": 5941,
+              "assetRefs": [],
+              "excerptSha256": "c9a6c97b92113c50c3ee9514e0cef1595c0be93c919f0c9a89bd969281814680"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000568"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "MPLS 的基本概念"
+              ],
+              "lineStart": 5942,
+              "lineEnd": 5951,
+              "assetRefs": [],
+              "excerptSha256": "e425e05bed5aab96195e97f9c74a784d423572179d1b53177b5a81cd730e0a5f"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000569"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "MPLS 的工作原理"
+              ],
+              "lineStart": 5952,
+              "lineEnd": 5964,
+              "assetRefs": [
+                "parts/part-0003/images/f055789341cdc9692684d4e9c1b6c49d73f931601fbac9e13e8d08466375c0ba.jpg"
+              ],
+              "excerptSha256": "f7c3e4c0b79bbae2a85713d137b4f9ddc83d80e77d27e10052b74c968d2c4b5b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "vpn-and-mpls-vpn",
+        "moduleId": "qos-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "VPN 与 MPLS VPN",
+        "markdown": "VPN 是在公共传输网中建立虚拟专用通道，把不同地理位置的网络或主机互联，提供安全的端到端数据传输。它的核心是“虚拟”和“专用”：虚拟表示通过隧道或虚电路在公共网上建立逻辑覆盖网，专用表示提供安全与 QoS 保证。\n\nVPN 的实现方式包括租用线路组建的第二层 VPN，以及在 MPLS 网络上建立第三层 VPN。MPLS VPN 为每个 VPN 分配唯一的路由标识符 RD，在 LSR 与 E-LSR 的标记转发表中记录用户 IP 地址与 RD 的对应关系，只有属于同一 VPN 的用户才能通信。这样既利用了 MPLS 的快速转发，又满足了安全与 QoS 需求，因此被大型网络、物联网和云计算系统广泛采用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000570"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "MPLS VPN 的应用"
+              ],
+              "lineStart": 5965,
+              "lineEnd": 5966,
+              "assetRefs": [],
+              "excerptSha256": "ea1f3c24aa61f50264d5125155c3028451e96da174679424069b24d5732e68ff"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000571"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "VPN 的基本概念"
+              ],
+              "lineStart": 5967,
+              "lineEnd": 5974,
+              "assetRefs": [],
+              "excerptSha256": "de6fb0c0343b40e34f3f1980dbf3dc543b483391cb44e9a2304d3ac23e1b908c"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000572"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "VPN 实现方法"
+              ],
+              "lineStart": 5975,
+              "lineEnd": 5986,
+              "assetRefs": [],
+              "excerptSha256": "1473e870063bc070c35881c40fbdbcd6561f7126152e554b628fb92b1925c780"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000573"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "MPLS VPN"
+              ],
+              "lineStart": 5987,
+              "lineEnd": 5995,
+              "assetRefs": [
+                "parts/part-0003/images/301b48044c543427e4c95f2ccb92df5637c12b3c98b4482d7ebc5702cb650b53.jpg"
+              ],
+              "excerptSha256": "92c5483b967c4dd2a8710e4919f7278f06538447d9b1e4a7a9ac88771808a629"
+            }
+          ]
+        }
+      },
+      {
+        "id": "qos-context-model",
+        "moduleId": "qos-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "QoS 机制与 ICMP 的边界",
+        "markdown": "这三组机制回答的是“如何让转发更有质量保证”，而不是“分组为什么出错”。RSVP 试图为单个流预留资源，DiffServ 把流量分类后按类别服务，MPLS 用标记和 LSP 把路由与交换结合，VPN 则借助隧道或 MPLS 在公共网上构建专用通道。\n\n它们与 ICMP 的边界很清楚：ICMP 报告差错和提供查询，不预留带宽、不建立标记路径，也不保证服务质量。把 QoS 或 VPN 的配置问题误判为 ICMP 故障，或者反过来用 ping 结果推断 QoS 是否生效，都会得到错误结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "qos-rsvp-diffserv",
+            "mpls-label-switching",
+            "vpn-and-mpls-vpn"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "icmp-diagnosis-check",
+        "type": "formative-check",
+        "anchorBlockId": "icmp-limits-model",
+        "moduleId": "diagnosis-pitfalls",
+        "depth": "core",
+        "outcomeRefs": [
+          "interpret-diagnostics",
+          "locate-boundaries"
+        ],
+        "learningPurpose": "让学习者根据 ping/traceroute 输出判断故障位置，并识别过滤或限速造成的误读。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "ping-read-model",
+            "tracert-probe-model",
+            "rtt-reading-model",
+            "icmp-limits-model"
+          ]
+        },
+        "config": {
+          "scenario": "某主机 ping 目标地址 4 次均超时；traceroute 显示前 3 跳有响应，之后全部为星号。",
+          "question": "下列哪种判断最合理？",
+          "options": [
+            "目标主机一定宕机",
+            "目标路径一定在第 4 跳断开",
+            "可能是第 4 跳之后过滤或限速 ICMP，需换时间或其他工具交叉验证",
+            "ICMP 协议本身失效"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "根据 ping 与 traceroute 结果判断：ping 全部超时不能直接证明主机宕机；traceroute 从某一跳开始全是星号，也可能只是该跳之后过滤或限速 ICMP。应换时间重测，并结合其他跳、其他工具交叉验证。"
+        }
+      }
+    ]
+  },
+  "subtitle": "网络层",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-4-8"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000528"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "互联网控制报文协议"
+      ],
+      "lineStart": 5651,
+      "lineEnd": 5652,
+      "assetRefs": [],
+      "excerptSha256": "44321290d1893cd2c5a133e95fcfaa75420a164a11a0380ba44c805035c8cbbc"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000529"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 的作用与特点"
+      ],
+      "lineStart": 5653,
+      "lineEnd": 5654,
+      "assetRefs": [],
+      "excerptSha256": "83dfa1dbe820d93ad72d32daa826ba92311c95a16ba53f23fde77e60d70d17b4"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000530"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 的研究背景"
+      ],
+      "lineStart": 5655,
+      "lineEnd": 5658,
+      "assetRefs": [],
+      "excerptSha256": "06742327b085f7b98d29229ef047993b4732594f7759a9204d9187f9d573e9e8"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000531"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 的主要特点"
+      ],
+      "lineStart": 5659,
+      "lineEnd": 5668,
+      "assetRefs": [],
+      "excerptSha256": "d068557bc13f400b50c40f42569995809281a451a4929cf680f513b5846bba37"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000532"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 报文结构"
+      ],
+      "lineStart": 5669,
+      "lineEnd": 5689,
+      "assetRefs": [
+        "parts/part-0003/images/bb2de7da965468b156c670e4f32c6c01928cdfcb6a57c52b7e74eaeeeb3d55c4.jpg"
+      ],
+      "excerptSha256": "948fc690872c82f43c0e7625286dee290e9f5bf92503dc4a166d8089347b690c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000533"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 报文类型"
+      ],
+      "lineStart": 5690,
+      "lineEnd": 5693,
+      "assetRefs": [],
+      "excerptSha256": "a32b893597cfdc029d86f6cb8f5dacb5c372596f30b86adea8ffa8fe4656edc3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000534"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 差错报告报文"
+      ],
+      "lineStart": 5694,
+      "lineEnd": 5697,
+      "assetRefs": [],
+      "excerptSha256": "f5d244712476aa4c0ba51530e4c3f4c9aa87028899dc046aec922a6155418d83"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000535"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "目的不可达报文"
+      ],
+      "lineStart": 5698,
+      "lineEnd": 5713,
+      "assetRefs": [],
+      "excerptSha256": "d73221e83d3407fdf3ad1cab9846f2451ea6191f5ab8425a82664c44c623722b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000536"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "源抑制报文"
+      ],
+      "lineStart": 5714,
+      "lineEnd": 5723,
+      "assetRefs": [],
+      "excerptSha256": "5a1d1ec4e23cff7923691642dd0c43b9fde47a4d244e59d22e9a1c70fde49cc5"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000537"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "超时报文"
+      ],
+      "lineStart": 5724,
+      "lineEnd": 5731,
+      "assetRefs": [],
+      "excerptSha256": "336d86efba3219c18d862ddd0662071d8a6016cab5ba714f15df4e6d5a24663e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000538"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "参数问题报文"
+      ],
+      "lineStart": 5732,
+      "lineEnd": 5735,
+      "assetRefs": [],
+      "excerptSha256": "0df62f9f811b7eb84978daaa76b18a7aa1ea8eab0222e49fcd28469fdd4f3193"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000539"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "重定向报文"
+      ],
+      "lineStart": 5736,
+      "lineEnd": 5742,
+      "assetRefs": [
+        "parts/part-0003/images/ee6c58bf01c5ae59190a71c67c7875bd032a4bca88fca7dca38968c3bcfabcbf.jpg"
+      ],
+      "excerptSha256": "f46d4254f4fb647aa90975a6a74e2568c0970cd608c69028f3f70fb91bebbda1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000540"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ICMP 查询报文"
+      ],
+      "lineStart": 5743,
+      "lineEnd": 5746,
+      "assetRefs": [],
+      "excerptSha256": "bb9a0075a1507841c31d056cdf9d351dca029fa77d7ae53e4a8f3db0c3716d1f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000541"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "回送请求和应答报文"
+      ],
+      "lineStart": 5747,
+      "lineEnd": 5750,
+      "assetRefs": [],
+      "excerptSha256": "660fe4e3c78e8c3b586a4036c863fca4b8b0fe119dc9f94b1647e5f54c9db9da"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000542"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "时间戳请求和应答报文"
+      ],
+      "lineStart": 5751,
+      "lineEnd": 5754,
+      "assetRefs": [],
+      "excerptSha256": "4f87bcd09e2357bc959ef8e7a429113a0d4e524d2cda3573cdb3f125d49b6f65"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000543"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由器询问和通告"
+      ],
+      "lineStart": 5755,
+      "lineEnd": 5758,
+      "assetRefs": [],
+      "excerptSha256": "68e9dc50367b3300e457ac37c47bd731234dbd1758aaf476d074d583556fb277"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000544"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "地址掩码请求和应答报文"
+      ],
+      "lineStart": 5759,
+      "lineEnd": 5762,
+      "assetRefs": [],
+      "excerptSha256": "988d5a76626d8b9d56ea79f5a261915738ac2a8e6475b4175d6f0c0fcf0d474b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000545"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "Ping 与 Traceroute 命令"
+      ],
+      "lineStart": 5763,
+      "lineEnd": 5764,
+      "assetRefs": [],
+      "excerptSha256": "98886a0d654882a6e8d08e35196eb2a22df19a45b7934b072a4f678467b062eb"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000546"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "Ping 命令的应用"
+      ],
+      "lineStart": 5765,
+      "lineEnd": 5776,
+      "assetRefs": [
+        "parts/part-0003/images/c52251ab53c47c9099eaf248157e41dafe0485367c9221ac80c2dfd36c52ff98.jpg",
+        "parts/part-0003/images/067cce6d0fe840b82bc446884405fc2e74b573dcd81b484f432b12c29e425498.jpg"
+      ],
+      "excerptSha256": "741f56862801c58ee80275ba4c25fee9ed6a46c0c91df6a8b718c52b5f3ec128"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000547"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "Tracert 命令的应用"
+      ],
+      "lineStart": 5777,
+      "lineEnd": 5802,
+      "assetRefs": [
+        "parts/part-0003/images/03ef0240e9e10df1d22565a57168216edbec1ef82c1803af51747ef949d76874.jpg",
+        "parts/part-0003/images/750dfa7d7846eb2abdd3f3e97ad35dc960bf10b5a824307372a4284893eee02a.jpg"
+      ],
+      "excerptSha256": "ad2e68b63962e66ab41b87d517b670f424ecd6c32ef1b106593f32e510594483"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000548"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播的基本概念"
+      ],
+      "lineStart": 5803,
+      "lineEnd": 5804,
+      "assetRefs": [],
+      "excerptSha256": "4b644070050491a58829ad57aa64c45372e8626fb16283ae0c7855160a60d021"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000549"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播发展过程"
+      ],
+      "lineStart": 5805,
+      "lineEnd": 5810,
+      "assetRefs": [],
+      "excerptSha256": "db881b7a4f2d11ba1728a4b43ae4c7c10dbc90b3c7f46805ed33a8ec6c10b8f3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000550"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播与单播的区别"
+      ],
+      "lineStart": 5811,
+      "lineEnd": 5814,
+      "assetRefs": [],
+      "excerptSha256": "b0ae789ea2156cde0401cccd393d518a0fc6c805952d427d454e23793878032f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000551"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播地址"
+      ],
+      "lineStart": 5815,
+      "lineEnd": 5818,
+      "assetRefs": [],
+      "excerptSha256": "222fac0b3e98c70ca392663c11655972199499949b10edbd4f43304f3c7b06ca"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000552"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播地址的特点"
+      ],
+      "lineStart": 5819,
+      "lineEnd": 5851,
+      "assetRefs": [
+        "parts/part-0003/images/5380fa2b211a63dacf483ceb637adc874c774b11fb75924a480528d1f7af14f8.jpg",
+        "parts/part-0003/images/b70ad3a279356b6205e56ef8e61c73054b8de2c2448ee8653c658d7786dc8f44.jpg"
+      ],
+      "excerptSha256": "97f9b1d34fe64f8b44126b32300b6e4b6fb96ccb0504605a991c501a6b69a238"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000553"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "硬件多播地址的特点"
+      ],
+      "lineStart": 5852,
+      "lineEnd": 5868,
+      "assetRefs": [
+        "parts/part-0003/images/5582871b90a89619d04d1c6f05ac3d3dcbbbd3627f32e9cb84395d10df5568ca.jpg"
+      ],
+      "excerptSha256": "d585cb243937b1cb586fe4291f5bcb901b2e045e9a50d99c4f25635de6b6a31a"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000554"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IGMP的基本内容"
+      ],
+      "lineStart": 5869,
+      "lineEnd": 5870,
+      "assetRefs": [],
+      "excerptSha256": "724dabc356be9619b486a24918016516f922c060b394719f429aa81cdd90c3ee"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000555"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播的实现方法"
+      ],
+      "lineStart": 5871,
+      "lineEnd": 5882,
+      "assetRefs": [],
+      "excerptSha256": "f2f7b4536899f6059ff8961f74c16cd25fc1209a895b9b49c2fa6a513ea9540a"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000556"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IGMP 的功能"
+      ],
+      "lineStart": 5883,
+      "lineEnd": 5884,
+      "assetRefs": [],
+      "excerptSha256": "c1edd1611e9e73790861e52bd84e4e9951e8df612cf709d540a6cefb3d710bf1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000557"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "加入一个多播组"
+      ],
+      "lineStart": 5885,
+      "lineEnd": 5888,
+      "assetRefs": [],
+      "excerptSha256": "8966f6ad9ee5e2826de8b13a635445555e5fc501a239db51c2f042e8d6171253"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000558"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "维护组成员关系"
+      ],
+      "lineStart": 5889,
+      "lineEnd": 5892,
+      "assetRefs": [],
+      "excerptSha256": "4c5be6bc5c4412db681e6717735cb1c7b0a423c0d1d35bb3ac8913406be025a7"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000559"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "查询组成员关系"
+      ],
+      "lineStart": 5893,
+      "lineEnd": 5896,
+      "assetRefs": [],
+      "excerptSha256": "96b210462b77d83bcc8f709c7df2c199b481bfb00401fd17027739fabc076d9f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000560"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "离开一个多播组"
+      ],
+      "lineStart": 5897,
+      "lineEnd": 5900,
+      "assetRefs": [],
+      "excerptSha256": "1b4d1585bc083e1955925378e293f8162ed469ff720ba8b7f393d8cc326a1bd5"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000561"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "多播路由器与 IP 多播中的隧道技术"
+      ],
+      "lineStart": 5901,
+      "lineEnd": 5902,
+      "assetRefs": [],
+      "excerptSha256": "d803bba5990b0f8e01eb10d60a2c0f92c04dab6af772cc1c16239138ca186f56"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000562"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "多播路由器"
+      ],
+      "lineStart": 5903,
+      "lineEnd": 5908,
+      "assetRefs": [],
+      "excerptSha256": "71d022d90b3c3495db3fa3329919f5e3378e3c8240780974fde5b5851bd2eb51"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000563"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 多播中的隧道技术"
+      ],
+      "lineStart": 5909,
+      "lineEnd": 5917,
+      "assetRefs": [
+        "parts/part-0003/images/b0b99f3d04c8412ff53488e78b57d7d49633ad6c3a494b82d67f7cff452cc5fb.jpg"
+      ],
+      "excerptSha256": "ededf312006aaf6005708b4689d1bce051fe650e42163b1b58d6e0fbd49a8df6"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000564"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "资源预留协议与区分服务"
+      ],
+      "lineStart": 5918,
+      "lineEnd": 5921,
+      "assetRefs": [],
+      "excerptSha256": "39b40f55a082dfff6c69376253a518caaf3c31b460320bde576bc71f5a0de777"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000565"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "RSVP 的基本概念"
+      ],
+      "lineStart": 5922,
+      "lineEnd": 5927,
+      "assetRefs": [],
+      "excerptSha256": "64165b7c984f36a7761a6c3107a23be3a9e5fd55a33285f2fc0b7893bce071bd"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000566"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DiffServ 的基本概念"
+      ],
+      "lineStart": 5928,
+      "lineEnd": 5939,
+      "assetRefs": [],
+      "excerptSha256": "18d7ff7f4ebd06009b8a364cfe44e5efb3dfe0186ef0360bb15eb1652a43be68"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000567"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "多协议标记交换"
+      ],
+      "lineStart": 5940,
+      "lineEnd": 5941,
+      "assetRefs": [],
+      "excerptSha256": "c9a6c97b92113c50c3ee9514e0cef1595c0be93c919f0c9a89bd969281814680"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000568"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "MPLS 的基本概念"
+      ],
+      "lineStart": 5942,
+      "lineEnd": 5951,
+      "assetRefs": [],
+      "excerptSha256": "e425e05bed5aab96195e97f9c74a784d423572179d1b53177b5a81cd730e0a5f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000569"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "MPLS 的工作原理"
+      ],
+      "lineStart": 5952,
+      "lineEnd": 5964,
+      "assetRefs": [
+        "parts/part-0003/images/f055789341cdc9692684d4e9c1b6c49d73f931601fbac9e13e8d08466375c0ba.jpg"
+      ],
+      "excerptSha256": "f7c3e4c0b79bbae2a85713d137b4f9ddc83d80e77d27e10052b74c968d2c4b5b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000570"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "MPLS VPN 的应用"
+      ],
+      "lineStart": 5965,
+      "lineEnd": 5966,
+      "assetRefs": [],
+      "excerptSha256": "ea1f3c24aa61f50264d5125155c3028451e96da174679424069b24d5732e68ff"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000571"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "VPN 的基本概念"
+      ],
+      "lineStart": 5967,
+      "lineEnd": 5974,
+      "assetRefs": [],
+      "excerptSha256": "de6fb0c0343b40e34f3f1980dbf3dc543b483391cb44e9a2304d3ac23e1b908c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000572"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "VPN 实现方法"
+      ],
+      "lineStart": 5975,
+      "lineEnd": 5986,
+      "assetRefs": [],
+      "excerptSha256": "1473e870063bc070c35881c40fbdbcd6561f7126152e554b628fb92b1925c780"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000573"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "MPLS VPN"
+      ],
+      "lineStart": 5987,
+      "lineEnd": 5995,
+      "assetRefs": [
+        "parts/part-0003/images/301b48044c543427e4c95f2ccb92df5637c12b3c98b4482d7ebc5702cb650b53.jpg"
+      ],
+      "excerptSha256": "92c5483b967c4dd2a8710e4919f7278f06538447d9b1e4a7a9ac88771808a629"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2921,
+    1691
+  ],
+  "scale": 0.63
+}

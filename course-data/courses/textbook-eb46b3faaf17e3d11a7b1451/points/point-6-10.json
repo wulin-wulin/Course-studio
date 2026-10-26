@@ -1,0 +1,947 @@
+{
+  "id": "point-6-10",
+  "title": "Web 服务实现方法分析",
+  "shortSummary": "分析大型 Web 服务在服务器集群、负载均衡、缓存与内容分发上的实现方法及其性能与可用性权衡。",
+  "keyTerms": [
+    "Web 服务器",
+    "负载均衡",
+    "集群",
+    "内容分发",
+    "缓存"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-6-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的访问链与抓包证据为主线，按情境、决策、证据、结果、反思、迁移重排；模型补充只负责解释与迁移，不改写教材事实。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-access-chain",
+          "text": "解释浏览器访问 Web 服务器前，DHCP、DNS、ARP 与 TCP/HTTP 依次补齐了哪些信息。"
+        },
+        {
+          "id": "analyze-layer-handoff",
+          "text": "分析应用层、传输层、网络层与 MAC 层协议在一次 Web 访问中的分工与协作。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "评估地址分配、缓存与规模化手段在性能、可用性与复杂度上的取舍和失效模式。"
+        }
+      ],
+      "misconceptions": [
+        "把“输入域名就能访问”理解为 HTTP 单独完成的工作，忽略 DHCP、DNS 与 ARP 的前置作用。",
+        "认为 ARP 解析的是远端 Web 服务器的 MAC 地址；实际上解析的是下一跳的 MAC，之后逐跳更换。",
+        "把 DNS 缓存或 ARP 缓存当作总是正确的优化；缓存会在记录变更后短暂返回旧信息。"
+      ],
+      "modules": [
+        {
+          "id": "situation-context",
+          "title": "情境：一次访问要补哪些信息",
+          "role": "situation",
+          "outcomeRefs": [
+            "explain-access-chain"
+          ],
+          "order": 0
+        },
+        {
+          "id": "decision-address",
+          "title": "决策一：用 DHCP 取得本地地址",
+          "role": "decision",
+          "outcomeRefs": [
+            "explain-access-chain"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decision-name",
+          "title": "决策二：用 DNS 解析服务器域名",
+          "role": "decision",
+          "outcomeRefs": [
+            "explain-access-chain",
+            "analyze-layer-handoff"
+          ],
+          "order": 2
+        },
+        {
+          "id": "decision-link",
+          "title": "决策三：用 ARP 解析下一跳地址",
+          "role": "decision",
+          "outcomeRefs": [
+            "analyze-layer-handoff"
+          ],
+          "order": 3
+        },
+        {
+          "id": "decision-transfer",
+          "title": "决策四：建立 TCP 连接并交换 HTTP",
+          "role": "decision",
+          "outcomeRefs": [
+            "analyze-layer-handoff"
+          ],
+          "order": 4
+        },
+        {
+          "id": "outcome-reflection",
+          "title": "结果与反思：分层协作与缓存",
+          "role": "reflection",
+          "outcomeRefs": [
+            "analyze-layer-handoff",
+            "evaluate-tradeoffs"
+          ],
+          "order": 5
+        },
+        {
+          "id": "transfer-extend",
+          "title": "迁移：从单次访问到规模化服务",
+          "role": "transfer",
+          "outcomeRefs": [
+            "evaluate-tradeoffs"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-access-chain",
+          "analyze-layer-handoff",
+          "evaluate-tradeoffs"
+        ],
+        "method": "完成一次端到端访问链复盘，并对一个规模化方案说明其收益与失效模式。",
+        "successCriteria": [
+          "能按顺序说出四个决策及其补齐的信息",
+          "能引用抓包或报文证据解释每一步",
+          "能指出至少一个缓存或规模化手段的失效风险"
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-context",
+        "moduleId": "situation-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "从一次访问看 Web 服务的实现",
+        "markdown": "本案例要回答一个看似简单的问题：用户在浏览器里输入网址并回车，后台究竟发生了什么？教材把 Web 服务的实现拆成一条可追踪的协议链。\n\n设计网络应用时，工程师先根据功能需求确定应用层协议的工作模型、系统结构与模块组成，并明确分布式进程通信的 QoS 要求；再据此选择传输层、网络层、MAC 层与物理层协议，形成完整的协议体系；随后确定报文交互的语义、语法与时序，设计应用层协议数据单元；最后由软件工程师完成编程、网络工程师构建运行环境，并进入测试与运行维护。\n\n这条链说明：Web 服务不是单个协议的功能，而是多类协议在同一次访问中依次补齐不同信息、共同完成端到端通信的结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000851"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "Web 服务实现方法分析"
+              ],
+              "lineStart": 8576,
+              "lineEnd": 8579,
+              "assetRefs": [],
+              "excerptSha256": "99cf582ce4cc4022f44866e9ef849a415d88b60f122570a4e77663cfd772d641"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000852"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "实现 Web 服务的网络环境"
+              ],
+              "lineStart": 8580,
+              "lineEnd": 8583,
+              "assetRefs": [],
+              "excerptSha256": "43adadd6689bf3c7c905d7372ba26815bd5ef28ef807367597f5c29bfd99d4fa"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000853"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "分析的基本方法"
+              ],
+              "lineStart": 8584,
+              "lineEnd": 8605,
+              "assetRefs": [],
+              "excerptSha256": "8a71efd621bee7d1aea13da870978360deb09fb459b9fec4a2f4fcffe1dd5672"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-environment",
+        "moduleId": "situation-context",
+        "depth": "support",
+        "kind": "example",
+        "title": "简化的测试分析环境",
+        "markdown": "教材搭建了一个简化环境：用户所在的大学 A 校园网、提供接入的 ISP 网络，以及目标 Web 服务器所在的大学 B 校园网，三者互联。\n\n用户带着一台装有以太网网卡与 WiFi 网卡的笔记本电脑，第一次以有线方式接入校园网 A，访问域名 www.netlab.cs.nankai.edu.cn。此时笔记本只有以太网网卡的 MAC 地址 02-01-02-1A-5F-01，还没有本地 IP 地址。\n\n因此，在输入网址之后，后台必须先依次解决四件事：通过 DHCP 取得本地 IP 地址；通过 DNS 把域名解析为服务器 IP；通过 ARP 把服务器 IP 解析为 MAC 地址；最后才用 HTTP 访问 Web 服务器。这个环境把抽象的协议协作压缩成一条可逐步验证的访问链。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000854"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "测试分析环境"
+              ],
+              "lineStart": 8606,
+              "lineEnd": 8628,
+              "assetRefs": [
+                "parts/part-0004/images/97e3ea6a4a0b53585bd62166ca6922a2aa12d1b609c5de65f642bad5a50bc64d.jpg"
+              ],
+              "excerptSha256": "afeb56df23c9b10d1f902a410fb278884a7eebae62e153a413ea9de16a4b492c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-access-chain",
+        "moduleId": "situation-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "案例框架：四个缺口、四次决策",
+        "markdown": "把这次访问看成一个案例分析，可以把“为什么这么复杂”转成“每一步在补哪个缺口”。\n\n| 阶段 | 缺失的信息 | 采用的手段 |\n|---|---|---|\n| 接入网络 | 本机没有本地 IP | DHCP 动态分配 |\n| 访问域名 | 只知道服务器域名 | DNS 解析为 IP |\n| 链路传输 | 只有服务器 IP，没有 MAC | ARP 解析 |\n| 获取内容 | 已有地址与端口 | TCP 建连 + HTTP 请求 |\n\n四个阶段不是并列的选项，而是有先后依赖的决策序列：没有 IP 就无法进行网络层路由选择，没有服务器 IP 就无法确定目的 MAC，地址不齐就无法建立 TCP 连接并发送 HTTP 请求。后续各节将按这个顺序，用抓包结果与报文格式作为证据，检查每一步是否真正完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-context",
+            "tb-environment"
+          ]
+        }
+      },
+      {
+        "id": "tb-dhcp-concept",
+        "moduleId": "decision-address",
+        "depth": "core",
+        "kind": "definition",
+        "title": "DHCP：即插即用的地址分配",
+        "markdown": "DHCP（动态主机配置协议）为主机提供即插即用的联网机制：主机接入网络后自动发出请求报文，获取一个本地 IP 地址以及租用期等参数。\n\n它的工作方式是客户/服务器模式：常见操作系统内置 DHCP 客户端，路由器或无线 AP 内嵌 DHCP 服务器。DHCP 报文在传输层使用 UDP，服务器端口号为 67，客户端口号为 68。\n\nDHCP 服务器以“租用”方式动态分配 IPv4 地址，并管理以 4 字节二进制数表示的租用期，单位为秒。租用而不是永久占用的设计，使有限的地址可以在大量间歇接入的设备之间循环使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000855"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DHCP 与动态 IP 地址分配"
+              ],
+              "lineStart": 8629,
+              "lineEnd": 8630,
+              "assetRefs": [],
+              "excerptSha256": "4ceb002650e0f9148fba5a1a2748d4b6f7aa30f0e094259decc8de2724b00b25"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000856"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DHCP 的基本概念"
+              ],
+              "lineStart": 8631,
+              "lineEnd": 8642,
+              "assetRefs": [],
+              "excerptSha256": "333e5e53506d2778f0b2c26c4a44420a4c4c460dea63248e6bfb00db9c936ef5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-dhcp-exec",
+        "moduleId": "decision-address",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "DHCP 的四步交互",
+        "markdown": "教材把 DHCP 客户机与服务器的交互概括为四步：\n\n1. 客户机构造 DHCPDISCOVER（服务器发现）报文，以广播方式发出，寻找可用的 DHCP 服务器。\n2. 所有收到请求的 DHCP 服务器返回 DHCPOFFER 应答报文。\n3. 客户机在收到的应答中选择服务器，并发出 DHCPREQUEST 请求。\n4. 被选中的服务器返回 DHCPACK 应答，其中包含分配给客户机的 IP 地址与租用期等信息；至此客户机的 MAC 地址与该 IP 地址形成绑定关系。\n\n抓包结果也印证了这四步：先是 0.0.0.0 发出的 DHCPDISCOVER，随后是 DHCPOFFER，再是 DHCPREQUEST，最后是 DHCPACK。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000857"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DHCP 的执行过程"
+              ],
+              "lineStart": 8643,
+              "lineEnd": 8659,
+              "assetRefs": [
+                "parts/part-0004/images/268467dcf8d65f2beb505c538a2a2a3e447a31eac58767ef12c49000fbc4906a.jpg"
+              ],
+              "excerptSha256": "90b4b15316fcbf64d83ff6c5fc1aeb942dce98fddb7db8e4f1fc312949f3c57f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-dhcp-encap",
+        "moduleId": "decision-address",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "DHCP 报文如何逐层封装",
+        "markdown": "DHCP 报文属于应用层报文，要经过传输层、网络层与 MAC 层封装后才能由物理层发送。以 DHCPDISCOVER 为例：\n\n- 构造 DHCP 报文：操作码字段（8 b）区分请求与应答；硬件类型字段（8 b）为 1 表示 IEEE 802.3 以太网；硬件地址长度字段（8 b）为 6 表示 48 位以太网地址。\n- 封装进 UDP：客户机发送时源端口为 68，目的端口为 67。\n- 封装进 IP 分组：协议类型为 17；客户机尚无 IP 地址，源地址写 0.0.0.0；不知道服务器地址，目的地址使用广播地址 255.255.255.255。\n- 封装进以太网帧：目的 MAC 为 FF-FF-FF-FF-FF-FF，源 MAC 为本机 02-01-02-1A-5F-01。\n- 发送以太网帧：通过物理层发出，完成 DHCPDISCOVER 的发送过程。\n\n这段封装过程是案例中“低层为高层提供服务”的第一个直接证据：应用层只负责业务字段，地址与链路问题交给下面各层解决。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000858"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DHCP 报文发送过程"
+              ],
+              "lineStart": 8660,
+              "lineEnd": 8665,
+              "assetRefs": [],
+              "excerptSha256": "8c76f7844ff03de7525168d4ac807889ea2a38e87f2e30dfa03549752ef31be4"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000859"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第一步,构造 DHCP 报文。"
+              ],
+              "lineStart": 8666,
+              "lineEnd": 8696,
+              "assetRefs": [
+                "parts/part-0004/images/6a114657ad1c20edc325ef300bd0a7b3ee7073b2b28493f9772313da7b03d7ea.jpg"
+              ],
+              "excerptSha256": "38e01a653eda58456138a12c0947f1f18c1575e703ed432f79ca8e037d33b969"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-dhcp-tradeoff",
+        "moduleId": "decision-address",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "决策分析：DHCP 的收益、代价与失效点",
+        "markdown": "从案例证据看，DHCP 的决策本质是用“自动协商”换取“零配置接入”。收益是主机无需手工填写地址即可入网，地址可以按租期回收再利用；代价是接入依赖 DHCP 服务器的可用性，且在拿到地址之前只能用广播通信。\n\n由此可以列出两个典型失效模式：\n\n1. 服务器无响应：客户机停留在 DHCPDISCOVER 阶段，后续 DNS、ARP 与 HTTP 都无从开始。\n2. 租期到期未续租：已有地址失效，访问链在第一步被动中断。\n\n这也解释了为什么教材把 DHCP 放在整条访问链的最前面：它是后续所有决策的前置条件，而不是一个可选的优化项。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dhcp-concept",
+            "tb-dhcp-exec",
+            "tb-dhcp-encap"
+          ]
+        }
+      },
+      {
+        "id": "tb-dhcp-result",
+        "moduleId": "decision-address",
+        "depth": "support",
+        "kind": "example",
+        "title": "抓包结果：一次分配得到的参数",
+        "markdown": "教材给出了 DHCPACK 报文的详细内容，可以据此读出这次分配的结果：\n\n- 客户机 MAC 地址：02-01-02-1A-5F-01。\n- 分配到的 IP 地址：202.60.32.10。\n- 租用批准时间：2020-01-20 08:06:05。\n- 租用期：691200 s，即 8 天。\n- 子网掩码：255.255.255.240。\n- 默认网关：202.60.32.10。\n- DNS 服务器：202.60.32.6。\n\n这些参数不是附带信息：IP、掩码和网关决定网络层如何转发，DNS 服务器地址则直接决定下一步域名解析向谁发问。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000860"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DHCP 服务器地址分配"
+              ],
+              "lineStart": 8697,
+              "lineEnd": 8718,
+              "assetRefs": [],
+              "excerptSha256": "186709c7f4ff3dbdb1ac520a849dd7f896ba21c4a9f86adb03e310e51f856560"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-lease-analysis",
+        "moduleId": "decision-address",
+        "depth": "support",
+        "kind": "note",
+        "title": "结果解读：租期参数意味着什么",
+        "markdown": "租用期 $691200$ 秒（即 8 天）是一个可回收的授权，而不是永久所有权。它同时携带三层含义：\n\n- 对网络管理者：地址会在租期结束后重新进入可分配池，适合人员流动大的校园网与公共网络。\n- 对主机：必须在租期结束前续租，否则会失去当前地址，访问链需要重新建立。\n- 对分析者：看到租期字段就能判断该地址的稳定窗口，从而解释“为什么同一台机器过几天 IP 会变”。\n\n掩码 255.255.255.240 与网关 202.60.32.10 一起限定了本机所在子网与出网路径；DNS 地址 202.60.32.6 则把下一步的解析请求指向了具体的服务器。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dhcp-result"
+          ]
+        }
+      },
+      {
+        "id": "tb-dns",
+        "moduleId": "decision-name",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "DNS：把域名解析为 IP",
+        "markdown": "拿到 IP 之后，客户机只知道要访问的域名 www.netlab.cs.nankai.edu.cn，仍不知道服务器 IP，因此还不能通信。DNS 的任务就是完成从域名到 IP 的解析。\n\n解析有反复解析与递归解析两种方法：反复解析主要由客户机逐级查询，递归解析主要由本地域名服务器代为完成。教材给出的递归过程是：本地域名服务器没有记录时，先向 dns.cernet.edu.cn 请求；拿到 dns.nankai.edu.cn 的地址后继续询问；再拿到 dns.cs.nankai.edu.cn 的地址；最后返回 www.netlab.cs.nankai.edu.cn 的 IP 地址 195.6.3.1。\n\n本地域名服务器会把最终结果缓存起来，供后续访问复用。DNS 因此不只是“查表”，而是一个带层级与缓存的分布式解析系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000861"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "DNS 与域名解析"
+              ],
+              "lineStart": 8719,
+              "lineEnd": 8730,
+              "assetRefs": [],
+              "excerptSha256": "3e299da5468006c3f6d6813ddc0bb1c91e314324200ba6b51a20049bee82f400"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-dns-cache",
+        "moduleId": "decision-name",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "对比与反思：递归解析和缓存的两面性",
+        "markdown": "递归解析把复杂度放在本地域名服务器，让客户机只发一次请求即可拿到最终结果；反复解析则把查询步骤交给客户机，服务器负担更轻，但客户端实现更复杂。案例中的过程属于递归解析。\n\n缓存是这个决策的关键收益：命中缓存时，解析不必再走完整层级链，访问延迟显著下降。但缓存也带来失效模式：\n\n- 域名记录变更后，旧缓存可能在一段时间内继续返回旧 IP，导致连接被导向错误或已下线的地址。\n- 本地域名服务器不可用时，即使缓存里没有记录，客户机也无法继续解析。\n\n所以 DNS 的取舍不是“缓存越多越好”，而是在解析速度与结果新鲜度之间维持平衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dns"
+          ]
+        }
+      },
+      {
+        "id": "tb-arp",
+        "moduleId": "decision-link",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "ARP：把 IP 地址解析为 MAC 地址",
+        "markdown": "即使知道了服务器 IP，也还不能直接发送数据。IP 地址用于网络层路由选择，而 IP 分组要通过 MAC 层在相邻节点之间逐跳传输，MAC 帧使用的是 MAC 地址。因此还需要 ARP 把服务器 IP 解析为 MAC 地址。\n\nARP 请求以广播方式发出：硬件类型为 1（以太网）、协议类型为 0x0800（IPv4）、硬件地址长度为 6、协议长度为 4、操作为 1（请求），发送端硬件地址是本机 MAC，接收端硬件地址先填 FF-FF-FF-FF-FF-FF。\n\n响应返回后，客户机把服务器的 IP 与 MAC 写入地址映射表。更关键的是，以太网帧的目的 MAC 并不是服务器的 MAC，而是路径上下一跳路由器接口的 MAC；每经过一跳，源与目的 MAC 都会更换，但 IP 地址保持不变。这就是“端到端由 IP 负责、点到点由 MAC 负责”的分工。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000862"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ARP 与 MAC 地址解析"
+              ],
+              "lineStart": 8731,
+              "lineEnd": 8788,
+              "assetRefs": [
+                "parts/part-0004/images/3b74845dadda0203a7c287e6e1389f4d96e5ecc8f2eb86befd2229fc1f853690.jpg",
+                "parts/part-0004/images/81cb6544e1f80e5ea0faeb9bfff732d5f9cda95076c28294b5ab8af65fc7a61c.jpg"
+              ],
+              "excerptSha256": "8bb75d659349645487b01528d2514693967ac9e0f61442619d75971f2e29ef13"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-arp-failure",
+        "moduleId": "decision-link",
+        "depth": "support",
+        "kind": "warning",
+        "title": "失效模式：ARP 与逐跳转发的边界",
+        "markdown": "从 ARP 的执行过程可以推出三个需要警惕的边界：\n\n1. 广播只在本地链路有效。ARP 请求不能跨越路由器，所以解析的是“下一跳”的 MAC，而不是远端服务器的 MAC。\n2. 映射表会过期或失真。若缓存中的 IP 与 MAC 对应关系与实际不一致，帧会被送到错误的下一跳，表现为“能解析但连不上”。\n3. 只在同一广播域内排障。排查时应先确认本机 ARP 表、网关接口与交换机连接，而不是直接怀疑远端服务器。\n\n这也是案例的反思点：同一个“地址解析”问题，在网络层用 IP、在 MAC 层用 ARP，层次不同，失效范围也不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-arp"
+          ]
+        }
+      },
+      {
+        "id": "tb-http",
+        "moduleId": "decision-transfer",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "建立连接并交换 HTTP 报文",
+        "markdown": "地址信息齐备后，客户机知道服务器的 MAC、IP 与熟知端口 80，也知道自己的 MAC、IP 与 TCP 随机分配的临时端口（例如 65500），于是进入访问阶段。\n\n浏览器发送 HTTP 请求报文，请求行包含请求方法、URL 与 HTTP 版本；服务器返回 HTTP 应答报文，状态行包含 HTTP 版本、状态码与状态短语。\n\n教材抓包显示了一个完整过程：报文 1～3 是建立 TCP 连接的三次握手；报文 4 是 GET HTTP/1.1 请求，报文 5 是对该请求的应答；报文 6～8 传输网页内容；报文 9 是接收确认；报文 10 再请求 test.jpg，报文 11 应答，报文 12～15 传输图片；报文 22～25 是释放连接的四次握手。页面所需的文本与图像全部到齐后，浏览器才显示出主页。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000863"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "浏览器访问 Web 服务器的过程分析"
+              ],
+              "lineStart": 8789,
+              "lineEnd": 8821,
+              "assetRefs": [
+                "parts/part-0004/images/ba2c808d597fc767cf1e5c377de3e383be558ea08640138613bfee4086d0cc68.jpg",
+                "parts/part-0004/images/5ce430b19b97351fe03550179d3f02fcdd4519160b7c14f33ff29f4cdbd7368a.jpg"
+              ],
+              "excerptSha256": "f598179b30b03fcc287a17fe88c07af7777df617205aeb50bf952b4f16e6569d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-http-analysis",
+        "moduleId": "decision-transfer",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "证据解读：一次页面访问的真实成本",
+        "markdown": "把抓包按阶段拆开，可以看到一次页面访问并不是“一个请求、一个应答”：\n\n- 建立连接需要三次握手，释放连接需要四次握手，这两段不传输页面内容，却占用往返时间。\n- 主页文本与内嵌图片要分别请求；每多一个对象，就多一次请求与应答，耗时约为 $1\\,\\mathrm{RTT}$。\n- 服务器的应答与数据确认穿插进行，说明可靠性由 TCP 负责，HTTP 只关心请求与响应的语义。\n\n因此，教材强调的“低层为高层提供服务”不是抽象口号：HTTP 的简洁，依赖于 TCP 替它处理连接、可靠传输与释放；而 TCP 又依赖 IP 与 MAC 完成寻址与逐跳转发。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-http"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "outcome-reflection",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结中的位置",
+        "markdown": "教材在本章小结中把 Web 服务放在互联网应用的整体图景里：互联网应用分为 C/S 与 P2P 两种工作模式；应用层协议按作用可分为基础设施类、网络服务类与网络管理类；Web 服务的核心技术包括 HTTP、HTML 与 URL 定位。\n\n小结同时重申了本案例涉及的支撑协议：DNS 负责域名到 IP 的转换；DHCP 为主机自动分配 IP 地址及其他配置参数；而 Web 访问本身依赖应用层协议与传输层、网络层、MAC 层的协同。\n\n把小结放回案例，可以确认本点的落点不是记背名词，而是理解一次 Web 服务实现中“谁在什么时候补上了哪类信息”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000864"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "小结"
+              ],
+              "lineStart": 8822,
+              "lineEnd": 8843,
+              "assetRefs": [],
+              "excerptSha256": "70c3d2405505c175913f2325f31fc4a11fc124bc7525b24598d326af6f0bd40e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-layering-reflection",
+        "moduleId": "outcome-reflection",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "反思：分层协作与缓存的双刃剑",
+        "markdown": "回看整条访问链，可以提炼出三条可迁移的判断：\n\n1. 每层只解决一类标识问题：DHCP 给 IP，DNS 把域名变 IP，ARP 把 IP 变 MAC，TCP 与 HTTP 用端口和请求定位服务。\n2. 缓存出现在多个层次：DNS 缓存解析结果，ARP 缓存 IP 与 MAC 的映射。它们共同降低重复解析成本，但也共同引入“旧信息”风险。\n3. 失效要按层定位：拿不到地址查 DHCP，域名不解析查 DNS，能解析但连不上查 ARP 与路由，连接建立后出错才查 TCP 与 HTTP。\n\n这三条判断把教材的协议细节转化为可操作的排障顺序，也解释了为什么“网络不通”不能笼统归因于某一个协议。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-dns",
+            "tb-arp"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "transfer-extend",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材习题指向的检查点",
+        "markdown": "教材习题围绕同一套证据设计了检查：填写协议栈中缺失的协议名称；从 DHCP 抓包中读出主机 MAC、租用 IP、子网掩码、默认网关、租用批准时间与租用期；根据 DNS 与 TCP 抓包判断服务器端口与临时端口；根据 HTTP 抓包指出主机 IP、访问域名、DNS 地址、源端口与三次握手报文；计算 HTTP/1.1 非流水线方式下获取主页及 5 个图像的 RTT 数；以及分析以太网帧中用于确定目的 MAC 的协议与 IP 分组转发时需要修改的字段。\n\n这些题目共同指向一个能力：能从报文证据反推协议执行到了哪一步，而不是只背协议名称。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000865"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "习题"
+              ],
+              "lineStart": 8844,
+              "lineEnd": 8906,
+              "assetRefs": [
+                "parts/part-0004/images/c8760463a6facd0da37b7a0afbcc3877187f81593ba0df7864a52a7ce64b90a4.jpg"
+              ],
+              "excerptSha256": "cc92af735e5699274316d702c93c984b741f3f540446ed947fa4fa284b7fe190"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-chapter-next",
+        "moduleId": "transfer-extend",
+        "depth": "support",
+        "kind": "note",
+        "title": "章节边界",
+        "markdown": "教材在第 6 章末尾收束 Web 服务与各类应用层协议的分析，随后进入第 7 章“网络安全”。这说明本点的范围是“应用层协议如何协同完成一次 Web 访问”，不延伸到安全机制；后续的加密、认证与攻击防御属于新的问题域。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000866"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第 7 章"
+              ],
+              "lineStart": 8907,
+              "lineEnd": 8908,
+              "assetRefs": [],
+              "excerptSha256": "503a36360c2cbbe7d2d988860bbdc1c9757228f738bf164322cb97a9285f63e3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-scale-transfer",
+        "moduleId": "transfer-extend",
+        "depth": "advanced",
+        "kind": "application",
+        "title": "模型拓展：从单次访问到规模化服务",
+        "markdown": "教材的证据止于单台客户机访问单台 Web 服务器。把同样的分层视角迁移到大型 Web 服务，可以得到一个分析框架，而不是新的教材结论：\n\n- 服务器集群：用多台服务器分担请求，提升吞吐与冗余，但引入会话一致性、数据同步与故障切换问题。\n- 负载均衡：在集群前分配流量，改善利用率与可用性，但均衡器本身会成为新的关键路径与单点风险。\n- 缓存：把热点内容放在更靠近用户的位置，降低延迟与后端压力，但必须处理过期、击穿与一致性。\n- 内容分发（CDN）：把缓存扩展到地理边缘，缩短传输距离，但调度、回源与计费复杂度上升。\n\n这四类手段与案例中的 DNS 缓存、ARP 缓存同构：都是“用副本或分工换取性能”，代价都是“副本可能过期、分工可能失效”。因此评估方案时应同时看性能收益、可用性风险与运维复杂度，而不是只比较峰值指标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-exercises",
+            "tb-chapter-next"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "architecture-tradeoff-check",
+        "type": "architecture-tradeoff",
+        "title": "规模化 Web 服务方案权衡",
+        "anchorBlockId": "md-scale-transfer",
+        "moduleId": "transfer-extend",
+        "depth": "advanced",
+        "outcomeRefs": [
+          "evaluate-tradeoffs"
+        ],
+        "learningPurpose": "检查学习者能否把单次访问中的缓存与分层判断迁移到集群、负载均衡与内容分发方案。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-exercises",
+            "tb-chapter-next",
+            "md-scale-transfer"
+          ]
+        },
+        "config": {
+          "dimensions": [
+            "性能收益",
+            "可用性风险",
+            "运维复杂度"
+          ],
+          "options": [
+            "服务器集群",
+            "负载均衡",
+            "缓存",
+            "内容分发"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "任选一种规模化手段（集群、负载均衡、缓存或内容分发），按性能收益、可用性风险与运维复杂度三个维度写出取舍，并指出一个可能的失效场景。"
+        }
+      }
+    ]
+  },
+  "subtitle": "应用层",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000851"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "Web 服务实现方法分析"
+      ],
+      "lineStart": 8576,
+      "lineEnd": 8579,
+      "assetRefs": [],
+      "excerptSha256": "99cf582ce4cc4022f44866e9ef849a415d88b60f122570a4e77663cfd772d641"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000852"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "实现 Web 服务的网络环境"
+      ],
+      "lineStart": 8580,
+      "lineEnd": 8583,
+      "assetRefs": [],
+      "excerptSha256": "43adadd6689bf3c7c905d7372ba26815bd5ef28ef807367597f5c29bfd99d4fa"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000853"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "分析的基本方法"
+      ],
+      "lineStart": 8584,
+      "lineEnd": 8605,
+      "assetRefs": [],
+      "excerptSha256": "8a71efd621bee7d1aea13da870978360deb09fb459b9fec4a2f4fcffe1dd5672"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000854"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "测试分析环境"
+      ],
+      "lineStart": 8606,
+      "lineEnd": 8628,
+      "assetRefs": [
+        "parts/part-0004/images/97e3ea6a4a0b53585bd62166ca6922a2aa12d1b609c5de65f642bad5a50bc64d.jpg"
+      ],
+      "excerptSha256": "afeb56df23c9b10d1f902a410fb278884a7eebae62e153a413ea9de16a4b492c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000855"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DHCP 与动态 IP 地址分配"
+      ],
+      "lineStart": 8629,
+      "lineEnd": 8630,
+      "assetRefs": [],
+      "excerptSha256": "4ceb002650e0f9148fba5a1a2748d4b6f7aa30f0e094259decc8de2724b00b25"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000856"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DHCP 的基本概念"
+      ],
+      "lineStart": 8631,
+      "lineEnd": 8642,
+      "assetRefs": [],
+      "excerptSha256": "333e5e53506d2778f0b2c26c4a44420a4c4c460dea63248e6bfb00db9c936ef5"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000857"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DHCP 的执行过程"
+      ],
+      "lineStart": 8643,
+      "lineEnd": 8659,
+      "assetRefs": [
+        "parts/part-0004/images/268467dcf8d65f2beb505c538a2a2a3e447a31eac58767ef12c49000fbc4906a.jpg"
+      ],
+      "excerptSha256": "90b4b15316fcbf64d83ff6c5fc1aeb942dce98fddb7db8e4f1fc312949f3c57f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000858"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DHCP 报文发送过程"
+      ],
+      "lineStart": 8660,
+      "lineEnd": 8665,
+      "assetRefs": [],
+      "excerptSha256": "8c76f7844ff03de7525168d4ac807889ea2a38e87f2e30dfa03549752ef31be4"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000859"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第一步,构造 DHCP 报文。"
+      ],
+      "lineStart": 8666,
+      "lineEnd": 8696,
+      "assetRefs": [
+        "parts/part-0004/images/6a114657ad1c20edc325ef300bd0a7b3ee7073b2b28493f9772313da7b03d7ea.jpg"
+      ],
+      "excerptSha256": "38e01a653eda58456138a12c0947f1f18c1575e703ed432f79ca8e037d33b969"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000860"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DHCP 服务器地址分配"
+      ],
+      "lineStart": 8697,
+      "lineEnd": 8718,
+      "assetRefs": [],
+      "excerptSha256": "186709c7f4ff3dbdb1ac520a849dd7f896ba21c4a9f86adb03e310e51f856560"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000861"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "DNS 与域名解析"
+      ],
+      "lineStart": 8719,
+      "lineEnd": 8730,
+      "assetRefs": [],
+      "excerptSha256": "3e299da5468006c3f6d6813ddc0bb1c91e314324200ba6b51a20049bee82f400"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000862"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ARP 与 MAC 地址解析"
+      ],
+      "lineStart": 8731,
+      "lineEnd": 8788,
+      "assetRefs": [
+        "parts/part-0004/images/3b74845dadda0203a7c287e6e1389f4d96e5ecc8f2eb86befd2229fc1f853690.jpg",
+        "parts/part-0004/images/81cb6544e1f80e5ea0faeb9bfff732d5f9cda95076c28294b5ab8af65fc7a61c.jpg"
+      ],
+      "excerptSha256": "8bb75d659349645487b01528d2514693967ac9e0f61442619d75971f2e29ef13"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000863"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "浏览器访问 Web 服务器的过程分析"
+      ],
+      "lineStart": 8789,
+      "lineEnd": 8821,
+      "assetRefs": [
+        "parts/part-0004/images/ba2c808d597fc767cf1e5c377de3e383be558ea08640138613bfee4086d0cc68.jpg",
+        "parts/part-0004/images/5ce430b19b97351fe03550179d3f02fcdd4519160b7c14f33ff29f4cdbd7368a.jpg"
+      ],
+      "excerptSha256": "f598179b30b03fcc287a17fe88c07af7777df617205aeb50bf952b4f16e6569d"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000864"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "小结"
+      ],
+      "lineStart": 8822,
+      "lineEnd": 8843,
+      "assetRefs": [],
+      "excerptSha256": "70c3d2405505c175913f2325f31fc4a11fc124bc7525b24598d326af6f0bd40e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000865"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "习题"
+      ],
+      "lineStart": 8844,
+      "lineEnd": 8906,
+      "assetRefs": [
+        "parts/part-0004/images/c8760463a6facd0da37b7a0afbcc3877187f81593ba0df7864a52a7ce64b90a4.jpg"
+      ],
+      "excerptSha256": "cc92af735e5699274316d702c93c984b741f3f540446ed947fa4fa284b7fe190"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000866"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第 7 章"
+      ],
+      "lineStart": 8907,
+      "lineEnd": 8908,
+      "assetRefs": [],
+      "excerptSha256": "503a36360c2cbbe7d2d988860bbdc1c9757228f738bf164322cb97a9285f63e3"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1091,
+    1764
+  ],
+  "scale": 0.61
+}

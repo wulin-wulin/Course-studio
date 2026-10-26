@@ -1,0 +1,2056 @@
+{
+  "id": "point-3-2",
+  "title": "数据链路层的基本概念",
+  "shortSummary": "说明链路层如何成帧、寻址、差错控制与流量控制，并解释以太网 MAC 帧与 CSMA/CD 的工作机制。",
+  "keyTerms": [
+    "帧",
+    "成帧",
+    "流量控制",
+    "CSMA/CD",
+    "MAC 帧"
+  ],
+  "animationType": "csmaCollision",
+  "animationSuggestion": "用两个节点在共享总线上发送同一帧：先显示双方侦听与错开启动，再在传播时延内发生冲突、波形叠加被判为违例，随后发出干扰序列并按指数后退等待不同时间片，重发成功；可切换固定随机种子重播，并标出冲突窗口与 64B 最小帧长。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-3-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-derivation-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对链路层功能、以太网帧与 CSMA/CD 的术语和数值，按功能定位、帧结构、争用机制、可靠性边界的顺序重排，并补充类比、推导与检查题。",
+      "estimatedMinutes": 30,
+      "outcomes": [
+        {
+          "id": "explain-link-functions",
+          "text": "解释链路与数据链路的区别，并说明数据链路层六项主要功能的协作关系。"
+        },
+        {
+          "id": "analyze-mac-frame",
+          "text": "识读以太网 MAC 帧各字段，说明地址、类型或长度、数据填充与帧校验的作用。"
+        },
+        {
+          "id": "apply-csma-cd",
+          "text": "用 CSMA/CD 四步流程、冲突窗口与最小帧长解释争用、冲突检测和退避重发。"
+        }
+      ],
+      "misconceptions": [
+        "把链路与数据链路当成同义词，忽略链路层协议软硬件也是数据链路的组成部分。",
+        "认为先听后发就能完全避免冲突，忽略传播时延造成的检测滞后。",
+        "认为最小帧长只是为了凑够长度，而不是为了保证发送方在发送期间能检测到冲突。",
+        "认为 CRC 校验通过就等于端到端可靠交付，忽略链路层只检错丢弃、不负责重传。"
+      ],
+      "modules": [
+        {
+          "id": "module-link-role",
+          "title": "链路层的定位与功能",
+          "role": "concept-map",
+          "description": "从链路与数据链路的区别出发，建立六项功能与上下层关系的整体框架。",
+          "outcomeRefs": [
+            "explain-link-functions"
+          ],
+          "order": 0
+        },
+        {
+          "id": "module-protocol-standards",
+          "title": "协议演进与局域网标准",
+          "role": "context",
+          "description": "了解链路层协议为何由复杂走向简化，以及 IEEE 802 的 LLC/MAC 分层。",
+          "outcomeRefs": [
+            "explain-link-functions"
+          ],
+          "order": 1
+        },
+        {
+          "id": "module-ethernet-evolution",
+          "title": "以太网演进与物理地址",
+          "role": "context",
+          "description": "理解共享介质的规模矛盾、三种扩展方案与 MAC 地址的全球唯一性。",
+          "outcomeRefs": [
+            "explain-link-functions",
+            "analyze-mac-frame"
+          ],
+          "order": 2
+        },
+        {
+          "id": "module-csma-cd",
+          "title": "CSMA/CD 的争用与退避",
+          "role": "mechanism-derivation",
+          "description": "按发送四步、冲突窗口、最小帧长与后退延迟推导共享总线的访问控制。",
+          "outcomeRefs": [
+            "apply-csma-cd"
+          ],
+          "order": 3
+        },
+        {
+          "id": "module-frame-receive",
+          "title": "MAC 帧结构与接收流程",
+          "role": "structure-analysis",
+          "description": "拆解以太网帧字段，并沿接收流程理解长度、地址与 CRC 的检查顺序。",
+          "outcomeRefs": [
+            "analyze-mac-frame"
+          ],
+          "order": 4
+        },
+        {
+          "id": "module-nic-transfer",
+          "title": "网卡实现、检查与迁移",
+          "role": "integration-check",
+          "description": "把发送流程落到网卡结构，完成帧字段与最小帧长的达成检查。",
+          "outcomeRefs": [
+            "explain-link-functions",
+            "analyze-mac-frame",
+            "apply-csma-cd"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-link-functions",
+          "analyze-mac-frame",
+          "apply-csma-cd"
+        ],
+        "method": "完成帧字段识别与最小帧长计算，并用 CSMA/CD 流程说明一次冲突后的重发过程。",
+        "successCriteria": [
+          "能按顺序说明帧字段并给出最小帧长与最大帧长",
+          "能用冲突窗口解释最小帧长的由来",
+          "能说明链路层可靠性的边界与上层承担的工作"
+        ],
+        "summaryBlockId": "model-summary"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-position",
+        "moduleId": "module-link-role",
+        "depth": "core",
+        "kind": "note",
+        "title": "本点在链路层中的位置",
+        "markdown": "数据链路层位于网络层与物理层之间。物理层只把比特送到相邻节点，网络层关心从源主机到目的主机的整条路径，而数据链路层负责把一段一段的链路变成可用的数据通道。\n\n本点先说明链路层要解决什么问题，再以太网为例拆开 MAC 帧，最后用 CSMA/CD 说明多个节点如何共享一条总线。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000261"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路层的基本概念"
+              ],
+              "lineStart": 2958,
+              "lineEnd": 2959,
+              "assetRefs": [],
+              "excerptSha256": "e5aca0827d2912098235033292b4dfe931d90211ab6860c9c335755ca8e2241c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-link-vs-data-link",
+        "moduleId": "module-link-role",
+        "depth": "core",
+        "kind": "definition",
+        "title": "链路与数据链路",
+        "markdown": "**链路（link）**由物理线路与通信设备构成，只负责连接相邻两个节点。例如电话线配合调制解调器完成数字信号与模拟信号之间的转换，电话线与调制解调器一起构成收发双方的物理层，用于传输比特流。\n\n**数据链路（data link）**在图 3-3 的对比中还要再加上实现数据链路层协议的硬件与软件。比特流在普通链路上传输可能出错，数据链路层的设计目的就是发现并纠正这些差错，把“有差错的链路”改造成“无差错的数据链路”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000262"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "链路与数据链路"
+              ],
+              "lineStart": 2960,
+              "lineEnd": 2972,
+              "assetRefs": [
+                "parts/part-0002/images/704278128f4406664a4c7f61569787673a290abd7a9c71b471a58d958e7ec077.jpg"
+              ],
+              "excerptSha256": "125cc1054775ff8831b13f3e5f990e86177960c49c914e279eed35b3607927aa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-link-analogy",
+        "moduleId": "module-link-role",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：传送带与质检",
+        "markdown": "把链路想成两站之间的传送带：它只保证把物品向前送，不保证物品完好。数据链路层相当于在传送带两端加上装框、编号、质检和按对方处理速度放行的流程：装框对应成帧，编号与地址对应寻址，质检对应差错控制，控制放行速度对应流量控制。\n\n因此“无差错的数据链路”不是说整条端到端路径都可靠，而是说这一段链路经过链路层处理后，交付给网络层的数据在这一段上不再带差错。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-link-vs-data-link"
+          ]
+        }
+      },
+      {
+        "id": "tb-six-functions",
+        "moduleId": "module-link-role",
+        "depth": "core",
+        "kind": "table",
+        "title": "数据链路层的六项主要功能",
+        "markdown": "数据链路层传输的数据单元是帧，物理层的比特流被封装在帧中传送。为实现这个目标，链路层需要以下六项功能。\n\n| 功能 | 主要解决的问题 |\n| --- | --- |\n| 数据链路管理 | 发送前确认接收端就绪，通信中维护、结束后释放数据链路。 |\n| 帧同步 | 让接收端能从连续比特流中判断一帧的开始与结束。 |\n| 流量控制 | 发送量超过线路能力或接收端帧接收能力会造成链路拥塞，必须限制发送节奏。 |\n| 差错控制 | 发现并纠正传输差错，把有差错的链路变成无差错的数据链路。 |\n| 透明传输 | 帧数据中出现与控制字符相同的比特序列时不能被误认成控制字符，帧数据必须能承载任意比特序列。 |\n| 寻址 | 点-多点链路中把每一帧送到正确的接收端。 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000263"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路层的主要功能"
+              ],
+              "lineStart": 2973,
+              "lineEnd": 2976,
+              "assetRefs": [],
+              "excerptSha256": "be2c2465ab89a3129bcaa6edd03d8060e7acf7d841b06c886628fa2e2182be54"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000264"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路管理"
+              ],
+              "lineStart": 2977,
+              "lineEnd": 2980,
+              "assetRefs": [],
+              "excerptSha256": "d7bcc6f6a06b15c909ad1a9f7046915060e2ee01453894ef0bc9bfe4e1f84cb7"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000265"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "帧同步"
+              ],
+              "lineStart": 2981,
+              "lineEnd": 2984,
+              "assetRefs": [],
+              "excerptSha256": "333016cf114ccb9c5f03e29cbecbffcbc593813f2e73d51c49a414f33a389a84"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000266"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "流量控制"
+              ],
+              "lineStart": 2985,
+              "lineEnd": 2988,
+              "assetRefs": [],
+              "excerptSha256": "c5fe7671260a3dea1276aca2871795ca18488303a0ae8f1e5d816d0945e26364"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000267"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "差错控制"
+              ],
+              "lineStart": 2989,
+              "lineEnd": 2992,
+              "assetRefs": [],
+              "excerptSha256": "c3193fd67c23634578952a2fccfbf0d4ef750d5a5cd068befd68c985ce24f758"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000268"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "透明传输"
+              ],
+              "lineStart": 2993,
+              "lineEnd": 2996,
+              "assetRefs": [],
+              "excerptSha256": "c2298a4fa618f38a7ea8b2eb7cd09ba029085e1f9c4808a9785ced6dffb3090b"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000269"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "寻址"
+              ],
+              "lineStart": 2997,
+              "lineEnd": 3000,
+              "assetRefs": [],
+              "excerptSha256": "25c67973c38e4cdbf72a4b3e4504769e5e2b6e31cbf113babc24e655a2f7f4dc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-function-map",
+        "moduleId": "module-link-role",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：六项功能如何配合",
+        "markdown": "六项功能不是并列清单，而是一条处理链：\n\n1. 数据链路管理先建立可用连接；\n2. 成帧与帧同步给出数据单元的边界；\n3. 寻址决定这一帧该由谁接收；\n4. 透明传输保证数据字段可以是任意比特序列；\n5. 差错控制校验并在协议允许时处理差错；\n6. 流量控制让发送节奏不超过线路与接收端能力。\n\n少了帧同步就无法定位数据，少了寻址就无法在多点链路中分发，少了流量控制与差错控制则链路会拥塞或把错误数据交给上层。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-six-functions"
+          ]
+        }
+      },
+      {
+        "id": "tb-layer-relations",
+        "moduleId": "module-link-role",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "与网络层、物理层的关系",
+        "markdown": "**对网络层：**网络层用路由选择算法找出由多段链路组成的传输路径。只要数据链路层保证网络层数据经过每一段链路时都不出错，网络层数据经过多段链路也不会出错，所以链路层要为网络层数据传输的正确性提供服务，同时屏蔽物理层所用介质、设备、模拟或数字通信、有线或无线等差异。\n\n**对物理层：**数据链路连接建立在物理线路连接之上。顺序是：先建立物理线路连接，再传比特流，然后用链路层控制帧协商建立数据链路，接着传输数据帧；数据帧传完后，控制帧协商释放数据链路，此时物理线路连接仍然存在，最后才释放物理线路连接。\n\n因此，链路层是在物理层比特流传输能力之上为网络层提供服务的中间层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000270"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路层与网络层、物理层的关系"
+              ],
+              "lineStart": 3001,
+              "lineEnd": 3002,
+              "assetRefs": [],
+              "excerptSha256": "edca62887cb5e2337f21af37e54aa82aca20bb5a17a1d042b6b64a4be47a87e2"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000271"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路层与网络层的关系"
+              ],
+              "lineStart": 3003,
+              "lineEnd": 3015,
+              "assetRefs": [
+                "parts/part-0002/images/c540f7d2c1afa0ca8e696f42d451d6f05e559d08d69edc472d5f1bde37b32710.jpg"
+              ],
+              "excerptSha256": "5a869363d9aca5f496bc5e9d7fe73cb5164e798f097f3c83aae831e1616d46a1"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000272"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路层与物理层的关系"
+              ],
+              "lineStart": 3016,
+              "lineEnd": 3038,
+              "assetRefs": [
+                "parts/part-0002/images/4be5888040b8ed90d9c54e5d0c174e0ce6ec2a936debbfdd8bfa20f4a7f60f00.jpg"
+              ],
+              "excerptSha256": "c351cef954492c50dbbca77fb24aee4067f5b60af63aebf657d8dd38f817197b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layer-boundary",
+        "moduleId": "module-link-role",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：看清服务边界",
+        "markdown": "链路层的“无差错”以一段链路为单位，不是端到端保证。一条路径由多段链路组成，每段链路各自完成成帧、校验与流量控制；网络层仍要负责选路，端到端的差错恢复由更高层承担。\n\n这也解释了为什么链路层要屏蔽物理层差异：网络层只依赖链路层提供的统一帧服务，换介质、换设备、改传输方式都不应影响网络层的接口与功能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-layer-relations"
+          ]
+        }
+      },
+      {
+        "id": "tb-ppp-evolution",
+        "moduleId": "module-protocol-standards",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "点-点链路协议的演进",
+        "markdown": "20 世纪 70 年代物理层技术不成熟，传输速率低、误码率高，因此需要较复杂的数据链路层协议来弥补物理层的缺陷。\n\n点-点链路最早使用面向字符型协议，用某种标准字符编码（如 ASCII、EBCDIC）的一个子集执行链路控制，典型代表是 BSC。它有三个明显缺点：不同计算机的控制字符可能不同、不能实现透明传输、协议效率低。改进方向是面向比特型协议，代表是 HDLC 与 PPP。\n\n1974 年 ISO 在 IBM HDLC 基础上制定 ISO 3309。光纤普及后速率高、误码率低，复杂协议不再必要，HDLC 逐渐被 PPP 取代；1994 年的 RFC 1661、1662、1663 说明了 PPP 的帧结构、差错处理、IP 地址动态分配与身份认证。PPP 由 LCP 以及涉及网络层的 NCP 组成。高速以太网出现后，广域网物理层也能使用以太网标准，用高速以太网取代 PPP 有两个好处：互联网络与远距离光纤链路都用以太网协议，组网方便、效率高；光纤链路采用高速以太网的广域网物理层标准可获得很高的数据传输速率。宽带接入中的 PPPoE 则把 PPP 帧封装进以太网帧，让多个 PPP 用户共享一条高带宽以太网链路。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000273"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据链路层协议的发展与演变"
+              ],
+              "lineStart": 3039,
+              "lineEnd": 3042,
+              "assetRefs": [],
+              "excerptSha256": "9d8510c08300be5c524cd70ceae6e24f89baf5daf504618346ddec80f449c68a"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000274"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "点-点链路数据链路层协议的发展"
+              ],
+              "lineStart": 3043,
+              "lineEnd": 3052,
+              "assetRefs": [],
+              "excerptSha256": "323736e9cf987eabcc452bc17e5c622f17c3c350759725a254f1863ed7820192"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-lan-mac-evolution",
+        "moduleId": "module-protocol-standards",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "局域网协议的演进",
+        "markdown": "局域网中多台主机共享传输介质，多台主机同时争用公共介质就会产生冲突，因此需要分布式介质访问控制（MAC）算法，这是局域网数据链路层的研究重点。\n\n早期局域网以令牌环网为代表，随后出现以以太网为代表的总线型局域网。以太网采用带冲突检测的载波侦听多路访问（CSMA/CD），令牌总线网与令牌环网采用令牌控制算法。20 世纪 80 年代以太网与令牌总线网、令牌环网三足鼎立并各自形成国际标准；90 年代以太网被广泛认可；进入 21 世纪，IEEE 802.3 与以太网成为局域网主流，研究重点转向高速以太网、交换以太网与无线以太网。无线局域网 WiFi 的 MAC 层采用带冲突避免的载波侦听多路访问（CSMA/CA）。因此 IEEE 802.3 的 CSMA/CD 与 IEEE 802.11 的 CSMA/CA 是链路层学习的重点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000275"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "局域网数据链路层协议的发展"
+              ],
+              "lineStart": 3053,
+              "lineEnd": 3060,
+              "assetRefs": [],
+              "excerptSha256": "84f209fd181bb605673a0bf6930446630e60494e9b2dedc98a7d15e7faa3eef9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-protocol-choice",
+        "moduleId": "module-protocol-standards",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：先判断瓶颈再选协议重点",
+        "markdown": "协议复杂度取决于物理层质量：误码率高时，需要面向比特型协议做较重的成帧与差错处理；光纤普及后误码率低，PPP 这类较轻的协议就够用。局域网不同，问题不是误码而是多主机共享介质，所以重点转向 MAC 算法：以太网用 CSMA/CD 争用，令牌网用令牌轮转控制，无线局域网用 CSMA/CA 避免冲突。\n\n遇到一个链路层问题时可以先问：瓶颈是“链路不可靠”还是“介质被多方争用”。前者关注差错控制与成帧，后者关注介质访问控制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ppp-evolution",
+            "tb-lan-mac-evolution"
+          ]
+        }
+      },
+      {
+        "id": "tb-lan-reference-model",
+        "moduleId": "module-protocol-standards",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "局域网参考模型与 IEEE 802 标准",
+        "markdown": "IEEE 802 委员会成立于 1980 年 2 月，只面对 OSI 参考模型的数据链路层与物理层，网络层及以上不属于局域网研究范围。为兼容以太网、令牌总线网、令牌环网等不同技术，802 标准把数据链路层划分为逻辑链路控制（LLC）子层与介质访问控制（MAC）子层：不同局域网的 MAC 子层和物理层协议不同，而 LLC 子层采用相同协议，由它把 MAC 帧封装成统一结构的 LLC 帧。\n\n由于办公环境几乎都使用以太网，LLC 子层已不重要，很多厂商直接把数据封装进 MAC 帧，IP 分组直接进入以太网帧，协议处理更简洁。\n\nIEEE 802 标准可分三类：802.1 定义局域网体系结构、网络互联、网络管理与性能测试；802.2 定义 LLC 子层功能与服务；其余标准定义不同介质访问控制技术。当前应用最多并仍在发展的四个标准是：802.3 以太网、802.11 无线局域网、802.15 近距离无线个域网、802.16 宽带无线城域网。\n\n发展趋势是：以太网成为办公组网首选，共享式以太网向交换式、高速与无线以太网发展；高速以太网保留传统以太网的帧结构与最小帧长，兼容性好，并用光纤、点-点全双工方式扩大覆盖范围；应用从局域网扩展到城域网，并进入高性能计算机集群、存储区域网、云计算中心等机房后端网络。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000276"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "局域网参考模型与协议标准"
+              ],
+              "lineStart": 3061,
+              "lineEnd": 3062,
+              "assetRefs": [],
+              "excerptSha256": "d66f29ff87620c915011da37efba78d4add4e214d23d2df579a83aa237d096f8"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000277"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "局域网参考模型"
+              ],
+              "lineStart": 3063,
+              "lineEnd": 3075,
+              "assetRefs": [
+                "parts/part-0002/images/a7293b32839d59d04d1e19c9c39828530ade359b73c5d7c4a4a1965e8163ed42.jpg"
+              ],
+              "excerptSha256": "ecd5ff9295257a7bcba5292154462cb8545777cb24b8f76d0ed2b50b7fbe4833"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000278"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IEEE 802 协议标准"
+              ],
+              "lineStart": 3076,
+              "lineEnd": 3077,
+              "assetRefs": [],
+              "excerptSha256": "8bedd5e09a2fc4a3648b8fc4388897856c0c48fb4a3e4b28564aabe87bbe831b"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000279"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IEEE 802 协议标准的分类"
+              ],
+              "lineStart": 3078,
+              "lineEnd": 3089,
+              "assetRefs": [],
+              "excerptSha256": "b834f781deedc55fb276be6c0c846275ab397c78405f80a6006bf123f7312258"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000280"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "介质访问控制标准的发展"
+              ],
+              "lineStart": 3090,
+              "lineEnd": 3104,
+              "assetRefs": [
+                "parts/part-0002/images/700c7952715eb036c8c60b3945932a293c7bc37a488ab14953850320b2f6b01d.jpg"
+              ],
+              "excerptSha256": "4371942ecde195cceff0c6ec4eb94ea4dab6bceec5ca9a2b4aa9fe115408a712"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000281"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "局域网技术发展趋势"
+              ],
+              "lineStart": 3105,
+              "lineEnd": 3114,
+              "assetRefs": [],
+              "excerptSha256": "f7f2ba964999e55377cb4c39a85068996d6977d8ca140e243f07be89a8b16501"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-ethernet-origin",
+        "moduleId": "module-ethernet-evolution",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "以太网的由来",
+        "markdown": "以太网的核心技术是共享总线的介质访问控制方法 CSMA/CD，其设计思想来自 ALOHANET。夏威夷大学为连接不同岛屿校区研究了无线分组交换网：中心主机到终端为下行信道，属于广播，不会冲突；终端到中心主机的上行信道由多个终端争用，可能冲突。解决冲突要么集中控制，要么分布控制，ALOHANET 采用分布式控制，属于随机访问控制。\n\nALOHANET 的规则是：发送前监听信道，空闲才发送；发送结束后等待确认，规定时间内没有确认就认为冲突，需要重新监听、空闲后再发。冲突概率与各主机发送的频繁程度有关。\n\n1973 年 5 月 Metcalfe 与 Boggs 提出以太网设计方案，1976 年 7 月发表论文。以太网没有集中控制节点，各节点平等地随机争用发送时间。1978 年出现中继器，1980 年 Xerox、DEC、Intel 公布物理层与数据链路层规范，1981 年公布 Ethernet V2.0，IEEE 802.3 即在此基础上制定，1982 年第一片以太网控制器芯片问世。早期以太网用同轴电缆，造价和故障率较高；1990 年 10Base-T 让非屏蔽双绞线成为 10Mb/s 以太网介质，同年交换机面世；1993 年全双工以太网把带宽增加一倍，10Base-F 又引入光纤，以太网由此在竞争中胜出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000282"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网技术的发展背景"
+              ],
+              "lineStart": 3115,
+              "lineEnd": 3116,
+              "assetRefs": [],
+              "excerptSha256": "36f0f36935ca5fad2d989036c6c486e2ec191b454275f2429e8045816926c247"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000283"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ALOHANET 研究的背景"
+              ],
+              "lineStart": 3117,
+              "lineEnd": 3120,
+              "assetRefs": [],
+              "excerptSha256": "826a8177d11d73997534f0b7ff7e8e0e209d79c87132a53b10d68c1e7ab7d843"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000284"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "ALOHANET 访问控制的工作原理"
+              ],
+              "lineStart": 3121,
+              "lineEnd": 3130,
+              "assetRefs": [],
+              "excerptSha256": "a47b698fc44fdb6ec70cf05f49c3db67759d2f3fd6a315a434e50966e2422e33"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000285"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网技术的产生过程"
+              ],
+              "lineStart": 3131,
+              "lineEnd": 3138,
+              "assetRefs": [],
+              "excerptSha256": "e1847f45a7047d4d839106b39bbb57c1010856ede9dcd368ff28122d5f397b97"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aloha-to-csma",
+        "moduleId": "module-ethernet-evolution",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：从 ALOHANET 到 CSMA/CD 的关键改动",
+        "markdown": "ALOHANET 已经具备“先听再发、失败重试”的骨架，但它主要靠事后确认判断是否失败。以太网在此基础上加入两点：发送前更明确地侦听总线忙闲，发送过程中持续检测冲突，一旦发现立即停止并发出干扰序列。\n\n所以 CSMA/CD 可以看成 ALOHANET 的随机访问思想加上“边发边听”的冲突快速终止机制：冲突不可避免，但可以让冲突尽早结束、尽快重试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ethernet-origin"
+          ]
+        }
+      },
+      {
+        "id": "tb-highspeed-solutions",
+        "moduleId": "module-ethernet-evolution",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "共享介质的规模矛盾与三种解法",
+        "markdown": "图 3-8 中主机都挂在一条共享总线上，一台主机发送时信号向两个方向传播，其他主机也能收到；若其他主机同时发送，信号叠加会使接收方无法正确接收。介质访问控制方法保证各主机公平使用总线。\n\n粗略估算：N 个节点的以太网，每个节点平均带宽约为 $10/N$ Mb/s。N 增大时通信负荷加重、冲突与重发次数大增、介质利用率下降、传输延迟增加、服务质量下降。为克服规模与性能的矛盾，教材给出三种方案：\n\n1. **高速**：把速率从 10Mb/s 提高到 100Mb/s、1Gb/s、10Gb/s、40Gb/s 或 100Gb/s。\n2. **交换**：把共享介质改为交换方式，核心设备是局域网交换机，可在多个端口间同时建立多个并发连接，于是局域网分为共享式与交换式两类。\n3. **互联**：把大型局域网划分成多个用网桥或路由器互联的小局域网，隔离子网间广播通信量，减少每个子网的节点数。\n\n用传播延时带宽积可以认识提速的必要性：延时带宽积 $=$ 传播延时 $\\times$ 带宽。总线长 $D=500\\,\\mathrm{m}$、电磁波速度 $V=2\\times10^{8}\\,\\mathrm{m/s}$ 时传播延时为 $2.5\\,\\mu\\mathrm{s}$；10Mb/s 下可连续发送 $10\\,\\mathrm{Mb/s}\\times2.5\\,\\mu\\mathrm{s}=25\\,\\mathrm{b}$，100Mb/s 时达 250b，1Gb/s 时达 2500b，10Gb/s 时达 25000b。\n\n标准节奏是：1995 年快速以太网 FE，1998 年 1Gb/s 以太网 GE，2002 年 10GE，2010 年 40GE 与 100GE；10Mb/s 以太网称为传统以太网。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000286"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "高速以太网的发展背景"
+              ],
+              "lineStart": 3139,
+              "lineEnd": 3147,
+              "assetRefs": [
+                "parts/part-0002/images/da106a031d3a2aa2dbcab90dcc8c0f2f93d63b443ebb4f45e0d1afdba5d34943.jpg"
+              ],
+              "excerptSha256": "c5ffa96e9f70735b522e1c82f78a45036409be0a06151379af4913559fd79090"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000287"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "高速"
+              ],
+              "lineStart": 3148,
+              "lineEnd": 3158,
+              "assetRefs": [
+                "parts/part-0002/images/d202b7f0eece46c91f889978ed0a5992e5e07312c99f5d0223cd6a41f29fc4f5.jpg"
+              ],
+              "excerptSha256": "96ef57a6345e96afcc209cca2064573bfea2d135bbd4b2624adb0dc0d9c461e0"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000288"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "交换"
+              ],
+              "lineStart": 3159,
+              "lineEnd": 3162,
+              "assetRefs": [],
+              "excerptSha256": "d38069f96c0e9e0df9a72670c1ba4113a28ea3ce69be6ad6ca095f9af0ed3a60"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000289"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "互联"
+              ],
+              "lineStart": 3163,
+              "lineEnd": 3170,
+              "assetRefs": [],
+              "excerptSha256": "241c42aa3d948cd349a5bd12143b5376b14292b36c23b9aeb7c33397f2526c45"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-delay-bandwidth",
+        "moduleId": "module-ethernet-evolution",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "补充：延时带宽积说明了什么",
+        "markdown": "延时带宽积 $=$ 传播延时 $\\times$ 带宽，表示“在第一个比特到达对端之前，发送方已经往链路上放了多少比特”，刻画链路中同时在途的数据量。\n\n以教材数据计算：$D=500\\,\\mathrm{m}$、$V=2\\times10^{8}\\,\\mathrm{m/s}$ 时 $\\tau=D/V=2.5\\,\\mu\\mathrm{s}$。速率提高十倍，在途比特数也提高十倍：10Mb/s 为 25b，100Mb/s 为 250b，1Gb/s 为 2500b。\n\n这说明仅提高速率并不会自动改善共享介质的争用问题：速率越高，一次冲突波及的比特越多，冲突窗口与最小帧长的约束也越重要。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-highspeed-solutions"
+          ]
+        }
+      },
+      {
+        "id": "tb-mac-address",
+        "moduleId": "module-ethernet-evolution",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "以太网物理地址",
+        "markdown": "48 位地址称为 EUI-48，可分配的以太网物理地址有 $2^{47}$ 个，足以保证全球唯一。IEEE 注册管理委员会为每个网卡生产商分配前三字节，即公司标识，又称机构唯一标识符（OUI）；后三字节由厂商自行分配，因此一个前三字节可支持 $2^{24}=16\\,777\\,216$ 块网卡。\n\n表示方法是在两个十六进制数之间用连字符隔开。若某公司获得 020100，其一块网卡的后三字节为 2A-10-C3，则物理地址写作 02-01-00-2A-10-C3，也可写作 0201002A10C3。\n\n物理地址在网卡生产时写入只读存储器。网卡装到任何计算机、计算机搬到任何局域网，这个地址都不变，也不会与全球其他网卡的物理地址相同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000290"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "对以太网物理地址的管理方法"
+              ],
+              "lineStart": 3171,
+              "lineEnd": 3174,
+              "assetRefs": [],
+              "excerptSha256": "775af15de6715d902937561bb5fecde148b67da26850fd502102d7b9ea4e5408"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000291"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网物理地址的表示方法"
+              ],
+              "lineStart": 3175,
+              "lineEnd": 3178,
+              "assetRefs": [],
+              "excerptSha256": "6f03f4cea705b3b8982ed2ade6798f1673afacce147b742ecbb65d22ce112ecf"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000292"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网物理地址的唯一性"
+              ],
+              "lineStart": 3179,
+              "lineEnd": 3182,
+              "assetRefs": [],
+              "excerptSha256": "00ba4c55679688189098ecd5cd550b1dc2e534dc9b03bd2f8f461200fd812681"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-send-flow",
+        "moduleId": "module-csma-cd",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "CSMA/CD 的发送四步",
+        "markdown": "教材用黑屋子会议作比喻：发言前先倾听，确认会场安静才发言；安静时每人都有平等机会讲话；两人以上同时说话就听不清，称为冲突；发言过程中及时发现冲突称为冲突检测；发现冲突就停止、随机延迟后再试，失败次数太多则可能放弃。\n\n据此，CSMA/CD 的发送流程可概括为四步：**先听后发，边听边发，冲突停止，延迟重发**。\n\n载波侦听的实现依据是曼彻斯特解码器的接收时钟：总线上有其他节点发送时接收时钟一直有输出，没有数据信号时输出为 0，因此接收时钟输出能反映总线的忙/闲状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000293"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网数据发送流程分析"
+              ],
+              "lineStart": 3183,
+              "lineEnd": 3188,
+              "assetRefs": [],
+              "excerptSha256": "4efff5f9608bb9f07a75e7c173b5717569103c67895879ad094ac191221aac68"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000294"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "载波侦听过程"
+              ],
+              "lineStart": 3189,
+              "lineEnd": 3198,
+              "assetRefs": [
+                "parts/part-0002/images/cba70e56f045755e0d432225fe6996ffab94270b08d66ab319c3d2520d14831c.jpg",
+                "parts/part-0002/images/cb00830241ec1df6cac2cf30a10bf054d3f9f33587fe90ccc56848c1c31e0166.jpg"
+              ],
+              "excerptSha256": "05b2979731213c0ec314ca5c68440c90c08c468542c844fd1f1ee8e578ca5176"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-collision-detection",
+        "moduleId": "module-csma-cd",
+        "depth": "core",
+        "kind": "formula",
+        "title": "冲突检测、冲突窗口与最小帧长",
+        "markdown": "载波侦听不能完全消除冲突。电磁波在同轴电缆中的速度约为光速的 2/3，即约 $2\\times10^{8}\\,\\mathrm{m/s}$。相距 1000m 的两个节点，发送一帧约需 5μs 传播延时；在这段时间里对方并不知道已有发送，可能也开始发送，于是冲突。\n\n最坏情况是信号快到对方时对方才开始发送，冲突传回发送方需要 $2\\tau$，其中 $\\tau=D/V$。整个缆段上的节点都应在 $2D/V$ 内检测到冲突，因此 $2D/V$ 称为冲突窗口，一个缆段就是一个冲突域。超过冲突窗口仍未检测到冲突，就认为已取得总线访问权。\n\n要保证发送一帧期间一定能检测到冲突，发送最短帧的时间必须不小于冲突窗口。设最短帧长为 $L_{\\min}$、发送速率为 $S$，则\n\n$$L_{\\min}/S \\geqslant 2D/V$$\n\n等价地，总线长度受限于\n\n$$D \\leqslant V L_{\\min}/(2S)$$\n\n以太网协议规定冲突窗口为 $51.2\\,\\mu\\mathrm{s}$，10Mb/s 下相当于 512b 即 64B，所以 64B 是最小帧长；发送一个最小帧或一个帧的前 64B 未发现冲突，就说明已获得总线发送权，冲突窗口也称为争用期。\n\n冲突的物理表现是两路信号叠加后的波形不等于任一路信号；检测方法有比较法（边发边比较发送与接收波形）和编码违例判决法（检查接收波形是否符合曼彻斯特编码规律）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000295"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "冲突检测方法"
+              ],
+              "lineStart": 3199,
+              "lineEnd": 3234,
+              "assetRefs": [
+                "parts/part-0002/images/2873656d3a452dde9ffcded441f67618f6426abacaa7cbf0e890576717b1a26a.jpg",
+                "parts/part-0002/images/7180492bec3cd86e3015974430179bb3d0a0d230921b94a2e33cbfb0460df63e.jpg"
+              ],
+              "excerptSha256": "a99e3ac40bbf141b349a11db54bc4752f952287876c4905130de3fbaadf0b426"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-collision-window",
+        "moduleId": "module-csma-cd",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：冲突窗口与最小帧长的推导",
+        "markdown": "设总线最大长度 $D$、电磁波速度 $V$、发送速率 $S$、最短帧长 $L_{\\min}$。最坏情况下，发送方要等冲突信号从最远端返回，所需时间为两倍单程传播延时：\n\n$$2\\tau = 2D/V$$\n\n要在这段时间内仍处于发送状态、从而听见冲突，就必须满足\n\n$$L_{\\min}/S \\geqslant 2D/V$$\n\n整理得最小帧长与最大总线长度的关系：\n\n$$L_{\\min} \\geqslant 2DS/V,\\qquad D \\leqslant V L_{\\min}/(2S)$$\n\n代入 10Mb/s 以太网：冲突窗口 $51.2\\,\\mu\\mathrm{s}$，$10\\,\\mathrm{Mb/s}\\times51.2\\,\\mu\\mathrm{s}=512\\,\\mathrm{b}=64\\,\\mathrm{B}$，这正是最小帧长 64B 的由来。若帧比 64B 更短，发送方可能在冲突返回前就已发完，无法判断这次发送是否成功。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-collision-detection"
+          ]
+        }
+      },
+      {
+        "id": "tb-jamming-backoff",
+        "moduleId": "module-csma-cd",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "冲突停止与退避重发",
+        "markdown": "检测到冲突后，发送节点先发送长度规定为 32b 的冲突加强干扰序列（jamming sequence），目的是让冲突持续足够长，使以太网中所有节点都能发现冲突并立即丢弃冲突帧，减少浪费、提高信道利用率。\n\n一个帧最多重发 16 次，超过 16 次就认为线路故障，进入“冲突过多”结束状态；不超过 16 次则随机延迟后重发。典型算法是截止二进制指数后退延迟：\n\n$$\\tau = 2^{k} R a$$\n\n其中 $\\tau$ 为后退延迟时间，$a$ 为冲突窗口，$R$ 为随机数，节点以自己的地址为初始值产生 $R$；$k=\\min(n,10)$，$n$ 为冲突次数。第 $n$ 次重发的延迟分布在 0 到 $2^{\\min(n,10)}-1$ 个时间片内，最大可能延迟为 1023 个时间片。延迟到达后节点重新判断总线忙/闲并重复发送流程。\n\n因此任何节点都要通过 CSMA/CD 争取总线使用权，从准备到开始发送的等待时间不确定，CSMA/CD 属于随机争用型介质访问控制方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000296"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "发现冲突时停止发送"
+              ],
+              "lineStart": 3235,
+              "lineEnd": 3238,
+              "assetRefs": [],
+              "excerptSha256": "46d61326bc81bfa9ad719b5257557dbafd96df1d0604aa5fc9386b8899bd5754"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000297"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "随机延迟重发"
+              ],
+              "lineStart": 3239,
+              "lineEnd": 3257,
+              "assetRefs": [
+                "parts/part-0002/images/76887ed33942b9b3e6ebd533718b0917d855fb10bc425c1b20cf52428d854638.jpg"
+              ],
+              "excerptSha256": "68e3632be6634e04f1646846e1dc81814e2b246824f23950840ad3d0bef9aa01"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-backoff-worked",
+        "moduleId": "module-csma-cd",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：退避延迟的估算",
+        "markdown": "按 $\\tau=2^{k}Ra$，$a$ 为冲突窗口，$R$ 为随机数，$k=\\min(n,10)$。教材给出的规律是：第 $n$ 次重发的延迟落在 0 到 $2^{\\min(n,10)}-1$ 个时间片内。\n\n- 第 1 次冲突：$k=1$，延迟上限为 2 个时间片；\n- 第 2 次冲突：$k=2$，延迟上限为 4 个时间片；\n- $n\\geqslant10$ 后 $k$ 固定为 10，最大可能延迟为 1023 个时间片。\n\n冲突次数越多，等待范围越大，多个节点再次同时发送的概率随之下降，这就是指数后退的作用；把指数截止在 10 是为了避免延迟无限增长。重发 16 次仍失败就放弃该帧。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-jamming-backoff"
+          ]
+        }
+      },
+      {
+        "id": "tb-frame-structure-diff",
+        "moduleId": "module-frame-receive",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "DIX 帧与 IEEE 802.3 帧的差异",
+        "markdown": "Ethernet V2.0 帧结构也称 DIX 帧结构，与 IEEE 802.3 帧有两处主要差异。\n\n**前导码：**DIX 帧前 8B 都是 10101010，接收电路靠曼彻斯特编码的自含时钟实现比特同步；IEEE 802.3 帧用 7B 前导码（7 个 10101010）加 1B 帧前定界符 10101011。接收端的锁相电路从开始接收到进入同步需要 10～20μs，7B 前导码保证目的地址字段到来前已进入稳定接收状态；合并看，62 位之后出现 11，11 之后才是目的地址。\n\n**类型字段与长度字段：**DIX 帧用 2B 类型字段表示网络层协议，例如 0x0800 表示 IPv4、0x8106 表示 ARP、0x86DD 表示 IPv6。IEEE 802.3 帧对应位置是长度字段：帧头 18B（6B 目的地址、6B 源地址、2B 长度字段、4B 帧校验），最小帧 64B 故数据最少 46B，数据最多 1500B，长度字段因此合理。DIX 帧没有长度字段，接收方只能靠帧间间隔判断一帧是否结束。\n\nIEEE 802.3 后来采用折中方案，把 2B 字段改为长度/协议字段：最大帧长小于 1518B，长度值一定小于 0x0600，而协议值最小为 0x0800，接收方 MAC 层可据此判断含义，从而消除两标准的差异。目前 DIX 帧结构应用广泛。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000298"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网数据接收流程分析"
+              ],
+              "lineStart": 3258,
+              "lineEnd": 3259,
+              "assetRefs": [],
+              "excerptSha256": "312f03f65c2af1cc9638b8cd9cdf36551e143dc62175406f9cdb1b0181e584fe"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000299"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网帧结构"
+              ],
+              "lineStart": 3260,
+              "lineEnd": 3267,
+              "assetRefs": [],
+              "excerptSha256": "c0c008098834824e901d6fd7879ab28842f06f4f3b556612879965d3b2e9ca4d"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000300"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "前导码部分"
+              ],
+              "lineStart": 3268,
+              "lineEnd": 3275,
+              "assetRefs": [],
+              "excerptSha256": "23c1a5452422ac799c9637acbad1899cfa3f425ad0889b8cb81f717325e8589d"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000301"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "类型字段与长度字段"
+              ],
+              "lineStart": 3276,
+              "lineEnd": 3287,
+              "assetRefs": [],
+              "excerptSha256": "8ba348846269c3ecfdb8a803516a4befabf7d6bee47804bb9e3deaef82bcc9d4"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000302"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网帧结构分析"
+              ],
+              "lineStart": 3288,
+              "lineEnd": 3291,
+              "assetRefs": [],
+              "excerptSha256": "cf2413cea9489e0b2ecd90fe77f39560838c16cbd20ec6d93a0eb5c3a14ce3b0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-frame-fields",
+        "moduleId": "module-frame-receive",
+        "depth": "core",
+        "kind": "table",
+        "title": "以太网帧的六个字段",
+        "markdown": "以太网帧由前导码、目的地址、源地址、类型、数据和帧校验六个部分组成。\n\n| 字段 | 长度 | 作用 |\n| --- | --- | --- |\n| 前导码 | 8B（8 个 10101010） | 实现收发双方的比特同步与帧同步，接收后不保留，也不计入帧头长度。 |\n| 目的地址 | 6B | 接收节点的硬件地址，可为单播、多播或广播地址。 |\n| 源地址 | 6B | 发送节点的 48 位 MAC 地址。 |\n| 类型 | 2B | 表示网络层使用的协议类型。 |\n| 数据 | 46～1500B | 网络层交下来的数据；不足 46B 时组帧前填充到最小长度。 |\n| 帧校验 | 4B | 32 位 CRC，校验范围包括目的地址、源地址、类型与数据等字段。 |\n\n帧头 18B 加数据上限 1500B 得最大帧长 1518B，最小帧长为 64B。DIX 帧没有长度字段，接收方不知道填充了多少字节；若高层是 IP，可借 IP 首部的总长度字段确定并删除填充字节。\n\n帧校验采用 CRC-32，生成多项式为\n\n$$G(X)=X^{32}+X^{26}+X^{23}+X^{22}+X^{16}+X^{12}+X^{11}+X^{10}+X^{8}+X^{7}+X^{5}+X^{4}+X^{2}+X+1$$",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000303"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "前导码字段"
+              ],
+              "lineStart": 3292,
+              "lineEnd": 3295,
+              "assetRefs": [],
+              "excerptSha256": "d0e1e7b6958df184ccfb678a50c8841db2a39aa8ab61001cbcc6c7c2b1ad292a"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "目的地址与源地址字段"
+              ],
+              "lineStart": 3296,
+              "lineEnd": 3299,
+              "assetRefs": [],
+              "excerptSha256": "382c3fcc2ff8e5c92068918ebb9fe3b48b9bbb4ea8e34cb9a106fe3c68c8fd0c"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000305"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "类型字段"
+              ],
+              "lineStart": 3300,
+              "lineEnd": 3303,
+              "assetRefs": [],
+              "excerptSha256": "c57a9a1060aad1528b105afc7181ccbff178680904ecb0c4ea490c9ce832391e"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000306"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "数据字段"
+              ],
+              "lineStart": 3304,
+              "lineEnd": 3309,
+              "assetRefs": [],
+              "excerptSha256": "2fda62be34c6e831ee4511754ce9be37934485b4859683fc00cd779d7b06da5b"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000307"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "帧校验字段"
+              ],
+              "lineStart": 3310,
+              "lineEnd": 3317,
+              "assetRefs": [],
+              "excerptSha256": "4b09c8d0f6d396fe98e7e866da7b3e2c500caa0ddd95a5c1c65dc57f568ffab0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-frame-field-table",
+        "moduleId": "module-frame-receive",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：用一张表核对帧的边界",
+        "markdown": "把帧字段与长度放在一起，可以快速检查一道题是否自洽：\n\n| 项目 | 数值 | 说明 |\n| --- | --- | --- |\n| 前导码 | 8B | 不计入帧头，接收后丢弃 |\n| 帧头 | 18B | 目的地址 6B + 源地址 6B + 类型或长度 2B + 帧校验 4B |\n| 数据 | 46～1500B | 不足 46B 需填充 |\n| 最小帧 | 64B | 18B 帧头 + 46B 数据 |\n| 最大帧 | 1518B | 18B 帧头 + 1500B 数据 |\n\n若题目给出“数据 40B”，则必须填充到 46B 再计算帧长，最小帧仍为 64B；若给出“数据 1500B”，则帧长为 1518B。注意前导码不参与这些计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-structure-diff",
+            "tb-frame-fields"
+          ]
+        }
+      },
+      {
+        "id": "tb-receive-flow",
+        "moduleId": "module-frame-receive",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "以太网接收流程",
+        "markdown": "所有节点不发送数据时就应处于接收状态。接收一帧后先判断帧长度：小于规定的最小帧长，说明发生了冲突，应丢弃该帧并回到等待接收状态。\n\n长度正常则检查目的地址：单播地址等于本节点地址、组地址且本节点属于该组、或广播地址，都接收；否则丢弃。\n\n地址匹配后再做 CRC 校验。CRC 正确且长度正确，就把数据部分交给网络层并报告“成功接收”。接收出错分三种：CRC 正确但帧长度不对，报告“帧长度错”；CRC 出错但帧长度是 8 比特的整数倍，说明没有比特丢失，报告“帧校验错”；帧长度不是 8 比特的整数倍，报告“帧比特错”。\n\n为保证网卡能连续处理接收帧，IEEE 802.3 规定帧间最小间隔为 $9.6\\,\\mu\\mathrm{s}$，相当于发送 96b 的时间，接收节点利用这段时间处理已收帧、准备接收下一帧或转入发送状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000308"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网接收流程的分析"
+              ],
+              "lineStart": 3318,
+              "lineEnd": 3342,
+              "assetRefs": [
+                "parts/part-0002/images/7f27a17843087d0e83b84bc0c944c9d279584ebd7b86f79146c5ade65d42b9c6.jpg"
+              ],
+              "excerptSha256": "2cb5bcf2bfdbafd8dfac140c80f53f651badae931d347b4f73457fa614ba4a98"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reliability-boundary",
+        "moduleId": "module-frame-receive",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "补充：链路层可靠性到底保证到什么程度",
+        "markdown": "CRC 只能发现差错，不能恢复丢失的帧。接收方发现帧校验错、长度错或比特错时，处理方式是丢弃并报告，链路层本身不负责重传；丢失或出错的数据要靠更高层机制补回。\n\n因此“链路层提供无差错的数据链路”应理解为：在一段链路上，交付给网络层的帧通过了长度、地址与 CRC 检查；它不承诺端到端不丢包，也不承诺上层一定收到数据。\n\n这也解释了接收流程为何先查长度再查地址最后查 CRC：长度异常往往说明发生了冲突，地址不符说明帧不属于本节点，只有两者都通过后，CRC 结果才有意义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-receive-flow",
+            "tb-frame-fields"
+          ]
+        }
+      },
+      {
+        "id": "tb-nic",
+        "moduleId": "module-nic-transfer",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "网卡结构与发送步骤",
+        "markdown": "网卡又称网络接口卡或网络接口适配器，由三部分组成：网卡与传输介质的接口、以太网数据链路控制器（EDLC）、网卡与主机的接口。收发器完成与介质的电信号连接，负责发送接收与冲突检测；常用方式是通过 RJ-45 接口用非屏蔽双绞线连到交换机或集线器。网卡插在 I/O 扩展槽中，作为外设受 CPU 控制，实现编码解码、CRC 产生与校验、帧装配与拆封以及 CSMA/CD。\n\n发送一帧的步骤是：主机把数据经 I/O 总线写入发送缓冲区并发出请求；缓冲区就绪后通知发送控制器；发送控制器检查曼彻斯特解码器的接收时钟，判断介质忙闲；空闲时启动发送移位寄存器、CRC 生成器与曼彻斯特编码器，把数据封装成帧经收发器发出；发送过程中持续做冲突检测，一个冲突窗口内无冲突即发送成功；检测到冲突则通知冲突计数器，由延迟生成器与随机数发生器执行后退延迟算法，延迟到时重发；重发达到 16 次仍未成功就丢弃该帧，并向网络层报告“冲突过多，发送失败”。\n\n这些功能由专用芯片实现；接收数据通过 I/O 总线以 DMA 方式送入内存，网卡 CPU 独立于主机 CPU 控制收发，驱动程序编程方式与异步通信适配器、打印机等外设类似。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "从计算机组成原理的角度认识以太网工作原理"
+              ],
+              "lineStart": 3343,
+              "lineEnd": 3344,
+              "assetRefs": [],
+              "excerptSha256": "051589de3e15495178b024815ae6b0a590e447fcddac8dd4f51fb07a37e459d9"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000310"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网网卡的基本结构"
+              ],
+              "lineStart": 3345,
+              "lineEnd": 3354,
+              "assetRefs": [],
+              "excerptSha256": "580aa3c5bd0bda445f99cdef794edcc66abc5218fda106451813d17d9b83dc43"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000311"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "以太网网卡的工作原理"
+              ],
+              "lineStart": 3355,
+              "lineEnd": 3406,
+              "assetRefs": [
+                "parts/part-0002/images/2be86664d2b8db861b9e858b5d592578fea893780b397a2b75aed4bbf67b0c75.jpg",
+                "parts/part-0002/images/aa9099ac00087aec59b16193b520f1d0cf625aefc1a7625f75c923efe39bbc27.jpg",
+                "parts/part-0002/images/5243803112227ab22d1f7b2586f814ccf974b564a63d159903dbd875dc46ed51.jpg",
+                "parts/part-0002/images/2bbf5a3d3ad6b3d0fb3e8b05630602105249ffc561ab44346603213df6dd23e9.jpg"
+              ],
+              "excerptSha256": "1bc860dab7e9aafdec9d1111bd17e8d7d56c86e8def090c4f0c6f8dd8a5b2fcc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "module-nic-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "本点的主线是：链路层把物理层的比特流组织成帧，用成帧与帧同步确定边界，用寻址选出接收者，用透明传输保证数据任意，用差错控制与流量控制把一段链路变成可用通道；以太网用 6 个字段的 MAC 帧承载数据，用 CSMA/CD 的“先听后发、边听边发、冲突停止、延迟重发”共享总线，并用冲突窗口与最小帧长保证冲突可被检测。\n\n链路层的可靠性以单段链路为界，CRC 检错后丢弃，不承担端到端重传。\n\n下一步将进入交换式局域网与虚拟局域网：交换机如何在端口之间建立并发连接、如何隔离冲突域，VLAN 又如何隔离广播域。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-nic",
+            "tb-receive-flow"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "min-frame-check",
+        "type": "calculation-check",
+        "anchorBlockId": "model-collision-window",
+        "moduleId": "module-csma-cd",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-csma-cd"
+        ],
+        "learningPurpose": "检查学习者能否把冲突窗口换算为可发送比特数与最小帧长。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-collision-detection"
+          ]
+        },
+        "config": {
+          "prompt": "已知 10 Mb/s 以太网的冲突窗口为 51.2 μs，求冲突窗口内可发送的比特数与最小帧长（字节）。",
+          "expectedBits": 512,
+          "expectedBytes": 64,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "计算：$10\\,\\mathrm{Mb/s}\\times51.2\\,\\mu\\mathrm{s}=512\\,\\mathrm{b}=64\\,\\mathrm{B}$，所以最小帧长为 64 B。"
+        }
+      }
+    ]
+  },
+  "subtitle": "数据链路层",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000261"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路层的基本概念"
+      ],
+      "lineStart": 2958,
+      "lineEnd": 2959,
+      "assetRefs": [],
+      "excerptSha256": "e5aca0827d2912098235033292b4dfe931d90211ab6860c9c335755ca8e2241c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000262"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "链路与数据链路"
+      ],
+      "lineStart": 2960,
+      "lineEnd": 2972,
+      "assetRefs": [
+        "parts/part-0002/images/704278128f4406664a4c7f61569787673a290abd7a9c71b471a58d958e7ec077.jpg"
+      ],
+      "excerptSha256": "125cc1054775ff8831b13f3e5f990e86177960c49c914e279eed35b3607927aa"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000263"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路层的主要功能"
+      ],
+      "lineStart": 2973,
+      "lineEnd": 2976,
+      "assetRefs": [],
+      "excerptSha256": "be2c2465ab89a3129bcaa6edd03d8060e7acf7d841b06c886628fa2e2182be54"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000264"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路管理"
+      ],
+      "lineStart": 2977,
+      "lineEnd": 2980,
+      "assetRefs": [],
+      "excerptSha256": "d7bcc6f6a06b15c909ad1a9f7046915060e2ee01453894ef0bc9bfe4e1f84cb7"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000265"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "帧同步"
+      ],
+      "lineStart": 2981,
+      "lineEnd": 2984,
+      "assetRefs": [],
+      "excerptSha256": "333016cf114ccb9c5f03e29cbecbffcbc593813f2e73d51c49a414f33a389a84"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000266"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "流量控制"
+      ],
+      "lineStart": 2985,
+      "lineEnd": 2988,
+      "assetRefs": [],
+      "excerptSha256": "c5fe7671260a3dea1276aca2871795ca18488303a0ae8f1e5d816d0945e26364"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000267"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "差错控制"
+      ],
+      "lineStart": 2989,
+      "lineEnd": 2992,
+      "assetRefs": [],
+      "excerptSha256": "c3193fd67c23634578952a2fccfbf0d4ef750d5a5cd068befd68c985ce24f758"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000268"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "透明传输"
+      ],
+      "lineStart": 2993,
+      "lineEnd": 2996,
+      "assetRefs": [],
+      "excerptSha256": "c2298a4fa618f38a7ea8b2eb7cd09ba029085e1f9c4808a9785ced6dffb3090b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000269"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "寻址"
+      ],
+      "lineStart": 2997,
+      "lineEnd": 3000,
+      "assetRefs": [],
+      "excerptSha256": "25c67973c38e4cdbf72a4b3e4504769e5e2b6e31cbf113babc24e655a2f7f4dc"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000270"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路层与网络层、物理层的关系"
+      ],
+      "lineStart": 3001,
+      "lineEnd": 3002,
+      "assetRefs": [],
+      "excerptSha256": "edca62887cb5e2337f21af37e54aa82aca20bb5a17a1d042b6b64a4be47a87e2"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000271"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路层与网络层的关系"
+      ],
+      "lineStart": 3003,
+      "lineEnd": 3015,
+      "assetRefs": [
+        "parts/part-0002/images/c540f7d2c1afa0ca8e696f42d451d6f05e559d08d69edc472d5f1bde37b32710.jpg"
+      ],
+      "excerptSha256": "5a869363d9aca5f496bc5e9d7fe73cb5164e798f097f3c83aae831e1616d46a1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000272"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路层与物理层的关系"
+      ],
+      "lineStart": 3016,
+      "lineEnd": 3038,
+      "assetRefs": [
+        "parts/part-0002/images/4be5888040b8ed90d9c54e5d0c174e0ce6ec2a936debbfdd8bfa20f4a7f60f00.jpg"
+      ],
+      "excerptSha256": "c351cef954492c50dbbca77fb24aee4067f5b60af63aebf657d8dd38f817197b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000273"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据链路层协议的发展与演变"
+      ],
+      "lineStart": 3039,
+      "lineEnd": 3042,
+      "assetRefs": [],
+      "excerptSha256": "9d8510c08300be5c524cd70ceae6e24f89baf5daf504618346ddec80f449c68a"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000274"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "点-点链路数据链路层协议的发展"
+      ],
+      "lineStart": 3043,
+      "lineEnd": 3052,
+      "assetRefs": [],
+      "excerptSha256": "323736e9cf987eabcc452bc17e5c622f17c3c350759725a254f1863ed7820192"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000275"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "局域网数据链路层协议的发展"
+      ],
+      "lineStart": 3053,
+      "lineEnd": 3060,
+      "assetRefs": [],
+      "excerptSha256": "84f209fd181bb605673a0bf6930446630e60494e9b2dedc98a7d15e7faa3eef9"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000276"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "局域网参考模型与协议标准"
+      ],
+      "lineStart": 3061,
+      "lineEnd": 3062,
+      "assetRefs": [],
+      "excerptSha256": "d66f29ff87620c915011da37efba78d4add4e214d23d2df579a83aa237d096f8"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000277"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "局域网参考模型"
+      ],
+      "lineStart": 3063,
+      "lineEnd": 3075,
+      "assetRefs": [
+        "parts/part-0002/images/a7293b32839d59d04d1e19c9c39828530ade359b73c5d7c4a4a1965e8163ed42.jpg"
+      ],
+      "excerptSha256": "ecd5ff9295257a7bcba5292154462cb8545777cb24b8f76d0ed2b50b7fbe4833"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000278"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IEEE 802 协议标准"
+      ],
+      "lineStart": 3076,
+      "lineEnd": 3077,
+      "assetRefs": [],
+      "excerptSha256": "8bedd5e09a2fc4a3648b8fc4388897856c0c48fb4a3e4b28564aabe87bbe831b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000279"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IEEE 802 协议标准的分类"
+      ],
+      "lineStart": 3078,
+      "lineEnd": 3089,
+      "assetRefs": [],
+      "excerptSha256": "b834f781deedc55fb276be6c0c846275ab397c78405f80a6006bf123f7312258"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000280"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "介质访问控制标准的发展"
+      ],
+      "lineStart": 3090,
+      "lineEnd": 3104,
+      "assetRefs": [
+        "parts/part-0002/images/700c7952715eb036c8c60b3945932a293c7bc37a488ab14953850320b2f6b01d.jpg"
+      ],
+      "excerptSha256": "4371942ecde195cceff0c6ec4eb94ea4dab6bceec5ca9a2b4aa9fe115408a712"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000281"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "局域网技术发展趋势"
+      ],
+      "lineStart": 3105,
+      "lineEnd": 3114,
+      "assetRefs": [],
+      "excerptSha256": "f7f2ba964999e55377cb4c39a85068996d6977d8ca140e243f07be89a8b16501"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000282"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网技术的发展背景"
+      ],
+      "lineStart": 3115,
+      "lineEnd": 3116,
+      "assetRefs": [],
+      "excerptSha256": "36f0f36935ca5fad2d989036c6c486e2ec191b454275f2429e8045816926c247"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000283"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ALOHANET 研究的背景"
+      ],
+      "lineStart": 3117,
+      "lineEnd": 3120,
+      "assetRefs": [],
+      "excerptSha256": "826a8177d11d73997534f0b7ff7e8e0e209d79c87132a53b10d68c1e7ab7d843"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000284"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "ALOHANET 访问控制的工作原理"
+      ],
+      "lineStart": 3121,
+      "lineEnd": 3130,
+      "assetRefs": [],
+      "excerptSha256": "a47b698fc44fdb6ec70cf05f49c3db67759d2f3fd6a315a434e50966e2422e33"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000285"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网技术的产生过程"
+      ],
+      "lineStart": 3131,
+      "lineEnd": 3138,
+      "assetRefs": [],
+      "excerptSha256": "e1847f45a7047d4d839106b39bbb57c1010856ede9dcd368ff28122d5f397b97"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000286"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "高速以太网的发展背景"
+      ],
+      "lineStart": 3139,
+      "lineEnd": 3147,
+      "assetRefs": [
+        "parts/part-0002/images/da106a031d3a2aa2dbcab90dcc8c0f2f93d63b443ebb4f45e0d1afdba5d34943.jpg"
+      ],
+      "excerptSha256": "c5ffa96e9f70735b522e1c82f78a45036409be0a06151379af4913559fd79090"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000287"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "高速"
+      ],
+      "lineStart": 3148,
+      "lineEnd": 3158,
+      "assetRefs": [
+        "parts/part-0002/images/d202b7f0eece46c91f889978ed0a5992e5e07312c99f5d0223cd6a41f29fc4f5.jpg"
+      ],
+      "excerptSha256": "96ef57a6345e96afcc209cca2064573bfea2d135bbd4b2624adb0dc0d9c461e0"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000288"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "交换"
+      ],
+      "lineStart": 3159,
+      "lineEnd": 3162,
+      "assetRefs": [],
+      "excerptSha256": "d38069f96c0e9e0df9a72670c1ba4113a28ea3ce69be6ad6ca095f9af0ed3a60"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000289"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "互联"
+      ],
+      "lineStart": 3163,
+      "lineEnd": 3170,
+      "assetRefs": [],
+      "excerptSha256": "241c42aa3d948cd349a5bd12143b5376b14292b36c23b9aeb7c33397f2526c45"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000290"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "对以太网物理地址的管理方法"
+      ],
+      "lineStart": 3171,
+      "lineEnd": 3174,
+      "assetRefs": [],
+      "excerptSha256": "775af15de6715d902937561bb5fecde148b67da26850fd502102d7b9ea4e5408"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000291"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网物理地址的表示方法"
+      ],
+      "lineStart": 3175,
+      "lineEnd": 3178,
+      "assetRefs": [],
+      "excerptSha256": "6f03f4cea705b3b8982ed2ade6798f1673afacce147b742ecbb65d22ce112ecf"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000292"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网物理地址的唯一性"
+      ],
+      "lineStart": 3179,
+      "lineEnd": 3182,
+      "assetRefs": [],
+      "excerptSha256": "00ba4c55679688189098ecd5cd550b1dc2e534dc9b03bd2f8f461200fd812681"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000293"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网数据发送流程分析"
+      ],
+      "lineStart": 3183,
+      "lineEnd": 3188,
+      "assetRefs": [],
+      "excerptSha256": "4efff5f9608bb9f07a75e7c173b5717569103c67895879ad094ac191221aac68"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000294"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "载波侦听过程"
+      ],
+      "lineStart": 3189,
+      "lineEnd": 3198,
+      "assetRefs": [
+        "parts/part-0002/images/cba70e56f045755e0d432225fe6996ffab94270b08d66ab319c3d2520d14831c.jpg",
+        "parts/part-0002/images/cb00830241ec1df6cac2cf30a10bf054d3f9f33587fe90ccc56848c1c31e0166.jpg"
+      ],
+      "excerptSha256": "05b2979731213c0ec314ca5c68440c90c08c468542c844fd1f1ee8e578ca5176"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000295"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "冲突检测方法"
+      ],
+      "lineStart": 3199,
+      "lineEnd": 3234,
+      "assetRefs": [
+        "parts/part-0002/images/2873656d3a452dde9ffcded441f67618f6426abacaa7cbf0e890576717b1a26a.jpg",
+        "parts/part-0002/images/7180492bec3cd86e3015974430179bb3d0a0d230921b94a2e33cbfb0460df63e.jpg"
+      ],
+      "excerptSha256": "a99e3ac40bbf141b349a11db54bc4752f952287876c4905130de3fbaadf0b426"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000296"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "发现冲突时停止发送"
+      ],
+      "lineStart": 3235,
+      "lineEnd": 3238,
+      "assetRefs": [],
+      "excerptSha256": "46d61326bc81bfa9ad719b5257557dbafd96df1d0604aa5fc9386b8899bd5754"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000297"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "随机延迟重发"
+      ],
+      "lineStart": 3239,
+      "lineEnd": 3257,
+      "assetRefs": [
+        "parts/part-0002/images/76887ed33942b9b3e6ebd533718b0917d855fb10bc425c1b20cf52428d854638.jpg"
+      ],
+      "excerptSha256": "68e3632be6634e04f1646846e1dc81814e2b246824f23950840ad3d0bef9aa01"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000298"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网数据接收流程分析"
+      ],
+      "lineStart": 3258,
+      "lineEnd": 3259,
+      "assetRefs": [],
+      "excerptSha256": "312f03f65c2af1cc9638b8cd9cdf36551e143dc62175406f9cdb1b0181e584fe"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000299"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网帧结构"
+      ],
+      "lineStart": 3260,
+      "lineEnd": 3267,
+      "assetRefs": [],
+      "excerptSha256": "c0c008098834824e901d6fd7879ab28842f06f4f3b556612879965d3b2e9ca4d"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000300"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "前导码部分"
+      ],
+      "lineStart": 3268,
+      "lineEnd": 3275,
+      "assetRefs": [],
+      "excerptSha256": "23c1a5452422ac799c9637acbad1899cfa3f425ad0889b8cb81f717325e8589d"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000301"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "类型字段与长度字段"
+      ],
+      "lineStart": 3276,
+      "lineEnd": 3287,
+      "assetRefs": [],
+      "excerptSha256": "8ba348846269c3ecfdb8a803516a4befabf7d6bee47804bb9e3deaef82bcc9d4"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000302"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网帧结构分析"
+      ],
+      "lineStart": 3288,
+      "lineEnd": 3291,
+      "assetRefs": [],
+      "excerptSha256": "cf2413cea9489e0b2ecd90fe77f39560838c16cbd20ec6d93a0eb5c3a14ce3b0"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000303"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "前导码字段"
+      ],
+      "lineStart": 3292,
+      "lineEnd": 3295,
+      "assetRefs": [],
+      "excerptSha256": "d0e1e7b6958df184ccfb678a50c8841db2a39aa8ab61001cbcc6c7c2b1ad292a"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000304"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "目的地址与源地址字段"
+      ],
+      "lineStart": 3296,
+      "lineEnd": 3299,
+      "assetRefs": [],
+      "excerptSha256": "382c3fcc2ff8e5c92068918ebb9fe3b48b9bbb4ea8e34cb9a106fe3c68c8fd0c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000305"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "类型字段"
+      ],
+      "lineStart": 3300,
+      "lineEnd": 3303,
+      "assetRefs": [],
+      "excerptSha256": "c57a9a1060aad1528b105afc7181ccbff178680904ecb0c4ea490c9ce832391e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000306"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "数据字段"
+      ],
+      "lineStart": 3304,
+      "lineEnd": 3309,
+      "assetRefs": [],
+      "excerptSha256": "2fda62be34c6e831ee4511754ce9be37934485b4859683fc00cd779d7b06da5b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000307"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "帧校验字段"
+      ],
+      "lineStart": 3310,
+      "lineEnd": 3317,
+      "assetRefs": [],
+      "excerptSha256": "4b09c8d0f6d396fe98e7e866da7b3e2c500caa0ddd95a5c1c65dc57f568ffab0"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000308"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网接收流程的分析"
+      ],
+      "lineStart": 3318,
+      "lineEnd": 3342,
+      "assetRefs": [
+        "parts/part-0002/images/7f27a17843087d0e83b84bc0c944c9d279584ebd7b86f79146c5ade65d42b9c6.jpg"
+      ],
+      "excerptSha256": "2cb5bcf2bfdbafd8dfac140c80f53f651badae931d347b4f73457fa614ba4a98"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000309"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "从计算机组成原理的角度认识以太网工作原理"
+      ],
+      "lineStart": 3343,
+      "lineEnd": 3344,
+      "assetRefs": [],
+      "excerptSha256": "051589de3e15495178b024815ae6b0a590e447fcddac8dd4f51fb07a37e459d9"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000310"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网网卡的基本结构"
+      ],
+      "lineStart": 3345,
+      "lineEnd": 3354,
+      "assetRefs": [],
+      "excerptSha256": "580aa3c5bd0bda445f99cdef794edcc66abc5218fda106451813d17d9b83dc43"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000311"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "以太网网卡的工作原理"
+      ],
+      "lineStart": 3355,
+      "lineEnd": 3406,
+      "assetRefs": [
+        "parts/part-0002/images/2be86664d2b8db861b9e858b5d592578fea893780b397a2b75aed4bbf67b0c75.jpg",
+        "parts/part-0002/images/aa9099ac00087aec59b16193b520f1d0cf625aefc1a7625f75c923efe39bbc27.jpg",
+        "parts/part-0002/images/5243803112227ab22d1f7b2586f814ccf974b564a63d159903dbd875dc46ed51.jpg",
+        "parts/part-0002/images/2bbf5a3d3ad6b3d0fb3e8b05630602105249ffc561ab44346603213df6dd23e9.jpg"
+      ],
+      "excerptSha256": "1bc860dab7e9aafdec9d1111bd17e8d7d56c86e8def090c4f0c6f8dd8a5b2fcc"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2716,
+    2238
+  ],
+  "scale": 1.26
+}

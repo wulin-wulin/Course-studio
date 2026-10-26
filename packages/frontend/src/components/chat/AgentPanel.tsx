@@ -49,6 +49,7 @@ import {
 } from "@/features/reviews/types";
 import {
   getBrowserReviewResumeOutbox,
+  isReviewResumeConversationGoneStatus,
   queueReviewResume,
   reconcileReviewResume,
   REVIEW_RESUME_AVAILABLE_EVENT,
@@ -349,6 +350,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                     reviewResumeRetryTimerRef.current = null;
                     reconcileReviewResumeRef.current();
                   }, delay);
+                } else {
+                  // Do not let a permanently failing resume re-enter the
+                  // outbox on every websocket reconnect. Keep the generation
+                  // visible as paused so the user can decide what to do next.
+                  getBrowserReviewResumeOutbox().removeConversation(
+                    activeResume.conversationId,
+                  );
+                  inFlightReviewResumeRef.current = null;
+                  useCourseGenerationStore.getState().pauseLive(
+                    activeResume.conversationId,
+                    "课程恢复连续失败，已暂停自动重试；请检查当前会话后手动继续或重新创建。",
+                  );
+                  setIsRunning(false);
+                  setRunStatus(null);
                 }
               }
             } else if (
@@ -904,6 +919,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         `/api/conversations/${encodeURIComponent(request.conversationId)}`,
         { cache: "no-store", signal: controller.signal },
       );
+      if (isReviewResumeConversationGoneStatus(response.status)) {
+        // A deleted/expired conversation is a terminal state for this
+        // browser resume item. Retrying it only recreates the stuck loop.
+        getBrowserReviewResumeOutbox().removeConversation(request.conversationId);
+        useCourseGenerationStore.getState().removeLive(request.conversationId);
+        inFlightReviewResumeRef.current = null;
+        reviewResumeFailureCountsRef.current.delete(request.reviewId);
+        if (lastActiveConversationIdRef.current === request.conversationId) {
+          const nextId = createConversation();
+          lastActiveConversationIdRef.current = nextId;
+          resetConversationView();
+        }
+        return;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const decision = reconcileReviewResume(request.reviewId, await response.json());
       if (controller.signal.aborted) return;
@@ -945,7 +974,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         reviewResumeReconcileAbortRef.current = null;
       }
     }
-  }, []);
+  }, [createConversation, resetConversationView]);
 
   useEffect(() => {
     deliverReviewResumeRef.current = deliverReviewResume;

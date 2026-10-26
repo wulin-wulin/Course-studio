@@ -1,0 +1,2029 @@
+{
+  "id": "point-4-4",
+  "title": "路由选择算法与分组交付",
+  "shortSummary": "对比距离向量与链路状态路由算法的工作原理与收敛特性，并说明自治系统内外的路由选择与分组交付过程。",
+  "keyTerms": [
+    "距离向量",
+    "链路状态",
+    "RIP",
+    "OSPF",
+    "BGP"
+  ],
+  "animationType": "distanceVectorConvergence",
+  "animationSuggestion": "逐步高亮 R2 通告的表项，比较 R1 当前距离，显示每轮更新后的距离与下一跳，并在故障场景演示距离逐轮递增到 16。",
+  "difficulty": "进阶",
+  "importance": 0.92,
+  "prerequisites": [
+    "point-4-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的定义、参数、协议定位与算法结论，围绕“如何比较并选择路由机制”重组讲解，补充逐跳交付例子、Bellman-Ford 形式化、路由表更新算例与协议选型对比。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-delivery",
+          "text": "解释直接交付、间接交付与逐跳转发中 IP 地址和 MAC 地址的变化。"
+        },
+        {
+          "id": "compare-algorithms",
+          "text": "对比距离向量与链路状态算法在信息交换、度量与收敛上的差异，并解释计数到无穷。"
+        },
+        {
+          "id": "apply-protocols",
+          "text": "说明 IGP/EGP 与 RIP、OSPF、BGP 的定位，并据此判断给定场景应选哪类协议。"
+        }
+      ],
+      "misconceptions": [
+        "认为路由表保存到达目的主机的完整路径；实际上路由表只记录目的网络或前缀、下一跳与转发端口。",
+        "把 RIP 的慢收敛归因于计时器设置；根因是距离向量只传播距离，故障信息可能沿环路反复放大，形成计数到无穷。",
+        "认为 OSPF 与 BGP 都可以作为域内协议；BGP 是自治系统之间的路径向量协议，不负责计算域内最短路径。"
+      ],
+      "modules": [
+        {
+          "id": "delivery-foundations",
+          "title": "分组交付与逐跳转发",
+          "role": "introduction",
+          "description": "建立直接交付、间接交付、源路由器与目的路由器的基本概念。",
+          "outcomeRefs": [
+            "explain-delivery"
+          ],
+          "order": 0
+        },
+        {
+          "id": "routing-basics",
+          "title": "路由选择依据、路由表与汇聚",
+          "role": "concept-and-worked-example",
+          "description": "理解理想算法要求、参数、静态/动态分类，以及路由表生成与最长前缀匹配。",
+          "outcomeRefs": [
+            "explain-delivery",
+            "compare-algorithms"
+          ],
+          "order": 1
+        },
+        {
+          "id": "as-igp-egp",
+          "title": "自治系统与 IGP/EGP 分层",
+          "role": "framework",
+          "description": "理解互联网分层路由的动因与内部、外部网关协议的边界。",
+          "outcomeRefs": [
+            "apply-protocols"
+          ],
+          "order": 2
+        },
+        {
+          "id": "distance-vector-rip",
+          "title": "距离向量与 RIP",
+          "role": "comparison",
+          "description": "掌握距离向量的距离通告、路由表更新规则、计时器与慢收敛对策。",
+          "outcomeRefs": [
+            "compare-algorithms",
+            "apply-protocols"
+          ],
+          "order": 3
+        },
+        {
+          "id": "link-state-ospf",
+          "title": "链路状态与 OSPF",
+          "role": "comparison",
+          "description": "掌握洪泛、链路状态数据库、区域结构与 Dijkstra 最短路径计算。",
+          "outcomeRefs": [
+            "compare-algorithms",
+            "apply-protocols"
+          ],
+          "order": 4
+        },
+        {
+          "id": "interdomain-bgp",
+          "title": "BGP 与域间路由",
+          "role": "comparison",
+          "description": "理解路径向量、BGP 发言人、四类分组与变化驱动的更新方式。",
+          "outcomeRefs": [
+            "apply-protocols"
+          ],
+          "order": 5
+        },
+        {
+          "id": "router-forwarding",
+          "title": "路由器转发与结构演进",
+          "role": "application",
+          "description": "把路由表落到转发表与线速转发，并理解路由器结构演进与第三层交换。",
+          "outcomeRefs": [
+            "explain-delivery"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-delivery",
+          "compare-algorithms",
+          "apply-protocols"
+        ],
+        "method": "完成一次路由表更新算例与一个协议选型判断，并说明所用规则。",
+        "successCriteria": [
+          "能区分直接交付与间接交付，并说明逐跳过程中 IP 地址不变、MAC 地址改变。",
+          "能按距离向量规则完成一次 RIP 路由表更新，并指出可能出现的慢收敛。",
+          "能说明 RIP、OSPF、BGP 的作用范围与适用场景。"
+        ]
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-delivery-basics",
+        "moduleId": "delivery-foundations",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：分组交付与默认路由器",
+        "markdown": "分组交付（forwarding）指互联网中主机与路由器转发 IP 分组的过程。主机通常先接入局域网，再经一台路由器接入互联网，这台路由器就是该主机的默认路由器，又称第一跳路由器。发送主机的默认路由器称为源路由器，与目的主机相连的路由器称为目的路由器，早期文献也把默认路由器称为默认网关。\n\n交付分为两类：若源主机与目的主机在同一网络，或由目的路由器向目的主机传送，采用直接交付；若两者不在同一网络，则采用间接交付。判断依据是分组的目的地址与源地址是否属于同一网络。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000474"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由选择算法与分组交付"
+              ],
+              "lineStart": 5146,
+              "lineEnd": 5147,
+              "assetRefs": [],
+              "excerptSha256": "750dee189463849a6a8bfd924aebdd643c239d37b02a4c61a0d3d3fc7aea975b"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000475"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "分组交付和路由选择的基本概念"
+              ],
+              "lineStart": 5148,
+              "lineEnd": 5149,
+              "assetRefs": [],
+              "excerptSha256": "2f91c162167054cee16ef4baaf1cc65b88752a697c872226a9206de0e29382c0"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000476"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "分组交付的基本概念"
+              ],
+              "lineStart": 5150,
+              "lineEnd": 5151,
+              "assetRefs": [],
+              "excerptSha256": "4b09210b5b650322caa54dd04cf7d38a78dcc4c2e1a92527723a2cb286690c46"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000477"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "默认路由器的概念"
+              ],
+              "lineStart": 5152,
+              "lineEnd": 5160,
+              "assetRefs": [
+                "parts/part-0002/images/c752cb47935f898535740e5010c4722f72cfcded2b2bdc8850d1dc2f2596e41e.jpg"
+              ],
+              "excerptSha256": "891d9aa3e123537c02332950f1cc7de1d1d0a8096ee078ead837aaef2dbcc247"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-routing-criteria",
+        "moduleId": "routing-basics",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：路由选择的依据、参数与分类",
+        "markdown": "分组交付的路径由路由选择算法决定，路由选择算法是生成路由表的依据。理想算法应当正确、稳定、公平，尽量简单，能适应网络拓扑与通信量的变化，并在给定条件下相对“最佳”。这里的“最佳”指以较低开销转发分组，衡量开销可考虑链路长度、传输速率、容量、延时、安全性与费用，因此不存在绝对最佳。\n\n常用参数包括跳数、带宽、负载、可靠性、开销；采用不同参数会得到不同路由。按对网络状态变化的适应能力，算法分为静态与动态：静态算法又称非自适应算法，简单、开销小，但需管理员手工维护，适合小型或结构稳定的网络；动态算法又称自适应算法，能自动跟随拓扑变化更新，但实现复杂、开销较大，适合大型互联网。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "评价路由选择的依据"
+              ],
+              "lineStart": 5161,
+              "lineEnd": 5172,
+              "assetRefs": [],
+              "excerptSha256": "5c4824fed56048e6b9656ed7367857b221bfe9e3a9e5c59edca9576dfabad3d7"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000479"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由选择算法的主要参数"
+              ],
+              "lineStart": 5173,
+              "lineEnd": 5188,
+              "assetRefs": [],
+              "excerptSha256": "887e9880dd8e360e0bed9e10596fa0040fc7720fde8c9ea5c4a1531b7b909724"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000480"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由选择算法的分类"
+              ],
+              "lineStart": 5189,
+              "lineEnd": 5192,
+              "assetRefs": [],
+              "excerptSha256": "3c76fcaec36e6153e221f2b5b1875b9ac2a0ffb9e120be3598a2945cb0919e25"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000481"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "静态路由表"
+              ],
+              "lineStart": 5193,
+              "lineEnd": 5198,
+              "assetRefs": [],
+              "excerptSha256": "55c03c0835834cd72d8cf61cdd244e454e2f771eaa9355c43d25fa3cb82ac8fd"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000482"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "动态路由表"
+              ],
+              "lineStart": 5199,
+              "lineEnd": 5204,
+              "assetRefs": [],
+              "excerptSha256": "f0fe729b9af4d8921814257913433ded46c550e9e62ecffb28f01e515d7423e7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-route-table-example",
+        "moduleId": "routing-basics",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：路由表的生成与使用",
+        "markdown": "互联网中每台路由器都保存路由表，转发采用表驱动方式。路由表一般只记录目的网络、子网掩码、下一跳路由器地址与转发端口，而不是完整路径。\n\n以小型校园网为例，路由器 2 逐步得到五项表项：目的 202.1.1.0/24 与 202.1.2.0/24 都经 S1 转发、下一跳为 202.1.5.1；直连的 202.1.3.0/24 与 202.1.4.0/24 分别经 E0、E1 直接交付，没有下一跳；其余目的地使用默认路由 0.0.0.0/0，经 E1、下一跳 202.1.4.1。特殊地址 0.0.0.0/0 表示默认路由，路由表中没有明确匹配时就把分组交给默认路由器。\n\n逐跳转发时，分组头中的源 IP 地址与目的 IP 地址保持不变，但封装该分组的以太网帧的源 MAC 地址与目的 MAC 地址会逐段改变。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000483"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由表的生成与使用"
+              ],
+              "lineStart": 5205,
+              "lineEnd": 5208,
+              "assetRefs": [],
+              "excerptSha256": "e447acb6254ef6d3a5bde527c32ef8a19f8439797d6f46629cb1145de8688127"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000484"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "网络结构与 IP 地址"
+              ],
+              "lineStart": 5209,
+              "lineEnd": 5215,
+              "assetRefs": [
+                "parts/part-0002/images/f923eb2fa64d1c583e0ba16deaedbbf14e42874b5c391c8943769e1067f9f285.jpg"
+              ],
+              "excerptSha256": "04989919720b4df3d5eb1e4a55c3a0b6415f5eee388d8ba5432da60ce08a6b85"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由表的生成原理"
+              ],
+              "lineStart": 5216,
+              "lineEnd": 5233,
+              "assetRefs": [],
+              "excerptSha256": "ff813534181606cd31665879c40f46e23b7187c9a8a0964f2155a6b17f382030"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hop-addresses",
+        "moduleId": "routing-basics",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：逐跳交付中地址如何变化",
+        "markdown": "逐跳转发时，路由器只改写链路层封装，网络层地址保持不变。以主机 A 向主机 G 发送为例：A→路由器 1 的帧，源 MAC 是 A 的网卡、目的 MAC 是路由器 1 的 E1 网卡；路由器 1→路由器 2 的帧，改为路由器 1 的 S0 网卡与路由器 2 的 S1 网卡。源、目的 IP 始终是 202.1.1.2 与 202.1.4.3。\n\n因此每台路由器只需知道“下一跳是谁”，路由表记录目的前缀、掩码、下一跳与端口即可，不必保存整条路径；分组每经过一跳就重新封装一次，MAC 地址只在当前链路内有效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-delivery-basics",
+            "textbook-route-table-example"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cidr-aggregation",
+        "moduleId": "routing-basics",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：最长前缀匹配与路由汇聚",
+        "markdown": "路由表项越少，查表时间越短，转发延迟也越低，因此路由汇聚是减少表项的重要手段。使用 CIDR 后，路由选择变成从匹配结果中选择最长网络前缀的过程，即最长前缀匹配；网络前缀越长，地址块包含的主机越少，定位越精确。\n\n以路由器 $R_{G}$ 的路由表为例，156.26.0.0/24～156.26.3.0/24 四项的第三字节前 5 位相同，最长相同前缀为 21 位，可合并为 156.26.0.0/21；156.26.56.0/24～156.26.59.0/24 前 6 位相同，合并为 156.26.56.0/22。汇聚后路由条目由 12 项减少到 6 项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000486"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "IP 路由汇聚"
+              ],
+              "lineStart": 5234,
+              "lineEnd": 5235,
+              "assetRefs": [],
+              "excerptSha256": "bd8b063bd01a8d89dff36ca47bb0d14bc2960a73e65d88012bcb1caabaa74844"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000487"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "最长前缀匹配原则"
+              ],
+              "lineStart": 5236,
+              "lineEnd": 5241,
+              "assetRefs": [],
+              "excerptSha256": "8feffe2ed97b116f4cee342daf585bdc91bb3a82e46d96c12967dbf04030ab9c"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000488"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由汇聚过程"
+              ],
+              "lineStart": 5242,
+              "lineEnd": 5276,
+              "assetRefs": [
+                "parts/part-0002/images/d3936a59baeb068014a8baee96f54e0526ea80346c610e9797a4acdaf6516e79.jpg"
+              ],
+              "excerptSha256": "32d59cc5d7c570f56b0b49f3973515643823c208989b2cd2ac72b99efcfcebe7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-as-igp-egp",
+        "moduleId": "as-igp-egp",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：分层路由、自治系统与 IGP/EGP",
+        "markdown": "互联网规模过大，不可能为整个互联网设计一个全局路由选择算法，必须采用分层、分而治之的思路。同时要区分两个概念：路由选择算法的目标是生成路由表、为分组找出下一跳；路由选择协议的目标是动态更新路由表中的路由信息。\n\n互联网被划分为许多自治系统（AS）。AS 的核心是路由选择的自治：同一行政单位可以自主决定内部采用的协议，内部路由器之间使用动态协议及时交换信息。AS 内部的路由选择称为域内路由选择，AS 之间称为域间路由选择；对应地，路由协议分为内部网关协议（IGP）与外部网关协议（EGP）。IGP 如 RIP、OSPF；EGP 目前主要是 BGP-4。边界路由器不同端口可分别运行 IGP 与 EGP。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000489"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "互联网路由选择的思路"
+              ],
+              "lineStart": 5277,
+              "lineEnd": 5284,
+              "assetRefs": [],
+              "excerptSha256": "2b86c932181444c8a0025e96cec4d1e44eab20e77cec19d5a462db6dc396fd5f"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000490"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "自治系统的基本概念"
+              ],
+              "lineStart": 5285,
+              "lineEnd": 5294,
+              "assetRefs": [],
+              "excerptSha256": "ea8f6738dbca078b0ca9ae559b87e46d55516edf2419d0ba7171b59ebc9d1969"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000491"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "互联网路由选择协议的分类"
+              ],
+              "lineStart": 5295,
+              "lineEnd": 5296,
+              "assetRefs": [],
+              "excerptSha256": "e061f3019ef443aefc9d163ff63769b311688566eb8aebf71df044eefc05fe31"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000492"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "内部网关协议"
+              ],
+              "lineStart": 5297,
+              "lineEnd": 5300,
+              "assetRefs": [],
+              "excerptSha256": "f9f9276f1cd47b3ebf83b0d3c424051e760d6b0772bfa156fa4934cc7f32e45d"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000493"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "外部网关协议"
+              ],
+              "lineStart": 5301,
+              "lineEnd": 5313,
+              "assetRefs": [
+                "parts/part-0003/images/1eca80a71ecc67a85a3c8411059c87bb9fcbaae99d0228f343f0b12cffa2f947.jpg"
+              ],
+              "excerptSha256": "f94f7406ed15fc2845de12d70b73387924efae6fc3f793827575d4d50a1693c1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-distance-vector",
+        "moduleId": "distance-vector-rip",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：距离向量算法与路由表更新规则",
+        "markdown": "RIP 是基于距离向量（V-D）算法的内部网关协议。距离向量算法又称 Bellman-Ford 算法；路由是一个向量，既有方向（指向目的网络的下一跳），又有数值（度量值）。\n\n算法要求路由器周期性地向相邻路由器通告“自己能到达哪些网络以及距离（跳数）”，更新报文由若干 $(V,D)$ 组成。直连网络或主机距离为 0，每经过一个路由器距离加 1；邻居收到后按最短路径原则更新。R1 收到 R2 的报文后按四条规则处理：现有距离小于等于 R2 距离加 1 时不修改；表中没有该项则新增为 R2 距离加 1、下一跳为 R2；现有距离大于 R2 距离加 1 时改为 R2 距离加 1、下一跳为 R2；R2 报文中没有的项则保留。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000494"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由信息协议"
+              ],
+              "lineStart": 5314,
+              "lineEnd": 5317,
+              "assetRefs": [],
+              "excerptSha256": "0561f152dc0659faef863ec58ec7344cd84b0c463703d6df8933247e29c258c3"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000495"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "距离向量路由选择算法"
+              ],
+              "lineStart": 5318,
+              "lineEnd": 5329,
+              "assetRefs": [],
+              "excerptSha256": "b23956882f5308a2d25808642463000ded885d249f50b289117156a193abf428"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000496"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "距离向量路由协议的工作原理"
+              ],
+              "lineStart": 5330,
+              "lineEnd": 5331,
+              "assetRefs": [],
+              "excerptSha256": "4e884e326d118732d45675f9560a28c632bcb2c77a94a19dd73c3ec6f39c7747"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000497"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由表信息的更新方法"
+              ],
+              "lineStart": 5332,
+              "lineEnd": 5378,
+              "assetRefs": [
+                "parts/part-0003/images/f3f710de481aa412ff0a5cbbfd2bb9c5eaab8eccea69c26e8b988070d33f4d64.jpg"
+              ],
+              "excerptSha256": "0efd4c7eb659fa759f48aaaaae6db95ef4c64c4f76ecc5be17f60922f7389b58"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bellman-ford",
+        "moduleId": "distance-vector-rip",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "补充：Bellman-Ford 的松弛形式与计数到无穷",
+        "markdown": "把“邻居通告的距离加本链路代价，再取最小”写成公式，就是 Bellman-Ford 的松弛过程：\n\n$$D(x,y)=\\min_{v\\in N(x)}\\{c(x,v)+D(v,y)\\}$$\n\n其中 $D(x,y)$ 是节点 $x$ 到目的 $y$ 的最短距离，$N(x)$ 是 $x$ 的邻居集合，$c(x,v)$ 是链路 $(x,v)$ 的代价。路由器不需要全局拓扑，只需邻居通告的距离即可迭代。\n\n该式也解释了计数到无穷：链路故障后，邻居可能仍通过环回路径通告一个比原值略大的距离，路由器逐轮接受并加 1，距离缓慢增大，直到 16 才判定不可达。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-distance-vector"
+          ]
+        }
+      },
+      {
+        "id": "model-rip-update-example",
+        "moduleId": "distance-vector-rip",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：一次 RIP 路由表更新算例",
+        "markdown": "设 R1 收到 R2 的通告：10.0.0.0 距离 3、20.0.0.0 距离 2、30.0.0.0 距离 4、40.0.0.0 距离 7、120.0.0.0 距离 5、125.0.0.0 距离 8。R1 原表为：10.0.0.0 距离 0（直连）、30.0.0.0 距离 7（经 R3）、40.0.0.0 距离 6（经 R6）、120.0.0.0 距离 11（经 R4）、125.0.0.0 距离 4（经 R4）、212.0.0.0 距离 10（经 R6）。\n\n| 目的网络 | 更新后距离 | 下一跳 | 依据 |\n|---|---|---|---|\n| 10.0.0.0 | 0 | 直连 | $0 \\le 3+1$，保留 |\n| 20.0.0.0 | 3 | R2 | 原表无此项，新增 |\n| 30.0.0.0 | 5 | R2 | $7 > 4+1$，改小 |\n| 40.0.0.0 | 6 | R6 | $6 \\le 7+1$，保留 |\n| 120.0.0.0 | 6 | R2 | $11 > 5+1$，改小 |\n| 125.0.0.0 | 4 | R4 | $4 \\le 8+1$，保留 |\n| 212.0.0.0 | 10 | R6 | R2 未通告，保留 |\n\n最终有 3 项被修改（20.0.0.0、30.0.0.0、120.0.0.0），其余保持不变，说明距离向量只在出现更短距离时才改写表项。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-distance-vector",
+            "model-bellman-ford"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rip-timers",
+        "moduleId": "distance-vector-rip",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：RIP 计时器、慢收敛与对策",
+        "markdown": "RIP 为路由信息交互设置了四个定时器：周期更新定时器每 30s 交换一次更新；延时定时器为触发更新加入 1～5s 的随机延迟，避免广播风暴；超时定时器从表项被修改起算，180s 未收到刷新就把该项置为无效而不是立即删除；清除定时器在无效超过 120s 后删除该项。\n\n距离向量只在新距离更短时修改表项，路径故障后旧记录可能长期保留，并因环路使距离不断增大，这就是慢收敛。RIP 有四条对策：最大距离限定为 15，16 表示不可达；水平分割，即不把从某邻居学到的路由再发回该邻居；毒性逆转，即故障时继续通告该路由并把距离置为 16，同时触发更新立即广播。RIP 配置部署简单、路由最短，但最大跳数限制使其只适合较小的互联网。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000498"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "RIP 协议的计时器"
+              ],
+              "lineStart": 5379,
+              "lineEnd": 5382,
+              "assetRefs": [],
+              "excerptSha256": "33f0bf0f9fc5c3138f8bdf20042b503e5342479aabe1f190304ce192e5863789"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000499"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "周期更新定时器"
+              ],
+              "lineStart": 5383,
+              "lineEnd": 5386,
+              "assetRefs": [],
+              "excerptSha256": "da5ae593bd36b5425e379b1eef47ea59e06ae7b3b63b2f17ad216c6b58f2a68e"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000500"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "延时定时器"
+              ],
+              "lineStart": 5387,
+              "lineEnd": 5390,
+              "assetRefs": [],
+              "excerptSha256": "beccd6c38badf3345802079bbed1d2140835eb4954b9153bb820ad44c4f9d3c6"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000501"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "超时定时器"
+              ],
+              "lineStart": 5391,
+              "lineEnd": 5394,
+              "assetRefs": [],
+              "excerptSha256": "9ea019b0e56c7880706e21725de1a89af9311e0b3f9f316b1b32e8859f882882"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000502"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "清除定时器"
+              ],
+              "lineStart": 5395,
+              "lineEnd": 5398,
+              "assetRefs": [],
+              "excerptSha256": "4a4f009cb1b88720694f2b8403b8c02e98bec0faac9804f7f487e60e8384a574"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000503"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "讨论"
+              ],
+              "lineStart": 5399,
+              "lineEnd": 5410,
+              "assetRefs": [],
+              "excerptSha256": "5b906364f0ee33b8ce9895560b3beea9f74fba412f81d33de545187f616e6597"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-ospf-link-state",
+        "moduleId": "link-state-ospf",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：链路状态、OSPF 区域与执行过程",
+        "markdown": "OSPF 是链路状态协议。链路状态变化时，路由器通过所有输出端口向相邻路由器（刚发来信息的路由器除外）发送更新，接收者再转发给邻居，以洪泛方式使区域内所有路由器都获得更新；而 RIP 是周期性向邻居通告。OSPF 的链路度量可综合距离、延时、带宽与费用，范围 1～65 535，由管理员设定。每个路由器最终形成跟踪网络变化的链路状态数据库，并据此建立以自己为根的最短路径优先树。\n\nOSPF 把自治系统分为主干区域 area 0 与多个区域，区域通过区域边界路由器接入主干，主干区域的自治系统边界路由器专门与其他 AS 交换路由信息；分区把洪泛限制在较小范围。\n\nOSPF 有五类分组：问候、数据库描述、链路状态请求、链路状态更新、链路状态确认。执行分三阶段：用问候分组发现邻居并测量开销；用数据库描述分组交换摘要以同步数据库；链路变化时洪泛更新并用确认分组回复。邻居每 10s 交换问候，40s 未收到即判定不可达并重算路由表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "最短路径优先协议"
+              ],
+              "lineStart": 5411,
+              "lineEnd": 5412,
+              "assetRefs": [],
+              "excerptSha256": "2e12a96373bdea8d13770aff32d3968c6e9b94a7153405bdf749860db8b4fb25"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000505"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "最短路径优先协议的特点"
+              ],
+              "lineStart": 5413,
+              "lineEnd": 5426,
+              "assetRefs": [],
+              "excerptSha256": "8b7c056ea196d3549f660e653551473ec209ba526f964b38e410195246a1fd1d"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000506"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "OSPF 协议主干区域与区域的概念"
+              ],
+              "lineStart": 5427,
+              "lineEnd": 5445,
+              "assetRefs": [
+                "parts/part-0003/images/db1dfc6e8e3e9fd38f2c7c0e97df745f73e5813b0a1e3d17b5eefa51ccfc7ed8.jpg"
+              ],
+              "excerptSha256": "b0333e7a55226266ed63fd8ffab922d5f0036fdfe36d3e3844a041a11b02b8b8"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000507"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "OSPF 协议分组类型"
+              ],
+              "lineStart": 5446,
+              "lineEnd": 5459,
+              "assetRefs": [],
+              "excerptSha256": "0ede899b0b03eb2c87958e75ced897b13bd8a3f1e1e7cc9691800e56d91b1ca4"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000508"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "OSPF 协议执行过程"
+              ],
+              "lineStart": 5460,
+              "lineEnd": 5463,
+              "assetRefs": [],
+              "excerptSha256": "bd45284ca4a73f5b23303cab14407c25f0e2b2ac1fd66c44aba54e212d7c6356"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000509"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "确定相邻路由器可达"
+              ],
+              "lineStart": 5464,
+              "lineEnd": 5467,
+              "assetRefs": [],
+              "excerptSha256": "753bf6736d9856abeef686fa218c749fdb88fbe9e36707cd7f3d8e38ccc10f9f"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000510"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "链路状态数据库同步"
+              ],
+              "lineStart": 5468,
+              "lineEnd": 5471,
+              "assetRefs": [],
+              "excerptSha256": "ae2f1860a5bdd86168d99a720aba3686003788f556964259890fa9a18bb1dc6d"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000511"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "链路状态数据库更新"
+              ],
+              "lineStart": 5472,
+              "lineEnd": 5478,
+              "assetRefs": [
+                "parts/part-0003/images/a5f326d3b28531bab0df3f5b2da734c3e689badde64dea3c3ba8c8b6bd126d87.jpg"
+              ],
+              "excerptSha256": "d001ad26cc7e619ad297d6498ed51e666bb8ae0f1f18a718d88f0194985d2b86"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-flooding-dijkstra",
+        "moduleId": "link-state-ospf",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充：链路状态为何要“洪泛 + 最短路径”",
+        "markdown": "链路状态协议把“拓扑信息”与“路径计算”分开。每个路由器只在链路变化时洪泛带序号的链路状态分组，收到者继续转发并保存，最终区域内所有路由器拥有相同的链路状态数据库；然后各自以自己为根运行 Dijkstra。\n\n这样避免了距离向量靠邻居互相“猜测”距离所造成的计数到无穷，收敛更快，也能支持带宽等多种度量；代价是需要维护数据库、洪泛占用带宽，且每台路由器都要独立计算。这正是 OSPF 适合中大型自治系统的原因，也是它比 RIP 复杂的地方。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-ospf-link-state"
+          ]
+        }
+      },
+      {
+        "id": "textbook-ospf-spf",
+        "moduleId": "link-state-ospf",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：Dijkstra 最短路径计算",
+        "markdown": "OSPF 的路由计算来源于 Dijkstra 最短路径优先算法。以 R8 为例，把区域拓扑抽象为带权图后，算法求出 R8 到各目的网络的最小开销路径，形成以 R8 为根的最短路径树，再由树导出优化路由表。\n\nDijkstra 逐步扩展：初始只知道源点距离为 0，其余记为 -1；先确定到邻居的最短距离，再以已确定的节点为转发节点松弛其他节点。例如从 A 出发，A-C-B 的距离 $1+2=3$ 优于 A-B 的 4，A-C-D 为 $1+4=5$；每轮把距源最近的未确定节点加入集合，直到全部确定。OSPF 能快速适应拓扑变化、支持多种度量与层次结构，但协议复杂，度量值由管理员设定，洪泛也占用带宽。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000512"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "OSPF 区域最短路径选择过程"
+              ],
+              "lineStart": 5479,
+              "lineEnd": 5496,
+              "assetRefs": [
+                "parts/part-0003/images/7d3556d338892d8eece625c68790a1d0c69c965831be4a550cb732c1c9db6c2c.jpg",
+                "parts/part-0003/images/220bb844a31ad739ae7ade5714fcd374737cfde83bb0bdf4e13c07a9af6326d2.jpg"
+              ],
+              "excerptSha256": "4394bf2b62fb3e6f67481db7abc1c0f7735ed17e47d7b9295ffdfc9a7029f4d3"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000513"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "Dijkstra 算法的计算方法"
+              ],
+              "lineStart": 5497,
+              "lineEnd": 5530,
+              "assetRefs": [
+                "parts/part-0003/images/1c05d85aa442b73c15322b997a57106151fda1bfbc9e2d92795ae786622d01e0.jpg",
+                "parts/part-0003/images/1c5829403f948de94e4686d6ef2886b0ba92e6b6b479fd78601722eb69fb41fc.jpg",
+                "parts/part-0003/images/baad4a2435c788ad563be2a20b171f4330490a670ccac133d412464a90cbeb45.jpg",
+                "parts/part-0003/images/0c5bb1a7b00f7eccf87388d47ae3dc8d87109cb0f43d76d70daaa2c4d340a0b2.jpg",
+                "parts/part-0003/images/a9f7c52b84e6fd7036713c9c52e657fd556df6026129efbe4a6491efd97bad2e.jpg",
+                "parts/part-0003/images/1b97768196f5098578504ce3c7e8cfc35feaab93b34255e8d1283c0fb85dc1ee.jpg",
+                "parts/part-0003/images/af800492426317ca3190149902d811d862925c57f11d4cf3c20701ef44343743.jpg"
+              ],
+              "excerptSha256": "6e11acf63f81422c2c77fa184e0bf607ee6418c49c221c6fdd752bc05ab74002"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-bgp",
+        "moduleId": "interdomain-bgp",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：BGP 的定位与工作过程",
+        "markdown": "BGP 是不同自治系统之间交换路由信息的协议，BGP-4 采用路径向量（path vector）方式，是目前自治系统之间唯一的外部网关协议。每个 AS 至少选出一个 BGP 发言人（通常是边界路由器），与其他 AS 的发言人交换新增路由、撤销路由和差错信息。\n\nBGP 交换的可达信息是到达某网络要经过的一系列自治系统，发言人再按自身策略选出最佳路由。BGP 启动时与相邻边界路由器交换整个路由表，此后只在变化时更新，不像 RIP、OSPF 那样周期性通告。\n\nBGP 有四类分组：打开分组用于建立关系；更新分组用于发布或撤销路由，可一次撤销多条但每次只增加一条；保活分组周期性确认邻居存在，通常每 30s 一次；通知分组报告差错并终止本次连接。当某一方发现错误时发送通知分组，下一次连接需要重新协商。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "外部网关协议"
+              ],
+              "lineStart": 5531,
+              "lineEnd": 5546,
+              "assetRefs": [
+                "parts/part-0003/images/cb3ad070441ca56f238130d7bcccd9762f1f1d2dbc6442a6f6c65f8541e1c73a.jpg",
+                "parts/part-0003/images/20b3c6e7e76a8555202ad0dc5f546bced82be0853c742587ca22c11672479584.jpg"
+              ],
+              "excerptSha256": "4817b69f594ef4851e55a8d31a31d78e33e01fb332af6319c8feaeaaf5e531ee"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000515"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "BGP 的工作过程"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5548,
+              "assetRefs": [],
+              "excerptSha256": "191bf6f52b5f9ad93c28db43508ed69e93e1585de0bb88272e4f7d627da4b031"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000516"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "边界路由器初始化过程"
+              ],
+              "lineStart": 5549,
+              "lineEnd": 5552,
+              "assetRefs": [],
+              "excerptSha256": "73be65c1cf7f39a26393470b18c1d3f8bf30dbb3dac781b1d362255e463c4446"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000517"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "BGP 分组类型"
+              ],
+              "lineStart": 5553,
+              "lineEnd": 5570,
+              "assetRefs": [],
+              "excerptSha256": "c58e3041850b8679181e40323566db895f67e0783e25961bf97cb17dc137c913"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-protocol-positioning",
+        "moduleId": "interdomain-bgp",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：RIP、OSPF、BGP 的定位与选型",
+        "markdown": "把三种协议放在同一组维度上比较，定位就清楚了：\n\n| 维度 | RIP | OSPF | BGP |\n|---|---|---|---|\n| 作用范围 | AS 内 | AS 内 | AS 间 |\n| 算法 | 距离向量 | 链路状态 + Dijkstra | 路径向量 + 策略 |\n| 度量 | 跳数（最大 15） | 距离/延时/带宽/费用 | AS 路径与策略 |\n| 更新 | 周期广播 | 触发洪泛 + 周期问候 | 启动全表，之后变化更新 |\n| 适用 | 小型网络 | 中大型 AS | 互联网域间 |\n\n选型时先看边界：域内小型网络可用 RIP；追求快速收敛和多种度量选 OSPF；跨自治系统则必须用 BGP。不能因为 BGP 也传路由信息就把它当成域内协议。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-as-igp-egp",
+            "textbook-distance-vector",
+            "textbook-ospf-link-state",
+            "textbook-bgp"
+          ]
+        }
+      },
+      {
+        "id": "textbook-router-functions",
+        "moduleId": "router-forwarding",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：路由器功能与转发表",
+        "markdown": "路由器的主要功能是建立并维护路由表、提供网络间的分组转发。分组进入路由器后，路由器检查目的地址，按路由表判断是直接交付还是间接交付；间接交付时确定转发端口与下一跳地址。\n\n路由器由路由选择处理机与分组处理、交换部分组成。前者生成和维护路由表；后者包含交换结构与输入输出端口，按转发表转发分组。转发表由路由表形成。路由表很大时，减少查表时间是重要问题，理想情况是以线速转发。只要输入、处理、输出任一环节慢于线速，就都会出现排队，队列溢出会造成分组丢失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000518"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由器与第三层交换技术"
+              ],
+              "lineStart": 5571,
+              "lineEnd": 5572,
+              "assetRefs": [],
+              "excerptSha256": "4a5f9d4a8e6b8a6d768bbdf32805f60cded943b1f5c1549601661f4fff8d8012"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000519"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由器的主要功能"
+              ],
+              "lineStart": 5573,
+              "lineEnd": 5574,
+              "assetRefs": [],
+              "excerptSha256": "4325b902043154ac8ce2e2fdf890383c69f7832169d406b6379ffca92e0c5419"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000520"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "建立并维护路由表"
+              ],
+              "lineStart": 5575,
+              "lineEnd": 5578,
+              "assetRefs": [],
+              "excerptSha256": "2ad3b7be55cf70584da60af438fc7b3ec4dd6f12fe976a59d3f29b77cc3ef48f"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000521"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "提供网络间的分组转发功能"
+              ],
+              "lineStart": 5579,
+              "lineEnd": 5597,
+              "assetRefs": [
+                "parts/part-0003/images/550730c94a12a6b14dbd425a11ef5da612ce35347fa9e78cd8f3ebd45697a073.jpg"
+              ],
+              "excerptSha256": "9ed9a203419bd1bf55a8a40b2334a0f05724c7dbcc1c10dd73011ba5b66df2c1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-router-evolution",
+        "moduleId": "router-forwarding",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：路由器结构演进与第三层交换",
+        "markdown": "路由器体系结构从基于软件的单总线单 CPU 结构向基于硬件的高性能结构演进。第一代以 Cisco 2501 为代表，结构简单、价格低，但处理慢、CPU 故障会导致系统瘫痪；第二代出现单总线主从 CPU、单总线对称多 CPU 与多总线多 CPU 三类，仍受共享总线与软件转发限制；第三代用 ASIC 交换结构实现线速转发，扩展性好；第四代采用网络处理器与多级交换，兼顾性能与可编程性。\n\n第三层交换把成熟的路由技术与第二层硬件交换结合：第三层交换机通过 RIP、OSPF 等协议维护路由表，常用 ASIC 实现转发，速度快，但协议固化、只支持特定的网络协议。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000522"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "路由器技术演变与发展"
+              ],
+              "lineStart": 5598,
+              "lineEnd": 5606,
+              "assetRefs": [
+                "parts/part-0003/images/3acf6b9b103fb3aab85f6d0270e660dbc4547f330a17b3bfadc78af8078e29a0.jpg"
+              ],
+              "excerptSha256": "641958fd93865548edf8a129e9cf7f5195494a55730575e5d329eb92a30a9bc0"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000523"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第一代单总线单 CPU 结构的路由器"
+              ],
+              "lineStart": 5607,
+              "lineEnd": 5615,
+              "assetRefs": [
+                "parts/part-0003/images/1dc9f082f964c8f248218412e6566a79bc00bc834e4bd5e77b4c7aed02988ec0.jpg"
+              ],
+              "excerptSha256": "5de93f20552240bcd79dfa9a02c6e3395dc80bc45272bd2ae56177d4a77beada"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000524"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第二代多 CPU 结构的路由器"
+              ],
+              "lineStart": 5616,
+              "lineEnd": 5628,
+              "assetRefs": [
+                "parts/part-0003/images/837aa4f3e510357e4b4628c203efdb1bee9b946e67dc031859df97879601bd77.jpg"
+              ],
+              "excerptSha256": "c56e68291386aabb9897cc491e3aa46033472704f0ca78bce30f6ca2f3cad7a3"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000525"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第三代基于硬件交换结构的路由器"
+              ],
+              "lineStart": 5629,
+              "lineEnd": 5634,
+              "assetRefs": [],
+              "excerptSha256": "df524e53317359311bded91c678e9b49b30df6e997c15d12a5a2a1d29a3026c5"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000526"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第四代多级交换路由器"
+              ],
+              "lineStart": 5635,
+              "lineEnd": 5644,
+              "assetRefs": [
+                "parts/part-0003/images/a4fda50eef77b7bf3a9fffa2b158c0b00961d76d079863c3f99a8bfdf8b6937b.jpg",
+                "parts/part-0003/images/a4c784b69871ae07fe6951bce53f3c1a2f8ca03956e60b860b351b3249644adc.jpg"
+              ],
+              "excerptSha256": "8dd742a9b27a83c87060d55394a16fd4238cbe96aaa927a3fd24e8057ab560d1"
+            },
+            {
+              "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+              "blockIds": [
+                "block-000527"
+              ],
+              "headingPath": [
+                "世纪大学本科计算机专业系列教材编委会",
+                "第三层交换的基本概念"
+              ],
+              "lineStart": 5645,
+              "lineEnd": 5650,
+              "assetRefs": [],
+              "excerptSha256": "09addcb536fff70ed8c46927c342752c19d9ac850c932e9ecc5d7f265c443429"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "rip-update-check",
+        "type": "formative-check",
+        "title": "RIP 路由表更新自检",
+        "anchorBlockId": "model-rip-update-example",
+        "moduleId": "distance-vector-rip",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-algorithms"
+        ],
+        "learningPurpose": "检查学习者能否按距离向量规则更新路由表，并识别慢收敛风险。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-distance-vector",
+            "model-bellman-ford"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "R2 通告到达 20.0.0.0 的距离为 2、到达 120.0.0.0 的距离为 5；R1 当前没有 20.0.0.0，到 120.0.0.0 的距离为 11。更新后两项分别是多少？",
+          "expected": [
+            {
+              "network": "20.0.0.0",
+              "distance": 3,
+              "route": "R2"
+            },
+            {
+              "network": "120.0.0.0",
+              "distance": 6,
+              "route": "R2"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "R2 通告到达 20.0.0.0 的距离为 2、到达 120.0.0.0 的距离为 5；R1 当前没有 20.0.0.0，到 120.0.0.0 的距离为 11。请按距离向量规则写出更新后的距离与下一跳。"
+        }
+      }
+    ]
+  },
+  "subtitle": "网络层",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [
+    "point-4-11"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000474"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由选择算法与分组交付"
+      ],
+      "lineStart": 5146,
+      "lineEnd": 5147,
+      "assetRefs": [],
+      "excerptSha256": "750dee189463849a6a8bfd924aebdd643c239d37b02a4c61a0d3d3fc7aea975b"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000475"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "分组交付和路由选择的基本概念"
+      ],
+      "lineStart": 5148,
+      "lineEnd": 5149,
+      "assetRefs": [],
+      "excerptSha256": "2f91c162167054cee16ef4baaf1cc65b88752a697c872226a9206de0e29382c0"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000476"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "分组交付的基本概念"
+      ],
+      "lineStart": 5150,
+      "lineEnd": 5151,
+      "assetRefs": [],
+      "excerptSha256": "4b09210b5b650322caa54dd04cf7d38a78dcc4c2e1a92527723a2cb286690c46"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000477"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "默认路由器的概念"
+      ],
+      "lineStart": 5152,
+      "lineEnd": 5160,
+      "assetRefs": [
+        "parts/part-0002/images/c752cb47935f898535740e5010c4722f72cfcded2b2bdc8850d1dc2f2596e41e.jpg"
+      ],
+      "excerptSha256": "891d9aa3e123537c02332950f1cc7de1d1d0a8096ee078ead837aaef2dbcc247"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000478"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "评价路由选择的依据"
+      ],
+      "lineStart": 5161,
+      "lineEnd": 5172,
+      "assetRefs": [],
+      "excerptSha256": "5c4824fed56048e6b9656ed7367857b221bfe9e3a9e5c59edca9576dfabad3d7"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000479"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由选择算法的主要参数"
+      ],
+      "lineStart": 5173,
+      "lineEnd": 5188,
+      "assetRefs": [],
+      "excerptSha256": "887e9880dd8e360e0bed9e10596fa0040fc7720fde8c9ea5c4a1531b7b909724"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000480"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由选择算法的分类"
+      ],
+      "lineStart": 5189,
+      "lineEnd": 5192,
+      "assetRefs": [],
+      "excerptSha256": "3c76fcaec36e6153e221f2b5b1875b9ac2a0ffb9e120be3598a2945cb0919e25"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000481"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "静态路由表"
+      ],
+      "lineStart": 5193,
+      "lineEnd": 5198,
+      "assetRefs": [],
+      "excerptSha256": "55c03c0835834cd72d8cf61cdd244e454e2f771eaa9355c43d25fa3cb82ac8fd"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000482"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "动态路由表"
+      ],
+      "lineStart": 5199,
+      "lineEnd": 5204,
+      "assetRefs": [],
+      "excerptSha256": "f0fe729b9af4d8921814257913433ded46c550e9e62ecffb28f01e515d7423e7"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000483"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由表的生成与使用"
+      ],
+      "lineStart": 5205,
+      "lineEnd": 5208,
+      "assetRefs": [],
+      "excerptSha256": "e447acb6254ef6d3a5bde527c32ef8a19f8439797d6f46629cb1145de8688127"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000484"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "网络结构与 IP 地址"
+      ],
+      "lineStart": 5209,
+      "lineEnd": 5215,
+      "assetRefs": [
+        "parts/part-0002/images/f923eb2fa64d1c583e0ba16deaedbbf14e42874b5c391c8943769e1067f9f285.jpg"
+      ],
+      "excerptSha256": "04989919720b4df3d5eb1e4a55c3a0b6415f5eee388d8ba5432da60ce08a6b85"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000485"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由表的生成原理"
+      ],
+      "lineStart": 5216,
+      "lineEnd": 5233,
+      "assetRefs": [],
+      "excerptSha256": "ff813534181606cd31665879c40f46e23b7187c9a8a0964f2155a6b17f382030"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000486"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "IP 路由汇聚"
+      ],
+      "lineStart": 5234,
+      "lineEnd": 5235,
+      "assetRefs": [],
+      "excerptSha256": "bd8b063bd01a8d89dff36ca47bb0d14bc2960a73e65d88012bcb1caabaa74844"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000487"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "最长前缀匹配原则"
+      ],
+      "lineStart": 5236,
+      "lineEnd": 5241,
+      "assetRefs": [],
+      "excerptSha256": "8feffe2ed97b116f4cee342daf585bdc91bb3a82e46d96c12967dbf04030ab9c"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000488"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由汇聚过程"
+      ],
+      "lineStart": 5242,
+      "lineEnd": 5276,
+      "assetRefs": [
+        "parts/part-0002/images/d3936a59baeb068014a8baee96f54e0526ea80346c610e9797a4acdaf6516e79.jpg"
+      ],
+      "excerptSha256": "32d59cc5d7c570f56b0b49f3973515643823c208989b2cd2ac72b99efcfcebe7"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000489"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "互联网路由选择的思路"
+      ],
+      "lineStart": 5277,
+      "lineEnd": 5284,
+      "assetRefs": [],
+      "excerptSha256": "2b86c932181444c8a0025e96cec4d1e44eab20e77cec19d5a462db6dc396fd5f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000490"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "自治系统的基本概念"
+      ],
+      "lineStart": 5285,
+      "lineEnd": 5294,
+      "assetRefs": [],
+      "excerptSha256": "ea8f6738dbca078b0ca9ae559b87e46d55516edf2419d0ba7171b59ebc9d1969"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000491"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "互联网路由选择协议的分类"
+      ],
+      "lineStart": 5295,
+      "lineEnd": 5296,
+      "assetRefs": [],
+      "excerptSha256": "e061f3019ef443aefc9d163ff63769b311688566eb8aebf71df044eefc05fe31"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000492"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "内部网关协议"
+      ],
+      "lineStart": 5297,
+      "lineEnd": 5300,
+      "assetRefs": [],
+      "excerptSha256": "f9f9276f1cd47b3ebf83b0d3c424051e760d6b0772bfa156fa4934cc7f32e45d"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000493"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "外部网关协议"
+      ],
+      "lineStart": 5301,
+      "lineEnd": 5313,
+      "assetRefs": [
+        "parts/part-0003/images/1eca80a71ecc67a85a3c8411059c87bb9fcbaae99d0228f343f0b12cffa2f947.jpg"
+      ],
+      "excerptSha256": "f94f7406ed15fc2845de12d70b73387924efae6fc3f793827575d4d50a1693c1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000494"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由信息协议"
+      ],
+      "lineStart": 5314,
+      "lineEnd": 5317,
+      "assetRefs": [],
+      "excerptSha256": "0561f152dc0659faef863ec58ec7344cd84b0c463703d6df8933247e29c258c3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000495"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "距离向量路由选择算法"
+      ],
+      "lineStart": 5318,
+      "lineEnd": 5329,
+      "assetRefs": [],
+      "excerptSha256": "b23956882f5308a2d25808642463000ded885d249f50b289117156a193abf428"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000496"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "距离向量路由协议的工作原理"
+      ],
+      "lineStart": 5330,
+      "lineEnd": 5331,
+      "assetRefs": [],
+      "excerptSha256": "4e884e326d118732d45675f9560a28c632bcb2c77a94a19dd73c3ec6f39c7747"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000497"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由表信息的更新方法"
+      ],
+      "lineStart": 5332,
+      "lineEnd": 5378,
+      "assetRefs": [
+        "parts/part-0003/images/f3f710de481aa412ff0a5cbbfd2bb9c5eaab8eccea69c26e8b988070d33f4d64.jpg"
+      ],
+      "excerptSha256": "0efd4c7eb659fa759f48aaaaae6db95ef4c64c4f76ecc5be17f60922f7389b58"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000498"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "RIP 协议的计时器"
+      ],
+      "lineStart": 5379,
+      "lineEnd": 5382,
+      "assetRefs": [],
+      "excerptSha256": "33f0bf0f9fc5c3138f8bdf20042b503e5342479aabe1f190304ce192e5863789"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000499"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "周期更新定时器"
+      ],
+      "lineStart": 5383,
+      "lineEnd": 5386,
+      "assetRefs": [],
+      "excerptSha256": "da5ae593bd36b5425e379b1eef47ea59e06ae7b3b63b2f17ad216c6b58f2a68e"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000500"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "延时定时器"
+      ],
+      "lineStart": 5387,
+      "lineEnd": 5390,
+      "assetRefs": [],
+      "excerptSha256": "beccd6c38badf3345802079bbed1d2140835eb4954b9153bb820ad44c4f9d3c6"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000501"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "超时定时器"
+      ],
+      "lineStart": 5391,
+      "lineEnd": 5394,
+      "assetRefs": [],
+      "excerptSha256": "9ea019b0e56c7880706e21725de1a89af9311e0b3f9f316b1b32e8859f882882"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000502"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "清除定时器"
+      ],
+      "lineStart": 5395,
+      "lineEnd": 5398,
+      "assetRefs": [],
+      "excerptSha256": "4a4f009cb1b88720694f2b8403b8c02e98bec0faac9804f7f487e60e8384a574"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000503"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "讨论"
+      ],
+      "lineStart": 5399,
+      "lineEnd": 5410,
+      "assetRefs": [],
+      "excerptSha256": "5b906364f0ee33b8ce9895560b3beea9f74fba412f81d33de545187f616e6597"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000504"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "最短路径优先协议"
+      ],
+      "lineStart": 5411,
+      "lineEnd": 5412,
+      "assetRefs": [],
+      "excerptSha256": "2e12a96373bdea8d13770aff32d3968c6e9b94a7153405bdf749860db8b4fb25"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000505"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "最短路径优先协议的特点"
+      ],
+      "lineStart": 5413,
+      "lineEnd": 5426,
+      "assetRefs": [],
+      "excerptSha256": "8b7c056ea196d3549f660e653551473ec209ba526f964b38e410195246a1fd1d"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000506"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "OSPF 协议主干区域与区域的概念"
+      ],
+      "lineStart": 5427,
+      "lineEnd": 5445,
+      "assetRefs": [
+        "parts/part-0003/images/db1dfc6e8e3e9fd38f2c7c0e97df745f73e5813b0a1e3d17b5eefa51ccfc7ed8.jpg"
+      ],
+      "excerptSha256": "b0333e7a55226266ed63fd8ffab922d5f0036fdfe36d3e3844a041a11b02b8b8"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000507"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "OSPF 协议分组类型"
+      ],
+      "lineStart": 5446,
+      "lineEnd": 5459,
+      "assetRefs": [],
+      "excerptSha256": "0ede899b0b03eb2c87958e75ced897b13bd8a3f1e1e7cc9691800e56d91b1ca4"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000508"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "OSPF 协议执行过程"
+      ],
+      "lineStart": 5460,
+      "lineEnd": 5463,
+      "assetRefs": [],
+      "excerptSha256": "bd45284ca4a73f5b23303cab14407c25f0e2b2ac1fd66c44aba54e212d7c6356"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000509"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "确定相邻路由器可达"
+      ],
+      "lineStart": 5464,
+      "lineEnd": 5467,
+      "assetRefs": [],
+      "excerptSha256": "753bf6736d9856abeef686fa218c749fdb88fbe9e36707cd7f3d8e38ccc10f9f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000510"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "链路状态数据库同步"
+      ],
+      "lineStart": 5468,
+      "lineEnd": 5471,
+      "assetRefs": [],
+      "excerptSha256": "ae2f1860a5bdd86168d99a720aba3686003788f556964259890fa9a18bb1dc6d"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000511"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "链路状态数据库更新"
+      ],
+      "lineStart": 5472,
+      "lineEnd": 5478,
+      "assetRefs": [
+        "parts/part-0003/images/a5f326d3b28531bab0df3f5b2da734c3e689badde64dea3c3ba8c8b6bd126d87.jpg"
+      ],
+      "excerptSha256": "d001ad26cc7e619ad297d6498ed51e666bb8ae0f1f18a718d88f0194985d2b86"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000512"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "OSPF 区域最短路径选择过程"
+      ],
+      "lineStart": 5479,
+      "lineEnd": 5496,
+      "assetRefs": [
+        "parts/part-0003/images/7d3556d338892d8eece625c68790a1d0c69c965831be4a550cb732c1c9db6c2c.jpg",
+        "parts/part-0003/images/220bb844a31ad739ae7ade5714fcd374737cfde83bb0bdf4e13c07a9af6326d2.jpg"
+      ],
+      "excerptSha256": "4394bf2b62fb3e6f67481db7abc1c0f7735ed17e47d7b9295ffdfc9a7029f4d3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000513"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "Dijkstra 算法的计算方法"
+      ],
+      "lineStart": 5497,
+      "lineEnd": 5530,
+      "assetRefs": [
+        "parts/part-0003/images/1c05d85aa442b73c15322b997a57106151fda1bfbc9e2d92795ae786622d01e0.jpg",
+        "parts/part-0003/images/1c5829403f948de94e4686d6ef2886b0ba92e6b6b479fd78601722eb69fb41fc.jpg",
+        "parts/part-0003/images/baad4a2435c788ad563be2a20b171f4330490a670ccac133d412464a90cbeb45.jpg",
+        "parts/part-0003/images/0c5bb1a7b00f7eccf87388d47ae3dc8d87109cb0f43d76d70daaa2c4d340a0b2.jpg",
+        "parts/part-0003/images/a9f7c52b84e6fd7036713c9c52e657fd556df6026129efbe4a6491efd97bad2e.jpg",
+        "parts/part-0003/images/1b97768196f5098578504ce3c7e8cfc35feaab93b34255e8d1283c0fb85dc1ee.jpg",
+        "parts/part-0003/images/af800492426317ca3190149902d811d862925c57f11d4cf3c20701ef44343743.jpg"
+      ],
+      "excerptSha256": "6e11acf63f81422c2c77fa184e0bf607ee6418c49c221c6fdd752bc05ab74002"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000514"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "外部网关协议"
+      ],
+      "lineStart": 5531,
+      "lineEnd": 5546,
+      "assetRefs": [
+        "parts/part-0003/images/cb3ad070441ca56f238130d7bcccd9762f1f1d2dbc6442a6f6c65f8541e1c73a.jpg",
+        "parts/part-0003/images/20b3c6e7e76a8555202ad0dc5f546bced82be0853c742587ca22c11672479584.jpg"
+      ],
+      "excerptSha256": "4817b69f594ef4851e55a8d31a31d78e33e01fb332af6319c8feaeaaf5e531ee"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000515"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "BGP 的工作过程"
+      ],
+      "lineStart": 5547,
+      "lineEnd": 5548,
+      "assetRefs": [],
+      "excerptSha256": "191bf6f52b5f9ad93c28db43508ed69e93e1585de0bb88272e4f7d627da4b031"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000516"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "边界路由器初始化过程"
+      ],
+      "lineStart": 5549,
+      "lineEnd": 5552,
+      "assetRefs": [],
+      "excerptSha256": "73be65c1cf7f39a26393470b18c1d3f8bf30dbb3dac781b1d362255e463c4446"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000517"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "BGP 分组类型"
+      ],
+      "lineStart": 5553,
+      "lineEnd": 5570,
+      "assetRefs": [],
+      "excerptSha256": "c58e3041850b8679181e40323566db895f67e0783e25961bf97cb17dc137c913"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000518"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由器与第三层交换技术"
+      ],
+      "lineStart": 5571,
+      "lineEnd": 5572,
+      "assetRefs": [],
+      "excerptSha256": "4a5f9d4a8e6b8a6d768bbdf32805f60cded943b1f5c1549601661f4fff8d8012"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000519"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由器的主要功能"
+      ],
+      "lineStart": 5573,
+      "lineEnd": 5574,
+      "assetRefs": [],
+      "excerptSha256": "4325b902043154ac8ce2e2fdf890383c69f7832169d406b6379ffca92e0c5419"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000520"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "建立并维护路由表"
+      ],
+      "lineStart": 5575,
+      "lineEnd": 5578,
+      "assetRefs": [],
+      "excerptSha256": "2ad3b7be55cf70584da60af438fc7b3ec4dd6f12fe976a59d3f29b77cc3ef48f"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000521"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "提供网络间的分组转发功能"
+      ],
+      "lineStart": 5579,
+      "lineEnd": 5597,
+      "assetRefs": [
+        "parts/part-0003/images/550730c94a12a6b14dbd425a11ef5da612ce35347fa9e78cd8f3ebd45697a073.jpg"
+      ],
+      "excerptSha256": "9ed9a203419bd1bf55a8a40b2334a0f05724c7dbcc1c10dd73011ba5b66df2c1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000522"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "路由器技术演变与发展"
+      ],
+      "lineStart": 5598,
+      "lineEnd": 5606,
+      "assetRefs": [
+        "parts/part-0003/images/3acf6b9b103fb3aab85f6d0270e660dbc4547f330a17b3bfadc78af8078e29a0.jpg"
+      ],
+      "excerptSha256": "641958fd93865548edf8a129e9cf7f5195494a55730575e5d329eb92a30a9bc0"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000523"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第一代单总线单 CPU 结构的路由器"
+      ],
+      "lineStart": 5607,
+      "lineEnd": 5615,
+      "assetRefs": [
+        "parts/part-0003/images/1dc9f082f964c8f248218412e6566a79bc00bc834e4bd5e77b4c7aed02988ec0.jpg"
+      ],
+      "excerptSha256": "5de93f20552240bcd79dfa9a02c6e3395dc80bc45272bd2ae56177d4a77beada"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000524"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第二代多 CPU 结构的路由器"
+      ],
+      "lineStart": 5616,
+      "lineEnd": 5628,
+      "assetRefs": [
+        "parts/part-0003/images/837aa4f3e510357e4b4628c203efdb1bee9b946e67dc031859df97879601bd77.jpg"
+      ],
+      "excerptSha256": "c56e68291386aabb9897cc491e3aa46033472704f0ca78bce30f6ca2f3cad7a3"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000525"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第三代基于硬件交换结构的路由器"
+      ],
+      "lineStart": 5629,
+      "lineEnd": 5634,
+      "assetRefs": [],
+      "excerptSha256": "df524e53317359311bded91c678e9b49b30df6e997c15d12a5a2a1d29a3026c5"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000526"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第四代多级交换路由器"
+      ],
+      "lineStart": 5635,
+      "lineEnd": 5644,
+      "assetRefs": [
+        "parts/part-0003/images/a4fda50eef77b7bf3a9fffa2b158c0b00961d76d079863c3f99a8bfdf8b6937b.jpg",
+        "parts/part-0003/images/a4c784b69871ae07fe6951bce53f3c1a2f8ca03956e60b860b351b3249644adc.jpg"
+      ],
+      "excerptSha256": "8dd742a9b27a83c87060d55394a16fd4238cbe96aaa927a3fd24e8057ab560d1"
+    },
+    {
+      "materialId": "doc-eb46b3faaf17e3d11a7b1451",
+      "blockIds": [
+        "block-000527"
+      ],
+      "headingPath": [
+        "世纪大学本科计算机专业系列教材编委会",
+        "第三层交换的基本概念"
+      ],
+      "lineStart": 5645,
+      "lineEnd": 5650,
+      "assetRefs": [],
+      "excerptSha256": "09addcb536fff70ed8c46927c342752c19d9ac850c932e9ecc5d7f265c443429"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3040,
+    1693
+  ],
+  "scale": 0.98
+}

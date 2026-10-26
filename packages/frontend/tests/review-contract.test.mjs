@@ -441,6 +441,13 @@ test("resume delivery stays locked while retry reconciliation is pending", () =>
   );
 });
 
+test("deleted conversations terminate review resume delivery", () => {
+  assert.equal(contracts.isReviewResumeConversationGoneStatus(404), true);
+  assert.equal(contracts.isReviewResumeConversationGoneStatus(410), true);
+  assert.equal(contracts.isReviewResumeConversationGoneStatus(409), false);
+  assert.equal(contracts.isReviewResumeConversationGoneStatus(500), false);
+});
+
 test("conversation cleanup removes every queued review resume for that flow", () => {
   const outbox = new contracts.ReviewResumeOutbox(new MemoryStorage());
   outbox.enqueue({
