@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -8,6 +9,12 @@ import {
   buildPipelineStepInvocation,
   pipelineStepActions,
 } from "./run-course-pipeline-step.mjs";
+import { POINT_IDS } from "../skills/candidate-knowledge-point-generator/scripts/test-fixture.mjs";
+import {
+  COURSE_ID,
+  createWorkerSession,
+  writePlaceholders,
+} from "../skills/candidate-knowledge-point-generator/scripts/worker-task-test-fixture.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUNNER = path.join(PROJECT_ROOT, "scripts", "run-course-pipeline-step.mjs");
@@ -86,6 +93,79 @@ test("pipeline step runner maps validate-animation-drafts to the fixed validator
     "--phase",
     "animation-drafts",
   ]);
+});
+
+test("pipeline step runner maps worker task actions to fixed content scripts", () => {
+  const contentScripts = path.join(
+    PROJECT_ROOT,
+    ".opencode",
+    "skills",
+    "candidate-knowledge-point-generator",
+    "scripts",
+  );
+  const cases = [
+    [
+      "prepare-content-tasks",
+      "prepare_worker_tasks.mjs",
+      ["--root", "pipeline/demo-course/course-content", "--kind", "content"],
+    ],
+    [
+      "finalize-point-drafts",
+      "finalize_point_drafts.mjs",
+      ["--root", "pipeline/demo-course/course-content"],
+    ],
+    [
+      "prepare-animation-tasks",
+      "prepare_worker_tasks.mjs",
+      ["--root", "pipeline/demo-course/course-content", "--kind", "animations"],
+    ],
+  ];
+  for (const [action, script, args] of cases) {
+    assert.ok(pipelineStepActions().includes(action), action);
+    const invocation = buildPipelineStepInvocation(action, "demo-course", PROJECT_ROOT);
+    assert.equal(invocation.script, path.join(contentScripts, script), action);
+    assert.deepEqual(invocation.args, args, action);
+  }
+});
+
+test("worker task actions run from a course session and honor the concurrency env", (t) => {
+  const session = createWorkerSession(t);
+  fs.cpSync(
+    path.join(PROJECT_ROOT, "skills", "candidate-knowledge-point-generator", "scripts"),
+    path.join(
+      session.sessionRoot,
+      ".opencode",
+      "skills",
+      "candidate-knowledge-point-generator",
+      "scripts",
+    ),
+    { recursive: true },
+  );
+  writePlaceholders(session.contentRoot, POINT_IDS);
+
+  const prepared = spawnSync(
+    process.execPath,
+    [RUNNER, "prepare-content-tasks", COURSE_ID],
+    {
+      cwd: session.sessionRoot,
+      encoding: "utf8",
+      env: { ...process.env, COURSE_WORKER_CONCURRENCY: "2" },
+    },
+  );
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const summary = JSON.parse(prepared.stdout);
+  assert.equal(summary.concurrency, 2);
+  assert.equal(summary.pending, POINT_IDS.length);
+  assert.ok(fs.existsSync(path.join(session.tasksRoot, "content", `${POINT_IDS[0]}.json`)));
+
+  const finalized = spawnSync(
+    process.execPath,
+    [RUNNER, "finalize-point-drafts", COURSE_ID],
+    { cwd: session.sessionRoot, encoding: "utf8" },
+  );
+  assert.equal(finalized.status, 0, finalized.stderr);
+  assert.match(finalized.stdout, /待生成 3 个知识点/);
+  assert.match(finalized.stdout, /溯源展开：跳过/);
 });
 
 test("every pipeline action is fixed and rejects attacker-controlled path syntax", () => {

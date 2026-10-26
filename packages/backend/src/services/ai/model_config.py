@@ -4,6 +4,12 @@ Models are declared in ``models.json`` at the project root (gitignored, like
 ``.env``); each entry carries its own ``base_url`` and ``api_key`` so models can
 live on different providers. When the file is absent we fall back to the legacy
 ``GATEWAY_*`` settings so existing single-provider setups keep working.
+
+An entry may also declare ``limit`` in OpenCode's own shape,
+``{"context": <tokens>, "output": <tokens>}``. Custom OpenAI-compatible
+providers carry no token metadata, so this is how OpenCode learns the window
+it needs for automatic compaction. ``scripts/gen_opencode_config.py`` parses
+the same field with identical rules.
 """
 
 import json
@@ -19,6 +25,7 @@ from ...config import PROJECT_ROOT, settings
 MODELS_FILE = PROJECT_ROOT / "models.json"
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MODELS_LOCK = threading.RLock()
+_LIMIT_KEYS = ("context", "output")
 
 
 @dataclass
@@ -28,23 +35,62 @@ class ModelDef:
     base_url: str
     api_key: str
     vision: bool = True
+    # Declared OpenCode token budget; ``None`` when absent or malformed.
+    limit: dict[str, int] | None = None
+
+
+def _parse_limit(value: object) -> dict[str, int] | None:
+    """Validate an optional ``limit`` declaration from ``models.json``.
+
+    Returns ``None`` when nothing is declared and raises ``ValueError`` with a
+    readable reason when the declaration cannot be forwarded to OpenCode.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("limit 必须是包含 context 与 output 的对象")
+    unknown = sorted(str(key) for key in value if key not in _LIMIT_KEYS)
+    if unknown:
+        raise ValueError(f"limit 只支持 context 与 output，不支持：{', '.join(unknown)}")
+    limit: dict[str, int] = {}
+    for key in _LIMIT_KEYS:
+        number = value.get(key)
+        # JSON true is a Python int; it must not become a one-token window.
+        if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+            raise ValueError(f"limit.{key} 必须是正整数")
+        limit[key] = number
+    # OpenCode compacts against ``context - output``; a non-positive budget
+    # would make every turn overflow.
+    if limit["output"] >= limit["context"]:
+        raise ValueError("limit.output 必须小于 limit.context")
+    return limit
+
+
+def _model_def(item: dict) -> ModelDef:
+    mid = (item.get("id") or "").strip()
+    try:
+        limit = _parse_limit(item.get("limit"))
+    except ValueError:
+        # A malformed optional budget must not hide the model itself. The
+        # OpenCode launcher reports the reason when it generates its config.
+        limit = None
+    return ModelDef(
+        id=mid,
+        name=item.get("name") or mid,
+        base_url=(item.get("base_url") or "").strip(),
+        api_key=(item.get("api_key") or "").strip(),
+        vision=bool(item.get("vision", True)),
+        limit=limit,
+    )
 
 
 def _from_file(data: dict) -> list[ModelDef]:
     models: list[ModelDef] = []
     for item in data.get("models", []):
-        mid = (item.get("id") or "").strip()
-        if not mid:
-            continue
-        models.append(
-            ModelDef(
-                id=mid,
-                name=item.get("name") or mid,
-                base_url=(item.get("base_url") or "").strip(),
-                api_key=(item.get("api_key") or "").strip(),
-                vision=bool(item.get("vision", True)),
-            )
-        )
+        model = _model_def(item)
+        if model.id:
+            models.append(model)
     return models
 
 
@@ -155,13 +201,7 @@ def add_model(name: str, base_url: str, api_key: str) -> ModelDef:
         if not data.get("default"):
             data["default"] = model_id
         _write_document(data)
-    return ModelDef(
-        id=model_id,
-        name=model_id,
-        base_url=item["base_url"],
-        api_key=item["api_key"],
-        vision=True,
-    )
+    return _model_def(item)
 
 
 def upsert_model(
@@ -180,6 +220,13 @@ def upsert_model(
         models = data.setdefault("models", [])
         for index, current in enumerate(models):
             if isinstance(current, dict) and current.get("id") == normalized_id:
+                # The settings form only owns the endpoint. Keep hand-edited
+                # fields such as ``name``, ``vision`` and ``limit``.
+                item = {
+                    **current,
+                    "base_url": item["base_url"],
+                    "api_key": item["api_key"],
+                }
                 models[index] = item
                 break
         else:
@@ -187,10 +234,4 @@ def upsert_model(
         if make_default or not data.get("default"):
             data["default"] = normalized_id
         _write_document(data)
-    return ModelDef(
-        id=normalized_id,
-        name=normalized_id,
-        base_url=item["base_url"],
-        api_key=item["api_key"],
-        vision=True,
-    )
+    return _model_def(item)

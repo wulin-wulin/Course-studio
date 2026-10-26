@@ -55,8 +55,10 @@ _COURSE_PIPELINE_TOOL_SOURCE = (
 _SHARED_OPENCODE_NODE_MODULES = _PROJECT_ROOT / ".opencode" / "node_modules"
 
 # These custom OpenAI-compatible providers have no Models.dev metadata for
-# OpenCode to consult. Declare the verified Kimi K2 window explicitly so
-# automatic compaction has a real input budget instead of ``context: 0``.
+# OpenCode to consult. A ``limit`` declared in models.json always wins; when
+# absent, only the verified Kimi K2 window gets a default so automatic
+# compaction has a real input budget instead of ``context: 0``. Other vendors
+# stay unset rather than guessed.
 _KIMI_256K_MODEL_IDS = frozenset({
     "kimi-k2.5",
     "kimi-k2.6",
@@ -74,13 +76,15 @@ _COMPACTION = {
 }
 
 
-def _model_capabilities(model_id: str) -> dict:
+def _model_capabilities(model_id: str, limit: dict | None = None) -> dict:
     capabilities = {
         "attachment": True,
         "tool_call": True,
         "modalities": {"input": ["text", "image"], "output": ["text"]},
     }
-    if model_id in _KIMI_256K_MODEL_IDS:
+    if limit is not None:
+        capabilities["limit"] = dict(limit)
+    elif model_id in _KIMI_256K_MODEL_IDS:
         capabilities["limit"] = dict(_KIMI_256K_LIMIT)
     return capabilities
 
@@ -264,7 +268,7 @@ def build_root_config() -> dict:
         model.id: {
             "npm": "@ai-sdk/openai-compatible",
             "options": {"baseURL": model.base_url, "apiKey": model.api_key},
-            "models": {model.id: _model_capabilities(model.id)},
+            "models": {model.id: _model_capabilities(model.id, model.limit)},
         }
         for model in models
     }
