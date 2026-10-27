@@ -1,0 +1,480 @@
+{
+  "id": "point-39-4",
+  "title": "读写文件",
+  "shortSummary": "解释 read 和 write 的文件偏移语义、返回值与短读写处理。",
+  "keyTerms": [
+    "read",
+    "write",
+    "strace",
+    "文件描述符",
+    "缓冲区",
+    "EOF"
+  ],
+  "animationType": "fdReadWrite",
+  "animationSuggestion": "逐步展示 open→read→write→read→close 的调用序列，高亮文件描述符 3 与 1、缓冲区内容和每次返回的字节数，并在 read 返回 0 时标出 EOF 与终止。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-39-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "system-call-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材用 cat 与 strace 展示读写系统调用的轨迹、参数和返回值结论，按“调用轨迹—描述符—返回值—EOF”重排讲解顺序，并补充返回值检查与写文件迁移。",
+      "estimatedMinutes": 13,
+      "outcomes": [
+        {
+          "id": "trace-syscall-sequence",
+          "text": "说明 cat 读取文件时 open、read、write、close 的调用序列，并解释每次调用的参数与返回值。"
+        },
+        {
+          "id": "explain-descriptors-and-returns",
+          "text": "解释文件描述符 0、1、2、3 的含义，以及 read/write 返回字节数、返回 0 表示 EOF 的规则。"
+        },
+        {
+          "id": "write-procedure-and-stdout",
+          "text": "描述写入文件的完整步骤，并说明标准输出与库函数 printf 如何最终落到 write 系统调用。"
+        }
+      ],
+      "misconceptions": [
+        "认为 read 一次调用就能读满请求的缓冲区，忽略返回值可能小于缓冲区大小。",
+        "认为第一次 open 返回的文件描述符一定是 0 或 1，忽略标准输入、标准输出和标准错误已经占用了 0、1、2。",
+        "认为 cat 直接读取文件内容而不经过 read 等系统调用。"
+      ],
+      "modules": [
+        {
+          "id": "why-syscalls",
+          "title": "从 cat foo 到系统调用",
+          "role": "motivation",
+          "outcomeRefs": [
+            "trace-syscall-sequence"
+          ],
+          "order": 0
+        },
+        {
+          "id": "open-and-fd",
+          "title": "open 调用与文件描述符",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-syscall-sequence",
+            "explain-descriptors-and-returns"
+          ],
+          "order": 1
+        },
+        {
+          "id": "read-write-values",
+          "title": "read/write 的参数、返回值与 EOF",
+          "role": "procedure",
+          "outcomeRefs": [
+            "explain-descriptors-and-returns",
+            "write-procedure-and-stdout"
+          ],
+          "order": 2
+        },
+        {
+          "id": "check-and-next",
+          "title": "读懂轨迹并走向随机访问",
+          "role": "practice",
+          "outcomeRefs": [
+            "trace-syscall-sequence",
+            "explain-descriptors-and-returns",
+            "write-procedure-and-stdout"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "trace-syscall-sequence",
+          "explain-descriptors-and-returns",
+          "write-procedure-and-stdout"
+        ],
+        "method": "独立解释一段 strace 轨迹中的每个系统调用，并写出读文件与写文件的步骤。",
+        "successCriteria": [
+          "能指出 open 的标志位与返回的文件描述符",
+          "能根据 read 的返回值判断读到的字节数与文件是否结束",
+          "能说明写文件时 open、write、close 的分工"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-39-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-cat-read",
+        "moduleId": "why-syscalls",
+        "depth": "core",
+        "kind": "example",
+        "title": "从 cat foo 开始",
+        "markdown": "在命令行执行 `echo hello > foo` 之后，`cat foo` 会在屏幕上输出 `hello`。问题在于：`cat` 程序是如何访问文件 `foo` 的？\n\n教材的答案不是猜测，而是**观察系统调用**：用 `strace` 跟踪程序运行时发出的每个系统调用，查看参数和返回代码，就能看到 `cat` 究竟让内核做了什么。Linux 上使用 `strace`，macOS 上可用 `dtruss`，较早的 UNIX 变体使用 `truss`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000528"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "读写文件"
+              ],
+              "lineStart": 10465,
+              "lineEnd": 10479,
+              "assetRefs": [],
+              "excerptSha256": "a4c5571bf451aa7c0af40ce58c96f7ab9841f8b21566fc618beffbb3cc1828e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-trace",
+        "moduleId": "why-syscalls",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：为什么看系统调用",
+        "markdown": "库例程和系统调用是两层不同的接口。`cat` 可能直接调用 `read` 和 `write`，也可能通过 `printf` 这类库例程间接完成输出；但最终把数据送进或取出内核的，仍然是系统调用。\n\n因此追踪系统调用能同时回答两个问题：程序访问了哪个文件，以及每次操作实际读写了多少数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cat-read"
+          ]
+        }
+      },
+      {
+        "id": "textbook-strace-trace",
+        "moduleId": "open-and-fd",
+        "depth": "core",
+        "kind": "code",
+        "title": "cat 的系统调用轨迹",
+        "markdown": "```txt\nprompt> strace cat foo\n...\nopen(\"foo\", O_RDONLY|O_LARGEFILE) = 3\nread(3, \"hello\\n\", 4096) = 6\nwrite(1, \"hello\\n\", 6) = 6\nhello\nread(3, \"\", 4096) = 0\nclose(3) = 0\n...\n```\n\n这是教材为了可读性删减后的轨迹。`strace` 还提供 `-f`（跟踪所有 fork 的子进程）、`-t`（报告每次调用的时间）和 `-etrace=open,close,read,write`（只跟踪指定的系统调用）等选项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-open-flags",
+        "moduleId": "open-and-fd",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "open 的标志与返回值",
+        "markdown": "`open(\"foo\", O_RDONLY|O_LARGEFILE) = 3` 这一行包含三个要点：\n\n- `O_RDONLY` 表示文件仅为读取而打开，不允许写入。\n- `O_LARGEFILE` 表示使用 64 位偏移量。\n- `open()` 成功时返回文件描述符 3。文件描述符只是一个整数，是每个进程私有的，用来访问已打开的文件；拿到它之后，才能调用 `read`、`write` 等方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-descriptor-three",
+        "moduleId": "open-and-fd",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么是 3 而不是 0",
+        "markdown": "第一次 `open()` 返回 3 而不是 0 或 1，是因为每个正在运行的进程默认已经打开了三个文件：\n\n- 0：标准输入，进程可从中读取输入；\n- 1：标准输出，进程可向其写入以显示到屏幕；\n- 2：标准错误，进程可向其写入错误消息。\n\n所以第一次打开另一个文件时，得到的几乎总是文件描述符 3。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fd-handle",
+        "moduleId": "open-and-fd",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：描述符是进程内的权限句柄",
+        "markdown": "| 描述符 | 含义 | 在 `cat` 例子中的用途 |\n|---|---|---|\n| 0 | 标准输入 | 可读取用户输入 |\n| 1 | 标准输出 | `write` 把 `hello` 显示到屏幕 |\n| 2 | 标准错误 | 输出错误消息 |\n| 3 | 新打开的文件 `foo` | `read` 从这里取数据 |\n\n描述符只在所属进程内有意义：另一个进程里的 3 号描述符可能指向完全不同的文件。它像一个不透明的句柄，拿到它就获得了执行相应操作的权限；`close` 之后这个句柄才算交还。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-descriptor-three"
+          ]
+        }
+      },
+      {
+        "id": "textbook-read-call",
+        "moduleId": "read-write-values",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "read 的三个参数与返回值",
+        "markdown": "`read()` 的第一个参数是文件描述符，用来告诉文件系统要读哪个文件；第二个参数指向存放结果的缓冲区；第三个参数是缓冲区大小，例子中是 4096 字节（4KB）。\n\n调用的返回值是**实际读取的字节数**：轨迹里返回 6，因为 `hello` 有 5 个字母，再加上 1 个行尾换行符。进程可以同时打开多个文件，正是文件描述符让内核知道这次读取针对哪一个文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-write-call",
+        "moduleId": "read-write-values",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "write 到标准输出",
+        "markdown": "读到 `hello` 之后，`cat` 调用 `write()`，目标描述符是 1，也就是标准输出，因此这 6 个字节被写到屏幕上。\n\n`cat` 不一定直接调用 `write`：如果实现高度优化，可能直接调用；否则可能调用 `printf`。`printf` 在内部处理完所有格式化细节后，最终仍然会对标准输出调用 `write`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-eof-close",
+        "moduleId": "read-write-values",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "读到文件末尾：返回 0",
+        "markdown": "随后 `cat` 再次请求读取，但文件里已经没有剩余字节，于是 `read()` 返回 0。返回 0 是文件结束（EOF）的信号，程序据此知道自己已经读完了整个文件。\n\n接下来程序调用 `close(3)`，把文件描述符 3 交还；文件被关闭，对它的读取也随之结束。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-return-value",
+        "moduleId": "read-write-values",
+        "depth": "core",
+        "kind": "warning",
+        "title": "模型补充：返回值决定下一步",
+        "markdown": "`read()` 的返回值是本次实际读到的字节数，不能假定它一定等于请求大小 4096。它可能小于请求值；只有返回 0 才表示没有更多数据。\n\n因此正确的处理方式是：用返回值决定这次拿到了多少字节，只要返回值大于 0 就继续读取，返回 0 时结束，而不是盲目地固定循环次数。`write()` 同理，返回的是实际写出的字节数，写较大文件时可能需要重复调用才能写完全部数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-read-call",
+            "textbook-eof-close"
+          ]
+        }
+      },
+      {
+        "id": "textbook-write-sequence",
+        "moduleId": "read-write-values",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "写文件的步骤",
+        "markdown": "写入文件走的是类似的一组步骤：先以写入方式打开文件，然后调用 `write()`，对于较大的文件可能重复调用，最后调用 `close()`。\n\n教材提示可以用 `dd if=foo of=bar` 这样的命令来观察写文件的过程，也可以用 strace 跟踪自己编写的程序，核对每一步实际发出的系统调用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000529"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用 strace（和类似工具）"
+              ],
+              "lineStart": 10480,
+              "lineEnd": 10512,
+              "assetRefs": [],
+              "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-next",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：读懂一段 trace",
+        "markdown": "**检查一下**：根据轨迹 `open(\"foo\", O_RDONLY|O_LARGEFILE) = 3`、`read(3, \"hello\\n\", 4096) = 6`、`write(1, \"hello\\n\", 6) = 6`、`read(3, \"\", 4096) = 0`，回答：\n\n1. 为什么第一次 `open` 返回 3，而不是 0 或 1？\n2. `read` 的 4096 和返回值 6 分别代表什么？\n3. 为什么 `write` 使用描述符 1 而不是 3？\n4. 第二次 `read` 返回 0 意味着什么，程序接下来做什么？\n5. 如果要把 `hello` 写入另一个文件，需要哪些步骤？\n\n参考思路：0、1、2 已被标准输入、标准输出和标准错误占用；4096 是缓冲区大小，6 是实际读到的字节数（含换行）；描述符 1 是标准输出，所以内容显示在屏幕上；返回 0 表示 EOF，随后调用 `close(3)`；写文件则先以写入方式打开，调用 `write`（较大文件可能重复调用），最后 `close`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-strace-trace",
+            "textbook-read-call",
+            "textbook-eof-close",
+            "textbook-write-sequence"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-next",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：顺序读写的边界",
+        "markdown": "本节看到的读写都是顺序推进的：程序从文件开头读起，一直读到返回 0 为止。可一旦需要在文件的任意位置读写，就必须显式改变读取位置；下一个知识点将用 `lseek` 定位偏移，理解本节的文件描述符与读写返回值，是理解随机访问的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-eof-close",
+            "textbook-write-sequence"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "trace-reading-check",
+        "type": "formative-check",
+        "title": "系统调用轨迹小测",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-next",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-descriptors-and-returns"
+        ],
+        "learningPurpose": "检查学习者能否从一段 strace 轨迹中读出文件描述符、参数和返回值含义，并据此判断 EOF。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-strace-trace",
+            "textbook-read-call",
+            "textbook-eof-close"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "showHints": false
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出 cat 读取文件 foo 时 open、read、write、read、close 的调用序列，并说明每次 read/write 的返回值含义以及返回 0 表示什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "插叙:文件和目录",
+  "clusterId": "chapter-39",
+  "clusterIds": [
+    "chapter-39"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000528"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "读写文件"
+      ],
+      "lineStart": 10465,
+      "lineEnd": 10479,
+      "assetRefs": [],
+      "excerptSha256": "a4c5571bf451aa7c0af40ce58c96f7ab9841f8b21566fc618beffbb3cc1828e8"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000529"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：使用 strace（和类似工具）"
+      ],
+      "lineStart": 10480,
+      "lineEnd": 10512,
+      "assetRefs": [],
+      "excerptSha256": "e3bd9d70aa7980ec7abc0cf7737339d44b5b87b5666e0cd523a9bcf979981dfb"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2774,
+    330
+  ],
+  "scale": 0.95
+}

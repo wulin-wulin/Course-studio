@@ -1,0 +1,433 @@
+{
+  "id": "point-28-13",
+  "title": "简单方法：让出来吧，宝贝",
+  "shortSummary": "说明让出 CPU 的简单方法及其在锁竞争下的局限，并分析上下文切换开销。",
+  "keyTerms": [
+    "让出 CPU",
+    "yield",
+    "锁竞争",
+    "调度"
+  ],
+  "animationType": "yieldStarvation",
+  "animationSuggestion": "以时间轴展示两个线程与多线程两种场景，标出每次 yield 触发的上下文切换计数，并在多线程场景中突出饿死线程始终排不上锁的循环边界。",
+  "difficulty": "中等",
+  "importance": 0.55,
+  "prerequisites": [
+    "point-28-7",
+    "point-28-12"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-and-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的动机、代码与竞争分析为主线，补充状态轨迹、开销对比和饿死场景，不改变 yield 的语义与教材结论。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-spin-problem",
+          "text": "说明持锁线程被抢占时，基于测试并设置的自旋锁为何浪费 CPU。"
+        },
+        {
+          "id": "explain-yield-mechanism",
+          "text": "解释 yield() 如何把线程从运行态转为就绪态并主动放弃 CPU。"
+        },
+        {
+          "id": "analyze-contention-cost",
+          "text": "比较自旋与让出在轻度和高度竞争下的开销来源。"
+        },
+        {
+          "id": "identify-starvation-risk",
+          "text": "识别让出方法可能造成的饿死，并说明它不能保证公平。"
+        }
+      ],
+      "misconceptions": [
+        "认为 yield() 消除了自旋浪费，而忽略每次让出都要发生上下文切换。",
+        "把让出 CPU 与阻塞等待混为一谈，以为让出后线程一定不会马上被再次调度。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-spin",
+          "title": "问题：等待者在原地空转",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-spin-problem"
+          ],
+          "order": 0
+        },
+        {
+          "id": "yield-mechanism",
+          "title": "机制：用 yield() 放弃 CPU",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-yield-mechanism"
+          ],
+          "order": 1
+        },
+        {
+          "id": "contention-analysis",
+          "title": "从两个线程到高度竞争",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "analyze-contention-cost"
+          ],
+          "order": 2
+        },
+        {
+          "id": "starvation-risk",
+          "title": "边界：让出并不保证公平",
+          "role": "boundary-check",
+          "outcomeRefs": [
+            "identify-starvation-risk"
+          ],
+          "order": 3
+        },
+        {
+          "id": "synthesis-and-bridge",
+          "title": "小结与下一步",
+          "role": "summary",
+          "outcomeRefs": [
+            "explain-spin-problem",
+            "explain-yield-mechanism",
+            "analyze-contention-cost",
+            "identify-starvation-risk"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-spin-problem",
+          "explain-yield-mechanism",
+          "analyze-contention-cost",
+          "identify-starvation-risk"
+        ],
+        "method": "能沿一条时间线追踪两个线程的加锁、让出与释放，并判断多线程高竞争下让出方法的开销与饿死风险。",
+        "successCriteria": [
+          "正确指出自旋浪费的是等待者的时间片",
+          "说明 yield() 把运行态转为就绪态而不是阻塞态",
+          "能指出让出方法的开销来自上下文切换与调度",
+          "能构造一个线程一直让出却拿不到锁的场景"
+        ],
+        "summaryBlockId": "model-summary-and-bridge",
+        "nextPointId": "point-28-14"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-spin-problem",
+        "moduleId": "problem-and-spin",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：硬件锁留下的自旋问题",
+        "markdown": "教材指出，硬件支持已经让我们得到有效、且通过票据锁实现公平的锁，但问题仍然存在：如果临界区中的线程发生上下文切换，其他线程只能一直自旋，等待被中断的持锁线程重新运行。\n\n也就是说，锁的正确性和公平性并不能消除“等待者占着 CPU 空转”的浪费。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000370"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单方法：让出来吧，宝贝"
+              ],
+              "lineStart": 6881,
+              "lineEnd": 6908,
+              "assetRefs": [],
+              "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spin-cost",
+        "moduleId": "problem-and-spin",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：自旋浪费在哪里",
+        "markdown": "在单核系统上，自旋线程虽然处于运行态，却没有推进任何有用的工作。它的时间片被用来反复读取一个暂时不会变化的锁变量，而真正能改变这个变量的持锁线程，此刻可能根本没有被调度。\n\n因此，问题的根源不是原子指令太慢，而是等待者与持锁者争用同一颗 CPU 时，等待者没有把 CPU 让出来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-spin-problem"
+          ]
+        }
+      },
+      {
+        "id": "textbook-yield-lock",
+        "moduleId": "yield-mechanism",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：测试并设置加 yield 的锁",
+        "markdown": "教材给出的第一种简单方法是：在需要自旋时放弃 CPU。锁仍然用测试并设置实现，只是把空转改成调用 `yield()`。\n\n```c\nvoid init() {\n    flag = 0;\n}\n\nvoid lock() {\n    while (TestAndSet(&flag, 1) == 1)\n        yield(); // give up the CPU\n}\n\nvoid unlock() {\n    flag = 0;\n}\n```\n\n`lock()` 先尝试原子地把 `flag` 置 1；若发现锁已被占用，就调用 `yield()`；`unlock()` 把 `flag` 清零。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000370"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单方法：让出来吧，宝贝"
+              ],
+              "lineStart": 6881,
+              "lineEnd": 6908,
+              "assetRefs": [],
+              "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lock-semantics-unchanged",
+        "moduleId": "yield-mechanism",
+        "depth": "core",
+        "kind": "note",
+        "title": "模型补充：让出并不改变锁的语义",
+        "markdown": "让出只改变等待者的行为，不改变锁本身。互斥仍然由 `TestAndSet(&flag, 1)` 的原子性保证：同一时刻只有一个线程能把 `flag` 从 0 置为 1 并进入临界区。`unlock()` 的语义也没有变化，仍然只是把 `flag` 清零。\n\n所以评价这个方法时，正确性可以沿用前面的分析，真正需要重新审视的是性能与公平性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-yield-lock"
+          ]
+        }
+      },
+      {
+        "id": "textbook-yield-semantics",
+        "moduleId": "yield-mechanism",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：yield 的语义与线程状态",
+        "markdown": "教材假定操作系统提供原语 `yield()`，线程可以调用它主动放弃 CPU，让其他线程运行。线程可以处于运行、就绪和阻塞三种状态之一；`yield()` 让线程从运行态转为就绪态，从而允许其他线程运行。因此，让出线程本质上取消调度了它自己。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000370"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单方法：让出来吧，宝贝"
+              ],
+              "lineStart": 6881,
+              "lineEnd": 6908,
+              "assetRefs": [],
+              "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-yield-vs-block",
+        "moduleId": "yield-mechanism",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：让出与阻塞的区别",
+        "markdown": "`yield()` 把线程放回就绪队列，而不是让它进入阻塞态。线程并没有在等待某个特定事件，它随时可能再次被调度，于是又去检查锁。这个区别解释了后面为什么仅靠让出仍然可能反复空转。\n\n可以把 `yield()` 想成在会议室里主动起身、让调度器决定下一位发言者；阻塞则更像离开会议室，直到有人专门通知再回来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-yield-semantics"
+          ]
+        }
+      },
+      {
+        "id": "textbook-two-thread-case",
+        "moduleId": "contention-analysis",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：单 CPU 上的两个线程",
+        "markdown": "考虑在单 CPU 上运行两个线程。一个线程调用 `lock()`，发现锁被占用时让出 CPU，另一个线程得以运行并完成临界区。在这个简单的例子中，让出方法工作得非常好。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000370"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单方法：让出来吧，宝贝"
+              ],
+              "lineStart": 6881,
+              "lineEnd": 6908,
+              "assetRefs": [],
+              "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-thread-trace",
+        "moduleId": "contention-analysis",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：两个线程的完整轨迹",
+        "markdown": "把过程展开：T0 先取得锁并进入临界区；此时发生时钟中断，调度器切换到 T1；T1 调用 `lock()`，测试并设置失败，于是调用 `yield()` 回到就绪队列；调度器再次选择 T0，T0 完成临界区并 `unlock()`；之后 T1 被调度，这次测试并设置成功，进入临界区。\n\n在这条轨迹里，让出只发生一次，等待时间也不长，所以代价可以忽略。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-two-thread-case"
+          ]
+        }
+      },
+      {
+        "id": "textbook-many-thread-cost",
+        "moduleId": "contention-analysis",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：许多线程反复竞争",
+        "markdown": "现在考虑许多线程（例如 100 个）反复竞争一把锁的情况。一个线程持有锁，在释放锁之前被抢占，其他 99 个线程分别调用 `lock()`，发现锁被占用后让出 CPU。假定采用某种轮转调度程序，这 99 个线程会一直处于“运行—让出”的模式，直到持锁的线程再次运行。\n\n教材强调：这虽然比浪费 99 个时间片的自旋方案要好，但成本仍然很高，因为上下文切换的成本是实实在在的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000370"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单方法：让出来吧，宝贝"
+              ],
+              "lineStart": 6881,
+              "lineEnd": 6908,
+              "assetRefs": [],
+              "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-shift",
+        "moduleId": "contention-analysis",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：开销被转移而不是消除",
+        "markdown": "对比两种方案可以看出：自旋让等待者在原地烧掉时间片；让出则把 CPU 交给调度器，但每让出一次就多一次上下文切换，还要额外运行调度程序。\n\n在高度竞争时，大量线程可能在就绪队列里排队、被调度、再次失败、再次让出。开销没有消失，只是从“空转”转移成了“切换与调度”。因此判断这个方案是否合适，必须看竞争强度与上下文切换代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-many-thread-cost"
+          ]
+        }
+      },
+      {
+        "id": "textbook-starvation",
+        "moduleId": "starvation-risk",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：让出方法的饿死风险",
+        "markdown": "教材还指出一个更糟的问题：还没有考虑饿死。一个线程可能一直处于让出的循环，而其他线程反复进出临界区。也就是说，让出并不保证每个等待者最终都能取得锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000370"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单方法：让出来吧，宝贝"
+              ],
+              "lineStart": 6881,
+              "lineEnd": 6908,
+              "assetRefs": [],
+              "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-starvation-scenario",
+        "moduleId": "starvation-risk",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：一个饿死场景",
+        "markdown": "设想线程 C 长期等待，而 A、B 两个线程交替完成很短的临界区。每次 C 被调度时，锁恰好被 A 或 B 持有，C 只好再次 `yield()`；等 A 或 B 释放后，调度器又可能先选中另一个已经就绪的线程。只要这种交错持续，C 就可能一直拿不到锁，尽管它并没有死锁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-starvation"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "starvation-risk",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：两个常见误解",
+        "markdown": "一个常见误解是“调用 `yield()` 就能解决自旋问题”。实际上 `yield()` 只改变了等待者的行为：它不改变锁的公平性，也不保证等待者获胜，还会引入上下文切换开销。\n\n另一个误解是“让出等于阻塞”。让出的线程仍在就绪队列中参与调度，因此它可能立刻又被选中并再次失败；阻塞则要等到明确的唤醒条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-many-thread-cost",
+            "textbook-starvation"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-and-bridge",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "让出方法用 `yield()` 把等待者从运行态转为就绪态，在轻度竞争、尤其是单 CPU 两线程的场景下效果很好；但在高竞争下，它把空转变成了大量上下文切换，并且没有消除饿死风险。\n\n这说明“偶然性”仍然存在：线程是否能及时拿到锁，取决于调度器何时选中谁。下一步教材引入显式等待队列，用 `park()` 让拿不到锁的线程真正休眠，并在锁释放时精确唤醒一个等待者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-yield-semantics",
+            "textbook-many-thread-cost",
+            "textbook-starvation"
+          ]
+        }
+      }
+    ]
+  },
+  "subtitle": "锁",
+  "clusterId": "chapter-28",
+  "clusterIds": [
+    "chapter-28"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000370"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "简单方法：让出来吧，宝贝"
+      ],
+      "lineStart": 6881,
+      "lineEnd": 6908,
+      "assetRefs": [],
+      "excerptSha256": "87d32abf0aa6005c75919ac576da2d81265c4159e9854bd69c59b0d99aa1c40f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    934,
+    1670
+  ],
+  "scale": 0.85
+}

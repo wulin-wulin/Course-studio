@@ -1,0 +1,460 @@
+{
+  "id": "point-16-1",
+  "title": "浮点数",
+  "shortSummary": "说明浮点寄存器、浮点加载存储与算术指令在 ARM64 中的使用方式。",
+  "keyTerms": [
+    "浮点数",
+    "浮点寄存器",
+    "算术指令"
+  ],
+  "animationType": "simdBlockCopyLoop",
+  "animationSuggestion": "逐步展示内存从 src 逐轮搬到 dst：高亮每轮载入的 q 寄存器与写出的 64 字节，同步显示 src、dst 和 count 的变化，直到 count 归零停止。",
+  "difficulty": "中等",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-2-1",
+    "point-7-2",
+    "point-10-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-instruction-transfer",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对寄存器宽度与指令用法的定义，围绕选择寄存器、读写内存和迁移到大块搬运重排讲解，补充宽度对照表、算例与自检，不改变教材的事实边界。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-fp-registers",
+          "text": "说明 AArch64 的 SIMD 与 FP 寄存器如何存放浮点数，以及 s/d/h/q 前缀各自的宽度含义。"
+        },
+        {
+          "id": "choose-fp-register-width",
+          "text": "根据数据类型或操作宽度选择正确的浮点寄存器前缀与指令宽度。"
+        },
+        {
+          "id": "apply-fp-instructions",
+          "text": "使用 f 前缀算术指令和 ldr/str 完成浮点运算与内存读写。"
+        },
+        {
+          "id": "transfer-bulk-memory",
+          "text": "解释 128 位 SIMD 与 FP 寄存器配合 ldp/stp 为何能加速大块内存搬运。"
+        }
+      ],
+      "misconceptions": [
+        "把 s1、d1、q1 当作三个彼此独立的寄存器，而不是同一个 128 位寄存器的不同宽度视图。",
+        "以为浮点数的加载存储必须先用整数寄存器中转，实际上 ldr/str 可以直接在浮点寄存器与内存之间搬运数据。"
+      ],
+      "modules": [
+        {
+          "id": "chapter-orientation",
+          "title": "章节定位与动机",
+          "role": "orientation",
+          "description": "交代本章位置，并说明浮点数据为何在汇编中需要单独处理。",
+          "outcomeRefs": [
+            "explain-fp-registers"
+          ],
+          "order": 0
+        },
+        {
+          "id": "fp-register-bank",
+          "title": "寄存器与宽度视图",
+          "role": "concept",
+          "description": "建立 32 个 128 位 SIMD 与 FP 寄存器及 s/d/h/q 前缀的对应关系。",
+          "outcomeRefs": [
+            "explain-fp-registers",
+            "choose-fp-register-width"
+          ],
+          "order": 1
+        },
+        {
+          "id": "fp-arithmetic",
+          "title": "浮点算术指令",
+          "role": "mechanism",
+          "description": "用 f 前缀指令完成寄存器之间的浮点运算。",
+          "outcomeRefs": [
+            "apply-fp-instructions"
+          ],
+          "order": 2
+        },
+        {
+          "id": "fp-memory",
+          "title": "浮点的加载与存储",
+          "role": "procedure",
+          "description": "用 ldr/str 在内存与浮点寄存器之间搬运数据。",
+          "outcomeRefs": [
+            "apply-fp-instructions"
+          ],
+          "order": 3
+        },
+        {
+          "id": "bulk-memory-copy",
+          "title": "用宽寄存器搬大块内存",
+          "role": "application",
+          "description": "理解 128 位寄存器与 ldp/stp 在大块拷贝中的作用。",
+          "outcomeRefs": [
+            "transfer-bulk-memory"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-summary",
+          "title": "自检与收束",
+          "role": "assessment",
+          "description": "用练习检查宽度选择与指令使用，并总结本点主线。",
+          "outcomeRefs": [
+            "explain-fp-registers",
+            "choose-fp-register-width",
+            "apply-fp-instructions",
+            "transfer-bulk-memory"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-fp-registers",
+          "choose-fp-register-width",
+          "apply-fp-instructions",
+          "transfer-bulk-memory"
+        ],
+        "method": "先完成宽度选择与指令书写练习，再用三句话总结复述本点主线。",
+        "successCriteria": [
+          "能为 float、double 和 128 位搬运场景选对寄存器前缀",
+          "能写出 f 前缀算术指令与 ldr/str 的正确操作数顺序",
+          "能说明 q 寄存器与 ldp/stp 为何适合大块内存拷贝"
+        ],
+        "exerciseBlockId": "check-yourself",
+        "summaryBlockId": "fp-summary",
+        "nextPointId": "point-16-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "chapter-intro",
+        "moduleId": "chapter-orientation",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材定位：为什么还讲浮点数",
+        "markdown": "本章进入浮点数与 SIMD。教材先给出定位：这部分内容在日常汇编开发和程序逆向中并不常见，但仍是不可或缺的一部分。本节先处理浮点数本身——它住在哪里、用哪些指令搬运和计算；把同一组寄存器当作多路向量使用是下一个知识点的事。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "浮点数与SIMD"
+              ],
+              "lineStart": 2837,
+              "lineEnd": 2840,
+              "assetRefs": [],
+              "excerptSha256": "0c2a3a3634edac5cae8502212ad4fa034e804ba015c3207e55470276af480d29"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-float-in-asm",
+        "moduleId": "chapter-orientation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么浮点要单独学",
+        "markdown": "为什么汇编里要单独关心浮点？整数与浮点在硬件上走两套寄存器与指令：把一个 `float` 或 `double` 的位模式直接交给通用寄存器并用整数指令运算，得到的不是浮点数值结果。本点要建立的是「浮点数据住在哪个寄存器、用什么指令搬运与计算」的映射，这是读懂编译器输出、手写数值代码的起点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "chapter-intro"
+          ]
+        }
+      },
+      {
+        "id": "fp-register-bank",
+        "moduleId": "fp-register-bank",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "32 个 128 位寄存器与宽度前缀",
+        "markdown": "在 AArch64 中，浮点数存放在 32 个 128 位的「SIMD 与 FP 寄存器」里。处理浮点时最常用的是每个寄存器的 32 位和 64 位部分，分别对应 C 语言的单精度 `float` 与双精度 `double`。\n\n引用不同宽度要换前缀：32 位用 `s`，64 位用 `d`，16 位用 `h`，128 位用 `q`。例如 `s1` 是第 2 个 SIMD 与 FP 寄存器的 32 位部分，`d3` 是第 4 个寄存器的 64 位部分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000136"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "浮点数"
+              ],
+              "lineStart": 2841,
+              "lineEnd": 2896,
+              "assetRefs": [
+                "./assets/16-neon-fp.png"
+              ],
+              "excerptSha256": "638d57f3f4070ed88a3463c5f7128cd67968ad3dd80150c4007c84db8d31af7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-register-width-table",
+        "moduleId": "fp-register-bank",
+        "depth": "core",
+        "kind": "table",
+        "title": "宽度前缀速查表",
+        "markdown": "把教材给出的前缀整理成一张随时可查的对照表：\n\n| 前缀 | 宽度 | 对应关系与示例 |\n|---|---|---|\n| `s` | 32 位 | C 的 `float`；`s1` 是第 2 个寄存器的 32 位部分 |\n| `d` | 64 位 | C 的 `double`；`d3` 是第 4 个寄存器的 64 位部分 |\n| `h` | 16 位 | 16 位视图，写作 `h` 加编号 |\n| `q` | 128 位 | 整个 128 位寄存器；如大块搬运中的 `q0` |\n\n同一编号的不同前缀落在同一个物理寄存器上：`s1`、`d1`、`q1` 都指向第 2 个 SIMD 与 FP 寄存器的不同宽度部分。因此选择前缀就是在选择这次操作要触及多宽的数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fp-register-bank"
+          ]
+        }
+      },
+      {
+        "id": "fp-arithmetic",
+        "moduleId": "fp-arithmetic",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "f 前缀的浮点算术",
+        "markdown": "和整数类似，SIMD 与 FP 寄存器之间也能按浮点运算法则做算术运算，对应指令只需在指令名前加上 `f`。例如：\n\n```armasm\nfadd    s1, s0, s2\n```\n\n意思是把 `s0` 的值与 `s2` 相加，结果存入 `s1`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000136"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "浮点数"
+              ],
+              "lineStart": 2841,
+              "lineEnd": 2896,
+              "assetRefs": [
+                "./assets/16-neon-fp.png"
+              ],
+              "excerptSha256": "638d57f3f4070ed88a3463c5f7128cd67968ad3dd80150c4007c84db8d31af7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-arithmetic-worked-example",
+        "moduleId": "fp-arithmetic",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：换一条浮点运算",
+        "markdown": "把 `fadd` 的模式推广开：把运算换成 `f` 前缀版本，并把操作数换成同一宽度的 `s` 或 `d` 寄存器即可。例如双精度乘法写成：\n\n```armasm\nfmul    d0, d1, d2\n```\n\n表示 `d0 = d1 × d2`。检查要点是三个操作数的宽度前缀必须一致：都写 `s` 表示按单精度计算，都写 `d` 表示按双精度计算，混用则不是同一个数据宽度上的运算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fp-arithmetic"
+          ]
+        }
+      },
+      {
+        "id": "fp-memory",
+        "moduleId": "fp-memory",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "直接用 ldr 与 str",
+        "markdown": "浮点寄存器的内存读写与整型相同，直接使用 `ldr` 与 `str`。例如：\n\n```armasm\nldr    s1, [x0]\n```\n\n教材的解释是：把 `x0` 寄存器中保存的地址所指向的 32 位值导入 `s1`。地址写在方括号里，数据端则直接是浮点寄存器，不需要先用整数寄存器中转。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000136"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "浮点数"
+              ],
+              "lineStart": 2841,
+              "lineEnd": 2896,
+              "assetRefs": [
+                "./assets/16-neon-fp.png"
+              ],
+              "excerptSha256": "638d57f3f4070ed88a3463c5f7128cd67968ad3dd80150c4007c84db8d31af7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-load-store-walkthrough",
+        "moduleId": "fp-memory",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次浮点内存往返",
+        "markdown": "把加载与存储配成一对，就是一次完整的浮点内存往返：\n\n```armasm\nldr    d0, [x0]\nstr    d0, [x1]\n```\n\n第一条按 `x0` 给出的地址读入一个 64 位（`double`）值到 `d0`，第二条把 `d0` 写到 `x1` 给出的地址。宽度前缀同时决定搬运多少字节：`ldr s2` 搬 4 字节，`ldr d2` 搬 8 字节，`ldr q2` 搬 16 字节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fp-memory"
+          ]
+        }
+      },
+      {
+        "id": "bulk-memory",
+        "moduleId": "bulk-memory-copy",
+        "depth": "advanced",
+        "kind": "application",
+        "title": "用 128 位寄存器搬大块内存",
+        "markdown": "SIMD 与 FP 寄存器还有一个常见用途：大块内存访问。以 `memcpy` 为例，AArch64 不能用一条指令直接把一块内存写到另一块内存，必须先 `ldr` 读入寄存器、再 `str` 写出；而一个通用寄存器最多只有 64 位，拷贝大块内存需要多次读写。SIMD 与 FP 寄存器最大 128 位，再配合 `ldp`/`stp` 就能一次读写两块内存：\n\n```armasm\nldp    q0, q1, [x0]\nstp    q0, q1, [x1]\n```\n\nLinux glibc 的 `memcpy_advsimd.S` 就采用类似写法，在循环里成对搬运 `q` 寄存器，并每轮把源地址、目的地址各推进 64 字节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000136"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "浮点数"
+              ],
+              "lineStart": 2841,
+              "lineEnd": 2896,
+              "assetRefs": [
+                "./assets/16-neon-fp.png"
+              ],
+              "excerptSha256": "638d57f3f4070ed88a3463c5f7128cd67968ad3dd80150c4007c84db8d31af7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bulk-memory-loop",
+        "moduleId": "bulk-memory-copy",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "模型补充：算一算循环收益",
+        "markdown": "把数字算一遍就能看出收益：一个通用寄存器一次最多搬 8 字节，而 `ldp q0, q1, [...]` 一次读入 2 × 16 = 32 字节。glibc 的那段循环在一次迭代里用两组 `stp`/`ldp` 处理 64 字节，然后把 `src`、`dst` 各加 64，把剩余 `count` 减 64，并用 `b.hi` 决定是否回到 `L(loop64)`。搬完同样多的数据所需的迭代次数因此大幅下降，循环与指令开销被摊薄。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bulk-memory"
+          ]
+        }
+      },
+      {
+        "id": "check-yourself",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：宽度选择与指令书写",
+        "markdown": "先合上页面独立作答，再对照下面的要点。\n\n1. `d5` 访问的是第几个 SIMD 与 FP 寄存器？它有多宽？\n2. 要把两个 `float` 相加，应选 `s` 还是 `d` 前缀？为什么操作数不能混用宽度？\n3. 已知 `x0` 指向一块内存，写出把其中 32 位浮点值读入 `s2` 的指令。\n4. 为什么 `memcpy` 会选用 `q` 寄存器，而不是只用通用寄存器？\n\n参考要点：\n\n1. 第 6 个寄存器，64 位部分。\n2. 选 `s`；`float` 是 32 位，混用宽度就不是同一个数据宽度上的运算。\n3. `ldr s2, [x0]`。\n4. `q` 寄存器有 128 位，配合 `ldp`/`stp` 一次可搬两块，减少迭代次数和指令开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fp-register-bank",
+            "fp-arithmetic",
+            "fp-memory",
+            "bulk-memory"
+          ]
+        }
+      },
+      {
+        "id": "fp-summary",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "三句话收束",
+        "markdown": "本点的主线可以压缩成三句话：\n\n- 浮点数据住在 32 个 128 位 SIMD 与 FP 寄存器中，用 `s`/`d`/`h`/`q` 选择宽度视图，最常用的 `s` 对应 `float`、`d` 对应 `double`。\n- 浮点算术就是在整数指令前加 `f`，例如 `fadd s1, s0, s2`，操作数与结果的宽度前缀保持一致。\n- 浮点的加载与存储仍用 `ldr`/`str`；更宽的 `q` 寄存器配合 `ldp`/`stp`，还能显著减少大块内存搬运的迭代次数。\n\n下一个知识点会把同一组寄存器拆成多路，正式进入 SIMD 向量运算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fp-register-bank",
+            "fp-arithmetic",
+            "fp-memory",
+            "bulk-memory"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fp-width-choice-check",
+        "type": "formative-check",
+        "title": "宽度选择自检",
+        "anchorBlockId": "check-yourself",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-fp-register-width",
+          "apply-fp-instructions"
+        ],
+        "learningPurpose": "检查学习者能否按数据类型与操作宽度选择正确的寄存器前缀，并写出配套指令。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "fp-register-bank",
+            "fp-arithmetic"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别给出 `float`、`double` 和整寄存器搬运三类场景，写出应使用的寄存器前缀，并说明宽度不一致时会失去什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "浮点数与SIMD",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000135"
+      ],
+      "headingPath": [
+        "浮点数与SIMD"
+      ],
+      "lineStart": 2837,
+      "lineEnd": 2840,
+      "assetRefs": [],
+      "excerptSha256": "0c2a3a3634edac5cae8502212ad4fa034e804ba015c3207e55470276af480d29"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000136"
+      ],
+      "headingPath": [
+        "浮点数与SIMD",
+        "浮点数"
+      ],
+      "lineStart": 2841,
+      "lineEnd": 2896,
+      "assetRefs": [
+        "./assets/16-neon-fp.png"
+      ],
+      "excerptSha256": "638d57f3f4070ed88a3463c5f7128cd67968ad3dd80150c4007c84db8d31af7c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    946,
+    420
+  ],
+  "scale": 1.19
+}

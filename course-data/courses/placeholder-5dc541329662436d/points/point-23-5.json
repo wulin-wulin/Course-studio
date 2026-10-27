@@ -1,0 +1,467 @@
+{
+  "id": "point-23-5",
+  "title": "其他漂亮的虚拟内存技巧",
+  "shortSummary": "讨论 VAX/VMS 中写时复制、按需清零等虚拟内存技巧及其带来的收益。",
+  "keyTerms": [
+    "写时复制",
+    "按需清零",
+    "虚拟内存技巧",
+    "VAX/VMS"
+  ],
+  "animationType": "copyOnWriteSharing",
+  "animationSuggestion": "分步展示两个地址空间共享页的初始只读状态，让学习者选择读取或写入，画面按真实规则更新页表项和物理页归属，并显示陷阱、置零或复制发生的位置。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-5-1",
+    "point-21-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-trace-with-tradeoffs",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对按需置零与写时复制的机制描述和讲解顺序，围绕惰性这一共同线索补充状态追踪、适用边界与取舍检查。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-demand-zeroing",
+          "text": "解释按需置零如何用不可访问的页表项和陷阱把分配与清零推迟到首次访问。"
+        },
+        {
+          "id": "explain-cow",
+          "text": "说明写时复制的只读共享、写陷阱和私有副本流程。"
+        },
+        {
+          "id": "judge-lazy-tradeoff",
+          "text": "判断惰性优化在给定场景中节省了什么、何时仍要付出代价。"
+        }
+      ],
+      "misconceptions": [
+        "把按需置零理解为页面永远不分配或不清零，忽视首次访问时仍要完成置零和映射。",
+        "认为写时复制后父子进程始终共享同一物理页，忽略写入时会触发复制并得到私有副本。",
+        "把惰性只看成增加复杂度的延迟，忽视推迟的工作有时可以完全避免。"
+      ],
+      "modules": [
+        {
+          "id": "m-intro-lazy",
+          "title": "两个惰性技巧的共同线索",
+          "role": "problem-intro",
+          "description": "先建立两个技巧都属于惰性优化的整体印象。",
+          "outcomeRefs": [
+            "explain-demand-zeroing",
+            "explain-cow",
+            "judge-lazy-tradeoff"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-demand-zeroing",
+          "title": "按需置零的机制与代价",
+          "role": "mechanism-trace",
+          "description": "追踪页从未分配、首次访问到完成置零映射的状态变化。",
+          "outcomeRefs": [
+            "explain-demand-zeroing",
+            "judge-lazy-tradeoff"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-laziness-principle",
+          "title": "惰性的收益与边界",
+          "role": "principle",
+          "description": "理解推迟工作为何能降低延迟，以及何时能完全省掉工作。",
+          "outcomeRefs": [
+            "explain-demand-zeroing",
+            "explain-cow",
+            "judge-lazy-tradeoff"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-copy-on-write",
+          "title": "写时复制的机制",
+          "role": "mechanism-trace",
+          "description": "追踪只读共享页在写入时如何变成私有副本。",
+          "outcomeRefs": [
+            "explain-cow"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-cow-application",
+          "title": "COW 的应用与取舍",
+          "role": "application",
+          "description": "把 COW 放到共享库与 fork/exec 场景中比较收益与开销。",
+          "outcomeRefs": [
+            "explain-cow",
+            "judge-lazy-tradeoff"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-check",
+          "title": "达成检查与回顾",
+          "role": "assessment",
+          "description": "用新场景检查两类状态转移是否真正掌握。",
+          "outcomeRefs": [
+            "explain-demand-zeroing",
+            "explain-cow",
+            "judge-lazy-tradeoff"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-demand-zeroing",
+          "explain-cow",
+          "judge-lazy-tradeoff"
+        ],
+        "method": "在给定访问场景中写出页面状态转移，并说明惰性带来的收益与仍需付出的代价。",
+        "successCriteria": [
+          "能正确指出首次访问与写入时分别触发了什么处理",
+          "能用惰性原理解释收益来源，并说明何时推迟的工作仍会发生"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-23-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-intro",
+        "moduleId": "m-intro-lazy",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：两个标准的虚拟内存技巧",
+        "markdown": "VAX/VMS 把两个后来成为标准做法的虚拟内存技巧放在一起讨论：按需置零（demand zeroing）与写时复制（copy-on-write，COW）。它们的共同点是**惰性（lazy）**：不提前完成全部工作，而是把工作推迟到真正需要时，甚至可能永远不做。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000324"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "其他漂亮的虚拟内存技巧"
+              ],
+              "lineStart": 5586,
+              "lineEnd": 5593,
+              "assetRefs": [],
+              "excerptSha256": "da087a8aa8b7cf594f119e6c883dcfbbd62f8446d9af0783046ca23c6395b036"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lazy-overview",
+        "moduleId": "m-intro-lazy",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：同一个惰性思路的两种用法",
+        "markdown": "两个技巧都借助页表项和陷阱来推迟工作，但推迟的内容不同：按需置零推迟的是**物理页的分配与清零**，写时复制推迟的是**页面内容的复制**。阅读后面的机制时，可以反复问三个问题：当前页表项允许访问吗？访问触发陷阱时操作系统如何识别这是惰性页？完成处理后页表项变成什么状态？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-intro"
+          ]
+        }
+      },
+      {
+        "id": "tb-demand-zeroing",
+        "moduleId": "m-demand-zeroing",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：按需置零",
+        "markdown": "考虑向进程地址空间新增一个页。初级实现会立刻找到物理页、清零、再映射到地址空间；清零是安全要求，否则进程可能看到其他进程使用该页时的残留内容。这种立即完成的方式在页面未被使用时就白费了力气。\n\n按需置零把工作压到最低：新增页时只在页表中放入一个标记为**不可访问**的页表项。若进程随后读取或写入该页，就会陷入操作系统；操作系统借助页表项中保留给操作系统的位认出这是一个按需置零页，此时才寻找物理页、置零并映射到进程地址空间。如果进程从不访问该页，这些工作就完全避免了。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000324"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "其他漂亮的虚拟内存技巧"
+              ],
+              "lineStart": 5586,
+              "lineEnd": 5593,
+              "assetRefs": [],
+              "excerptSha256": "da087a8aa8b7cf594f119e6c883dcfbbd62f8446d9af0783046ca23c6395b036"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-zeroing-trace",
+        "moduleId": "m-demand-zeroing",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：按需置零的状态追踪",
+        "markdown": "把一次按需置零拆成四个状态：\n\n1. **新增页**：页表项存在但标记不可访问，物理页尚未分配。\n2. **首次访问**：进程读或写该地址，硬件发现不可访问并陷入操作系统。\n3. **识别与兑现**：操作系统判定这是按需置零页，分配物理页、清零并建立映射，页表项转为可访问。\n4. **后续访问**：不再触发该路径，直到页面被换出或地址空间布局改变。\n\n这里的关键不是“永远不分配”，而是“访问之前不分配”；不可访问标记同时承担了触发器与识别标签。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-demand-zeroing"
+          ]
+        }
+      },
+      {
+        "id": "model-zeroing-cost",
+        "moduleId": "m-demand-zeroing",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：何时省得最多",
+        "markdown": "想象进程申请了一大块零初始化内存，却只写入其中少数几页。立即置零的实现要为整块区域找到并清零所有物理页；按需置零只为真正被触碰的页付出代价，其余页停留在不可访问状态。反过来，如果进程马上遍历整块区域，那么每页都会触发一次陷阱并完成置零，惰性只把总工作量分散到访问过程中，并额外增加了陷阱处理开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-demand-zeroing"
+          ]
+        }
+      },
+      {
+        "id": "tb-lazy-tip",
+        "moduleId": "m-laziness-principle",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材提示：惰性为什么有益",
+        "markdown": "惰性在操作系统中通常有两方面好处。第一，推迟工作可以降低当前操作的延迟，提高响应性；例如操作系统可以先报告写入文件成功，稍后再在后台真正写盘。第二，也是更重要的，惰性有时能让工作完全不必发生；例如数据一直延迟到文件被删除都没有真正写入，那么写盘就不需要做了。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000325"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：惰性"
+              ],
+              "lineStart": 5594,
+              "lineEnd": 5603,
+              "assetRefs": [],
+              "excerptSha256": "2f4ac9a40cdf01215c4abbc6de1c759fde483ab02daa0236c78a5356905da3ef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lazy-boundary",
+        "moduleId": "m-laziness-principle",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：惰性的适用边界",
+        "markdown": "惰性不等于省略正确性或安全性要求。按需置零首次访问时仍会真正清零，写时复制在被写入时仍会生成正确内容，只是这些工作换了发生时机。判断惰性是否划算，要看被推迟的工作是否真的可能被跳过，以及推迟路径本身的开销是否小于提前完成的开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-lazy-tip",
+            "tb-demand-zeroing"
+          ]
+        }
+      },
+      {
+        "id": "tb-cow",
+        "moduleId": "m-copy-on-write",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：写时复制",
+        "markdown": "写时复制的想法至少可以追溯到 TENEX 系统。当操作系统需要把一个页面从一个地址空间复制到另一个地址空间时，它并不实际复制页面内容，而是把该页映射到目标地址空间，并在两个地址空间中都把该页标记为**只读**。只要两边都只读取，就不会有进一步动作，操作系统已经完成了一次不移动数据的“快速复制”。\n\n如果其中一方尝试写入该页，就会陷入操作系统。操作系统认出这是一个 COW 页，惰性地分配一个新页、填入数据，并把新页映射到出错的那个地址空间；这个进程随后继续执行，并拥有了该页的私有副本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000325"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：惰性"
+              ],
+              "lineStart": 5594,
+              "lineEnd": 5603,
+              "assetRefs": [],
+              "excerptSha256": "2f4ac9a40cdf01215c4abbc6de1c759fde483ab02daa0236c78a5356905da3ef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cow-trace",
+        "moduleId": "m-copy-on-write",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：一次 fork 后的写入追踪",
+        "markdown": "父进程 P 创建子进程 C 后，两者地址空间中的对应页指向同一个物理页，两边页表项都标记只读。\n\n- C 只读取该页：不发生复制，P 和 C 继续共享这一物理页。\n- C 写入该页：写操作违反只读保护而陷入操作系统；操作系统为 C 分配新物理页，复制原内容，把 C 的页表项改为指向新页并恢复可写，P 的页表项保持只读以免两边互相影响。\n- P 之后也写入：若该页仍被 C 以只读方式共享，P 也会触发同样的复制流程，得到自己的私有副本。\n\n因此共享状态和私有状态可以同时存在，复制是按页、按写入时机发生的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cow"
+          ]
+        }
+      },
+      {
+        "id": "tb-cow-why",
+        "moduleId": "m-cow-application",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材解释：COW 为什么重要",
+        "markdown": "COW 的用途有多方面。任何共享库都可以通过写时复制映射到许多进程的地址空间中，从而节省内存。在 UNIX 系统中，由于 fork() 与 exec() 的语义，COW 更加关键：fork() 要创建调用者地址空间的精确副本，对于大地址空间，逐页复制既慢又数据密集；而随后的 exec() 往往会用新程序覆盖大部分地址空间。改成写时复制的 fork() 后，操作系统避免了大量不必要的复制，同时保留正确的语义并提高性能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000325"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：惰性"
+              ],
+              "lineStart": 5594,
+              "lineEnd": 5603,
+              "assetRefs": [],
+              "excerptSha256": "2f4ac9a40cdf01215c4abbc6de1c759fde483ab02daa0236c78a5356905da3ef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cow-tradeoff",
+        "moduleId": "m-cow-application",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：立即复制与写时复制的取舍",
+        "markdown": "| 维度 | 立即复制 | 写时复制 |\n|---|---|---|\n| 复制发生时机 | 建立共享时一次完成 | 每次写入时按页发生 |\n| 只读或几乎不写的场景 | 付出了完整复制开销 | 可能完全省掉复制 |\n| 频繁写入的场景 | 一次开销后不再为写页付出额外代价 | 每次首次写入都要陷入并复制，开销分散且叠加 |\n| 实现要求 | 直接复制数据 | 需要只读保护、写陷阱、COW 标记与页表维护 |\n\nCOW 的收益来自“写之前不复制”，代价则转移到了写路径上；读写比例和 fork 之后是否立即 exec 会显著影响它是否划算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cow",
+            "tb-cow-why"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：判断两个场景的惰性收益",
+        "markdown": "场景一：进程申请一块很大的零初始化内存，但只写入开头两页。场景二：进程 fork 出子进程后，子进程立即调用 exec() 换成新程序。\n\n请分别回答：\n\n1. 惰性机制把哪项工作推迟了？\n2. 哪些页可能永远不需要完成这项工作？\n3. 如果进程改为立刻触碰所有页，收益会怎样变化？\n\n参考要点：场景一依靠按需置零，未被写入的页一直停留在不可访问状态；场景二依靠 COW，子进程在 exec 前若只读或未访问旧页，就不必复制它们，而 exec 会替换地址空间。若立刻触碰所有页或大量写入，推迟的工作仍会发生，收益主要变成延迟分摊而非总量减少。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-demand-zeroing",
+            "tb-cow",
+            "tb-cow-why"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "m-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：本点回顾与下一节",
+        "markdown": "本点用两个技巧展示了虚拟内存中的惰性设计：按需置零把物理页的分配与清零推迟到首次访问，写时复制把页面内容复制推迟到首次写入；两者都靠页表项的访问控制位和陷阱把“稍后处理”变成可执行的机制。评价这类优化时，既要看它省掉了什么，也要看访问真正发生时仍需完成的工作与额外开销。下一节将对 VAX/VMS 这个真实系统做整体小结。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-intro",
+            "tb-lazy-tip",
+            "tb-cow-why"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "lazy-page-state-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "m-check",
+        "depth": "core",
+        "title": "惰性页状态自检",
+        "outcomeRefs": [
+          "explain-demand-zeroing",
+          "explain-cow",
+          "judge-lazy-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否把按需置零与写时复制的状态转移应用到新的访问场景，并说明收益来源。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-demand-zeroing",
+            "tb-cow",
+            "tb-cow-why"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别说明两个场景中哪项工作被推迟、哪些页可能永远不需处理，以及立刻访问全部页面时收益如何变化。"
+        }
+      }
+    ]
+  },
+  "subtitle": "VAX/VMS 虚拟内存系统",
+  "clusterId": "chapter-23",
+  "clusterIds": [
+    "chapter-23"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000324"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "其他漂亮的虚拟内存技巧"
+      ],
+      "lineStart": 5586,
+      "lineEnd": 5593,
+      "assetRefs": [],
+      "excerptSha256": "da087a8aa8b7cf594f119e6c883dcfbbd62f8446d9af0783046ca23c6395b036"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000325"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：惰性"
+      ],
+      "lineStart": 5594,
+      "lineEnd": 5603,
+      "assetRefs": [],
+      "excerptSha256": "2f4ac9a40cdf01215c4abbc6de1c759fde483ab02daa0236c78a5356905da3ef"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4197,
+    1585
+  ],
+  "scale": 0.91
+}

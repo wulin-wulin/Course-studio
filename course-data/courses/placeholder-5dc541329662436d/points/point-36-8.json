@@ -1,0 +1,346 @@
+{
+  "id": "point-36-8",
+  "title": "案例研究：简单的IDE 磁盘驱动程序",
+  "shortSummary": "通过简单 IDE 磁盘驱动案例展示初始化、命令提交和中断处理流程。",
+  "keyTerms": [
+    "IDE 驱动",
+    "初始化",
+    "命令提交",
+    "中断处理"
+  ],
+  "animationType": "driverQueue",
+  "animationSuggestion": "用两条请求队列和状态位面板演示：请求依次入队、驱动等待就绪并提交、进程进入睡眠、中断标记完成并唤醒进程、随后自动提交下一条请求；每一步用文字标注读取或写入了哪个寄存器、依据哪个状态位。",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 IDE 接口、交互协议和 xv6 实现的原始描述与顺序，围绕案例补充状态位含义、队列语义和迁移检查。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-ide-interface",
+          "text": "说明 IDE 磁盘接口的寄存器分组、访问方式与各自职责。"
+        },
+        {
+          "id": "trace-request-flow",
+          "text": "追踪一次读写请求从排队、提交、等待到中断完成的完整流程。"
+        },
+        {
+          "id": "transfer-driver-model",
+          "text": "把该案例概括为可迁移的设备驱动设计模型，并判断类似设备的驱动至少需要哪些部件。"
+        }
+      ],
+      "misconceptions": [
+        "认为驱动程序发出读写命令后即可立即返回，忽略必须先等待设备就绪并检查状态位。",
+        "把中断处理理解为请求流程的起点，实际上中断只在数据传送完成或需要补充数据时触发。",
+        "认为阻塞式等待意味着 CPU 一直在轮询，实际上 xv6 的进程会在等待队列上睡眠并被唤醒。"
+      ],
+      "modules": [
+        {
+          "id": "ide-interface",
+          "title": "案例情境：IDE 接口与寄存器",
+          "role": "case-context",
+          "description": "先建立设备对外暴露的寄存器模型，为后续协议和代码提供观察对象。",
+          "outcomeRefs": [
+            "explain-ide-interface"
+          ],
+          "order": 0
+        },
+        {
+          "id": "request-protocol",
+          "title": "协议：从就绪检查到命令提交",
+          "role": "procedure",
+          "description": "按教材给出的顺序还原与设备交互的协议步骤及其状态依据。",
+          "outcomeRefs": [
+            "explain-ide-interface",
+            "trace-request-flow"
+          ],
+          "order": 1
+        },
+        {
+          "id": "xv6-implementation",
+          "title": "实现：xv6 的四个函数",
+          "role": "worked-example",
+          "description": "把协议映射到 ide_rw、ide_start_request、ide_wait_ready、ide_intr 的职责分工。",
+          "outcomeRefs": [
+            "trace-request-flow"
+          ],
+          "order": 2
+        },
+        {
+          "id": "reflection-transfer",
+          "title": "反思与迁移：什么构成一个设备驱动",
+          "role": "reflection",
+          "description": "从案例中提取可迁移的驱动结构，并用练习检查能否套用到新设备。",
+          "outcomeRefs": [
+            "transfer-driver-model"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-ide-interface",
+          "trace-request-flow",
+          "transfer-driver-model"
+        ],
+        "method": "完成迁移练习，并为一次 IDE 读请求写出各阶段的寄存器操作与状态判断。",
+        "successCriteria": [
+          "能按顺序说明等待就绪、写参数、发命令、数据传送和中断处理的职责",
+          "能指出 READY、BUSY 与 DRQ 在流程中的判断位置",
+          "能为新设备列出驱动所需的初始化、提交、等待和完成处理环节"
+        ],
+        "exerciseBlockId": "model-transfer-check",
+        "nextPointId": "point-36-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-register-interface",
+        "moduleId": "ide-interface",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：IDE 磁盘暴露的寄存器",
+        "markdown": "IDE 硬盘向操作系统暴露的接口比较简单，包含四类寄存器：控制寄存器、命令块寄存器、状态寄存器和错误寄存器。在 x86 上，驱动通过 `in` 和 `out` 指令访问特定的 I/O 地址来读写这些寄存器，例如控制寄存器位于 `0x3F6`。\n\n命令块寄存器覆盖数据端口与寻址参数：`0x1F0` 是数据端口，`0x1F1` 是错误寄存器，`0x1F2` 记录扇区数，`0x1F3`–`0x1F5` 依次存放 LBA 的低、中、高字节，`0x1F6` 用于选择主盘或从盘并携带 LBA 的最高四位，`0x1F7` 则是命令/状态寄存器。状态寄存器在 `0x1F7`，各位分别表示忙、就绪、故障、寻道、数据请求、校正、索引和错误；错误寄存器在 `0x1F1`，只有在状态寄存器的 ERROR 位被置位时才需要读取，用于区分坏块、不可校正数据错误、命令中止等具体原因。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "案例研究：简单的IDE 磁盘驱动程序"
+              ],
+              "lineStart": 9515,
+              "lineEnd": 9627,
+              "assetRefs": [],
+              "excerptSha256": "fe808af9ead893cd057881424f4b1498b07a4382752dac9b9f4989f0bb5342f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-register-role",
+        "moduleId": "ide-interface",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：四类寄存器各自解决什么问题",
+        "markdown": "教材按地址列出寄存器，实际使用时可以按职责理解：控制寄存器负责设备级行为（例如是否允许中断），命令块寄存器承载“这次要做哪个扇区的什么操作”，状态寄存器回答“设备现在能不能接受操作”，错误寄存器回答“上次为什么失败”。\n\n这种分工让驱动不必理解磁盘内部结构，只需按固定位置写入请求参数、读取状态位。它也是后面协议顺序的依据：先看状态是否允许，再写参数与命令，最后在完成时检查错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-register-interface"
+          ]
+        }
+      },
+      {
+        "id": "tb-interaction-protocol",
+        "moduleId": "request-protocol",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：与设备交互的简单协议",
+        "markdown": "教材给出的协议假设设备已经初始化，步骤依次为：\n\n1. 等待驱动就绪：反复读取状态寄存器 `0x1F7`，直到设备处于 READY 而不是忙碌状态。\n2. 向命令寄存器写入参数：写入扇区数、待访问扇区的逻辑块地址（LBA），并把盘号（master 为 `0x00`，slave 为 `0x10`，因为 IDE 允许接入两块硬盘）写入命令块寄存器 `0x1F2`–`0x1F6`。\n3. 发送读写命令：向命令寄存器 `0x1F7` 写入 READ 或 WRITE 命令。\n4. 数据传送（针对写请求）：等待设备状态同时为 READY 和 DRQ（设备请求数据），然后向数据端口写入数据。\n5. 中断处理：最简单的情况下，每个扇区的数据传送结束后触发一次中断；较复杂的方式会把多个扇区的传送合并为一次中断。\n6. 错误处理：每次操作后读取状态寄存器，若 ERROR 位被置位，再读取错误寄存器获取详细信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "案例研究：简单的IDE 磁盘驱动程序"
+              ],
+              "lineStart": 9515,
+              "lineEnd": 9627,
+              "assetRefs": [],
+              "excerptSha256": "fe808af9ead893cd057881424f4b1498b07a4382752dac9b9f4989f0bb5342f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-status-polling",
+        "moduleId": "request-protocol",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：三个状态位如何约束流程",
+        "markdown": "把协议中的判断对应到状态位，可以得到一条清晰的因果链。`BUSY` 表示设备正在处理上一条操作，此时写入新参数没有意义，所以第一步必须等它清除；`READY` 表示设备可以接受命令，因此参数写入与命令提交要放在 READY 之后。\n\n`DRQ` 只在需要搬运数据时出现：读请求由设备把数据准备好后置位，写请求则要求驱动在 DRQ 置位后主动把数据送入数据端口。这就是为什么教材把“等待 READY 且 DRQ”单独列为写请求的数据传送步骤，而不是在发出命令后立刻写数据。ERROR 位与这些状态位配合使用，避免把失败当成正常完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-interaction-protocol"
+          ]
+        }
+      },
+      {
+        "id": "tb-xv6-functions",
+        "moduleId": "xv6-implementation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：xv6 的四个主要函数",
+        "markdown": "该协议的大部分可以在 xv6 的 IDE 驱动中看到。初始化之后，驱动通过四个主要函数协作：`ide_rw()` 把一个缓冲请求加入 `ide_queue` 队列；如果队列原本为空，它直接把请求发送给磁盘，否则请求留在队尾等待。无论哪种情况，调用进程都会调用 `sleep()` 进入睡眠，直到请求处理完成。\n\n`ide_start_request()` 真正把请求发送到磁盘：它先调用 `ide_wait_ready()` 确保驱动就绪，再通过 `outb()` 写入扇区数、三段 LBA、盘号与最高位 LBA，并写入控制寄存器以生成中断；如果请求是写（缓冲带有 `B_DIRTY` 标志），就继续写入写命令并通过 `outsl()` 传送 512 字节数据，否则只写入读命令。`ide_wait_ready()` 循环读取 `0x1F7`，直到设备既非 BUSY 又处于 DRDY。`ide_intr()` 在中断到来时被调用：对读请求，它在确认就绪后通过 `ins1()` 取回数据，随后清除脏标志、置有效标志、唤醒等待该缓冲的进程；如果队列中还有下一个请求，就继续调用 `ide_start_request()`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "案例研究：简单的IDE 磁盘驱动程序"
+              ],
+              "lineStart": 9515,
+              "lineEnd": 9627,
+              "assetRefs": [],
+              "excerptSha256": "fe808af9ead893cd057881424f4b1498b07a4382752dac9b9f4989f0bb5342f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-queue-sleep",
+        "moduleId": "xv6-implementation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：队列与睡眠如何把并发请求串行化",
+        "markdown": "`ide_rw()` 与 `ide_intr()` 配合，用一把 `ide_lock` 把磁盘访问变成串行流水线。多个进程可以同时调用 `ide_rw()`，但同一时刻只有一个请求被送到设备，其余请求挂在 `ide_queue` 上；每个进程都在自己的缓冲上睡眠，而不是忙等。\n\n中断处理结束一个请求后，会唤醒对应的进程，并从队列取出下一个请求继续提交。这样“排队—提交—等待—唤醒—再提交”构成一个由中断驱动的循环，而不是由进程主动轮询推进。理解这一点，就能解释为什么驱动必须在队列为空时才直接提交请求，以及在中断里要检查 `b->qnext`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-xv6-functions"
+          ]
+        }
+      },
+      {
+        "id": "tb-interrupt-completion",
+        "moduleId": "xv6-implementation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：中断到来之后",
+        "markdown": "教材把中断处理归纳为一次“完成并推进”的动作：`ide_intr()` 先获取锁，若该请求不是写请求且设备等待就绪成功，就从数据端口读回数据；随后把缓冲标记为有效并清除脏标志，唤醒等待该请求的进程。若队列中还有未处理的请求，处理程序会立即调用 `ide_start_request()` 接着处理下一个 I/O 请求，最后释放锁。\n\n这意味着中断不仅结束当前请求，还负责把驱动的状态机推进到下一个请求。设备与驱动之间因此形成闭环：驱动提交命令并睡眠，设备在完成时中断 CPU，中断例程回收结果、唤醒进程并继续提交。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "案例研究：简单的IDE 磁盘驱动程序"
+              ],
+              "lineStart": 9515,
+              "lineEnd": 9627,
+              "assetRefs": [],
+              "excerptSha256": "fe808af9ead893cd057881424f4b1498b07a4382752dac9b9f4989f0bb5342f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-case-reflection",
+        "moduleId": "reflection-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "案例反思：一个设备驱动的通用骨架",
+        "markdown": "把 IDE 案例抽象一层，可以看到任何块设备驱动都要回答四个问题：如何发现并初始化设备（寄存器地址、是否允许中断）；如何把上层请求转换成设备命令（扇区数、LBA、读写方向）；如何在不浪费 CPU 的前提下等待完成（就绪检查、队列、睡眠）；如何在完成或出错时推进状态（中断、错误寄存器、唤醒并提交下一请求）。\n\n对照教材的协议与 xv6 函数，这四件事分别落在寄存器访问、`ide_start_request()`、`ide_wait_ready()`/`ide_rw()` 的等待逻辑，以及 `ide_intr()` 的收尾与续传上。这个骨架也解释了设备驱动为何能向文件系统隐藏硬件差异：上层只看到“提交块请求、等待完成”，细节被封装在驱动内部。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-interaction-protocol",
+            "tb-xv6-functions",
+            "tb-interrupt-completion"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "reflection-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "迁移练习：为新设备补一条错误路径",
+        "markdown": "假设你要为另一种同样通过命令寄存器提交请求、通过状态寄存器报告结果、并在完成时发中断的块设备写驱动。请完成两件事：\n\n1. 写出提交一次读请求前必须依次检查或写入的寄存器类别，并说明每一步依赖哪个状态位。\n2. 在完成处理里增加错误分支：描述什么条件下读取错误寄存器、如何把失败结果告知等待的进程，以及失败后是否应继续提交队列中的下一个请求。\n\n对照 IDE 案例检查自己的答案：是否遗漏了就绪等待，是否把错误处理放在唤醒之前，是否让队列在失败后停滞。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-case-reflection"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "ide-driver-formative-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-transfer-check",
+        "moduleId": "reflection-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "transfer-driver-model"
+        ],
+        "learningPurpose": "检查学习者能否把 IDE 案例的协议与状态判断迁移到结构相近的新设备。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-interaction-protocol",
+            "tb-interrupt-completion"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "为新块设备写出提交前检查、错误读取位置和失败后续传队列的处理要点。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出提交读请求前需检查的状态位、错误寄存器读取的触发条件，以及出错后是否继续提交队列中的下一个请求，并说明理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "I/O设备",
+  "clusterId": "chapter-36",
+  "clusterIds": [
+    "chapter-36"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000473"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "案例研究：简单的IDE 磁盘驱动程序"
+      ],
+      "lineStart": 9515,
+      "lineEnd": 9627,
+      "assetRefs": [],
+      "excerptSha256": "fe808af9ead893cd057881424f4b1498b07a4382752dac9b9f4989f0bb5342f5"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4176,
+    896
+  ],
+  "scale": 0.87
+}

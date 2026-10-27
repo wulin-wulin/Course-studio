@@ -1,0 +1,418 @@
+{
+  "id": "point-19-1",
+  "title": "TLB 的基本算法",
+  "shortSummary": "说明 TLB 如何缓存近期地址转换，以及命中与未命中时的处理流程。",
+  "keyTerms": [
+    "TLB",
+    "地址转换",
+    "命中",
+    "未命中"
+  ],
+  "animationType": "tlbLookup",
+  "animationSuggestion": "按步骤展示虚拟地址拆分、TLB 查找、命中后的物理地址拼接，以及未命中时读取 PTE、填充 TLB 和重试指令的分支，并标出段错误与保护错误各自的触发点。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-18-1",
+    "point-18-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 TLB 控制流的算法描述与异常分支，围绕命中、未命中两条路径补充算例和检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-tlb-purpose",
+          "text": "说明 TLB 作为地址转换缓存要解决的分页性能问题。"
+        },
+        {
+          "id": "trace-tlb-hit",
+          "text": "按步骤描述 TLB 命中时的地址转换过程。"
+        },
+        {
+          "id": "trace-tlb-miss",
+          "text": "描述 TLB 未命中时访问页表、插入 TLB 并重试指令的流程。"
+        },
+        {
+          "id": "distinguish-faults",
+          "text": "区分 TLB 未命中、段错误与保护错误各自的触发条件。"
+        },
+        {
+          "id": "explain-locality",
+          "text": "解释 TLB 的有效性为什么依赖地址转换的局部性。"
+        }
+      ],
+      "misconceptions": [
+        "把 TLB 当成缓存数据的内存，而它缓存的是虚拟页号到物理页帧号的转换。",
+        "认为 TLB 未命中就代表地址非法或缺页，实际上未命中是否出错要由页表项的有效位和保护位决定。",
+        "认为 TLB 命中后连保护检查也一起省掉了，命中路径仍要先确认保护位允许访问。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-role",
+          "title": "分页的开销与 TLB 的定位",
+          "role": "motivation",
+          "description": "从额外内存访问的问题引出 TLB，并说明它缓存的是转换关系。",
+          "outcomeRefs": [
+            "explain-tlb-purpose"
+          ],
+          "order": 0
+        },
+        {
+          "id": "hit-path",
+          "title": "命中路径",
+          "role": "mechanism-step",
+          "description": "按算法顺序走一遍 VPN 查找、保护检查和物理地址拼接。",
+          "outcomeRefs": [
+            "trace-tlb-hit"
+          ],
+          "order": 1
+        },
+        {
+          "id": "miss-path",
+          "title": "未命中路径",
+          "role": "mechanism-step",
+          "description": "说明硬件查页表、校验 PTE、填充 TLB 与重试指令的完整链条。",
+          "outcomeRefs": [
+            "trace-tlb-miss"
+          ],
+          "order": 2
+        },
+        {
+          "id": "fault-branches",
+          "title": "异常分支辨析",
+          "role": "decision-branches",
+          "description": "把命中、未命中、段错误和保护错误放进同一张判断图。",
+          "outcomeRefs": [
+            "trace-tlb-hit",
+            "trace-tlb-miss",
+            "distinguish-faults"
+          ],
+          "order": 3
+        },
+        {
+          "id": "locality-and-cost",
+          "title": "局部性与未命中代价",
+          "role": "principle",
+          "description": "解释 TLB 依赖转换局部性，以及未命中为何昂贵。",
+          "outcomeRefs": [
+            "explain-locality"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "check-transfer",
+          "description": "用检查题确认两条路径与异常分支，并引出访问数组的量化示例。",
+          "outcomeRefs": [
+            "trace-tlb-hit",
+            "trace-tlb-miss",
+            "distinguish-faults"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-tlb-purpose",
+          "trace-tlb-hit",
+          "trace-tlb-miss",
+          "distinguish-faults",
+          "explain-locality"
+        ],
+        "method": "完成命中与未命中步骤复述，并判断给定情形会走哪条分支。",
+        "successCriteria": [
+          "能按顺序写出命中路径和未命中路径的关键步骤",
+          "能说明段错误与保护错误分别由哪个检查触发",
+          "能解释局部性如何维持较高命中率"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-19-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tlb-problem",
+        "moduleId": "problem-and-role",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "分页为什么需要 TLB",
+        "markdown": "分页把地址空间切成大量固定大小的页，映射信息通常存放在物理内存的页表中。因此每次指令取指、显式加载或保存，都可能在正常内存访问之外再读一次内存去取转换信息，这个额外开销慢得无法接受。\n\nTLB（translation-lookaside buffer，地址转换旁路缓冲存储器）就是为加速虚拟地址到物理地址转换而设置的硬件缓存；更贴切的名称是地址转换缓存。硬件在每次内存访问时先查 TLB，一旦命中就直接完成转换，不必访问页表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000245"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "分页：快速地址转换（TLB）"
+              ],
+              "lineStart": 4476,
+              "lineEnd": 4485,
+              "assetRefs": [],
+              "excerptSha256": "04bd80b3925d48794263974e7f1ec32b5ab6e1fd53ed43fd523e47d8c60f7e09"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cache-intuition",
+        "moduleId": "problem-and-role",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：CPU 旁边的转换小表",
+        "markdown": "可以把 TLB 想成放在 CPU 旁边的一小张最近转换记录表：它不保存数据，只保存少数最近用过的 VPN 到 PFN 的映射。因为程序在一段时间内往往反复访问同一批页，这张小表就能挡掉绝大多数页表查询。命中时省下的是页表内存访问，真正读取目标数据的访存仍然发生。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tlb-problem"
+          ]
+        }
+      },
+      {
+        "id": "tlb-hit-path",
+        "moduleId": "hit-path",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "命中时硬件做什么",
+        "markdown": "TLB 算法先从虚拟地址中切出页号 VPN，再查询 TLB 是否含有该 VPN 的转换项。命中说明 TLB 已经缓存了这页的映射；在保护位允许访问的前提下，从原虚拟地址中取出页内偏移，用 TLB 项的页帧号 PFN 与偏移拼成物理地址，然后访问内存。命中路径不需要读页表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000246"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "TLB 的基本算法"
+              ],
+              "lineStart": 4486,
+              "lineEnd": 4521,
+              "assetRefs": [],
+              "excerptSha256": "a33c6a9aab09c73dc2d2544c019b6302437b9539e4420cf56978dfde68f27e99"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hit-example",
+        "moduleId": "hit-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：一次命中转换",
+        "markdown": "设页面大小为 4 KB（$2^{12}$ 字节），某次访问的虚拟地址为 `0x00003A2C`。低 12 位 `0xA2C` 是页内偏移，其余高位对应的 VPN 为 `0x3`。若 TLB 已缓存 VPN `0x3` 且保护位允许，取出其 PFN（设为 `0x1F`），物理地址就是 `(0x1F << 12) | 0xA2C = 0x1FA2C`。偏移位原样保留，只有页号被替换，整个过程不读页表。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tlb-hit-path"
+          ]
+        }
+      },
+      {
+        "id": "tlb-miss-path",
+        "moduleId": "miss-path",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "未命中时硬件做什么",
+        "markdown": "未命中时，TLB 中没有该 VPN 的转换项，硬件需要访问页表。对简单的线性页表，页表项地址由页表基址寄存器 PTBR 加上 VPN 乘以页表项大小得到。读取该 PTE 后先检查有效位：无效就触发段错误；有效再检查保护位：无权限就触发保护错误。只有两项检查都通过，硬件才把 VPN、PFN 和保护位插入 TLB，然后重新执行刚才那条指令，重试时通常就会命中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000246"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "TLB 的基本算法"
+              ],
+              "lineStart": 4486,
+              "lineEnd": 4521,
+              "assetRefs": [],
+              "excerptSha256": "a33c6a9aab09c73dc2d2544c019b6302437b9539e4420cf56978dfde68f27e99"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fault-branches",
+        "moduleId": "fault-branches",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充辨析：未命中不等于出错",
+        "markdown": "把分支放在一起看可以避免混淆。TLB 命中且保护允许，走快速路径；TLB 命中但保护不允许，触发保护错误。TLB 未命中时先查页表：页表项无效触发段错误，页表项有效但保护不允许触发保护错误，两项都通过则填充 TLB 并重试。可见 TLB 未命中本身只是缓存未命中，并不表示地址非法；是否出错由页表项的有效位和保护位决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tlb-hit-path",
+            "tlb-miss-path"
+          ]
+        }
+      },
+      {
+        "id": "tlb-locality-premise",
+        "moduleId": "locality-and-cost",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "TLB 成立的前提与未命中代价",
+        "markdown": "TLB 能起作用的前提是转换在一般情况下能在缓存中找到，这与普通缓存依赖局部性相同。TLB 位于处理器核心附近，访问很快，命中只增加很少开销；未命中则必须访问页表，可能带来一次或多次额外内存引用。相对于大多数 CPU 指令，内存访问本就很昂贵，因此未命中越多，程序越容易被地址转换拖慢，设计上要尽可能避免 TLB 未命中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000246"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "TLB 的基本算法"
+              ],
+              "lineStart": 4486,
+              "lineEnd": 4521,
+              "assetRefs": [],
+              "excerptSha256": "a33c6a9aab09c73dc2d2544c019b6302437b9539e4420cf56978dfde68f27e99"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-locality-reason",
+        "moduleId": "locality-and-cost",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：局部性如何传导到地址转换",
+        "markdown": "程序的时间局部性和空间局部性会传导到地址转换上：一段时间内反复访问同一页，或顺序扫过相邻地址，都会反复用到同一个或相邻的 VPN，于是一小部分 TLB 项就能覆盖大部分访存。反过来，如果访问模式不断跳到大量不同的页，TLB 容量很快不够用，未命中率上升，分页的额外开销就会重新显露出来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tlb-locality-premise"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：两条路径与异常分支",
+        "markdown": "1. 命中路径中，物理地址由哪两部分拼成？TLB 保存的是数据还是转换？\n2. 未命中后，什么情况下触发段错误，什么情况下触发保护错误？\n3. 为什么说 TLB 的效果依赖局部性？\n\n参考要点：物理地址由 PFN 与页内偏移拼成，TLB 只保存转换；页表项有效位为假时触发段错误，有效但保护位不允许访问时触发保护错误；局部性使少量 VPN 反复出现，从而维持较高命中率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tlb-hit-path",
+            "tlb-miss-path",
+            "tlb-locality-premise"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "TLB 把“每次访存都先查页表”变成“大多数访存只查一次小缓存”。命中路径很短：查 VPN、检查保护、拼物理地址；未命中路径较长：读 PTE、检查有效位与保护位、插入 TLB、重试指令。两条路径的分界只由缓存是否已有该转换决定，真正的错误由页表项的有效位和保护位判定。下一节会用访问数组的例子量化命中与未命中对性能的影响。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tlb-problem",
+            "tlb-hit-path",
+            "tlb-miss-path",
+            "tlb-locality-premise"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "tlb-path-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "title": "TLB 路径判断",
+        "outcomeRefs": [
+          "trace-tlb-hit",
+          "trace-tlb-miss",
+          "distinguish-faults"
+        ],
+        "learningPurpose": "检查学习者能否区分命中、未命中、段错误与保护错误四类分支。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tlb-hit-path",
+            "tlb-miss-path",
+            "model-fault-branches"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别写出 TLB 命中与未命中时硬件执行的步骤，并说明哪一步可能触发段错误或保护错误。"
+        }
+      }
+    ]
+  },
+  "subtitle": "分页:快速地址转换(TLB)",
+  "clusterId": "chapter-19",
+  "clusterIds": [
+    "chapter-19"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000245"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "分页：快速地址转换（TLB）"
+      ],
+      "lineStart": 4476,
+      "lineEnd": 4485,
+      "assetRefs": [],
+      "excerptSha256": "04bd80b3925d48794263974e7f1ec32b5ab6e1fd53ed43fd523e47d8c60f7e09"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000246"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "TLB 的基本算法"
+      ],
+      "lineStart": 4486,
+      "lineEnd": 4521,
+      "assetRefs": [],
+      "excerptSha256": "a33c6a9aab09c73dc2d2544c019b6302437b9539e4420cf56978dfde68f27e99"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1872,
+    2308
+  ],
+  "scale": 1.25
+}

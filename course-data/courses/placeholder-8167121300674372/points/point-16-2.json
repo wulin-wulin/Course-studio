@@ -1,0 +1,414 @@
+{
+  "id": "point-16-2",
+  "title": "SIMD",
+  "shortSummary": "介绍 SIMD 向量寄存器与并行数据处理，理解一条指令处理多个元素的方式。",
+  "keyTerms": [
+    "SIMD",
+    "NEON",
+    "向量寄存器",
+    "Lane（路）",
+    "add.4h"
+  ],
+  "animationType": "simdLaneParallelAdd",
+  "animationSuggestion": "并排画出 v1、v2、v0 各 8 路 16 位格，只点亮低 4 路；执行时四对对应格同时高亮并填入相加结果，最后用边框标出实际使用的 64 位范围，并提供重播按钮。",
+  "difficulty": "中等",
+  "importance": 0.72,
+  "prerequisites": [
+    "point-16-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-with-lane-model-and-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 SIMD、NEON 与路（Lane）的定义、寄存器视图和 add.4h 示例，按「为什么需要—寄存器怎样分路—指令怎样按路执行—边界与代价—自测」重排讲解，并只补充可核实的类比、对照表与练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-simd",
+          "text": "用自己的话解释 SIMD 的含义，并判断一段计算是否适合用 SIMD 处理。"
+        },
+        {
+          "id": "read-lane-suffix",
+          "text": "根据 `.4h`、`.8b`、`.2s` 等后缀说出寄存器被分成几路、每路多少位。"
+        },
+        {
+          "id": "apply-lane-add",
+          "text": "按路独立计算的规则，推算 `add.4h v0, v1, v2` 的结果。"
+        },
+        {
+          "id": "evaluate-tradeoff",
+          "text": "说明 SIMD 的收益与代价，并解释为什么本课程只讲 NEON 而不讲 AMX2。"
+        }
+      ],
+      "misconceptions": [
+        "把 SIMD 当成「一条指令做多步运算」的顺序流水线，忽略各路必须执行同一操作且互不干扰。",
+        "认为 `.4h` 会写满整个 128 位寄存器，忽略它实际只使用 4 路 16 位、共 64 位。",
+        "认为按 `.8b` 相加时低位通道的进位会传给高位通道，忽略路与路之间不传递进位。"
+      ],
+      "modules": [
+        {
+          "id": "why-simd",
+          "title": "SIMD 是什么，解决什么问题",
+          "role": "concept-intuition",
+          "description": "从可向量化的重复模式引入 SIMD 的定义、适用条件与能耗代价。",
+          "outcomeRefs": [
+            "explain-simd"
+          ],
+          "order": 0
+        },
+        {
+          "id": "neon-lanes",
+          "title": "NEON 与寄存器的「路」视图",
+          "role": "concept-model",
+          "description": "说明 NEON 复用 128 位 SIMD 与 FP 寄存器，并建立路数、位宽与后缀的对应关系。",
+          "outcomeRefs": [
+            "read-lane-suffix"
+          ],
+          "order": 1
+        },
+        {
+          "id": "lane-instruction",
+          "title": "按路执行：add.4h 的数据流",
+          "role": "worked-example",
+          "description": "通过 add.4h 示例与数值演算落实按路独立相加的语义，并用随堂练习检查读数与推算。",
+          "outcomeRefs": [
+            "apply-lane-add"
+          ],
+          "order": 2
+        },
+        {
+          "id": "boundaries",
+          "title": "边界与取舍：功耗、跨路依赖和 AMX2",
+          "role": "boundary-check",
+          "description": "明确 SIMD 的适用边界、能耗代价，以及教材不介绍 AMX2 的原因。",
+          "outcomeRefs": [
+            "evaluate-tradeoff"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-transfer",
+          "title": "小结与迁移",
+          "role": "summary-transfer",
+          "description": "归纳本点要点，并把向量思路与前文的浮点寄存器、大块内存搬运示例联系起来。",
+          "outcomeRefs": [
+            "explain-simd",
+            "read-lane-suffix",
+            "apply-lane-add",
+            "evaluate-tradeoff"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-simd",
+          "read-lane-suffix",
+          "apply-lane-add",
+          "evaluate-tradeoff"
+        ],
+        "method": "完成三道读数与按路加法练习，并说明为什么跨路归约不能由一条 add.4h 完成。",
+        "successCriteria": [
+          "能正确说出 .8h 的路数与每路位宽",
+          "能按路独立计算 add.4h 的结果",
+          "能用「同一操作、数据互不干扰」解释 SIMD 的适用边界"
+        ],
+        "exerciseBlockId": "model-lane-check",
+        "summaryBlockId": "model-summary"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-simd-definition",
+        "moduleId": "why-simd",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：单指令多数据",
+        "markdown": "SIMD 是 _Single Instruction Multiple data_ 的缩写，即**一条指令操作多个数据**。它针对的是编程中大量出现的可向量化模式：对数组中的每个元素做同样的操作，或者图形学引擎、机器学习引擎中的大量矩阵运算。\n\n这类模式的共同特征是：**多组数据执行同一种操作，而每组数据之间互不干扰**。教材同时指出，速度提升并非没有代价——一条指令操作多个数据的同时，功耗也会显著上升。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000137"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "SIMD"
+              ],
+              "lineStart": 2897,
+              "lineEnd": 2922,
+              "assetRefs": [
+                "./assets/16-neon-vector.png"
+              ],
+              "excerptSha256": "f4325fbb8aad667001b72d9be8f511c30658ecc9a31cc701a70ed34bf4dfb94a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cashier-intuition",
+        "moduleId": "why-simd",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：四个并排的收银台",
+        "markdown": "可以把一个向量寄存器想成 4 个并排的收银台。广播里只说一句话：「每位顾客的金额加 10 元」。四个收银台同时动作，但它们各算各的账，彼此不交换数据。\n\n如果下一步要把 4 笔金额合并成一个总数，就需要跨收银台汇总，这已经超出「各算各的」模式，要用额外的横向操作完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-simd-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-neon-lane-view",
+        "moduleId": "neon-lanes",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材讲解：NEON 把寄存器分成多路",
+        "markdown": "AArch64 架构有自己的 SIMD 指令，其中一种称为 **NEON**，Apple Silicon 同样支持 NEON。NEON 使用的正是前文那 32 个 128 位 SIMD 与 FP 寄存器，区别在于它把这些寄存器看成多个「路」（Lane）：\n\n- 一个 128 位寄存器可以看作 2 路 64 位、4 路 32 位、8 路 16 位或 16 路 8 位；\n- 每一路独立存放一个元素，「4 路 32 位」就是把这一个寄存器视为同时存了 4 个 32 位数据；\n- 教材用图示说明这种分路视图，图中每一行对应一种路数与位宽的组合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000137"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "SIMD"
+              ],
+              "lineStart": 2897,
+              "lineEnd": 2922,
+              "assetRefs": [
+                "./assets/16-neon-vector.png"
+              ],
+              "excerptSha256": "f4325fbb8aad667001b72d9be8f511c30658ecc9a31cc701a70ed34bf4dfb94a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lane-table",
+        "moduleId": "neon-lanes",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：路数、位宽与后缀对照表",
+        "markdown": "教材把「2/4/8/16 路」与后缀字母 `b`、`h`、`s`、`d`（分别指代 8、16、32、64 位）放在一起讲。把两者合并成一张表，读数会更快：\n\n| 寄存器视图 | 路数 | 每路位宽 | 128 位完整视图后缀 | 64 位半寄存器后缀 |\n|---|---|---|---|---|\n| 16 路 8 位 | 16 | 8 | `.16b` | `.8b` |\n| 8 路 16 位 | 8 | 16 | `.8h` | `.4h` |\n| 4 路 32 位 | 4 | 32 | `.4s` | `.2s` |\n| 2 路 64 位 | 2 | 64 | `.2d` | `.1d` |\n\n教材明确举出的 `.4h`、`.8b`、`.2s` 都属于只占寄存器一半的 64 位形式：`.4h` 是 8 路 16 位视图中的第 0–3 路，因此这次运算只用到低 64 位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-neon-lane-view"
+          ]
+        }
+      },
+      {
+        "id": "tb-add-4h-example",
+        "moduleId": "lane-instruction",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材示例：add.4h 的写法",
+        "markdown": "教材给出的用法是：\n\n```armasm\nadd.4h  v0, v1, v2\n```\n\n其中 `v0`、`v1`、`v2` 分别指代第一、二、三个 SIMD 与 FP 寄存器。`.4h` 表示把这个寄存器看作 4 路 16 位，也就是只使用 8 路 16 位视图中的第 0、1、2、3 这四个部分。\n\n最终效果是：`v1`、`v2` 中相应部分的 4 个值分别相加，结果存入 `v0` 的相应部分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000137"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "SIMD"
+              ],
+              "lineStart": 2897,
+              "lineEnd": 2922,
+              "assetRefs": [
+                "./assets/16-neon-vector.png"
+              ],
+              "excerptSha256": "f4325fbb8aad667001b72d9be8f511c30658ecc9a31cc701a70ed34bf4dfb94a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-add-4h-walkthrough",
+        "moduleId": "lane-instruction",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：按路相加的数值演算",
+        "markdown": "设 `v1` 的低 64 位 4 路 16 位为 `[1, 2, 3, 4]`，`v2` 对应路为 `[10, 20, 30, 40]`，执行 `add.4h v0, v1, v2` 后 `v0` 的这 4 路为 `[11, 22, 33, 44]`。\n\n三点值得注意：\n\n- 第 0 路只与第 0 路相加，结果不会流入第 1 路；\n- `.4h` 只写低 64 位，`v0` 的高 64 位不参与这次运算；\n- 若把同一批数据按 `.8b` 解释，加的是 8 个 8 位通道，通道之间不进位，结果与按 16 位相加完全不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-add-4h-example"
+          ]
+        }
+      },
+      {
+        "id": "model-lane-check",
+        "moduleId": "lane-instruction",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "随堂自测：读数与按路加法",
+        "markdown": "**练习 1**：`.8h` 把寄存器分成几路？每路多少位？\n\n**练习 2**：若 `v1` 的 4 路 16 位为 `[5, 6, 7, 8]`，`v2` 为 `[1, 1, 1, 1]`，`add.4h v0, v1, v2` 的结果是什么？\n\n**练习 3**：为什么「把 4 个 16 位元素累加成一个 32 位结果」不能直接用一条 `add.4h` 完成？\n\n参考答案：1. 8 路，每路 16 位，合计 128 位；2. `[6, 7, 8, 9]`；3. 因为它需要跨路归约，路与路之间必须交换数据，不满足「同一操作、数据互不干扰」的 SIMD 条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-lane-table",
+            "model-add-4h-walkthrough"
+          ]
+        }
+      },
+      {
+        "id": "tb-simd-boundaries",
+        "moduleId": "boundaries",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材边界：AMX2 不可直接汇编",
+        "markdown": "Apple Silicon 中另有一个协处理器专门负责矩阵运算的优化，Apple 也为它研发了指令集 **AMX2**。但教材指出：目前没有任何官方文档，也没有任何一款汇编器支持这个指令集，只能通过 Accelerate 框架调用。因此本课程不介绍 AMX2，只讨论有公开汇编接口的 NEON。\n\n这也说明 SIMD 的能力边界并不只由指令集决定：能否用汇编写出来，还取决于硬件厂商是否公开接口与工具链支持。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000137"
+              ],
+              "headingPath": [
+                "浮点数与SIMD",
+                "SIMD"
+              ],
+              "lineStart": 2897,
+              "lineEnd": 2922,
+              "assetRefs": [
+                "./assets/16-neon-vector.png"
+              ],
+              "excerptSha256": "f4325fbb8aad667001b72d9be8f511c30658ecc9a31cc701a70ed34bf4dfb94a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tradeoff-checklist",
+        "moduleId": "boundaries",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：判断值不值得用 NEON 的三条检查",
+        "markdown": "把教材的定义与能耗提醒合起来，可以得到一个实用的判断清单：\n\n1. **同一操作**：所有元素执行同样的算术或逻辑动作；\n2. **互不干扰**：元素之间没有跨路依赖，例如不能在四路之间直接累加；\n3. **批量足够**：只有数据量足以摊薄打包、解包与边界处理的开销时，收益才明显。\n\n教材明确提到指令操作多个数据时功耗显著上升，因此 SIMD 是「用更多并行硬件换取吞吐」的取舍，而不是无条件更快。跨路归约（例如数组求和）需要额外的横向指令，本课程不展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-simd-definition",
+            "tb-simd-boundaries"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本点要点与前后联系",
+        "markdown": "- SIMD 用一条指令处理多组互不干扰的数据，以吞吐换功耗；\n- NEON 复用 32 个 128 位 SIMD 与 FP 寄存器，用「路」的视角解释同一个寄存器；\n- 后缀 `<路数><b|h|s|d>` 同时给出路数与每路位宽，`.4h` 即 4 路 16 位、只占低 64 位；\n- `add.4h v0, v1, v2` 按路独立相加，路间不进位、不借位。\n\n这是本教材的最后一个知识点。可以回到前文的浮点寄存器与 `ldp`/`stp` 大块内存搬运示例，比较标量与向量两种思路：前者一次搬一个或一对寄存器，后者把寄存器切成多路，一次处理多个元素。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-simd-definition",
+            "tb-neon-lane-view",
+            "tb-add-4h-example",
+            "tb-simd-boundaries",
+            "model-tradeoff-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "lane-arithmetic-check",
+        "type": "formative-check",
+        "title": "路数读数与按路加法自测",
+        "anchorBlockId": "model-lane-check",
+        "moduleId": "lane-instruction",
+        "depth": "core",
+        "outcomeRefs": [
+          "read-lane-suffix",
+          "apply-lane-add"
+        ],
+        "learningPurpose": "检查学习者能否把后缀读成路数与每路位宽，并按同一规则独立推算每一路的结果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-neon-lane-view",
+            "tb-add-4h-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            {
+              "id": "q1",
+              "prompt": "`.8h` 把寄存器分成几路？每路多少位？",
+              "answer": "8 路，每路 16 位，合计 128 位。"
+            },
+            {
+              "id": "q2",
+              "prompt": "`v1` 的 4 路 16 位为 `[5, 6, 7, 8]`，`v2` 为 `[1, 1, 1, 1]`，`add.4h v0, v1, v2` 的结果是什么？",
+              "answer": "`[6, 7, 8, 9]`，每一路各自相加，互不影响。"
+            },
+            {
+              "id": "q3",
+              "prompt": "为什么把 4 个 16 位元素累加成一个 32 位结果不能直接用一条 `add.4h`？",
+              "answer": "这需要跨路归约，路与路之间必须交换数据，不满足「同一操作、数据互不干扰」的条件。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请先写出 `.8h` 的路数与每路位宽，再按「每一路各自相加」的规则算出 `add.4h` 的结果，最后说明跨路归约为什么不属于一条 `add.4h` 能完成的操作。"
+        }
+      }
+    ]
+  },
+  "subtitle": "浮点数与SIMD",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-9-1"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000137"
+      ],
+      "headingPath": [
+        "浮点数与SIMD",
+        "SIMD"
+      ],
+      "lineStart": 2897,
+      "lineEnd": 2922,
+      "assetRefs": [
+        "./assets/16-neon-vector.png"
+      ],
+      "excerptSha256": "f4325fbb8aad667001b72d9be8f511c30658ecc9a31cc701a70ed34bf4dfb94a"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1069,
+    440
+  ],
+  "scale": 0.65
+}

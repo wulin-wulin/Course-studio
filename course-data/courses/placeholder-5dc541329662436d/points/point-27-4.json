@@ -1,0 +1,441 @@
+{
+  "id": "point-27-4",
+  "title": "条件变量",
+  "shortSummary": "介绍条件变量的等待、唤醒和与互斥锁配合使用的方式及典型代码结构。",
+  "keyTerms": [
+    "条件变量",
+    "pthread_cond",
+    "等待",
+    "唤醒"
+  ],
+  "animationType": "conditionWait",
+  "animationSuggestion": "按时间轴展示等待者检查条件、调用 wait 释放锁并睡眠，唤醒者加锁修改 ready 并发信号，等待者重新加锁后复检 while 条件的完整过程，并在每一步标出锁的归属变化。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-27-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-code-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于条件变量语义、锁配合与自旋替代的结论，围绕时序理解补充锁归属变化、代码走查和检查练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-condvar-purpose",
+          "text": "说明条件变量解决什么问题，以及它为什么必须与一把锁配合使用。"
+        },
+        {
+          "id": "explain-wait-signal",
+          "text": "解释 pthread_cond_wait 与 pthread_cond_signal 引发的状态变化和锁的释放与重获。"
+        },
+        {
+          "id": "apply-condvar-pattern",
+          "text": "写出等待者与唤醒者的正确代码结构，并用 while 循环复检条件。"
+        },
+        {
+          "id": "evaluate-spin-alternative",
+          "text": "判断能否用共享标志自旋替代条件变量，并说明其性能与正确性风险。"
+        }
+      ],
+      "misconceptions": [
+        "认为条件变量自己保存了某个条件，或可以脱离互斥锁单独使用。",
+        "把 pthread_cond_wait 的唤醒当作条件一定成立的保证，因而用 if 代替 while 复检。",
+        "以为用共享标志变量忙等是更简单且等价的同步方式。"
+      ],
+      "modules": [
+        {
+          "id": "why-condvar",
+          "title": "问题导入：线程之间的信号",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "explain-condvar-purpose"
+          ],
+          "order": 0
+        },
+        {
+          "id": "wait-signal-protocol",
+          "title": "核心机制：等待、唤醒与锁的交接",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-condvar-purpose",
+            "explain-wait-signal"
+          ],
+          "order": 1
+        },
+        {
+          "id": "code-pattern",
+          "title": "代码结构：等待者与唤醒者",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "apply-condvar-pattern"
+          ],
+          "order": 2
+        },
+        {
+          "id": "boundary-and-pitfalls",
+          "title": "边界与常见错误",
+          "role": "misconception-check",
+          "outcomeRefs": [
+            "apply-condvar-pattern",
+            "evaluate-spin-alternative"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与下一步",
+          "role": "formative-check",
+          "outcomeRefs": [
+            "explain-wait-signal",
+            "apply-condvar-pattern",
+            "evaluate-spin-alternative"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-condvar-purpose",
+          "explain-wait-signal",
+          "apply-condvar-pattern",
+          "evaluate-spin-alternative"
+        ],
+        "method": "完成时序排序练习，并说明 while 复检与自旋替代各自的理由。",
+        "successCriteria": [
+          "能按正确顺序排列加锁、检查条件、等待、发信号和解锁等步骤",
+          "能指出 wait 在睡眠时释放锁、返回前重新获取锁",
+          "能说明用自旋标志替代条件变量为什么既浪费 CPU 又容易出错"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "nextPointId": "point-27-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-condvar-purpose",
+        "moduleId": "why-condvar",
+        "depth": "core",
+        "kind": "definition",
+        "title": "条件变量要解决什么",
+        "markdown": "条件变量（condition variable）是线程库提供的同步组件，用于线程之间必须发生某种信号的情形：一个线程需要等待另一个线程完成某些操作后再继续执行。POSIX 线程为此提供两个主要函数：\n\n```c\nint pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);\nint pthread_cond_signal(pthread_cond_t *cond);\n```\n\n第一个函数让调用线程休眠，直到其他线程发出信号；第二个函数负责发出这个信号。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "条件变量"
+              ],
+              "lineStart": 6404,
+              "lineEnd": 6460,
+              "assetRefs": [],
+              "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-signal",
+        "moduleId": "why-condvar",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：等候室与门铃",
+        "markdown": "可以把条件变量想成一间等候室的门铃：线程发现条件尚未满足时，就去等候室睡下，而不是反复询问；另一个线程改变共享状态后按一次铃，等候的线程才被叫醒。\n\n关键点在于“询问条件”和“睡下等待”必须连成一个不会被插队的整体，否则可能刚好在两者之间错过门铃。这正是条件变量必须与锁一起使用的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-condvar-purpose"
+          ]
+        }
+      },
+      {
+        "id": "tb-lock-required",
+        "moduleId": "wait-signal-protocol",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "必须与一把锁配合",
+        "markdown": "要使用条件变量，必须另外有一个与此条件相关的锁；调用 `pthread_cond_wait()` 或 `pthread_cond_signal()` 时，应该持有这个锁。\n\n等待函数除了让调用线程进入睡眠，还会在睡眠时释放锁，否则其他线程将无法获得锁去修改条件并发出信号。在被唤醒之后、返回之前，`pthread_cond_wait()` 会重新获取该锁，从而保证等待线程从等待序列开始到结束时释放锁之间的任何时间都持有锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "条件变量"
+              ],
+              "lineStart": 6404,
+              "lineEnd": 6460,
+              "assetRefs": [],
+              "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lock-handoff",
+        "moduleId": "wait-signal-protocol",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：一次等待中的锁归属变化",
+        "markdown": "把一次等待拆成三个时刻，可以看清锁的交接：\n\n1. 调用前：等待线程持锁，检查共享条件（教材例子中是 `ready == 0`）。\n2. 调用中：`pthread_cond_wait()` 释放锁并让线程睡眠，其他线程此时才能拿到锁、修改条件并发信号。\n3. 返回前：等待线程被唤醒后重新获取锁，因此可以安全地再次读取共享条件。\n\n注意信号发送方只需要传入条件变量，不需要把锁传给 `pthread_cond_signal()`；但教材强调了在持锁状态下修改条件并发信号，以避免引入竞态条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-lock-required"
+          ]
+        }
+      },
+      {
+        "id": "tb-wait-pattern",
+        "moduleId": "code-pattern",
+        "depth": "core",
+        "kind": "code",
+        "title": "等待者的典型结构",
+        "markdown": "初始化锁和条件变量后，等待线程持锁检查共享变量 `ready` 是否已经变为非零；如果仍为零，就调用等待函数睡眠，直到其他线程唤醒它。\n\n```c\npthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;\npthread_cond_t cond = PTHREAD_COND_INITIALIZER;\n\nPthread_mutex_lock(&lock);\nwhile (ready == 0)\n    Pthread_cond_wait(&cond, &lock);\nPthread_mutex_unlock(&lock);\n```\n\n等待结束后线程解锁并继续执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "条件变量"
+              ],
+              "lineStart": 6404,
+              "lineEnd": 6460,
+              "assetRefs": [],
+              "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-signal-pattern",
+        "moduleId": "code-pattern",
+        "depth": "core",
+        "kind": "code",
+        "title": "唤醒者的典型结构",
+        "markdown": "唤醒线程在另外某个线程中运行：它先持有同一把锁，把 `ready` 置为 1，调用信号函数唤醒等待者，然后解锁。\n\n```c\nPthread_mutex_lock(&lock);\nready = 1;\nPthread_cond_signal(&cond);\nPthread_mutex_unlock(&lock);\n```\n\n在发出信号时以及修改全局变量 `ready` 时始终持有锁，可以确保不会在代码中意外引入竞态条件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "条件变量"
+              ],
+              "lineStart": 6404,
+              "lineEnd": 6460,
+              "assetRefs": [],
+              "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-code-walkthrough",
+        "moduleId": "code-pattern",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充走查：两段代码如何对上",
+        "markdown": "把两段代码放在同一时间轴上对照：\n\n- 等待者持锁进入 `while`，发现 `ready == 0`，于是调用 `pthread_cond_wait(&cond, &lock)`；该调用释放锁并让等待者睡下。\n- 唤醒者此时才能获得锁，执行 `ready = 1`，再调用 `pthread_cond_signal(&cond)`，最后解锁。\n- 等待者被唤醒后重新获得锁，返回 `while` 重新检查 `ready`；此时条件成立，循环结束，随后解锁。\n\n如果唤醒者不持锁就修改 `ready` 并发信号，等待者有可能在“检查发现 `ready == 0`”和“真正进入等待”之间被信号抢先，之后才睡下，形成丢失唤醒。持锁使这段检查与进入等待之间的窗口不会被修改条件的线程穿过。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-wait-pattern",
+            "tb-signal-pattern"
+          ]
+        }
+      },
+      {
+        "id": "tb-while-not-if",
+        "moduleId": "boundary-and-pitfalls",
+        "depth": "core",
+        "kind": "warning",
+        "title": "为什么用 while 而不是 if",
+        "markdown": "等待线程应在 `while` 循环中重新检查条件，而不是用简单的 `if` 语句。虽然重新检查会增加一点开销，但有些 pthread 实现可能会错误地唤醒等待的线程；如果没有复检，等待线程会误以为条件已经改变。\n\n因此更安全的做法是把唤醒视为“某种事物可能已经发生变化”的提示，而不是条件一定成立的事实。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "条件变量"
+              ],
+              "lineStart": 6404,
+              "lineEnd": 6460,
+              "assetRefs": [],
+              "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spurious-vs-lost",
+        "moduleId": "boundary-and-pitfalls",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充辨析：伪唤醒与丢失唤醒",
+        "markdown": "两种容易混淆的时序问题方向相反：\n\n- 伪唤醒：线程没有对应的有效信号也被唤醒。`while` 复检让线程发现条件仍不满足，于是重新睡下，因此不会误判。\n- 丢失唤醒：信号在等待者真正睡下之前发出，等待者错过信号而长期睡眠。教材要求的“持锁修改条件并发信号”正是为了避免这种情况。\n\n前者靠 `while` 防御，后者靠锁的互斥与正确的代码顺序防御，二者不能互相替代。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-while-not-if",
+            "model-lock-handoff"
+          ]
+        }
+      },
+      {
+        "id": "tb-no-spin",
+        "moduleId": "boundary-and-pitfalls",
+        "depth": "core",
+        "kind": "warning",
+        "title": "不要用标志变量自旋替代",
+        "markdown": "有时看起来更简单的做法是只用标志变量同步：等待方写 `while (ready == 0) ;` 忙等，通知方直接写 `ready = 1;`。教材明确说明千万不要这么做。\n\n首先，多数情况下性能很差，长时间自旋会浪费 CPU。其次，这种做法容易出错：教材引用的研究显示，线程之间通过标志同步的不正规方法半数以上都有问题。因此即使看起来可以不用条件变量，也应该使用它。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000349"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "条件变量"
+              ],
+              "lineStart": 6404,
+              "lineEnd": 6460,
+              "assetRefs": [],
+              "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spin-analysis",
+        "moduleId": "boundary-and-pitfalls",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：自旋方案的具体代价",
+        "markdown": "自旋标志的问题可以归为两类：\n\n- 资源代价：等待期间线程持续占用处理器反复读取标志，等待越久浪费越多，而条件变量会让等待线程真正睡眠。\n- 正确性代价：读写共享标志本身仍需同步保护，否则编译器优化、内存可见性以及多个通知者之间的交错都可能让结果偏离预期。\n\n即便在只需要短暂等待的场合，也要先确认同步语义，而不是默认“标志加循环”总是等价且更简单。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-no-spin"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：排出正确时序",
+        "markdown": "把下列步骤排成等待者与唤醒者协作的正确顺序，并说明每一步锁由谁持有：\n\n1. 等待者加锁并检查 `ready`；\n2. 等待者调用 `pthread_cond_wait`（释放锁并睡眠）；\n3. 唤醒者加锁，置 `ready = 1`；\n4. 唤醒者调用 `pthread_cond_signal` 并解锁；\n5. 等待者被唤醒后重新加锁，复检条件，退出循环后解锁。\n\n再回答两个问题：如果把 `while` 改成 `if` 会失去哪一层保护？如果把整个方案换成“标志变量加忙等”，会付出哪些代价？\n\n完成后，下一知识点“编译和运行”将说明如何把这类多线程代码真正编译并链接为可执行程序。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-wait-pattern",
+            "tb-while-not-if",
+            "tb-no-spin"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "condvar-timing-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-condvar-pattern",
+          "evaluate-spin-alternative"
+        ],
+        "learningPurpose": "检查学习者能否把条件变量的等待/唤醒时序与锁归属对应起来，并判断替代方案的风险。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-wait-pattern",
+            "tb-signal-pattern",
+            "tb-while-not-if",
+            "tb-no-spin"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "checklist": [
+            "等待前持锁并检查条件",
+            "wait 睡眠时释放锁、返回前重新加锁",
+            "唤醒者持锁修改条件并发信号",
+            "被唤醒后复检条件而不是直接认为成立"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出等待者与唤醒者的代码骨架，并在每一步旁标注锁由谁持有；随后说明 while 复检与拒绝自旋替代的理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "插叙:线程API",
+  "clusterId": "chapter-27",
+  "clusterIds": [
+    "chapter-27"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000349"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "条件变量"
+      ],
+      "lineStart": 6404,
+      "lineEnd": 6460,
+      "assetRefs": [],
+      "excerptSha256": "eaf343368c1e5b3b9c8c110ae4ee67c9063e1ee0d8a3f10383dbdd04d9aa0a07"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1542,
+    1471
+  ],
+  "scale": 0.96
+}

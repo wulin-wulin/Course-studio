@@ -1,0 +1,593 @@
+{
+  "id": "point-31-4",
+  "title": "生产者/消费者（有界缓冲区）问题",
+  "shortSummary": "用信号量解决有界缓冲区问题，说明空槽和满槽计数如何协调生产与消费。",
+  "keyTerms": [
+    "信号量",
+    "有界缓冲区",
+    "空槽",
+    "满槽"
+  ],
+  "animationType": "boundedBufferSem",
+  "animationSuggestion": "按操作序列逐步推进：高亮当前槽位与 fill/use 指针，同步显示 empty、full 与 mutex 计数及线程阻塞状态，并在缓冲区满或空时展示等待与唤醒的时刻。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-30-2",
+    "point-31-1",
+    "point-31-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-debug-repair",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材从首版方案到竞态、死锁、最终方案的诊断顺序，并在每个失败版本后就地补充可观察的状态推演与检查清单。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-bounded-buffer",
+          "text": "说明有界缓冲区问题，以及 empty 与 full 两个信号量分别记录什么。"
+        },
+        {
+          "id": "trace-single-slot",
+          "text": "追踪 MAX = 1 时生产者与消费者在 sem_wait、put、get、sem_post 之间的执行与阻塞。"
+        },
+        {
+          "id": "diagnose-race",
+          "text": "定位 MAX > 1 且存在多个生产者时的竞态条件，并说明数据为何被覆盖。"
+        },
+        {
+          "id": "diagnose-deadlock",
+          "text": "解释把互斥量包住整个等待与操作序列后，消费者与生产者如何形成循环等待。"
+        },
+        {
+          "id": "implement-correct",
+          "text": "写出锁作用域仅覆盖临界区的正确方案，并说明等待应放在锁外的理由。"
+        }
+      ],
+      "misconceptions": [
+        "认为 empty 和 full 的计数已经保证正确性，因此 put() 和 get() 不需要互斥量保护。",
+        "认为把互斥量加锁范围扩大、把所有 sem_wait 都包进锁里会更安全。",
+        "把信号量为 0 时的 sem_wait 理解成立即返回错误，而不是让线程阻塞等待。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-first-attempt",
+          "title": "问题与首版方案",
+          "role": "problem-framing",
+          "description": "从有界缓冲区的等待需求出发，建立 empty/full 计数并用 MAX = 1 验证首版方案。",
+          "outcomeRefs": [
+            "explain-bounded-buffer",
+            "trace-single-slot"
+          ],
+          "order": 0
+        },
+        {
+          "id": "race-condition",
+          "title": "竞态条件诊断",
+          "role": "fault-localization",
+          "description": "在 MAX > 1、多生产者场景中定位缓冲区写入与索引更新的竞态。",
+          "outcomeRefs": [
+            "trace-single-slot",
+            "diagnose-race"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mutex-and-deadlock",
+          "title": "加锁尝试与死锁",
+          "role": "fault-localization",
+          "description": "分析加入互斥量后为何出现死锁，并还原循环等待的步骤。",
+          "outcomeRefs": [
+            "diagnose-race",
+            "diagnose-deadlock"
+          ],
+          "order": 2
+        },
+        {
+          "id": "correct-solution",
+          "title": "正确的锁作用域",
+          "role": "repair",
+          "description": "把互斥量收缩到 put()/get() 临界区，等待与唤醒留在锁外。",
+          "outcomeRefs": [
+            "implement-correct"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与迁移",
+          "role": "formative-check",
+          "description": "用改序练习检查锁作用域判断，并桥接后续的读者—写者问题。",
+          "outcomeRefs": [
+            "diagnose-deadlock",
+            "implement-correct"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-bounded-buffer",
+          "trace-single-slot",
+          "diagnose-race",
+          "diagnose-deadlock",
+          "implement-correct"
+        ],
+        "method": "完成改序练习，说明错误顺序导致的阻塞链，并写出正确的加锁顺序。",
+        "successCriteria": [
+          "能指出 empty 与 full 的初值分别是 MAX 和 0",
+          "能说明互斥量只应覆盖 put()/get() 与索引更新",
+          "能说明消费者持锁等待 full 会造成循环等待"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary-and-bridge",
+        "nextPointId": "point-31-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-problem-intro",
+        "moduleId": "problem-and-first-attempt",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：有界缓冲区问题的由来",
+        "markdown": "生产者/消费者问题也叫有界缓冲区问题：生产者把数据放入容量有限的缓冲区，消费者从中取走数据。缓冲区空时消费者必须等待，缓冲区满时生产者必须等待。教材沿用第 30 章用条件变量描述过的同一问题背景，本章改用信号量重新解决。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000411"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "生产者/消费者（有界缓冲区）问题"
+              ],
+              "lineStart": 8203,
+              "lineEnd": 8206,
+              "assetRefs": [],
+              "excerptSha256": "3c328145d13ea87d5372c4f023676fd874a94231fe267387f5ee0fcf3a09d33f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-buffer-intuition",
+        "moduleId": "problem-and-first-attempt",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：两个计数各管一件事",
+        "markdown": "把缓冲区想成一排 MAX 个槽位，`empty` 记录“还能放几个”，`full` 记录“已经放了几个、可以取几个”。在没有线程阻塞时，两个计数之和为 MAX，因此它们天然互补：生产者每放入一个数据，可用空槽减一、可取数据加一；消费者每取走一个数据则相反。一旦计数减到负值，负数的绝对值表示正在等待的线程数，此时不能再把两者之和当作槽位总数。等待条件可以直接由计数是否为零表达，而不需要像条件变量那样自己检查共享变量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-problem-intro"
+          ]
+        }
+      },
+      {
+        "id": "textbook-put-get",
+        "moduleId": "problem-and-first-attempt",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：put() 与 get() 的环形索引",
+        "markdown": "```c\nint buffer[MAX];\nint fill = 0;\nint use = 0;\n\nvoid put(int value) {\n    buffer[fill] = value;      // f1\n    fill = (fill + 1) % MAX;   // f2\n}\n\nint get() {\n    int tmp = buffer[use];     // g1\n    use = (use + 1) % MAX;     // g2\n    return tmp;\n}\n```\n\n`put()` 先写入 `buffer[fill]` 再推进 `fill`；`get()` 先读出 `buffer[use]` 再推进 `use`。两个索引都以 MAX 取模，所以缓冲区被当作环形数组复用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000412"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "第一次尝试"
+              ],
+              "lineStart": 8207,
+              "lineEnd": 8227,
+              "assetRefs": [],
+              "excerptSha256": "83bcbf34f3b6aa0466f353311e79ed7083551c8e6b9a9b8756b637e0ccbec31f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ring-index",
+        "moduleId": "problem-and-first-attempt",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：两个索引为何不能互相替代",
+        "markdown": "`fill` 指向下一个可写槽位，`use` 指向下一个可读槽位。只有缓冲区为空或全满时两者才会重合，因此不能用同一个变量同时表示写位置和读位置。生产只推进 `fill`，消费只推进 `use`；一旦多个线程同时读改写其中一个索引，或者同时在同一个槽位写入，就需要额外的互斥保护。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-put-get"
+          ]
+        }
+      },
+      {
+        "id": "textbook-first-semaphore",
+        "moduleId": "problem-and-first-attempt",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：首版信号量方案",
+        "markdown": "```c\nsem_t empty;\nsem_t full;\n\nvoid *producer(void *arg) {\n    for (int i = 0; i < loops; i++) {\n        sem_wait(&empty);   // P1\n        put(i);             // P2\n        sem_post(&full);    // P3\n    }\n}\n\nvoid *consumer(void *arg) {\n    int tmp = 0;\n    while (tmp != -1) {\n        sem_wait(&full);    // C1\n        tmp = get();        // C2\n        sem_post(&empty);   // C3\n        printf(\"%d\\n\", tmp);\n    }\n}\n\nint main(int argc, char *argv[]) {\n    sem_init(&empty, 0, MAX);  // 初始有 MAX 个空槽\n    sem_init(&full, 0, 0);     // 初始有 0 个满槽\n}\n```\n\n教材先假设 MAX = 1 验证：消费者先运行，`sem_wait(&full)` 把 full 从 0 减为 -1 并睡眠；生产者执行 `sem_wait(&empty)` 成功，放入数据后 `sem_post(&full)` 唤醒消费者。之后无论生产者继续循环而被 empty 阻塞，还是消费者取走数据，都符合预期。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000413"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "图 31.5 put()和 get()函数"
+              ],
+              "lineStart": 8228,
+              "lineEnd": 8278,
+              "assetRefs": [],
+              "excerptSha256": "d25fffac3e71a644dfcf4fcc41ec225e544ea899f51259842b9a3ed0f185639c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-single-slot-trace",
+        "moduleId": "problem-and-first-attempt",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充推演：MAX = 1 时每一步的计数",
+        "markdown": "| 步骤 | 动作 | empty | full | 线程状态 |\n|---|---|---|---|---|\n| 初始 | 缓冲区为空 | 1 | 0 | 都未阻塞 |\n| 1 | 消费者 `sem_wait(&full)` | 1 | -1 | 消费者阻塞 |\n| 2 | 生产者 `sem_wait(&empty)` | 0 | -1 | 生产者继续 |\n| 3 | 生产者 `put` 后 `sem_post(&full)` | 0 | 0 | 消费者就绪 |\n| 4 | 生产者再次 `sem_wait(&empty)` | -1 | 0 | 生产者阻塞 |\n| 5 | 消费者 `get` 后 `sem_post(&empty)` | 0 | 0 | 生产者就绪 |\n\n关键在于：信号量计数可以为负，负值表示正在等待的线程数；`sem_post` 不只是加一，还会唤醒等待者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-first-semaphore"
+          ]
+        }
+      },
+      {
+        "id": "textbook-race",
+        "moduleId": "race-condition",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：MAX > 1 时的竞态条件",
+        "markdown": "当 MAX 大于 1 且存在多个生产者、多个消费者时，首版方案出现竞态条件。假设两个生产者 Pa 和 Pb 几乎同时调用 `put()`：Pa 在 f1 行把数据写入 `buffer[0]`（此时 `fill = 0`），却在执行 f2 行把 `fill` 更新为 1 之前被中断；Pb 接着运行，同样在 f1 行写入 `buffer[0]`，原先的数据就被覆盖了。生产者不能丢失数据，因此需要互斥。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000413"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "图 31.5 put()和 get()函数"
+              ],
+              "lineStart": 8228,
+              "lineEnd": 8278,
+              "assetRefs": [],
+              "excerptSha256": "d25fffac3e71a644dfcf4fcc41ec225e544ea899f51259842b9a3ed0f185639c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-race-localize",
+        "moduleId": "race-condition",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：临界区到底包含哪几条语句",
+        "markdown": "`put()` 的临界区是 f1 与 f2 两条语句的整体，`get()` 的临界区是 g1 与 g2 的整体。只保护写槽位而不保护索引推进仍然会出错：两个生产者可能读到相同的 `fill`，然后都把它加一，导致某个槽位的值被覆盖而另一个槽位被跳过。`empty` 与 `full` 只负责“有没有空槽/数据”的计数，并不让多个线程互斥地访问 `buffer`、`fill` 和 `use`，所以它们不能替代互斥量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-race",
+            "textbook-put-get"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mutex-attempt",
+        "moduleId": "mutex-and-deadlock",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：加入互斥量（不正确）",
+        "markdown": "```c\nsem_t empty;\nsem_t full;\nsem_t mutex;\n\nvoid *producer(void *arg) {\n    for (int i = 0; i < loops; i++) {\n        sem_wait(&mutex);  // p0 新增\n        sem_wait(&empty);  // p1\n        put(i);            // p2\n        sem_post(&full);   // p3\n        sem_post(&mutex);  // p4 新增\n    }\n}\n\nvoid *consumer(void *arg) {\n    for (int i = 0; i < loops; i++) {\n        sem_wait(&mutex);  // c0 新增\n        sem_wait(&full);   // c1\n        int tmp = get();   // c2\n        sem_post(&empty);  // c3\n        sem_post(&mutex);  // c4 新增\n        printf(\"%d\\n\", tmp);\n    }\n}\n```\n\n教材把整个 `put()`/`get()` 序列都放进互斥量，`mutex` 初值为 1。看起来所有共享访问都被保护了，但这一版仍然有问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000414"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "解决方案：增加互斥"
+              ],
+              "lineStart": 8279,
+              "lineEnd": 8324,
+              "assetRefs": [],
+              "excerptSha256": "a760a3a1cf989ba3b9834f2286934f139e63f6733617ab69b3ec0ca7ac856699"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mutex-looks-right",
+        "moduleId": "mutex-and-deadlock",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么这一版看起来是正确的",
+        "markdown": "从互斥角度看，这一版确实让任意时刻至多一个线程处于 `put()` 或 `get()` 区域内，竞态条件被消除了。问题不在于互斥不够，而在于互斥量覆盖的范围过大：`sem_wait(&empty)` 和 `sem_wait(&full)` 可能阻塞，却发生在持有 `mutex` 的时候。互斥量应当只保护临界区，不应把可能长时间阻塞的等待也包进去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mutex-attempt"
+          ]
+        }
+      },
+      {
+        "id": "textbook-deadlock",
+        "moduleId": "mutex-and-deadlock",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：死锁的成因",
+        "markdown": "设一个生产者和一个消费者。消费者先运行，在 c0 行获得锁，然后在 c1 行对 `full` 调用 `sem_wait()`；由于还没有数据，消费者阻塞并让出 CPU，但它仍然持有 `mutex`。接着生产者运行，它本可以生产数据并唤醒消费者，可惜它在 p0 行先对 `mutex` 调用 `sem_wait()`；锁已被消费者持有，生产者也被卡住。消费者持有互斥量等待 `full`，生产者能发 `full` 却在等待互斥量，形成循环等待，即典型的死锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000415"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "避免死锁"
+              ],
+              "lineStart": 8325,
+              "lineEnd": 8332,
+              "assetRefs": [],
+              "excerptSha256": "4edf2229a5eb93fc9543a163e976986d7507555359247933da3c9dc96b280d47"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-deadlock-walkthrough",
+        "moduleId": "mutex-and-deadlock",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：死锁场景的逐步还原",
+        "markdown": "1. 缓冲区为空，`full = 0`，`mutex = 1`。\n2. 消费者执行 c0：`mutex` 从 1 变为 0，消费者获得锁。\n3. 消费者执行 c1：`sem_wait(&full)` 使 full 从 0 变为 -1，消费者阻塞，但仍持有锁。\n4. 生产者执行 p0：`sem_wait(&mutex)` 使 mutex 从 0 变为 -1，生产者阻塞。\n5. 此时消费者等 `full`，而只有生产者能在 p3 发 `full`；生产者等 `mutex`，而只有消费者能在 c4 释放 `mutex`。两者互相等待，程序停住。\n\n如果生产者先运行并成功放入数据，死锁不一定立刻出现，这正说明该缺陷依赖执行顺序，不能靠“多跑几次没事”判断正确性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mutex-attempt",
+            "textbook-deadlock"
+          ]
+        }
+      },
+      {
+        "id": "textbook-final-solution",
+        "moduleId": "correct-solution",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：可行的最终方案",
+        "markdown": "```c\nsem_t empty;\nsem_t full;\nsem_t mutex;\n\nvoid *producer(void *arg) {\n    for (int i = 0; i < loops; i++) {\n        sem_wait(&empty);   // p1\n        sem_wait(&mutex);   // p1.5\n        put(i);             // p2\n        sem_post(&mutex);   // p2.5\n        sem_post(&full);    // p3\n    }\n}\n\nvoid *consumer(void *arg) {\n    for (int i = 0; i < loops; i++) {\n        sem_wait(&full);    // c1\n        sem_wait(&mutex);   // c1.5\n        int tmp = get();    // c2\n        sem_post(&mutex);   // c2.5\n        sem_post(&empty);   // c3\n        printf(\"%d\\n\", tmp);\n    }\n}\n\nint main(int argc, char *argv[]) {\n    sem_init(&empty, 0, MAX);\n    sem_init(&full, 0, 0);\n    sem_init(&mutex, 0, 1);\n}\n```\n\n解决方法是减少锁的作用域：把获取和释放互斥量的操作调整为紧挨着临界区，把 `full`、`empty` 的等待和唤醒放到锁外。这样得到简单而有效的有界缓冲区，也是多线程程序的常用模式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000416"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "最后，可行的方案"
+              ],
+              "lineStart": 8333,
+              "lineEnd": 8374,
+              "assetRefs": [],
+              "excerptSha256": "98caab315cb2a7402030f1cd44aa9410dc6295c60f20753ded14a963adc31c43"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lock-scope-rule",
+        "moduleId": "correct-solution",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：正确顺序为什么不会死锁",
+        "markdown": "正确方案遵守两条规则：先等待资源（`empty` 或 `full`），再获取互斥量；持有互斥量期间只做 `put()`/`get()` 这类不会阻塞的临界区操作。于是线程在等待资源时并不持有锁，另一个线程总能取得锁来推进状态并发出唤醒。生产者与消费者的对称顺序为：生产者 `wait(empty) → wait(mutex) → put → post(mutex) → post(full)`，消费者 `wait(full) → wait(mutex) → get → post(mutex) → post(empty)`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-solution",
+            "textbook-deadlock"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：改回错误顺序会怎样",
+        "markdown": "假设有人把生产者的顺序改成先 `sem_wait(&mutex)` 再 `sem_wait(&empty)`，消费者的顺序保持不变。请回答：\n\n1. 在缓冲区为空时，这一改动可能造成什么后果？\n2. 请写出导致停住的线程等待链。\n3. 说明为什么原来的正确方案不会出现同样的等待链。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-solution",
+            "textbook-mutex-attempt"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-and-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "解决有界缓冲区问题需要三种同步角色配合：`empty` 与 `full` 负责“能不能继续”的条件等待，`mutex` 负责临界区互斥。实现时先等待条件、再进入临界区，离开临界区后再发出条件唤醒。若把条件等待放进临界区，就会把“等待别人”变成“持锁等待别人”，从而制造循环等待。下一节把这种读写共享资源的模式推广到读者—写者锁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-solution",
+            "textbook-first-semaphore"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-lock-scope",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-deadlock",
+          "implement-correct"
+        ],
+        "learningPurpose": "检查学习者能否根据等待链判断加锁顺序错误，并说明互斥量应覆盖的范围。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-final-solution",
+            "textbook-mutex-attempt",
+            "textbook-deadlock"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "expectedPoints": [
+            "生产者持锁等待 empty 时会阻塞",
+            "消费者可能无法取得 mutex 去取走数据并发出 empty",
+            "正确方案在等待条件时不持有锁"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考答案：缓冲区为空时，生产者先取得 `mutex`，再在 `sem_wait(&empty)` 上阻塞并继续持锁；消费者若先在 `full` 上等待，则生产者等 empty、消费者等 full；消费者若已有数据可取，也会在 `sem_wait(&mutex)` 上被挡住。两条路径上都没有线程能执行 `get()` 并 `post(empty)` 或 `put()` 并 `post(full)`，形成循环等待。正确方案先等待 empty/full、后取 mutex，等待期间不持锁，因此不会出现该等待链。"
+        }
+      }
+    ]
+  },
+  "subtitle": "信号量",
+  "clusterId": "chapter-31",
+  "clusterIds": [
+    "chapter-31"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000411"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "生产者/消费者（有界缓冲区）问题"
+      ],
+      "lineStart": 8203,
+      "lineEnd": 8206,
+      "assetRefs": [],
+      "excerptSha256": "3c328145d13ea87d5372c4f023676fd874a94231fe267387f5ee0fcf3a09d33f"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000412"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "第一次尝试"
+      ],
+      "lineStart": 8207,
+      "lineEnd": 8227,
+      "assetRefs": [],
+      "excerptSha256": "83bcbf34f3b6aa0466f353311e79ed7083551c8e6b9a9b8756b637e0ccbec31f"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000413"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "图 31.5 put()和 get()函数"
+      ],
+      "lineStart": 8228,
+      "lineEnd": 8278,
+      "assetRefs": [],
+      "excerptSha256": "d25fffac3e71a644dfcf4fcc41ec225e544ea899f51259842b9a3ed0f185639c"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000414"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "解决方案：增加互斥"
+      ],
+      "lineStart": 8279,
+      "lineEnd": 8324,
+      "assetRefs": [],
+      "excerptSha256": "a760a3a1cf989ba3b9834f2286934f139e63f6733617ab69b3ec0ca7ac856699"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000415"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "避免死锁"
+      ],
+      "lineStart": 8325,
+      "lineEnd": 8332,
+      "assetRefs": [],
+      "excerptSha256": "4edf2229a5eb93fc9543a163e976986d7507555359247933da3c9dc96b280d47"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000416"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "最后，可行的方案"
+      ],
+      "lineStart": 8333,
+      "lineEnd": 8374,
+      "assetRefs": [],
+      "excerptSha256": "98caab315cb2a7402030f1cd44aa9410dc6295c60f20753ded14a963adc31c43"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    836,
+    947
+  ],
+  "scale": 0.93
+}

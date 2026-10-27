@@ -1,0 +1,401 @@
+{
+  "id": "point-26-2",
+  "title": "为什么更糟糕：共享数据",
+  "shortSummary": "解释共享计数器等数据在并发访问下为何会产生错误结果，并引出竞态条件。",
+  "keyTerms": [
+    "共享数据",
+    "计数器",
+    "竞态条件",
+    "并发"
+  ],
+  "animationType": "lostUpdate",
+  "animationSuggestion": "并排显示线程 A、线程 B 的步骤与共享内存中的 counter，按种子推进交错并在发生丢失更新时高亮；支持重播同一轨迹和重新生成新的交错。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-explanation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的计数器实验、实测结果与工具提示作为事实边界，围绕“共享数据为何让并发更糟”重排讲解顺序，并补充直觉、术语衔接与检查题。",
+      "estimatedMinutes": 11,
+      "outcomes": [
+        {
+          "id": "explain-shared-counter-failure",
+          "text": "说明两个线程各自自增同一个全局计数器时，最终结果为什么可能与预期的两千万不符。"
+        },
+        {
+          "id": "describe-nondeterminism",
+          "text": "描述共享数据并发访问时结果随运行变化、难以复现的现象，并说明它不是程序显式使用随机数造成的。"
+        },
+        {
+          "id": "connect-to-race",
+          "text": "把该现象与竞态条件联系起来，指出缺少协调的共享更新是问题根源。"
+        },
+        {
+          "id": "inspect-with-tools",
+          "text": "说明可以用反汇编等工具查看计数器更新对应的底层指令，为后续逐条分析做好准备。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要两个线程各自都执行了规定次数的加法，最终结果就必然等于两千万。",
+        "认为程序在单处理器上运行就不会出现共享数据导致的错误。",
+        "把每次运行结果都不同解释成程序里写了随机数或硬件损坏。"
+      ],
+      "modules": [
+        {
+          "id": "phenomenon",
+          "title": "问题导入：两个线程更新同一个计数器",
+          "role": "motivation",
+          "description": "从教材的共享计数器程序出发，明确共享变量、循环次数与预期结果。",
+          "outcomeRefs": [
+            "explain-shared-counter-failure"
+          ],
+          "order": 0
+        },
+        {
+          "id": "observed-evidence",
+          "title": "实验结果：预期与实际不符",
+          "role": "evidence",
+          "description": "对照教材给出的多次运行输出，确认结果偏小且每次不同。",
+          "outcomeRefs": [
+            "describe-nondeterminism"
+          ],
+          "order": 1
+        },
+        {
+          "id": "shared-data-risk",
+          "title": "理解：共享数据为何让并发更糟",
+          "role": "explanation",
+          "description": "把“共享”与“不可控的时序”联系起来，引出竞态条件这一术语。",
+          "outcomeRefs": [
+            "connect-to-race"
+          ],
+          "order": 2
+        },
+        {
+          "id": "diagnose-with-tools",
+          "title": "观察工具：用反汇编查看底层代码",
+          "role": "application",
+          "description": "按教材提示学习用反汇编程序定位计数器更新对应的指令。",
+          "outcomeRefs": [
+            "inspect-with-tools"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用三道检查题确认现象、原因与工具使用，并桥接到下一点的指令级分析。",
+          "outcomeRefs": [
+            "explain-shared-counter-failure",
+            "describe-nondeterminism",
+            "connect-to-race",
+            "inspect-with-tools"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-shared-counter-failure",
+          "describe-nondeterminism",
+          "connect-to-race",
+          "inspect-with-tools"
+        ],
+        "method": "完成三道检查题，并能用共享与时序两个要素解释结果为何会偏小且不可复现。",
+        "successCriteria": [
+          "能指出两个线程操作的是同一份 counter，而不是各自的副本",
+          "能说明结果取决于线程的相对执行时序",
+          "能说出反汇编工具在定位底层更新指令中的作用"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-26-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-counter-setup",
+        "moduleId": "phenomenon",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材的共享计数器程序",
+        "markdown": "教材用一个极简程序演示共享数据带来的问题：全局变量 `counter` 初值为 0，两个线程执行同一段工作函数，各自把 `counter` 自增一千万次（$10^{7}$），主线程等待二者结束后打印最终值。按预期，结果应当是两千万（20000000）。\n\n```c\nstatic volatile int counter = 0;\n\nvoid *mythread(void *arg) {\n    for (int i = 0; i < 1e7; i++) {\n        counter = counter + 1;\n    }\n    return NULL;\n}\n```\n\n两个线程使用的是同一段代码，只是传入的标识字符串不同，因此它们更新的是同一个全局变量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000332"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "为什么更糟糕：共享数据"
+              ],
+              "lineStart": 5836,
+              "lineEnd": 5935,
+              "assetRefs": [],
+              "excerptSha256": "f54a2c0d00a6588c90f4d53f091ca31f6afe946ecf96c629eecaf790b8c2d7c1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-shared",
+        "moduleId": "phenomenon",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：共享的是一份数据，不是副本",
+        "markdown": "这里的关键不是“两个线程各做了加法”，而是它们**操作同一份内存**。两个线程看到的是同一个 `counter` 变量，没有各自的私有副本；任何一次读取和写回都落在同一个地址上。只要执行顺序出现交错，彼此的操作就可能互相覆盖，而不像两个人各记一本账那样互不影响。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-counter-setup"
+          ]
+        }
+      },
+      {
+        "id": "tb-observed-results",
+        "moduleId": "observed-evidence",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材实测：有时正确，常常偏小且各不相同",
+        "markdown": "教材随后实际编译并运行该程序。有时确实得到期待的结果，但另一些运行得到的值明显偏小，而且每次运行的结果都可能不同。\n\n| 运行 | 最终 counter |\n|---|---|\n| 运行 1 | 20000000 |\n| 运行 2 | 19345221 |\n| 运行 3 | 19221041 |\n\n程序没有崩溃，也没有报错，却安静地给出了错误答案。教材由此追问：为什么会发生这种情况？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000332"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "为什么更糟糕：共享数据"
+              ],
+              "lineStart": 5836,
+              "lineEnd": 5935,
+              "assetRefs": [],
+              "excerptSha256": "f54a2c0d00a6588c90f4d53f091ca31f6afe946ecf96c629eecaf790b8c2d7c1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-nondeterminism",
+        "moduleId": "observed-evidence",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：结果依赖运行时的相对快慢",
+        "markdown": "同一个可执行文件、同一份输入，却得到不同的最终值，这说明结果依赖于线程在运行时的相对快慢。调度器何时切换线程、切换发生在哪一步，都不由这段程序控制。可以把程序可能出现的结局看成一组候选：其中包含正确结果，也包含若干错误结果，具体落到哪一个取决于这次运行的时序。这也解释了为什么这类错误难以复现、难以调试——重跑一次并不保证重现上一次的错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-counter-setup",
+            "tb-observed-results"
+          ]
+        }
+      },
+      {
+        "id": "tb-shared-data-focus",
+        "moduleId": "shared-data-risk",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材的定位：先前例子没有展示共享数据的相互作用",
+        "markdown": "教材明确指出，前面只创建线程的例子虽然展示了线程会按调度器的决定以不同顺序运行，却没有展示线程在访问共享数据时如何相互作用。本点的计数器程序正是这样一种情形：两个工作线程都在更新同一个全局共享变量，于是“运行顺序不确定”不再只是输出顺序问题，而会改变计算结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000332"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "为什么更糟糕：共享数据"
+              ],
+              "lineStart": 5836,
+              "lineEnd": 5935,
+              "assetRefs": [],
+              "excerptSha256": "f54a2c0d00a6588c90f4d53f091ca31f6afe946ecf96c629eecaf790b8c2d7c1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-race-intro",
+        "moduleId": "shared-data-risk",
+        "depth": "core",
+        "kind": "note",
+        "title": "模型补充：这是竞态条件的最小示例",
+        "markdown": "当多个执行流在没有协调的情况下访问同一份数据，且至少有一个在写，最终结果又取决于它们不可控的相对时序时，程序就处在**竞态条件**（race condition）之中。本点的计数器程序是最小示例：不是加法本身有错，而是“读取—修改—写回”这一串动作无法保证作为一个整体完成；一旦另一个线程的更新插入其中，先前的更新就可能被覆盖。要让结果稳定正确，就需要让这段更新在并发下保持原子性，这是后续原子性与互斥讨论的主题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-counter-setup",
+            "tb-observed-results",
+            "tb-shared-data-focus"
+          ]
+        }
+      },
+      {
+        "id": "tb-disassembler-tip",
+        "moduleId": "diagnose-with-tools",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材工具提示：了解并使用工具",
+        "markdown": "教材在这里插入一条工具提示：应当学习使用反汇编程序（disassembler）等工具来弄清程序实际执行了什么。对可执行文件运行 `objdump -d main`，就会看到组成程序的汇编指令，从而定位像更新计数器这样的底层代码。教材还提到 `gdb` 这类调试器和 `valgrind` 这类内存分析工具——工具用得越好，越能建立对系统的理解。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000333"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：了解并使用工具"
+              ],
+              "lineStart": 5936,
+              "lineEnd": 5945,
+              "assetRefs": [],
+              "excerptSha256": "e745f1d32549d43f562a8e5920385851d714ed9e8b19dc18561b9ec6c7be88c0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tool-use",
+        "moduleId": "diagnose-with-tools",
+        "depth": "support",
+        "kind": "application",
+        "title": "模型补充：把工具用于本例",
+        "markdown": "动手观察：先用 `objdump -d main` 找到与 `counter` 更新对应的几条指令，标出哪些指令在读内存、哪些在写内存，再设想线程在任意两条指令之间被切换会发生什么。这个过程不会改变程序，却能把“结果为什么会错”从抽象猜测变成可对照的指令序列，为下一点逐条分析交错做好准备。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-disassembler-tip"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：三道题",
+        "markdown": "**达成检查**（先自己回答，再看参考要点）：\n\n1. 两个线程各做一千万次自增，为什么最终值可能小于两千万？\n2. 为什么有时又能得到正确的 20000000？\n3. 同一程序两次运行结果不同，能否用“程序里写了随机数”解释？\n\n参考要点：第 1 题要考虑两个线程对同一变量的更新可能相互覆盖，使部分自增丢失；第 2 题说明交错恰好没有造成丢失更新时结果仍可能正确；第 3 题强调差异来自线程的相对执行时序，而不是程序显式使用了随机数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-counter-setup",
+            "tb-observed-results",
+            "model-race-intro",
+            "model-tool-use"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "下一点桥接",
+        "markdown": "小结：线程让“什么时候运行”变得难以言说，而共享数据又把这种不确定性转化为具体错误——程序可能安静地算出错误结果，且每次不同。下一步要回答“错误究竟发生在哪一步”：教材将查看编译器为 `counter = counter + 1` 生成的指令序列，并分析时钟中断如何把一次更新切成两半。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-observed-results",
+            "model-race-intro",
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "counter-outcome-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "title": "共享计数器结果自测",
+        "outcomeRefs": [
+          "explain-shared-counter-failure",
+          "connect-to-race"
+        ],
+        "learningPurpose": "检查学习者能否用共享内存与不可控时序解释计数器结果的偏差。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-counter-setup",
+            "tb-observed-results",
+            "model-race-intro"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questionType": "short-answer"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请回答：两个线程各自自增同一计数器一千万次，为什么最终结果可能小于两千万？请说明共享变量与线程相对时序在其中的作用。"
+        }
+      }
+    ]
+  },
+  "subtitle": "并发:介绍",
+  "clusterId": "chapter-26",
+  "clusterIds": [
+    "chapter-26"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000332"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "为什么更糟糕：共享数据"
+      ],
+      "lineStart": 5836,
+      "lineEnd": 5935,
+      "assetRefs": [],
+      "excerptSha256": "f54a2c0d00a6588c90f4d53f091ca31f6afe946ecf96c629eecaf790b8c2d7c1"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000333"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：了解并使用工具"
+      ],
+      "lineStart": 5936,
+      "lineEnd": 5945,
+      "assetRefs": [],
+      "excerptSha256": "e745f1d32549d43f562a8e5920385851d714ed9e8b19dc18561b9ec6c7be88c0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2251,
+    1494
+  ],
+  "scale": 0.93
+}

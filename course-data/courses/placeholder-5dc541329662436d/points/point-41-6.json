@@ -1,0 +1,468 @@
+{
+  "id": "point-41-6",
+  "title": "大文件例外",
+  "shortSummary": "讨论大文件如何跨柱面组分布，以及随之而来的局部性下降和性能问题。",
+  "keyTerms": [
+    "大文件",
+    "柱面组",
+    "分布",
+    "局部性"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-41-3",
+    "point-41-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的例外规则、分布示意与 409.6KB 摊还算例，围绕“局部性损失换块组可用性”重排讲解，补充推导、情景判断和设计取舍。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-why",
+          "text": "解释为什么大文件需要与一般文件不同的放置规则。"
+        },
+        {
+          "id": "describe-rule",
+          "text": "描述 FFS 大文件例外按直接块与间接块跨柱面组分块的具体规则。"
+        },
+        {
+          "id": "analyze-cost",
+          "text": "分析跨组分布对顺序访问局部性的损害及其表现。"
+        },
+        {
+          "id": "estimate-chunk",
+          "text": "用定位时间与传输率估算摊还所需的大块大小，并比较按目标计算与按 inode 结构分块的取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为大文件例外是把大文件整体挪到磁盘末尾，而不是跨柱面组分块。",
+        "认为把大文件打散到多个柱面组总能提升性能，忽略顺序访问的额外寻道。",
+        "认为 FFS 先算出最优大块大小再分块，实际上它依据的是 inode 的指针结构。"
+      ],
+      "modules": [
+        {
+          "id": "why-exception",
+          "title": "问题：填满一个块组会破坏局部性",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "explain-why"
+          ],
+          "order": 0
+        },
+        {
+          "id": "placement-rule",
+          "title": "机制：按直接块与间接块跨组分块",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "describe-rule"
+          ],
+          "order": 1
+        },
+        {
+          "id": "sequential-cost",
+          "title": "代价：顺序访问的额外寻道",
+          "role": "consequence-analysis",
+          "outcomeRefs": [
+            "analyze-cost"
+          ],
+          "order": 2
+        },
+        {
+          "id": "amortized-chunk",
+          "title": "量化：大块大小与摊还",
+          "role": "quantitative-derivation",
+          "outcomeRefs": [
+            "estimate-chunk",
+            "analyze-cost"
+          ],
+          "order": 3
+        },
+        {
+          "id": "tradeoff-and-check",
+          "title": "取舍、检查与下一点桥接",
+          "role": "transfer-and-summary",
+          "outcomeRefs": [
+            "explain-why",
+            "describe-rule",
+            "analyze-cost",
+            "estimate-chunk"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why",
+          "describe-rule",
+          "analyze-cost",
+          "estimate-chunk"
+        ],
+        "method": "完成顺序读取大文件的情景估算，并说明 FFS 为何按 inode 结构而不是按目标带宽分块。",
+        "successCriteria": [
+          "能说明填满块组为何损害相关文件的局部性",
+          "能复述 12 个直接块与每个间接块一组的分块规则",
+          "能算出 40MB/s、10ms 定位下 409.6KB 的大块估算",
+          "能指出跨组分布对顺序访问的代价与摊还的边界"
+        ],
+        "exerciseBlockId": "model-check-scenario",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-41-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-fills-group",
+        "moduleId": "why-exception",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为什么大文件需要例外",
+        "markdown": "FFS 中文件放置的一般策略有一个重要例外，它出现在大文件上。如果没有不同的规则，大文件会把它首先被放入的块组填满，也可能继续填满其他块组。教材指出，以这种方式填充块组是不符合需要的，因为它妨碍了随后的“相关”文件被放置在该块组内，因此可能破坏文件访问的局部性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000576"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "大文件例外"
+              ],
+              "lineStart": 11320,
+              "lineEnd": 11360,
+              "assetRefs": [
+                "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+              ],
+              "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-locality-analogy",
+        "moduleId": "why-exception",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：块组被占满是一种分配外部性",
+        "markdown": "可以把柱面组想成一排相邻的工位：FFS 的一般策略假设同一目录或相关文件会挨着放，从而减少磁头移动。一个大文件如果把整排工位占满，后来打开的相关文件只能去更远的组，原本设计的就近关系就断了。\n\n这里的关键不是“大文件自己访问慢”，而是它让别人变慢：它占用的不是一块数据，而是一整片本可以留给邻接文件的局部性资源。例外规则要解决的问题，正是把这个外部性限制在少数块组内，同时不让大文件自己被切得过碎。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-fills-group"
+          ]
+        }
+      },
+      {
+        "id": "tb-placement-rule",
+        "moduleId": "placement-rule",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：大文件的分块规则",
+        "markdown": "对于大文件，FFS 执行以下操作。在把一定数量的块分配到第一个块组之后（例如 12 个块，或 inode 中可用的直接指针的数量），FFS 把文件的下一个“大”块——也就是第一个间接块所指向的那些部分——放到另一个块组中（可能因为它利用率低而选择它）。然后，文件的下一个块放到又一个不同的块组中，依此类推。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000576"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "大文件例外"
+              ],
+              "lineStart": 11320,
+              "lineEnd": 11360,
+              "assetRefs": [
+                "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+              ],
+              "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-inode-mapping",
+        "moduleId": "placement-rule",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充推导：规则换算成具体大小",
+        "markdown": "以 4KB 块和 32 位磁盘地址为例，规则可以换算成两个具体数字：\n\n- inode 的 12 个直接指针最多指向 $12 \\times 4\\,\\mathrm{KB} = 48\\,\\mathrm{KB}$，这些块留在 inode 所在的组；\n- 一个间接块有 $4\\,\\mathrm{KB} / 4\\,\\mathrm{B} = 1024$ 个地址，因此每个间接块连同它指向的 1024 个块（$1024 \\times 4\\,\\mathrm{KB} = 4\\,\\mathrm{MB}$）构成一个“大块”，被放到另一个柱面组。\n\n于是，除前 48KB 外，文件大致每 4MB 换一个块组。注意这个粒度来自文件系统结构，而不是磁盘的实际传输性能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-placement-rule"
+          ]
+        }
+      },
+      {
+        "id": "tb-layout-example",
+        "moduleId": "placement-rule",
+        "depth": "support",
+        "kind": "figure",
+        "title": "教材示意：10 个块的两种分布",
+        "markdown": "教材用一个 10 个块的小文件作对比。没有大文件例外时，块 0–9 全部集中在 G2，文件只占据磁盘的一小段。有了大文件例外，文件以大块的形式分布在磁盘上：示意中块 8、9 位于 G0，块 0、1 在 G2，块 2、3 在 G4，块 4、5 在 G6，块 6、7 在 G8。\n\n这是一张示意性的图，重点是分布从“集中”变成“跨组”；具体编号不构成固定映射。教材在第二张图旁提醒：在磁盘上分散文件块会损害性能，特别是在顺序访问相对常见的情况下。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000576"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "大文件例外"
+              ],
+              "lineStart": 11320,
+              "lineEnd": 11360,
+              "assetRefs": [
+                "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+              ],
+              "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sequential-cost",
+        "moduleId": "sequential-cost",
+        "depth": "core",
+        "kind": "warning",
+        "title": "补充分析：顺序读取时代价最明显",
+        "markdown": "跨组分布的代价集中体现在顺序访问：应用程序依次读块 0–9 时，磁头必须在 G0、G2、G4、G6、G8 之间移动，每跨一次组就要额外付出寻道和旋转。局部性下降不是抽象指标，它直接表现为单位时间内读到的数据变少、有效带宽降低。\n\n这也解释了为什么例外规则必须配合“足够大的块”：如果每个大块只有几百字节，跨组开销会吞掉大部分时间；块足够大，跨组次数变少，分摊到每个字节的开销才降下来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-placement-rule",
+            "tb-layout-example"
+          ]
+        }
+      },
+      {
+        "id": "model-check-scenario",
+        "moduleId": "sequential-cost",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "补充练习：先估算再对照",
+        "markdown": "一个 100MB 文件被顺序读取，按 FFS 的规则它大致会被拆成多少个约 4MB 的大块？如果每次跨组定位耗时 10ms、传输率为 40MB/s，读一个大块需要多久，定位时间在其中占多大比例？\n\n请先写下你的估算与理由，再对照后文的摊还计算检查：4MB 在 40MB/s 下需要 100ms，定位 10ms，约占 9%。这个比例说明，块足够大时跨组开销可以被压到较低水平。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-placement-rule",
+            "tb-layout-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-amortization",
+        "moduleId": "amortized-chunk",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：用摊销把定位开销摊薄",
+        "markdown": "教材承认分散文件块确实会损害性能，并给出缓解思路：可以通过仔细选择大块大小来改善。具体来说，如果大块大小足够大，我们大部分时间仍然花在从磁盘传输数据上，而在大块之间寻道的时间相对较少。每次开销做更多工作、从而减少开销，这个过程称为摊销（amortization），它是计算机系统中的常用技术。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000576"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "大文件例外"
+              ],
+              "lineStart": 11320,
+              "lineEnd": 11360,
+              "assetRefs": [
+                "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+              ],
+              "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-chunk-calculation",
+        "moduleId": "amortized-chunk",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材算例：50%、90% 与 99% 峰值带宽",
+        "markdown": "假设磁盘的平均定位时间（寻道加旋转）是 10ms，传输率为 40MB/s。若目标是一半时间定位、一半时间传输，即达到峰值磁盘性能的 50%，那么每次 10ms 的定位开销需要对应 10ms 的数据传输：\n\n$$\\frac{40\\,\\mathrm{MB}}{1\\,\\mathrm{s}} \\times \\frac{1024\\,\\mathrm{KB}}{1\\,\\mathrm{MB}} \\times \\frac{1\\,\\mathrm{s}}{1000\\,\\mathrm{ms}} \\times 10\\,\\mathrm{ms} = 409.6\\,\\mathrm{KB}$$\n\n同样的算法可以算出：达到 90% 峰值带宽所需的块大小约为 3.69MB，达到 99% 约为 40.6MB。越接近峰值，所需的大块就越大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000576"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "大文件例外"
+              ],
+              "lineStart": 11320,
+              "lineEnd": 11360,
+              "assetRefs": [
+                "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+              ],
+              "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-calc-walkthrough",
+        "moduleId": "amortized-chunk",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充演算：量纲与摊还边界",
+        "markdown": "把单位一步步约掉：$40\\,\\mathrm{MB/s}$ 先换成 $40 \\times 1024\\,\\mathrm{KB/s} = 40960\\,\\mathrm{KB/s}$，再乘以 $0.01\\,\\mathrm{s}$，得到 $409.6\\,\\mathrm{KB}$。这说明在给定磁盘参数下，每定位一次至少要连续传输约 410KB，寻道与传输才各占一半时间。\n\n若目标是 90% 带宽，传输时间要是定位时间的 9 倍，块大小随之放大到约 3.69MB；99% 则要求 99 倍，约 40.6MB。摊还也有边界：块越大，定位占比越低，但单个大块内部的局部性也越差，只有顺序流式访问能充分受益；随机访问并不会因为块大而变快。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-amortization",
+            "tb-chunk-calculation"
+          ]
+        }
+      },
+      {
+        "id": "tb-mechanical-trend",
+        "moduleId": "tradeoff-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：机械成本相对变贵的趋势",
+        "markdown": "教材还提醒了一个趋势：磁盘制造商的传输率提升得相当快，因为他们擅长在同样面积的盘面上容纳更多位；但驱动器与寻道相关的机械方面（磁臂速度和旋转速度）改善相当缓慢。机械成本因此变得相对昂贵，为了摊销同样的定位成本，就必须在两次寻道之间传输更多数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000576"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "大文件例外"
+              ],
+              "lineStart": 11320,
+              "lineEnd": 11360,
+              "assetRefs": [
+                "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+              ],
+              "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-design-comparison",
+        "moduleId": "tradeoff-and-check",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充比较：算出来的大块 vs 结构决定的大块",
+        "markdown": "教材明确说，FFS 没有使用上述计算来跨组分布大文件，而是采用了一种简单方法，基于 inode 本身的结构。两种思路可以放在同一组维度下比较：\n\n| 维度 | 按性能目标计算 | FFS 的 inode 结构法 |\n|---|---|---|\n| 大块依据 | 定位时间与传输率 | 12 个直接指针，之后每个间接块一组 |\n| 典型大小 | 409.6KB（50% 峰值）到 3.69MB（90%） | 每个间接块覆盖约 1024 块，即约 4MB |\n| 优点 | 可按目标带宽调优 | 简单，无需测量磁盘参数 |\n| 代价 | 依赖具体磁盘，参数变化要重算 | 粒度由文件系统结构固定，可能偏离最优 |\n\n这也解释了一个容易混淆的点：FFS 的“大块”是 4MB 量级，而不是按 50% 目标算出的 409.6KB。前 48KB 仍由直接指针留在原地，则是规则里的另一个例外。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-placement-rule",
+            "tb-chunk-calculation",
+            "tb-mechanical-trend"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "tradeoff-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "补充小结：先问两个问题",
+        "markdown": "大文件例外把“集中放置”换成“跨柱面组分块”。它牺牲一部分局部性，换取块组不被单个大文件占满；顺序访问的代价则靠足够大的块来摊还。\n\n判断一个放置方案时可以先问两句：块组还留给相关文件吗？每次寻道之后传输的数据够多吗？下一个知识点继续看 FFS 在块大小、子块和参数化布局上的其他设计细节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-fills-group",
+            "tb-placement-rule",
+            "tb-chunk-calculation",
+            "tb-mechanical-trend"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "large-file-chunk-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-scenario",
+        "moduleId": "sequential-cost",
+        "depth": "support",
+        "outcomeRefs": [
+          "analyze-cost",
+          "estimate-chunk"
+        ],
+        "learningPurpose": "检查学习者能否把跨组分布规则与摊还估算结合起来判断顺序访问开销。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-placement-rule",
+            "tb-layout-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "一个 100MB 文件按 FFS 规则分布，顺序读取时的主要开销来自哪里？若块足够大，为什么开销会被摊薄？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "主要开销来自跨柱面组的定位；大块让每次定位后传输更多数据，从而摊薄固定开销。请用 4MB、40MB/s、10ms 三个数说明这一点。"
+        }
+      }
+    ]
+  },
+  "subtitle": "局部性和快速文件系统",
+  "clusterId": "chapter-41",
+  "clusterIds": [
+    "chapter-41"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000576"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "大文件例外"
+      ],
+      "lineStart": 11320,
+      "lineEnd": 11360,
+      "assetRefs": [
+        "parts/part-0004/images/7a7f3a5adc21b1cb8da07f5116f051de712ab6cdb60b75a9c17fd60325210212.jpg"
+      ],
+      "excerptSha256": "141f53622bd11b28439c18587498d263ddb7fe4e4195a9cf682a12638b7f468b"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1026,
+    100
+  ],
+  "scale": 0.89
+}

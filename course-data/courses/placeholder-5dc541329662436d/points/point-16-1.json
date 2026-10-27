@@ -1,0 +1,440 @@
+{
+  "id": "point-16-1",
+  "title": "分段：泛化的基址/界限",
+  "shortSummary": "把单一基址/界限扩展为多个段的基址和界限，说明分段如何对应代码、数据和栈。",
+  "keyTerms": [
+    "分段",
+    "基址",
+    "界限",
+    "段表"
+  ],
+  "animationType": "segmentationTranslation",
+  "animationSuggestion": "逐步显示虚拟地址、选段、偏移计算、界限比较和基址相加，并用一条越界地址演示检查失败后转入异常处理。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-15-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-example-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的分段定义、段寄存器数值与算例顺序，围绕地址转换和越界判断补充直觉、对比与自检。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "o-motivation",
+          "text": "解释单一基址/界限在栈堆之间存在大块空闲时为何浪费物理内存，并说明分段要解决的核心问题。"
+        },
+        {
+          "id": "o-mechanism",
+          "text": "说明分段如何用多对基址/界限寄存器把代码、堆、栈段独立放入物理内存。"
+        },
+        {
+          "id": "o-translate",
+          "text": "给定段基址、段大小和虚拟地址，完成界限检查并计算段内偏移与物理地址。"
+        },
+        {
+          "id": "o-fault",
+          "text": "判断越界访问为何触发段错误，并指出界限检查的对象是段内偏移。"
+        }
+      ],
+      "misconceptions": [
+        "认为分段只是换了名称，本质上仍是整个地址空间共用一对基址/界限寄存器。",
+        "把虚拟地址直接加上段基址，忘记先减去段的起始虚拟地址得到段内偏移。"
+      ],
+      "modules": [
+        {
+          "id": "m-motivation",
+          "title": "为什么需要分段",
+          "role": "motivation",
+          "outcomeRefs": [
+            "o-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-segment-definition",
+          "title": "分段的定义与直觉",
+          "role": "concept",
+          "outcomeRefs": [
+            "o-motivation",
+            "o-mechanism"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-register-translation",
+          "title": "段寄存器与地址转换",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "o-mechanism",
+            "o-translate"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-boundary-fault",
+          "title": "越界检查与段错误",
+          "role": "application",
+          "outcomeRefs": [
+            "o-fault",
+            "o-translate"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-check-bridge",
+          "title": "自检与下一点桥接",
+          "role": "check",
+          "outcomeRefs": [
+            "o-translate",
+            "o-fault"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-motivation",
+          "o-mechanism",
+          "o-translate",
+          "o-fault"
+        ],
+        "method": "完成两道段内地址判断，并写出偏移、物理地址或越界结论。",
+        "successCriteria": [
+          "能说明分段消除了栈堆之间空闲区域的物理内存占用",
+          "界限检查针对段内偏移而不是加过基址的物理地址",
+          "越界时能给出段错误的处理方向"
+        ],
+        "exerciseBlockId": "model-bounds-check",
+        "nextPointId": "point-16-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "m-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：整块装入的浪费",
+        "markdown": "教材先回顾了单一基址/界限机制：操作系统借助一对基址和界限寄存器，就能把整个进程地址空间重定位到某块连续的物理内存。问题在于，地址空间中栈与堆之间往往存在一大块空闲区域；若把整个地址空间完整装入物理内存，这段从不被访问的空间也会占用真实的物理内存。\n\n由此得到本章的关键问题：怎样才能既支持很大的地址空间，又不让其中的大片空闲区域占用物理内存？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "分段"
+              ],
+              "lineStart": 3650,
+              "lineEnd": 3659,
+              "assetRefs": [],
+              "excerptSha256": "bd4a55f1d0fd1214933f86b42c23874925926658f7658684d770e3624d72dbf5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-waste-intuition",
+        "moduleId": "m-motivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：按整栋楼计费",
+        "markdown": "可以把单一基址/界限机制想成给整个地址空间租下一整栋楼：即使中间许多房间长期空置，也照样按整栋计费。地址空间越大、栈堆之间的空洞越宽，浪费越明显；而且在剩余物理内存无法提供一段足够大的连续区域时，进程甚至无法启动。分段的动机正是只给“真正住人的房间”付费。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-segmentation-definition",
+        "moduleId": "m-segment-definition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：给每个逻辑段一对基址/界限",
+        "markdown": "**分段（segmentation）** 把 MMU 中的一对基址/界限寄存器泛化为多对：地址空间中的每个逻辑段各有一对。一个段是地址空间内一个连续的定长区域；典型的地址空间有三个逻辑段——代码、栈和堆。这样操作系统可以把不同的段放到不同的物理内存位置，使虚拟地址空间中未使用的部分不再占用物理内存。\n\n教材把这种地址空间称为稀疏地址空间（sparse address spaces）：只有实际用到的内存才在物理内存中分配。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000198"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "分段：泛化的基址/界限"
+              ],
+              "lineStart": 3660,
+              "lineEnd": 3684,
+              "assetRefs": [
+                "parts/part-0002/images/42ceb3ea88401ad620f3b95f4d40130b9d84cbbc28fdf9b9463633c22f3da4f5.jpg",
+                "parts/part-0002/images/f69d85e5b944ab6220ef8ef41c4b28e725dcc35bb12616cb3a54c5fa31734af5.jpg"
+              ],
+              "excerptSha256": "6ef92b98d466983f07137198fb59e68d9a875a11229b9723924a5275afcbaac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-segment-analogy",
+        "moduleId": "m-segment-definition",
+        "depth": "support",
+        "kind": "example",
+        "title": "辅助类比：三个可独立搬运的箱子",
+        "markdown": "把三个段想成三个可独立搬运的箱子：代码箱、堆箱、栈箱各自记录“放在哪”（基址）和“有多大”（界限）。搬运时只需改某一箱的基址，其他箱不受影响；箱与箱之间的空隙不再需要真实内存。这也是分段比整块搬运更灵活的地方。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segmentation-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-register-table",
+        "moduleId": "m-register-translation",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材表 16.1：段寄存器的值",
+        "markdown": "教材的示例把 64KB 物理内存中的一段留给操作系统（16KB），余下空间放置三个各 2KB 的段。段寄存器记录如下：\n\n| 段 | 基址 | 大小 |\n| --- | --- | --- |\n| 代码 | 32KB | 2KB |\n| 堆 | 34KB | 2KB |\n| 栈 | 28KB | 2KB |\n\n引用代码段中的虚拟地址 100 时，硬件先确认偏移 100 小于代码段的界限 2KB，再把基址加上偏移：$100 + 32768 = 32868$，得到物理地址 32868。只有通过界限检查的偏移才允许加上基址。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000198"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "分段：泛化的基址/界限"
+              ],
+              "lineStart": 3660,
+              "lineEnd": 3684,
+              "assetRefs": [
+                "parts/part-0002/images/42ceb3ea88401ad620f3b95f4d40130b9d84cbbc28fdf9b9463633c22f3da4f5.jpg",
+                "parts/part-0002/images/f69d85e5b944ab6220ef8ef41c4b28e725dcc35bb12616cb3a54c5fa31734af5.jpg"
+              ],
+              "excerptSha256": "6ef92b98d466983f07137198fb59e68d9a875a11229b9723924a5275afcbaac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-translate-order",
+        "moduleId": "m-register-translation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：检查与相加的先后顺序",
+        "markdown": "注意这一步的顺序：先判断“段内偏移在不在段内”，再做“基址加偏移”。若反过来先加基址，就越过了段本身的边界判断。教材中的界限寄存器记录的是段的大小，因此检查对象是段内偏移，而不是加过基址之后的物理地址。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-register-table"
+          ]
+        }
+      },
+      {
+        "id": "tb-heap-translation",
+        "moduleId": "m-register-translation",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材补充算例：堆中的地址",
+        "markdown": "再看堆中的虚拟地址 4200。堆段从虚拟地址 4KB（4096）开始，所以直接拿 4200 加堆基址（34KB）会得到 39016，这不是正确的物理地址。正确做法是先减去段的起始虚拟地址得到段内偏移：$4200 - 4096 = 104$；再用偏移加堆基址：$104 + 34816 = 34920$。物理地址 34920 才是正确结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000199"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：段错误"
+              ],
+              "lineStart": 3685,
+              "lineEnd": 3692,
+              "assetRefs": [],
+              "excerptSha256": "362c90f3477d8ffa76b1e60fbf6bb66aaff258cceada37676222c33d59aefbd8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-offset-rule",
+        "moduleId": "m-register-translation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：统一的偏移规则",
+        "markdown": "这里起作用的不是“虚拟地址”本身，而是“段内偏移”。教材对代码段的 100 可以直接相加，是因为代码段从虚拟地址 0 开始，偏移恰好等于虚拟地址；堆段不从 0 开始，所以必须先减起点。把两种情况合并，规则是：偏移 = 虚拟地址 − 段起始虚拟地址；物理地址 = 段基址 + 偏移，且偏移必须小于段大小。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-heap-translation",
+            "tb-register-table"
+          ]
+        }
+      },
+      {
+        "id": "tb-segment-fault",
+        "moduleId": "m-boundary-fault",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材补充：越界与段错误",
+        "markdown": "若试图访问超出堆边界的地址，例如 7KB，硬件会发现该地址越界，从而陷入操作系统，通常导致出错进程被终止。这一事件在支持分段的机器上称为段异常（segmentation violation）或段错误（segmentation fault）。即使机器并不支持分段，这个术语也仍然沿用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000199"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：段错误"
+              ],
+              "lineStart": 3685,
+              "lineEnd": 3692,
+              "assetRefs": [],
+              "excerptSha256": "362c90f3477d8ffa76b1e60fbf6bb66aaff258cceada37676222c33d59aefbd8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fault-meaning",
+        "moduleId": "m-boundary-fault",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：段错误检查的是什么",
+        "markdown": "段错误因此不是“这个地址根本不存在”，而是“段内偏移超出了该段的界限”。检查对象始终是偏移：偏移小于段大小才合法；一旦越界，硬件会在完成地址转换前触发异常，把控制权交给操作系统，由它决定终止进程等处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segment-fault"
+          ]
+        }
+      },
+      {
+        "id": "model-bounds-check",
+        "moduleId": "m-check-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：两道段内地址判断",
+        "markdown": "仍使用表 16.1 的寄存器值。\n\n1. 访问代码段的虚拟地址 2048，会发生什么？\n2. 访问堆段的虚拟地址 6144，会发生什么？若改为 5000 呢？\n\n参考思路：代码段界限为 2KB，偏移 2048 不满足“小于界限”，触发段错误；堆段偏移为 $6144 - 4096 = 2048$，同样不小于 2KB，也触发段错误。若把第二问改为虚拟地址 5000，偏移为 $5000 - 4096 = 904$，在界限内，物理地址为 $904 + 34816 = 35820$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-register-table",
+            "tb-heap-translation",
+            "tb-segment-fault"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "segmentation-bounds-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-bounds-check",
+        "moduleId": "m-check-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "o-translate",
+          "o-fault"
+        ],
+        "learningPurpose": "检查学习者能否把段基址、段大小和起始虚拟地址组合起来，正确判断越界与否并算出物理地址。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-register-table",
+            "tb-heap-translation"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定表 16.1 的段寄存器值，判断代码段虚拟地址 2048 与堆段虚拟地址 5000 是否越界；不越界时写出段内偏移与物理地址，并说明判断依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "分段",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000197"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "分段"
+      ],
+      "lineStart": 3650,
+      "lineEnd": 3659,
+      "assetRefs": [],
+      "excerptSha256": "bd4a55f1d0fd1214933f86b42c23874925926658f7658684d770e3624d72dbf5"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000198"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "分段：泛化的基址/界限"
+      ],
+      "lineStart": 3660,
+      "lineEnd": 3684,
+      "assetRefs": [
+        "parts/part-0002/images/42ceb3ea88401ad620f3b95f4d40130b9d84cbbc28fdf9b9463633c22f3da4f5.jpg",
+        "parts/part-0002/images/f69d85e5b944ab6220ef8ef41c4b28e725dcc35bb12616cb3a54c5fa31734af5.jpg"
+      ],
+      "excerptSha256": "6ef92b98d466983f07137198fb59e68d9a875a11229b9723924a5275afcbaac0"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000199"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "补充：段错误"
+      ],
+      "lineStart": 3685,
+      "lineEnd": 3692,
+      "assetRefs": [],
+      "excerptSha256": "362c90f3477d8ffa76b1e60fbf6bb66aaff258cceada37676222c33d59aefbd8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -224,
+    2372
+  ],
+  "scale": 1.23
+}

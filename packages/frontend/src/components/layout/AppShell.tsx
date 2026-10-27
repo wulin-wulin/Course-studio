@@ -4,9 +4,10 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
-import { AlertCircle, Loader2, PanelRightOpen } from "lucide-react";
+import { AlertCircle, BookOpen, Loader2, PanelRightOpen } from "lucide-react";
 import { TopNav } from "./TopNav";
 import { CourseCatalog } from "../course/CourseCatalog";
+import { CourseGroupPage } from "../course/CourseGroupPage";
 import { CourseGenerationView } from "../course/CourseGenerationView";
 import { CourseForestViewport } from "../course/CourseForestViewport";
 import { CourseReadingPage } from "../course/CourseReadingPage";
@@ -25,6 +26,7 @@ import type {
 
 type AppRoute =
   | { kind: "catalog" }
+  | { kind: "catalog-group"; groupId: string }
   | { kind: "generation"; conversationId: string }
   | { kind: "review"; reviewId: string; reviewKind: ReviewKind }
   | { kind: "forest"; courseId: string }
@@ -394,7 +396,7 @@ export function AppShell() {
 
   return (
     <div ref={appShellRef} className="h-screen flex flex-col overflow-hidden bg-cream">
-      <TopNav onGoHome={() => navigate("/")} isCatalog={route.kind === "catalog"} />
+      <TopNav onGoHome={() => navigate("/")} isCatalog={route.kind === "catalog" || route.kind === "catalog-group"} />
       <main className="relative flex-1 min-h-0 flex overflow-hidden max-lg:flex-col">
         <section ref={workspaceRef} className="flex-1 min-w-0 min-h-0 relative">
           {route.kind === "generation" ? (
@@ -440,11 +442,16 @@ export function AppShell() {
               onSubmitted={completeReview}
               onBack={() => navigate("/")}
             />
+          ) : route.kind === "catalog-group" ? (
+            <CourseGroupPage
+              key={route.groupId}
+              groupId={route.groupId}
+              onBack={() => navigate("/")}
+              onOpenCourse={(course) => navigate(`/courses/${encodeURIComponent(course.id)}/forest`)}
+            />
           ) : route.kind === "catalog" ? (
             <CourseCatalog
-              onOpenCourse={(course) =>
-                navigate(`/courses/${encodeURIComponent(course.id)}/forest`)
-              }
+              onOpenGroup={(groupId) => navigate(`/catalog/groups/${encodeURIComponent(groupId)}`)}
               onOpenGeneration={(conversationId) =>
                 navigate(`/generation/${encodeURIComponent(conversationId)}`)
               }
@@ -474,13 +481,11 @@ export function AppShell() {
           aria-label={isMobileAgentModalOpen ? "课程助手" : undefined}
           tabIndex={isMobileAgentModalOpen ? -1 : undefined}
           style={panelStyle}
-          className={`relative shrink-0 min-h-0 border-l border-border bg-surface max-lg:border-l-0 max-lg:border-t ${
-            isResizingAgentPanel ? "" : "transition-[width] duration-200"
-          } ${
-            isAgentPanelOpen
-              ? "w-[var(--agent-panel-width)] min-w-[400px] max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-50 max-lg:!h-[min(72vh,640px)] max-lg:!w-full max-lg:min-w-0 max-lg:overflow-hidden max-lg:rounded-t-2xl max-lg:shadow-2xl"
-              : "w-12 min-w-12 max-lg:w-full max-lg:min-h-12 max-lg:h-12"
-          }`}
+          className={isAgentPanelOpen
+            ? `relative shrink-0 min-h-0 border-l border-border bg-surface max-lg:border-l-0 max-lg:border-t ${
+                isResizingAgentPanel ? "" : "transition-[width] duration-200"
+              } w-[var(--agent-panel-width)] min-w-[400px] max-lg:absolute max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-50 max-lg:!h-[min(72vh,640px)] max-lg:!w-full max-lg:min-w-0 max-lg:overflow-hidden max-lg:rounded-t-2xl max-lg:shadow-2xl`
+            : "pointer-events-none absolute right-4 top-4 z-50 w-auto min-w-0 border-0 bg-transparent"}
         >
           {isAgentPanelOpen && (
             <div
@@ -516,12 +521,11 @@ export function AppShell() {
               onClick={openAgentPanel}
               aria-controls="course-agent-panel"
               aria-expanded={false}
-              aria-label="展开 OpenCode Agent 面板"
-              title="展开 OpenCode Agent 面板"
-              className="flex h-full w-full flex-col items-center justify-start gap-2 px-2 py-3 text-text-secondary transition-colors hover:bg-cream hover:text-text-primary max-lg:flex-row max-lg:justify-center"
+              aria-label="展开课程助手"
+              title="展开课程助手"
+              className="pointer-events-auto inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface/95 text-text-secondary shadow-lg shadow-black/10 transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:bg-primary-light hover:text-primary-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <PanelRightOpen className="h-4 w-4" aria-hidden="true" />
-              <span className="hidden text-xs font-medium max-lg:inline">展开课程助手</span>
             </button>
           )}
         </aside>
@@ -598,6 +602,25 @@ function CourseWorkspace({
     );
   }
 
+  if (course.placeholder) {
+    return (
+      <div className="grid h-full place-items-center bg-cream p-6 text-center text-text-secondary">
+        <div className="grid max-w-sm justify-items-center gap-3 rounded-xl border border-border bg-surface p-7 shadow-sm">
+          <BookOpen aria-hidden="true" className="h-6 w-6 text-primary" />
+          <strong className="text-text-primary">该课程暂时没有内容</strong>
+          <span className="text-sm">它目前仅用于课程导览和图谱展示。如需正式课程，请删除后按原名称重新创建。</span>
+          <button
+            type="button"
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-primary-text hover:bg-primary-light"
+            onClick={() => navigate("/")}
+          >
+            返回课程导览
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const forestPath = `/courses/${encodeURIComponent(course.id)}/forest`;
   const openPoint = (point: { id: string; clusterId: string }) =>
     navigate(`/courses/${encodeURIComponent(course.id)}/points/${encodeURIComponent(point.clusterId)}/${encodeURIComponent(point.id)}`);
@@ -632,6 +655,9 @@ function currentHashPath() {
 
 function parseRoute(path: string): AppRoute {
   const segments = path.split("/").filter(Boolean).map(decodeSegment);
+  if (segments.length === 3 && segments[0] === "catalog" && segments[1] === "groups" && segments[2]) {
+    return { kind: "catalog-group", groupId: segments[2] };
+  }
   if (segments.length === 3 && segments[0] === "reviews") {
     const reviewId = segments[1];
     const reviewPath = segments[2];
@@ -684,6 +710,7 @@ function unwrapCourse(payload: unknown): CourseMeta | null {
     description: typeof candidate.description === "string" ? candidate.description : undefined,
     language: typeof candidate.language === "string" ? candidate.language : undefined,
     revision: typeof candidate.revision === "string" || typeof candidate.revision === "number" ? candidate.revision : undefined,
+    placeholder: candidate.placeholder === true,
   };
 }
 

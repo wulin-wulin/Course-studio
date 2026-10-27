@@ -1,0 +1,565 @@
+{
+  "id": "point-4-4",
+  "title": "进程内存",
+  "shortSummary": "说明进程地址空间布局、内存页访问控制、ASLR 与 PIE 对地址的影响。",
+  "keyTerms": [
+    "进程内存",
+    "地址空间",
+    "ASLR",
+    "PIE",
+    "内存页"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-4-2",
+    "point-4-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-boundary-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对地址空间布局、页访问控制、ASLR 与 PIE 的定义和例子，按“布局—保护—随机化—配套机制”重排讲解顺序，并补充可观察的判断练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-address-space",
+          "text": "描述进程虚拟地址空间中内核空间、可执行程序映射、栈和堆的位置与用途。"
+        },
+        {
+          "id": "explain-page-protection",
+          "text": "解释内存页访问控制如何实现数据执行保护（DEP）。"
+        },
+        {
+          "id": "explain-aslr-pie",
+          "text": "说明 ASLR 与 PIE 各自随机化或允许随机化哪些地址，以及两者的配合关系。"
+        },
+        {
+          "id": "apply-address-reasoning",
+          "text": "能根据反复运行时的地址变化现象，判断是哪一类机制在起作用。"
+        }
+      ],
+      "misconceptions": [
+        "认为每次运行时局部变量地址不同，是编译器为变量随机分配了不同的栈内偏移。",
+        "认为栈和堆被标记为不可执行后，其中的局部变量和动态内存也不能读写。",
+        "认为只要开启了 ASLR，同一个进程内同一个局部变量的地址也会每次打印都变化。"
+      ],
+      "modules": [
+        {
+          "id": "scene-and-question",
+          "title": "问题导入：汇编程序面对的地址空间",
+          "role": "motivation",
+          "description": "从汇编直接操作地址的特点引入进程内存这一主题。",
+          "outcomeRefs": [
+            "explain-address-space"
+          ],
+          "order": 0
+        },
+        {
+          "id": "address-space-layout",
+          "title": "进程空间布局",
+          "role": "concept",
+          "description": "内核空间、可执行程序映射、栈与堆的位置、用途与增长方向。",
+          "outcomeRefs": [
+            "explain-address-space",
+            "apply-address-reasoning"
+          ],
+          "order": 1
+        },
+        {
+          "id": "page-protection",
+          "title": "内存页访问控制与数据执行保护",
+          "role": "mechanism",
+          "description": "以内存页为最小控制单元，解释堆栈页为何不可执行。",
+          "outcomeRefs": [
+            "explain-page-protection"
+          ],
+          "order": 2
+        },
+        {
+          "id": "aslr-mechanism",
+          "title": "ASLR：每次运行都换基址",
+          "role": "mechanism",
+          "description": "解释 ASLR 随机化的对象，以及“随机值加固定偏移”的观察结果。",
+          "outcomeRefs": [
+            "explain-aslr-pie",
+            "apply-address-reasoning"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pie-and-transfer",
+          "title": "PIE：让可执行文件自身也能移动",
+          "role": "comparison",
+          "description": "说明 PIE 的动机与实现思路，并与 ASLR 对照。",
+          "outcomeRefs": [
+            "explain-aslr-pie",
+            "apply-address-reasoning"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-next",
+          "title": "判断练习与小结",
+          "role": "assessment",
+          "description": "用地址现象判断题检验理解，并桥接下一章的工具链内容。",
+          "outcomeRefs": [
+            "apply-address-reasoning",
+            "explain-address-space",
+            "explain-page-protection",
+            "explain-aslr-pie"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-address-space",
+          "explain-page-protection",
+          "explain-aslr-pie",
+          "apply-address-reasoning"
+        ],
+        "method": "完成地址现象判断题并说明依据，再用一句话概括每个区域的用途。",
+        "successCriteria": [
+          "能指出栈、堆、代码/数据映射和内核空间各自的位置与用途",
+          "能说明 DEP 阻止的是取指执行而不是读写",
+          "能区分 ASLR 随机化的基址与 PIE 提供的可移动性"
+        ],
+        "exerciseBlockId": "model-address-judgement",
+        "summaryBlockId": "model-summary-and-next",
+        "nextPointId": "point-5-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-process-space",
+        "moduleId": "scene-and-question",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "进程拥有独立的虚拟内存空间",
+        "markdown": "在操作系统的内存虚拟化之后，每一个用户态进程都拥有一份完整的虚拟内存空间。这份空间是进程私有的：进程看到的地址并不是物理内存地址，而是由操作系统映射到物理页的虚拟地址。汇编程序里的每一条加载、存储和跳转指令都工作在这份虚拟地址空间之上，因此有必要先看清它内部有哪些区域。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000022"
+              ],
+              "headingPath": [
+                "操作系统",
+                "进程内存"
+              ],
+              "lineStart": 518,
+              "lineEnd": 521,
+              "assetRefs": [],
+              "excerptSha256": "642581c75a4e284d03447f0ac4e339fb5ea3f8eb2a9214c2753923eed4ec3bb3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-care",
+        "moduleId": "scene-and-question",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么汇编学习者要关心布局",
+        "markdown": "在 C 语言里，变量名由编译器帮你翻译成地址；到了汇编，地址通常要自己算。全局变量位于可执行程序映射的数据段，局部变量落在栈上，`malloc` 一类调用得到的内存落在堆上。知道这些区域的大致位置和增长方向，才能在读反汇编或调试时判断某条指令访问的到底是哪一块数据。教材在这里先给出整体地图，后续章节会逐个区域展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-process-space"
+          ]
+        }
+      },
+      {
+        "id": "textbook-layout",
+        "moduleId": "address-space-layout",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "进程空间的三个组成部分",
+        "markdown": "教材用一张 Linux 进程空间图帮助理解 macOS 上的同类布局，它由三部分组成。\n\n- **内核空间**：内核所在的物理页，会在每个进程启动时映射到该进程的高地址空间。\n- **二进制可执行程序映射的空间**：操作系统把 Mach-O 文件中的一部分内容装入内存，包括存放所有指令的代码段，以及存放全局变量等的数据段。\n- **栈和堆**：操作系统在内存中开辟的两块区域。栈位于较高的地址空间，**由上向下增长**，一般存放局部变量；堆一般用于存放运行时动态分配的变量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "操作系统",
+                "进程内存",
+                "进程空间布局"
+              ],
+              "lineStart": 522,
+              "lineEnd": 539,
+              "assetRefs": [
+                "./assets/4-address-space.png"
+              ],
+              "excerptSha256": "46d4839236b42b6bad13cdcb51f5c76f578b58e64d885487d76cc8a0f42ac152"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layout-table",
+        "moduleId": "address-space-layout",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：区域对照表",
+        "markdown": "把上面的描述压缩成一张表，便于在调试时快速定位：\n\n| 区域 | 主要内容 | 位置与增长方向 |\n|---|---|---|\n| 内核空间 | 内核代码与数据所在的物理页的映射 | 进程地址空间的高地址端 |\n| 可执行程序映射 | 从 Mach-O 装入的代码段、数据段等 | 由加载器决定 |\n| 栈 | 局部变量、函数调用相关数据 | 较高地址，由上向下增长 |\n| 堆 | 运行时动态分配的内存 | 由操作系统单独安排，与栈分开 |\n\n表中的“位置”只表达相对关系。不同系统和不同运行环境下具体数值不同，不要把这些区域当成固定地址段来记忆。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layout"
+          ]
+        }
+      },
+      {
+        "id": "model-stack-direction",
+        "moduleId": "address-space-layout",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：“向下增长”到底是什么意思",
+        "markdown": "“由上向下增长”指的是栈向低地址方向扩展。假设某次运行时栈顶指针为 `0x000000016fdfe000`，函数压入一个 8 字节的局部变量后，栈顶指针会变成更小的 `0x000000016fdfdff8`。因此同一个函数里的局部变量在栈上往往占据相邻的低地址，而越晚进入的函数调用，其栈帧越靠近低地址端。这里的数值只为演示方向，真实地址由运行时决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layout"
+          ]
+        }
+      },
+      {
+        "id": "textbook-page-permission",
+        "moduleId": "page-protection",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "以内存页为单位的访问控制",
+        "markdown": "操作系统对内存的访问控制以内存页为最小单位。这种控制往往是为了安全：攻击者有时需要通过 `scanf`、`fscanf` 等读入函数，把恶意载荷注入进程，而这些输入通常被存放在堆区或栈区。为此，操作系统把堆区和栈区所在内存页的访问权限标记为不可执行，即使载荷被写入进程空间，也无法被当作代码执行。教材给出的 `4-memory-access.c` 实验分别尝试调用指向栈上的函数指针和指向堆上的函数指针，运行结果证实了两者都无法执行。这种保护称为数据执行保护（Data Execution Protection, DEP）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "操作系统",
+                "进程内存",
+                "内存页的访问控制"
+              ],
+              "lineStart": 540,
+              "lineEnd": 553,
+              "assetRefs": [
+                "./assets/4-memory-access.png"
+              ],
+              "excerptSha256": "620eafb521abce27e4feee2b6d5d77ebb9f77d993bfa0a666926b73a0ee991d7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dep-verification",
+        "moduleId": "page-protection",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：实验失败在哪一步",
+        "markdown": "读这个实验时容易把“不可执行”误解成“写不进去”。关键在于失败发生在**取指**阶段：载荷本身可以顺利写进栈或堆的字节里，程序也可以打印这些字节；但当函数指针被调用、CPU 试图把该页中的字节当作指令取指时，页表权限中缺少可执行位，硬件触发异常，操作系统随即终止进程。换句话说，DEP 拦截的是“跳过去执行”，不是“读”或“写”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-page-permission"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-exec",
+        "moduleId": "page-protection",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：常见误解",
+        "markdown": "**误解**：栈和堆既然不可执行，那栈上的局部变量和堆上的动态内存也就不能读写了。\n\n**纠正**：被去掉的只是执行权限，读写权限仍然保留，否则局部变量和动态分配的内存根本无法使用。日常程序能正常读写栈上的局部变量和堆上的动态内存，本身就是这些页面仍可读写的证据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-page-permission"
+          ]
+        }
+      },
+      {
+        "id": "textbook-aslr",
+        "moduleId": "aslr-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "ASLR：随机化每次运行的基地址",
+        "markdown": "攻击程序的第一步通常是知道目标代码或数据所处的地址。为了从源头抬高这一步的难度，Apple 从 Mac OS X 10.5 开始引入地址空间布局随机化（ASLR）。每次程序执行时，程序在内存中的开始地址，以及堆、栈、库的基地址都会被随机化。教材给出的 C 程序只打印局部变量 `a` 的地址，编译后运行三次，得到的逻辑地址每次都不同，看上去像是一个随机值加上一个固定的偏移量。由于地址每次运行都变，攻击者难以直接依赖地址实施恶意行为。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000025"
+              ],
+              "headingPath": [
+                "操作系统",
+                "进程内存",
+                "ASLR"
+              ],
+              "lineStart": 554,
+              "lineEnd": 577,
+              "assetRefs": [
+                "./assets/4-aslr-res.png"
+              ],
+              "excerptSha256": "c41d89a0847fba300c0327a9c7f95c04af5de00bd693abda15bac6b057839ab7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aslr-offset",
+        "moduleId": "aslr-mechanism",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么“像随机值加固定偏移”",
+        "markdown": "局部变量在栈帧中的位置，是由编译器在生成代码时就确定好的偏移量；运行时不改变这个偏移，改变的是整块栈的基地址。于是可以把它写成：\n\n**变量地址 = 随机化的基地址 + 编译期确定的固定偏移**\n\n这解释了两个容易混淆的现象：同一进程内连续打印同一个局部变量的地址，结果完全一样，因为基址在进程启动时就已经确定；而重新运行程序时基址换了，地址就随之改变。真正随机化的是基址，不是变量的栈内偏移。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aslr"
+          ]
+        }
+      },
+      {
+        "id": "model-aslr-limits",
+        "moduleId": "aslr-mechanism",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：ASLR 的边界",
+        "markdown": "ASLR 提高的是攻击成本，而不是消除内存漏洞。它只把整块区域的起点挪动，区域内各对象的相对位置保持不变，因此一旦攻击者通过信息泄露等手段得到某个地址，仍可能推算出其他对象的位置。理解这一点有助于把它与 PIE 区分开：ASLR 是系统在加载时执行的随机化动作，PIE 则是让可执行文件本身具备被搬动的条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layout",
+            "textbook-aslr"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pie",
+        "moduleId": "pie-and-transfer",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "PIE：不依赖绝对地址的可执行文件",
+        "markdown": "ASLR 主要随机化的对象是栈和堆的基地址。那么，Mach-O 可执行文件映射到内存的那部分呢？随机化它们的地址有一定难度，因为在后续的汇编学习中会看到，访问全局变量、跳转函数，原本大多需要实际的绝对地址。前人在编译器层面做了改进，才使这部分内存也能被随机化。这类程序内部不依赖绝对地址的二进制程序，称为位置无关可执行文件（Position Independent Executable, PIE）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000026"
+              ],
+              "headingPath": [
+                "操作系统",
+                "进程内存",
+                "PIE"
+              ],
+              "lineStart": 578,
+              "lineEnd": 581,
+              "assetRefs": [],
+              "excerptSha256": "bcbc897c6c0221f5c59951cda1bf193add6b33aede245d8ab05af81015440820"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aslr-vs-pie",
+        "moduleId": "pie-and-transfer",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：ASLR 与 PIE 的分工",
+        "markdown": "两者常被一起提到，但回答的是不同问题：\n\n| 对比维度 | ASLR | PIE |\n|---|---|---|\n| 是什么 | 操作系统在每次加载进程时随机化基址的机制 | 编译器与链接器产出的一种不依赖绝对地址的可执行文件 |\n| 作用对象 | 程序开始地址、堆、栈、库的基地址 | 可执行文件自身映射到内存的代码与数据 |\n| 生效时机 | 每次运行、加载时 | 编译与链接时决定，运行时才体现效果 |\n| 关系 | 提供“随机摆放”的能力 | 让 Mach-O 映射部分具备被随机摆放的条件 |\n\n因此，观察到一个全局变量或函数地址在每次运行时都变化，通常意味着可执行文件以 PIE 方式构建且系统启用了 ASLR；而栈上局部变量地址的变化，主要体现 ASLR 对栈基址的随机化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aslr",
+            "textbook-pie"
+          ]
+        }
+      },
+      {
+        "id": "model-address-judgement",
+        "moduleId": "check-and-next",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "判断练习：这些地址现象说明了什么",
+        "markdown": "阅读下面三组现象，分别判断主要涉及哪个机制，并说明依据。\n\n1. 同一个打印局部变量地址的程序连续运行三次，三次输出的地址都不相同。\n2. 在同一个进程内把同一个局部变量的地址连续打印三次，三次结果完全相同。\n3. 一个程序在栈上写入一段字节后，试图通过函数指针执行它，进程被终止；但同样的字节仍然可以被正常读出。\n\n**参考答案**：第 1 组体现 ASLR 对栈基址的随机化，每次运行基址不同；第 2 组说明同一进程内基址已固定，变化的是运行之间的基址而不是变量的栈内偏移；第 3 组体现 DEP，被拒绝的是取指执行，读写不受影响。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-page-permission",
+            "textbook-aslr",
+            "textbook-pie",
+            "model-aslr-offset",
+            "model-aslr-vs-pie"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-and-next",
+        "moduleId": "check-and-next",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "- 进程拥有独立的虚拟地址空间，其中包含内核空间、Mach-O 映射的代码与数据、以及栈和堆。\n- 内存访问控制以内存页为单位；堆栈页不可执行，构成数据执行保护（DEP）。\n- ASLR 在每次运行时随机化程序开始地址以及堆、栈、库的基地址。\n- PIE 让可执行文件自身不依赖绝对地址，从而配合 ASLR 移动 Mach-O 映射部分。\n\n至此，运行程序所需的内存与操作系统背景已经具备。下一章从编辑器、汇编器和链接器开始，写出并运行第一个汇编程序。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layout",
+            "textbook-page-permission",
+            "textbook-aslr",
+            "textbook-pie"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "address-phenomenon-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-address-judgement",
+        "moduleId": "check-and-next",
+        "depth": "core",
+        "title": "地址现象判断",
+        "outcomeRefs": [
+          "apply-address-reasoning",
+          "explain-aslr-pie",
+          "explain-page-protection"
+        ],
+        "learningPurpose": "检查学习者能否把布局、DEP 与 ASLR/PIE 的规则对应到可观察的地址现象上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-aslr",
+            "textbook-page-permission",
+            "textbook-pie"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "caption": "无交互时的判断练习",
+          "markdown": "分别说明：连续运行地址变化、同一进程内地址不变、栈上代码无法执行，各自由什么机制造成。"
+        }
+      }
+    ]
+  },
+  "subtitle": "操作系统",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000022"
+      ],
+      "headingPath": [
+        "操作系统",
+        "进程内存"
+      ],
+      "lineStart": 518,
+      "lineEnd": 521,
+      "assetRefs": [],
+      "excerptSha256": "642581c75a4e284d03447f0ac4e339fb5ea3f8eb2a9214c2753923eed4ec3bb3"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000023"
+      ],
+      "headingPath": [
+        "操作系统",
+        "进程内存",
+        "进程空间布局"
+      ],
+      "lineStart": 522,
+      "lineEnd": 539,
+      "assetRefs": [
+        "./assets/4-address-space.png"
+      ],
+      "excerptSha256": "46d4839236b42b6bad13cdcb51f5c76f578b58e64d885487d76cc8a0f42ac152"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000024"
+      ],
+      "headingPath": [
+        "操作系统",
+        "进程内存",
+        "内存页的访问控制"
+      ],
+      "lineStart": 540,
+      "lineEnd": 553,
+      "assetRefs": [
+        "./assets/4-memory-access.png"
+      ],
+      "excerptSha256": "620eafb521abce27e4feee2b6d5d77ebb9f77d993bfa0a666926b73a0ee991d7"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000025"
+      ],
+      "headingPath": [
+        "操作系统",
+        "进程内存",
+        "ASLR"
+      ],
+      "lineStart": 554,
+      "lineEnd": 577,
+      "assetRefs": [
+        "./assets/4-aslr-res.png"
+      ],
+      "excerptSha256": "c41d89a0847fba300c0327a9c7f95c04af5de00bd693abda15bac6b057839ab7"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000026"
+      ],
+      "headingPath": [
+        "操作系统",
+        "进程内存",
+        "PIE"
+      ],
+      "lineStart": 578,
+      "lineEnd": 581,
+      "assetRefs": [],
+      "excerptSha256": "bcbc897c6c0221f5c59951cda1bf193add6b33aede245d8ab05af81015440820"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3122,
+    2427
+  ],
+  "scale": 0.9
+}

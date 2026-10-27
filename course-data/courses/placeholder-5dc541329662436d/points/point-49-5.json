@@ -1,0 +1,383 @@
+{
+  "id": "point-49-5",
+  "title": "缓存一致性",
+  "shortSummary": "解释 AFSv2 如何使用回调在多个客户端缓存之间维持一致性。",
+  "keyTerms": [
+    "缓存一致性",
+    "AFSv2",
+    "回调",
+    "失效",
+    "最后关闭者胜出"
+  ],
+  "animationType": "closeToOpen",
+  "animationSuggestion": "按时间线逐步展示两个客户端与服务器上的文件版本及回调状态，高亮关闭提交与回调失效两个关键事件，并允许重播同一条轨迹。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-49-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-scenario-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于更新可见性、缓存陈旧、回调失效与最后关闭者胜出的定义和边界，按“问题—机制—同机例外—并发场景—时间线检查”重排，并补充步骤化示例与对照表。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-two-questions",
+          "text": "区分更新可见性与缓存陈旧各自提出的问题。"
+        },
+        {
+          "id": "trace-close-invalidation",
+          "text": "按打开、写入、关闭、失效回调、重新获取的顺序追踪跨机器一致性。"
+        },
+        {
+          "id": "contrast-local-remote",
+          "text": "说明同机进程与跨机客户端在写入可见时机上的差异。"
+        },
+        {
+          "id": "analyze-concurrent-writers",
+          "text": "判断并发写入下最后关闭者胜出的结果，并解释它与 NFS 块级混合的区别。"
+        }
+      ],
+      "misconceptions": [
+        "误以为 AFS 在任何时刻都让其他机器上的客户端立即看到写入；跨机更新要等到写入者关闭文件并失效回调后才可见。",
+        "误以为最后写入者胜出会合并双方的修改；AFS 保留最后关闭者提交的整个文件，另一次写入被整体覆盖。",
+        "误以为同机进程也要等待回调失效；同一台机器上的其他本地进程会立即看到写入。"
+      ],
+      "modules": [
+        {
+          "id": "cache-consistency-dimensions",
+          "title": "缓存一致性的两个问题",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-two-questions"
+          ],
+          "order": 0
+        },
+        {
+          "id": "cross-machine-update",
+          "title": "跨机器：关闭时提交与失效",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-two-questions",
+            "trace-close-invalidation"
+          ],
+          "order": 1
+        },
+        {
+          "id": "same-machine-exception",
+          "title": "同机进程的例外",
+          "role": "comparison",
+          "outcomeRefs": [
+            "contrast-local-remote"
+          ],
+          "order": 2
+        },
+        {
+          "id": "concurrent-writers",
+          "title": "并发写入与最后关闭者胜出",
+          "role": "scenario-analysis",
+          "outcomeRefs": [
+            "analyze-concurrent-writers",
+            "contrast-local-remote"
+          ],
+          "order": 3
+        },
+        {
+          "id": "timeline-check",
+          "title": "用时间线检查理解",
+          "role": "assessment",
+          "outcomeRefs": [
+            "trace-close-invalidation",
+            "contrast-local-remote",
+            "analyze-concurrent-writers"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-two-questions",
+          "trace-close-invalidation",
+          "contrast-local-remote",
+          "analyze-concurrent-writers"
+        ],
+        "method": "完成表 49.3 对应的三次读取判断，并分别指出服务器提交事件与回调失效事件。",
+        "successCriteria": [
+          "能区分更新可见性与缓存陈旧两个问题",
+          "能按关闭提交、回调失效、重新获取的顺序解释跨机读取",
+          "能说明并发写入时另一个版本被整体覆盖"
+        ],
+        "exerciseBlockId": "model-timeline-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-49-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-consistency-dimensions",
+        "moduleId": "cache-consistency-dimensions",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材提出的两个一致性问题",
+        "markdown": "讨论缓存一致性时，AFS 沿用 NFS 章节提出的两个问题。**更新可见性**问的是：服务器何时用文件的新版本进行更新，使其它客户端能够看到这次更新？**缓存陈旧**问的是：一旦服务器有了新版本，客户端还要等多久才会停止读取旧缓存副本，转而看到新版本？\n\nAFSv2 的回调机制与全文件缓存，使这两个问题可以给出简单而明确的回答。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性"
+              ],
+              "lineStart": 13032,
+              "lineEnd": 13050,
+              "assetRefs": [],
+              "excerptSha256": "205e6105a7374f122d4a387f37bb19aac71884f30fca3ef02b2b3e4ee63acc46"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-two-questions",
+        "moduleId": "cache-consistency-dimensions",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把两个问题分开看",
+        "markdown": "更新可见性关注**服务器上何时生效**，缓存陈旧关注**客户端上何时过期**。二者不是同一个时刻：服务器可能已经写入新内容，而某个客户端仍在用旧缓存。分析 AFS 时，应先确定写入在哪个事件被提交到服务器，再确定服务器如何通知其它客户端放弃旧副本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-consistency-dimensions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cross-machine-close",
+        "moduleId": "cross-machine-update",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "跨机器：关闭时提交并失效回调",
+        "markdown": "在不同计算机之间，AFS 把更新的可见与缓存失效绑定在同一个时刻：文件被关闭时。客户端打开文件后可以多次写入；在最终关闭之前，新内容留在客户端一侧。关闭时，新文件被刷新到服务器，于是在服务器上可见；随后服务器中断所有持有该文件缓存副本的客户端的回调，使这些副本不再被视为有效。\n\n这些客户端下一次打开文件时，回调已经失效，必须从服务器重新获取该文件的新版本，而不是继续读取过时的缓存副本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性"
+              ],
+              "lineStart": 13032,
+              "lineEnd": 13050,
+              "assetRefs": [],
+              "excerptSha256": "205e6105a7374f122d4a387f37bb19aac71884f30fca3ef02b2b3e4ee63acc46"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-close-walkthrough",
+        "moduleId": "cross-machine-update",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：一次跨机器写入的完整路径",
+        "markdown": "以客户端 C1 修改文件 F、客户端 C2 也缓存了 F 为例：\n\n1. C1 打开 F 并写入若干次，写入先停留在 C1 的缓存中。\n2. C1 关闭 F，新文件被刷新到服务器，服务器上的 F 变为新版本。\n3. 服务器发现 C2 持有 F 的回调承诺，于是中断该回调。\n4. C2 再次打开 F 时，发现回调无效，向服务器重新获取 F。\n\n关键点是：**在第 3 步之前，C2 可能仍在读旧副本；第 4 步之后，C2 必须重新验证。**",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cross-machine-close"
+          ]
+        }
+      },
+      {
+        "id": "textbook-same-machine-exception",
+        "moduleId": "same-machine-exception",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "同机例外：本地进程立即看到写入",
+        "markdown": "AFS 对同一台机器上的不同进程作了例外处理。当一台机器上的进程写入文件时，该机器上的其它本地进程可以立即看到更新，而不必等到文件关闭。这符合典型 UNIX 文件系统的行为，因此单机使用时感觉与本地文件系统一致；只有切换到不同机器时，才会显现 AFS 更一般的回调一致性机制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性"
+              ],
+              "lineStart": 13032,
+              "lineEnd": 13050,
+              "assetRefs": [],
+              "excerptSha256": "205e6105a7374f122d4a387f37bb19aac71884f30fca3ef02b2b3e4ee63acc46"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-local-vs-remote-table",
+        "moduleId": "same-machine-exception",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：同机与跨机可见性对照",
+        "markdown": "| 场景 | 其它进程何时看到写入 | 依赖的机制 |\n|---|---|---|\n| 同一台机器上的其它进程 | 写入后立即可见 | 本地 UNIX 语义，不等待关闭 |\n| 不同机器上的客户端 | 写入者关闭文件、服务器提交并失效回调之后 | 回调与关闭时的缓存失效 |\n\n这张表只比较可见性时机，不改变“写入最终要在关闭时提交到服务器”这一事实。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-same-machine-exception",
+            "textbook-cross-machine-close"
+          ]
+        }
+      },
+      {
+        "id": "textbook-concurrent-last-closer",
+        "moduleId": "concurrent-writers",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "并发写入：最后关闭者胜出",
+        "markdown": "不同机器上的进程同时修改同一文件时，AFS 采用**最后写入者胜出**，更准确地说，是**最后关闭者胜出**：哪个客户端最后关闭文件，它就在服务器上写入整个文件，因此它的版本成为保留下来供其他人查看的版本。结果是文件完全由某一个客户端生成。\n\n这与基于块的 NFS 不同。NFS 可能在每个客户端更新时把各个块刷新到服务器，于是最终文件可能混合了来自两个客户端的更新。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性"
+              ],
+              "lineStart": 13032,
+              "lineEnd": 13050,
+              "assetRefs": [],
+              "excerptSha256": "205e6105a7374f122d4a387f37bb19aac71884f30fca3ef02b2b3e4ee63acc46"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-jpeg-example",
+        "moduleId": "concurrent-writers",
+        "depth": "core",
+        "kind": "example",
+        "title": "模型补充：为什么混合写入可能毁掉文件",
+        "markdown": "设想两个客户端同时分段修改同一张 JPEG 图像。若服务器保存的是按块混合的结果，文件头部可能来自一个客户端，而图像数据来自另一个客户端，拼在一起很可能不再是有效的 JPEG。AFSv2 的最后关闭者胜出避免了这种混合：服务器保留的是最后关闭者提交的完整文件。\n\n代价是另一次并发写入会被整体覆盖；胜出并不意味着所有修改都被合并。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-concurrent-last-closer"
+          ]
+        }
+      },
+      {
+        "id": "model-timeline-exercise",
+        "moduleId": "timeline-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：读时间线，判断下一次读取",
+        "markdown": "教材的表 49.3 用一个文件 F、Client1 上的 P1 和 P2、以及 Client2 上的 P3 展示缓存状态。做下面的检查：\n\n1. P1 写入后尚未关闭时，同机的 P2 打开 F 会读到什么？为什么？\n2. P3 在另一台机器上读取 F 时，能否看到 P1 尚未关闭的写入？要等到哪个事件？\n3. 当 P1 与 P3 都写入并各自关闭后，服务器最终保留哪个版本？另一个版本会怎样？\n\n作答时分别指出**服务器提交事件**和**回调失效事件**，不要只回答“新版本”或“旧版本”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cross-machine-close",
+            "textbook-same-machine-exception",
+            "textbook-concurrent-last-closer"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "timeline-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：小结与下一步",
+        "markdown": "AFSv2 的一致性由两个事件串起来：写入者在关闭文件时把整个文件提交到服务器，服务器随即失效其它客户端的回调。跨机器读取因此不会无限期陈旧，同机进程则保留立即可见的 UNIX 语义。并发写入退化为最后关闭者胜出的整文件覆盖，而不是 NFS 那样的块级混合。\n\n如果客户端或服务器在回调尚未处理时崩溃，缓存有效性就需要额外的恢复流程，这正是下一点要讨论的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cross-machine-close",
+            "textbook-same-machine-exception",
+            "textbook-concurrent-last-closer",
+            "model-timeline-exercise"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "timeline-consistency-check",
+        "type": "formative-check",
+        "title": "时间线读取检查",
+        "anchorBlockId": "model-timeline-exercise",
+        "moduleId": "timeline-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-close-invalidation",
+          "contrast-local-remote",
+          "analyze-concurrent-writers"
+        ],
+        "learningPurpose": "检查学习者能否依据服务器提交与回调失效两个事件，推断时间线中下一次读取的结果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-cross-machine-close",
+            "textbook-concurrent-last-closer"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用一句话写出跨机器写入在何时对其它客户端可见，并指出服务器失效回调后客户端下一次打开必须做什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Andrew 文件系统(AFS)",
+  "clusterId": "chapter-49",
+  "clusterIds": [
+    "chapter-49"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000676"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "缓存一致性"
+      ],
+      "lineStart": 13032,
+      "lineEnd": 13050,
+      "assetRefs": [],
+      "excerptSha256": "205e6105a7374f122d4a387f37bb19aac71884f30fca3ef02b2b3e4ee63acc46"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3568,
+    -756
+  ],
+  "scale": 0.91
+}

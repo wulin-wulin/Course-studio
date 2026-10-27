@@ -1,0 +1,643 @@
+{
+  "id": "point-10-3",
+  "title": "寻址模式",
+  "shortSummary": "讲解基寄存器、偏移、索引与字面量寻址，说明地址如何由操作数计算。",
+  "keyTerms": [
+    "寻址模式",
+    "基寄存器",
+    "偏移",
+    "索引"
+  ],
+  "animationType": "indexedAddressingWalk",
+  "animationSuggestion": "用一段连续的 int 数组演示 `ldr w1, [x0], #4`：逐步高亮当前地址、显示读出的值写入 w1、并用箭头标出 x0 增加 4 的写回；可切换到 `ldr w1, [x0, #4]!` 对比同一步取值地址的差异，并提供重播。",
+  "difficulty": "中等",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-8-2",
+    "point-9-3",
+    "point-10-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对各类寻址写法的界定与示例，围绕“地址怎么算、基寄存器是否被改写”重排为统一比较维度，并补充编码限制与练习检查。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-address-formula",
+          "text": "写出每种寻址模式的地址计算方式，并指出地址由哪些操作数合成。"
+        },
+        {
+          "id": "select-mode",
+          "text": "根据一段 C 代码模式选择恰当的寻址写法。"
+        },
+        {
+          "id": "predict-writeback",
+          "text": "预测前索引与后索引访问后基寄存器的新值，说明二者取值顺序的差异。"
+        },
+        {
+          "id": "state-boundary",
+          "text": "说明 ldr/str 对常数偏移的编码限制，以及汇编器在其中的作用。"
+        }
+      ],
+      "misconceptions": [
+        "把 [x0, #4]! 与 [x0, #4] 当成同一种写法，忽略感叹号会把新地址写回 x0。",
+        "认为寄存器偏移里的数值可以直接当数组下标使用，忘记元素宽度需要缩放。",
+        "认为字面量寻址也靠某个寄存器存放基地址，忽略它依赖 PC 加编码距离。"
+      ],
+      "modules": [
+        {
+          "id": "address-composition",
+          "title": "地址是如何合成的",
+          "role": "concept-model",
+          "description": "先建立“所有寻址模式都在算一个地址”的统一视角。",
+          "outcomeRefs": [
+            "explain-address-formula",
+            "select-mode"
+          ],
+          "order": 0
+        },
+        {
+          "id": "base-only",
+          "title": "仅基寄存器",
+          "role": "concept-example",
+          "description": "最直接的指针解引用形式。",
+          "outcomeRefs": [
+            "explain-address-formula",
+            "select-mode"
+          ],
+          "order": 1
+        },
+        {
+          "id": "base-offset",
+          "title": "基寄存器加偏移",
+          "role": "concept-model",
+          "description": "常数偏移、寄存器偏移与按元素宽度缩放。",
+          "outcomeRefs": [
+            "explain-address-formula",
+            "select-mode",
+            "state-boundary"
+          ],
+          "order": 2
+        },
+        {
+          "id": "indexed-writeback",
+          "title": "索引寻址与写回",
+          "role": "procedure",
+          "description": "前索引与后索引的操作顺序及对基寄存器的改写。",
+          "outcomeRefs": [
+            "predict-writeback",
+            "select-mode"
+          ],
+          "order": 3
+        },
+        {
+          "id": "literal",
+          "title": "字面量寻址",
+          "role": "mechanism",
+          "description": "以 PC 为基准读取指令附近的常数。",
+          "outcomeRefs": [
+            "explain-address-formula",
+            "state-boundary"
+          ],
+          "order": 4
+        },
+        {
+          "id": "compare-check",
+          "title": "选择与自检",
+          "role": "check",
+          "description": "用统一维度比较全部写法并完成一次判定练习。",
+          "outcomeRefs": [
+            "explain-address-formula",
+            "select-mode",
+            "predict-writeback",
+            "state-boundary"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-address-formula",
+          "select-mode",
+          "predict-writeback",
+          "state-boundary"
+        ],
+        "method": "完成三道代码模式的寻址选择，并说明访问后基寄存器是否变化。",
+        "successCriteria": [
+          "三道题的指令写法正确",
+          "能指出前索引与后索引的取值顺序差异",
+          "能说明常数偏移受编码条件约束"
+        ],
+        "exerciseBlockId": "mode-check",
+        "summaryBlockId": "mode-summary",
+        "nextPointId": "point-10-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "addressing-overview",
+        "moduleId": "address-composition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "寻址模式：方括号里的地址怎么来",
+        "markdown": "执行 `ldr` 或 `str` 时，方括号中的部分决定访问哪个内存地址，这套构成方式就叫**寻址模式**（Addressing Mode）。\n\n同一条加载/存储指令，只要方括号里的操作数不同，就能表达指针解引用、结构体字段、数组元素和常数读取等不同访问意图。所有模式最终都要算出一个地址，区别只在于这个地址由哪些寄存器值、常数和移位组合出来。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000070"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式"
+              ],
+              "lineStart": 1241,
+              "lineEnd": 1244,
+              "assetRefs": [],
+              "excerptSha256": "ad74cd563879f5e4527eb31c1ef4a13abdc9c82ec74c9b5a27b9912a5ab25cc4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "address-formula-summary",
+        "moduleId": "address-composition",
+        "depth": "support",
+        "kind": "summary",
+        "title": "读指令的三问",
+        "markdown": "后面几种写法都可以压缩成一条式子：地址等于基寄存器值加上偏移或索引，必要时再叠加移位。\n\n因此判断一条访存指令属于哪种模式，只需问三件事：方括号里有没有第二个操作数；第二个操作数来自常数还是寄存器；访问结束后基寄存器是否被更新。下文每节都按这三问来读。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "addressing-overview"
+          ]
+        }
+      },
+      {
+        "id": "base-register-only",
+        "moduleId": "base-only",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "仅基寄存器：把寄存器值当地址",
+        "markdown": "最直接的形式是把地址本身放进寄存器：\n\n```armasm\nldr    w1, [x0]\n```\n\n这条指令把 `x0` 中存储的值看作内存地址，从该地址取值并赋给 `w1`。教材把它对应到 C 的指针解引用：`b = *a` 就是把 `a` 的值看作地址，向该地址取值再赋给 `b`。\n\n仅基寄存器模式已经能实现绝大部分内存交互方式，后面的偏移写法是为了让常见代码模式少写几条指令。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式",
+                "仅基寄存器"
+              ],
+              "lineStart": 1245,
+              "lineEnd": 1256,
+              "assetRefs": [],
+              "excerptSha256": "51bd2d40ad22cc78fd48e1a92207b099dd3c04e1665ba29cd18b82f9b8578f31"
+            }
+          ]
+        }
+      },
+      {
+        "id": "base-only-pointer",
+        "moduleId": "base-only",
+        "depth": "support",
+        "kind": "example",
+        "title": "读代码时如何认出基寄存器",
+        "markdown": "在 `b = *a` 中，`a` 是存放地址的变量；编译器通常让 `a` 常驻某个寄存器，于是 `*a` 直接变成 `[xN]`，不必先把地址搬进临时寄存器。\n\n反过来读也成立：看到 `[x0]` 就要意识到 `x0` 里存的不是数据而是地址，真正的数据还在内存中，要等这条指令执行完才进入目的寄存器。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "base-register-only"
+          ]
+        }
+      },
+      {
+        "id": "offset-overview",
+        "moduleId": "base-offset",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么还需要偏移",
+        "markdown": "用 C 等高级语言编程时，会反复出现一些固定的内存访问套路。针对这些套路，底层汇编指令做了相应优化，于是有了「基寄存器加偏移」这一类模式：偏移既可以是常数，也可以来自另一个寄存器。\n\n教材给出的两类典型场景是结构体字段访问（基地址加固定距离）和数组遍历（基地址加变化的距离）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式",
+                "基寄存器加偏移"
+              ],
+              "lineStart": 1257,
+              "lineEnd": 1260,
+              "assetRefs": [],
+              "excerptSha256": "61140387ea8345655f594f50355aba55270d0f19ba9d91013d9f52d5272dc95c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "constant-offset",
+        "moduleId": "base-offset",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "基寄存器加常数偏移",
+        "markdown": "结构体字段相对结构体首地址的位置是固定的。以教材的 `struct Foo { int a; int b; }` 为例，访问 `foo->b` 时 `b` 距离起始地址 4 字节：先把 `foo` 指针的值加 4，再解引用。汇编里不必拆成加法指令：\n\n```armasm\nldr    w1, [x0, #4]\n```\n\n这条指令把 `x0` 的值加 4 当作地址，取值并赋给 `w1`。同一写法也便于访问相对基地址固定距离的局部变量，教材把局部变量的细节留到函数一章。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式",
+                "基寄存器加偏移",
+                "基寄存器加常数偏移"
+              ],
+              "lineStart": 1261,
+              "lineEnd": 1289,
+              "assetRefs": [],
+              "excerptSha256": "128089eb89cceb230ea5b285c0c8b2bb537582fe0d649b52b174f15254a07729"
+            }
+          ]
+        }
+      },
+      {
+        "id": "offset-encoding-boundary",
+        "moduleId": "base-offset",
+        "depth": "support",
+        "kind": "warning",
+        "title": "常数偏移受编码条件约束",
+        "markdown": "真正的 A64 `ldr`/`str` 只接受满足特定条件的常数偏移，例如非负且是 4 或 8 的倍数；负数偏移等情形在指令集里另有 `ldur`、`stur` 等指令承担。\n\n手写汇编通常不必自己判断：汇编器在偏移不满足条件时会据偏移生成不同指令（教材提到 GCC 的 `try_to_encode_as_unscaled_ldst` 与 LLVM 的 `isAArch64FrameOffsetLegal`）。读反汇编时因此要区分「源码里写的偏移」与「最终编码出来的指令」，前者可以比较自由，后者受指令集限制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "constant-offset"
+          ]
+        }
+      },
+      {
+        "id": "register-offset",
+        "moduleId": "base-offset",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "基寄存器加寄存器偏移",
+        "markdown": "数组遍历时首地址和下标都是变量，翻译成汇编可以分别用两个寄存器保存。教材给出的写法是：\n\n```armasm\nldr    w2, [x0, x1]\n```\n\n它把 `x0` 的值与 `x1` 的值相加后当作地址，取值并赋给 `w2`。这里相加的结果只用于本次访问，不会被写回任何寄存器。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式",
+                "基寄存器加偏移",
+                "基寄存器加寄存器偏移"
+              ],
+              "lineStart": 1290,
+              "lineEnd": 1319,
+              "assetRefs": [],
+              "excerptSha256": "f0ee192f79afa6f2f6018dfa60dcb78da15f23431ebde549cea32c78bef84339"
+            }
+          ]
+        }
+      },
+      {
+        "id": "scaled-index",
+        "moduleId": "base-offset",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "用移位把元素下标换算成字节距离",
+        "markdown": "寄存器偏移只解决「两个值相加」，但 C 的下标按元素计数，不是按字节计数。`char` 数组里 `a[2]` 距离首地址 2 字节；`int` 数组里每个元素占 4 字节，`a[2]` 就距离首地址 8 字节。\n\n教材的办法是复用「操作数的可选移位」：\n\n```armasm\nldr    w2, [x0, x1, lsl #2]\n```\n\n地址等于 `x0` 加上 `x1` 左移 2 位的结果，而左移 2 位就是乘以 4，正好是 `int` 的宽度。一般地，元素宽度是 2 的 k 次方时，用 `lsl #k` 就能把元素下标换算成字节偏移；这也是编译器面对不同类型数组时会生成不同缩放位数的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "register-offset"
+          ]
+        }
+      },
+      {
+        "id": "indexed-addressing",
+        "moduleId": "indexed-writeback",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "索引寻址：访问的同时改写基寄存器",
+        "markdown": "`*(++a)` 与 `*(a++)` 要求「先移动指针再取值」或「先取值再移动指针」。教材给出：\n\n```armasm\nldr    w1, [x0, #4]!\nldr    w1, [x0], #4\n```\n\n带 `!` 的第一种是**前索引寻址**：先把 `x0` 加 4 写回 `x0`，再从新地址取值赋给 `w1`。偏移写在方括号外的第二种是**后索引寻址**：先从 `x0` 当前指向的地址取值赋给 `w1`，再把 `x0` 自身加 4。\n\n两种写法都让基寄存器在访问后前进 4 字节，差别只在于取值用的是移动前还是移动后的地址。教材指出这类模式常用于程序优化，LLVM 中可见 `AArch64LoadStoreOpt::mergeUpdateInsn`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式",
+                "索引寻址"
+              ],
+              "lineStart": 1320,
+              "lineEnd": 1346,
+              "assetRefs": [],
+              "excerptSha256": "59668ad9b816f997c30f6060ecbd3a5e5ee0ce0f57592066b526912d43e742bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "prepost-compare",
+        "moduleId": "indexed-writeback",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "前索引与后索引的对照",
+        "markdown": "| 写法 | 取值所用地址 | 访问后 x0 |\n|---|---|---|\n| `[x0, #4]!` | 原值加 4 | 原值加 4 |\n| `[x0], #4` | 原值 | 原值加 4 |\n\n前索引等价于先自增再解引用，后索引等价于先解引用再自增，这正是 `*(++a)` 与 `*(a++)` 的区别。两者都会写回基寄存器，如果之后还要用原来的首地址，必须另存一份。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "indexed-addressing"
+          ]
+        }
+      },
+      {
+        "id": "writeback-misconception",
+        "moduleId": "indexed-writeback",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解：把感叹号当成装饰",
+        "markdown": "`[x0, #4]!` 与 `[x0, #4]` 只差一个 `!`，但前者会永久改写 `x0`，后者不会。在循环里反复使用同一寄存器做基址时，忽略这一点会让地址越走越远，最终读到数组之外。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "prepost-compare"
+          ]
+        }
+      },
+      {
+        "id": "literal-addressing",
+        "moduleId": "literal",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "字面量寻址：以 PC 为基准找到常数",
+        "markdown": "教材在赋值指令一章提到，`ldr` 伪指令遇到 `mov` 无法表示的常数时，汇编器会在二进制镜像中创建一块内存保存该值，执行时再通过读内存完成赋值。\n\n读取这块内存用的就是**字面量寻址**：编码时计算目标内存地址与当前指令地址的距离，执行时把程序计数器 PC 加上这个距离得到地址。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000076"
+              ],
+              "headingPath": [
+                "内存交互",
+                "寻址模式",
+                "字面量寻址"
+              ],
+              "lineStart": 1347,
+              "lineEnd": 1352,
+              "assetRefs": [],
+              "excerptSha256": "7f2a46c5f29987d9486e91435d3101c237aca66aa770c2fdb20ddd88cb179062"
+            }
+          ]
+        }
+      },
+      {
+        "id": "literal-pc-relative",
+        "moduleId": "literal",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么字面量寻址不用基寄存器",
+        "markdown": "字面量寻址依赖「指令地址加固定距离」这一相对关系，因此代码整体被搬到别处时该访问仍然成立。这是它与前几种模式的根本区别：其他模式的地址来自寄存器中的运行时值，字面量寻址的地址由 PC 和编码时确定的距离共同决定。\n\n在反汇编里看到一条从代码段附近取值、目标不像任何变量的 `ldr`，常常就是汇编器为大常数准备的字面量池。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "literal-addressing"
+          ]
+        }
+      },
+      {
+        "id": "mode-selection-table",
+        "moduleId": "compare-check",
+        "depth": "core",
+        "kind": "table",
+        "title": "按代码模式选寻址方式",
+        "markdown": "| C 场景 | 汇编形态 | 地址计算 | 改写基寄存器 |\n|---|---|---|---|\n| `*p` | `[x0]` | x0 | 否 |\n| `foo->b` | `[x0, #4]` | x0 + 4 | 否 |\n| `char` 数组 `a[i]` | `[x0, x1]` | x0 + x1 | 否 |\n| `int` 数组 `a[i]` | `[x0, x1, lsl #2]` | x0 + (x1 乘 4) | 否 |\n| `*(++a)` | `[x0, #4]!` | 先 x0 加 4 再取值 | 是 |\n| `*(a++)` | `[x0], #4` | 先取值再 x0 加 4 | 是 |\n| 大常数字面量 | 从 PC 加距离处取值 | PC + 距离 | 否 |\n\n选择规则可以概括为：地址只依赖一个寄存器时用仅基寄存器；距离固定用常数偏移；距离随变量变化用寄存器偏移并按元素宽度缩放；需要边访问边移动指针才用索引寻址。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "addressing-overview",
+            "base-register-only",
+            "constant-offset",
+            "register-offset",
+            "scaled-index",
+            "indexed-addressing",
+            "literal-addressing"
+          ]
+        }
+      },
+      {
+        "id": "mode-check",
+        "moduleId": "compare-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "判定练习",
+        "markdown": "为下面三段代码选择 `ldr` 写法，并说明访问后基寄存器是否变化。\n\n1. `int *p; int v = *p;`\n2. `struct Foo *foo; int v = foo->b;`（`b` 偏移 4 字节）\n3. `int *a; int v = *(a++);`\n\n参考要点：第 1 题用仅基寄存器，基寄存器不变；第 2 题用常数偏移，基寄存器不变；第 3 题用后索引，取值后 `a` 加 4。第 3 题若误写成前索引，取值地址会比题意要求的地址大 4 字节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "mode-selection-table",
+            "prepost-compare"
+          ]
+        }
+      },
+      {
+        "id": "mode-summary",
+        "moduleId": "compare-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点衔接",
+        "markdown": "几种写法共享同一个目标：先算出一个地址再访问。仅基寄存器、常数偏移、寄存器偏移和带缩放的寄存器偏移都不改动基寄存器，只有前索引与后索引会把更新后的地址写回基寄存器；字面量寻址则完全不使用基寄存器，靠 PC 加编码距离寻址。\n\n这些模式都以「某个寄存器的值已经是地址」为前提，但寄存器里的地址最初从哪来？下一点「获得地址的方式」会从变量所在的区域出发回答这个问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "mode-selection-table",
+            "literal-pc-relative"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "writeback-prediction-check",
+        "type": "formative-check",
+        "anchorBlockId": "prepost-compare",
+        "moduleId": "indexed-writeback",
+        "depth": "core",
+        "outcomeRefs": [
+          "predict-writeback"
+        ],
+        "learningPurpose": "检查学习者能否区分前索引与后索引的取值地址，并写出访问后基寄存器的值。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "indexed-addressing",
+            "prepost-compare"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "设 `x0` 初值为 0x1000。分别执行 `ldr w1, [x0, #4]!` 与 `ldr w1, [x0], #4`，写出 `w1` 取值所用的地址和执行后的 `x0`。"
+        }
+      }
+    ]
+  },
+  "subtitle": "内存交互",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000070"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式"
+      ],
+      "lineStart": 1241,
+      "lineEnd": 1244,
+      "assetRefs": [],
+      "excerptSha256": "ad74cd563879f5e4527eb31c1ef4a13abdc9c82ec74c9b5a27b9912a5ab25cc4"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000071"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式",
+        "仅基寄存器"
+      ],
+      "lineStart": 1245,
+      "lineEnd": 1256,
+      "assetRefs": [],
+      "excerptSha256": "51bd2d40ad22cc78fd48e1a92207b099dd3c04e1665ba29cd18b82f9b8578f31"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000072"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式",
+        "基寄存器加偏移"
+      ],
+      "lineStart": 1257,
+      "lineEnd": 1260,
+      "assetRefs": [],
+      "excerptSha256": "61140387ea8345655f594f50355aba55270d0f19ba9d91013d9f52d5272dc95c"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000073"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式",
+        "基寄存器加偏移",
+        "基寄存器加常数偏移"
+      ],
+      "lineStart": 1261,
+      "lineEnd": 1289,
+      "assetRefs": [],
+      "excerptSha256": "128089eb89cceb230ea5b285c0c8b2bb537582fe0d649b52b174f15254a07729"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000074"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式",
+        "基寄存器加偏移",
+        "基寄存器加寄存器偏移"
+      ],
+      "lineStart": 1290,
+      "lineEnd": 1319,
+      "assetRefs": [],
+      "excerptSha256": "f0ee192f79afa6f2f6018dfa60dcb78da15f23431ebde549cea32c78bef84339"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000075"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式",
+        "索引寻址"
+      ],
+      "lineStart": 1320,
+      "lineEnd": 1346,
+      "assetRefs": [],
+      "excerptSha256": "59668ad9b816f997c30f6060ecbd3a5e5ee0ce0f57592066b526912d43e742bf"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000076"
+      ],
+      "headingPath": [
+        "内存交互",
+        "寻址模式",
+        "字面量寻址"
+      ],
+      "lineStart": 1347,
+      "lineEnd": 1352,
+      "assetRefs": [],
+      "excerptSha256": "7f2a46c5f29987d9486e91435d3101c237aca66aa770c2fdb20ddd88cb179062"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1447,
+    996
+  ],
+  "scale": 0.97
+}

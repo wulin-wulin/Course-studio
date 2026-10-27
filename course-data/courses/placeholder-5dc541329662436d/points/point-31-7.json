@@ -1,0 +1,429 @@
+{
+  "id": "point-31-7",
+  "title": "如何实现信号量",
+  "shortSummary": "用锁和条件变量实现信号量，说明其内部计数、等待队列和唤醒逻辑。",
+  "keyTerms": [
+    "信号量实现",
+    "锁",
+    "条件变量",
+    "内部状态"
+  ],
+  "animationType": "conditionVariableOrder",
+  "animationSuggestion": "按调用序列逐步高亮当前代码行与线程状态，显示 value 计数增减、锁的归属以及 cond 等待队列的进出，并在 post 后强调被唤醒线程重新检查条件的过程。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-30-1",
+    "point-31-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 Zemaphore 代码与语义结论，按结构、等待、唤醒、语义差异和泛化边界的顺序重排讲解，并补充状态追踪与检查清单。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-struct",
+          "text": "说明 Zemaphore 的计数、锁和条件变量三个字段各自承担什么职责。"
+        },
+        {
+          "id": "trace-wait-post",
+          "text": "给定初值和一个 wait/post 调用序列，推演计数变化与各线程的等待、唤醒状态。"
+        },
+        {
+          "id": "compare-semantics",
+          "text": "解释本实现的 value 为何永不为负，以及这与 Dijkstra 原始语义的差别。"
+        },
+        {
+          "id": "judge-generalization",
+          "text": "判断为什么用信号量反过来实现锁和条件变量会更困难，避免滥用泛化。"
+        }
+      ],
+      "misconceptions": [
+        "认为 value 为负数时表示等待线程数，和 Dijkstra 原始信号量一样。",
+        "认为 Cond_signal 会立即把许可交给被唤醒线程，因此醒来后不必重新检查条件。",
+        "认为既然信号量可以表达锁和条件变量，就可以在工程中无条件用信号量替代它们。"
+      ],
+      "modules": [
+        {
+          "id": "structure-and-state",
+          "title": "数据结构与状态模型",
+          "role": "concept-model",
+          "description": "先看清 Zem_t 的三个字段和它们的分工，再进入具体操作。",
+          "outcomeRefs": [
+            "explain-struct"
+          ],
+          "order": 0
+        },
+        {
+          "id": "wait-path",
+          "title": "wait 的等待与扣减",
+          "role": "procedure-trace",
+          "description": "逐行解读 Zem_wait，并用一次具体等待追踪计数变化。",
+          "outcomeRefs": [
+            "trace-wait-post"
+          ],
+          "order": 1
+        },
+        {
+          "id": "post-path",
+          "title": "post 的唤醒与释放",
+          "role": "procedure-trace",
+          "description": "逐行解读 Zem_post，追踪被唤醒线程为何必须重新检查条件。",
+          "outcomeRefs": [
+            "trace-wait-post"
+          ],
+          "order": 2
+        },
+        {
+          "id": "semantics-gap",
+          "title": "与 Dijkstra 语义的差异",
+          "role": "comparison",
+          "description": "对照负值语义与零值语义，理解本实现的选择与代价。",
+          "outcomeRefs": [
+            "compare-semantics"
+          ],
+          "order": 3
+        },
+        {
+          "id": "generalization-boundary",
+          "title": "泛化边界与达成检查",
+          "role": "boundary-check",
+          "description": "解释教材关于泛化的提醒，并用检查清单收束本点。",
+          "outcomeRefs": [
+            "judge-generalization"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-struct",
+          "trace-wait-post",
+          "compare-semantics",
+          "judge-generalization"
+        ],
+        "method": "完成一次 wait/post 序列推演，并说明 value 非负语义与泛化边界。",
+        "successCriteria": [
+          "能写出三个字段的职责并说明锁保护的范围",
+          "能正确推演等待线程被唤醒后重新检查条件的过程",
+          "能指出 value 为 0 时无法据此判断是否有等待线程"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-31-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-struct",
+        "moduleId": "structure-and-state",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材实现：用锁、条件变量和计数构造 Zemaphore",
+        "markdown": "教材把信号量的实现压缩成三个字段：一个整数计数 `value`、一个条件变量 `cond` 和一把互斥锁 `lock`。结构体定义如下：\n\n```c\ntypedef struct _Zem_t {\n    int value;\n    pthread_cond_t cond;\n    pthread_mutex_t lock;\n} Zem_t;\n```\n\n初始化时，`Zem_init` 把调用者给出的初值写入 `value`，再分别初始化条件变量与锁。教材用“Zemaphore”这个名字区分自己实现的版本与 Dijkstra 定义的信号量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000422"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "如何实现信号量"
+              ],
+              "lineStart": 8519,
+              "lineEnd": 8560,
+              "assetRefs": [],
+              "excerptSha256": "1444d53b3ba519e46f8edb0a597fdc11c0db92d13e51ef963d66d1ff40796b72"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-model",
+        "moduleId": "structure-and-state",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "三个字段的分工与状态模型",
+        "markdown": "把 `value` 读作“当前可用许可数”，`lock` 是保护计数与等待逻辑的门，`cond` 是暂时拿不到许可时线程排队的地方。`value` 只允许在持有 `lock` 时读写；`cond` 的等待与唤醒也只在持有 `lock` 时发生，因此计数检查和状态变更不会与另一个线程交错。\n\n一个便于记忆的类比：`value` 是停车场的空位数，`lock` 是入口闸机，`cond` 是等位区。空位大于零时直接进入并让空位减一；否则进入等位区，等有人离开时被通知。类比只描述等待结构，真实语义仍以代码为准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-struct"
+          ]
+        }
+      },
+      {
+        "id": "tb-wait",
+        "moduleId": "wait-path",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Zem_wait：等待许可并扣减计数",
+        "markdown": "`Zem_wait` 对应 P 操作。教材给出的实现是：\n\n```c\nvoid Zem_wait(Zem_t *s) {\n    Mutex_lock(&s->lock);\n    while (s->value <= 0)\n        Cond_wait(&s->cond, &s->lock);\n    s->value--;\n    Mutex_unlock(&s->lock);\n}\n```\n\n三处细节决定了正确性：第一，`while` 而不是 `if`，线程被唤醒后必须重新检查计数；第二，`Cond_wait` 在睡眠前原子地释放锁，醒来后重新获取锁，等待期间其他线程仍能进入 `wait` 或 `post`；第三，扣减与检查都在锁内完成，检查与修改之间没有空档。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000422"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "如何实现信号量"
+              ],
+              "lineStart": 8519,
+              "lineEnd": 8560,
+              "assetRefs": [],
+              "excerptSha256": "1444d53b3ba519e46f8edb0a597fdc11c0db92d13e51ef963d66d1ff40796b72"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-wait-trace",
+        "moduleId": "wait-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "追踪一次等待：计数如何降到零",
+        "markdown": "设初值为 `value = 1`，三个线程依次调用 `Zem_wait`：\n\n1. T1 获得锁，检查 `value = 1 > 0`，扣减后 `value = 0`，解锁返回。\n2. T2 获得锁，检查 `value = 0`，进入 `Cond_wait` 并释放锁，T2 停在等待队列中。\n3. T3 同理进入等待，`value` 仍为 0。\n\n此时 T1 成功取得许可，T2、T3 在 `cond` 上排队，而 `value` 只记录“还剩多少个许可”，并不记录排队人数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-wait"
+          ]
+        }
+      },
+      {
+        "id": "tb-post",
+        "moduleId": "post-path",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Zem_post：增加计数并唤醒等待者",
+        "markdown": "`Zem_post` 对应 V 操作：\n\n```c\nvoid Zem_post(Zem_t *s) {\n    Mutex_lock(&s->lock);\n    s->value++;\n    Cond_signal(&s->cond);\n    Mutex_unlock(&s->lock);\n}\n```\n\n`post` 在持锁状态下增加计数并发出信号，然后才解锁。教材强调 `signal` 只是一个通知：被唤醒的线程需要重新竞争锁，因此它不会在当前线程仍然持有锁时立刻继续执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000422"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "如何实现信号量"
+              ],
+              "lineStart": 8519,
+              "lineEnd": 8560,
+              "assetRefs": [],
+              "excerptSha256": "1444d53b3ba519e46f8edb0a597fdc11c0db92d13e51ef963d66d1ff40796b72"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-post-trace",
+        "moduleId": "post-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "追踪一次唤醒：为什么醒来后要重查条件",
+        "markdown": "接上例，T3 调用 `Zem_post`：它获得锁，把 `value` 从 0 增到 1，调用 `Cond_signal`，再解锁。此时 T2 被唤醒，但必须先重新拿到锁：\n\n1. T2 重新获得锁后再次检查 `value = 1 > 0`，条件成立。\n2. T2 扣减使 `value = 0`，解锁并返回。\n3. T3 仍在等待队列中，因为没有新的 `post` 唤醒它。\n\n若 `post` 一次唤醒多个线程，或同时有新的 `wait` 抢先获得锁，被唤醒线程也可能发现计数已被别人取走；这正是 `while` 覆盖条件存在的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-post"
+          ]
+        }
+      },
+      {
+        "id": "tb-value-semantics",
+        "moduleId": "semantics-gap",
+        "depth": "core",
+        "kind": "note",
+        "title": "与 Dijkstra 语义的细微差别",
+        "markdown": "教材明确指出，这个实现与 Dijkstra 定义的信号量有一处细微差别：没有让负值反映等待线程数。这里的 `value` 永远不会小于 0，等待中的线程只存在于条件变量的等待队列里。教材认为这一行为更容易实现，并且符合现有的 Linux 实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000422"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "如何实现信号量"
+              ],
+              "lineStart": 8519,
+              "lineEnd": 8560,
+              "assetRefs": [],
+              "excerptSha256": "1444d53b3ba519e46f8edb0a597fdc11c0db92d13e51ef963d66d1ff40796b72"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-comparison",
+        "moduleId": "semantics-gap",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "负值语义与零值语义的对比",
+        "markdown": "两种语义的差别可以直接对照：\n\n| 观察点 | Dijkstra 语义 | 本实现 |\n|---|---|---|\n| `value` 取值范围 | 可以为负 | 恒大于等于 0 |\n| 负值含义 | 绝对值等于等待线程数 | 不存在负值 |\n| 等待者位置 | 由计数隐含 | 条件变量的等待队列 |\n| 看到 `value = 0` | 可能有也可能没有等待者 | 可能有也可能没有等待者 |\n\n因此在本实现中，不能靠读取 `value` 来推断“有几个线程在等”，排查问题时需要借助其他手段或额外计数。这是选择更简单实现所付出的可观测性代价，而不是功能缺失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-value-semantics"
+          ]
+        }
+      },
+      {
+        "id": "tb-generalization",
+        "moduleId": "generalization-boundary",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材提醒：泛化要小心",
+        "markdown": "教材把信号量描述为锁和条件变量的泛化，但紧接着提醒：这种泛化未必像看起来那样通用。用信号量反过来实现锁和条件变量是棘手得多的问题；某些富有经验的并发程序员曾在 Windows 环境下尝试，结果随之而来的是很多缺陷。教材引用 Lampson 的话作为警示：“不要泛化。泛化通常都是错的。”",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000423"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：小心泛化"
+              ],
+              "lineStart": 8561,
+              "lineEnd": 8568,
+              "assetRefs": [],
+              "excerptSha256": "26e27701c5e21713d781d048734bd99925bd93ffc8c2c587825f45da50d89ce4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-generalization",
+        "moduleId": "generalization-boundary",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "为什么用信号量实现条件变量更难",
+        "markdown": "原因在于两种原语保存的信息不同。信号量只有一个计数，它知道“还有多少许可”，却不知道每个等待线程在等哪一个具体条件；条件变量把等待队列与调用者检查的谓词绑定，并支持在谓词变化时精确唤醒或广播。\n\n要用信号量模拟条件变量，实现者必须自己维护等待者集合、谓词状态和唤醒顺序，还要处理通知早于等待、多个等待者竞争同一许可等情况。只要漏掉其中一项，就可能出现丢失唤醒或唤醒错误线程。教材的结论应理解为：理解实现有助于掌握原语，但不等于可以在工程中随意互换它们。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-generalization"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "generalization-boundary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "实现要点与检查清单",
+        "markdown": "回顾本点的实现，可以把正确性归结为四条：\n\n- 计数检查、扣减、增加和唤醒都在同一把 `lock` 保护下完成；\n- 等待使用 `while` 覆盖条件，被唤醒后重新检查；\n- `post` 先增加计数再 `signal`，并在解锁后才让被唤醒者继续；\n- 接受 `value` 非负的语义选择，并知道它不携带等待人数信息。\n\n掌握这些要点后，就能读懂教材的 Zemaphore，也能判断在什么情况下不应把它当作通用替代品。下一节将总结信号量的通用性与常见使用模式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-struct",
+            "tb-wait",
+            "tb-post",
+            "tb-value-semantics",
+            "tb-generalization"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "wait-post-check",
+        "type": "formative-check",
+        "title": "推演一次等待与唤醒",
+        "anchorBlockId": "model-post-trace",
+        "moduleId": "post-path",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-wait-post",
+          "compare-semantics"
+        ],
+        "learningPurpose": "检查学习者能否按锁与条件变量的实际交互推演计数变化，并判断 value 是否能反映等待人数。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-wait",
+            "tb-post"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "initialValue": 1,
+          "calls": [
+            "wait",
+            "wait",
+            "post",
+            "wait"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "设 `value` 初值为 1，依次执行 `wait`、`wait`、`post`、`wait`。写出每一步后的 `value`，说明哪些线程在等待，并回答：能否仅根据 `value = 0` 判断当前是否有线程在等？为什么？"
+        }
+      }
+    ]
+  },
+  "subtitle": "信号量",
+  "clusterId": "chapter-31",
+  "clusterIds": [
+    "chapter-31"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000422"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "如何实现信号量"
+      ],
+      "lineStart": 8519,
+      "lineEnd": 8560,
+      "assetRefs": [],
+      "excerptSha256": "1444d53b3ba519e46f8edb0a597fdc11c0db92d13e51ef963d66d1ff40796b72"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000423"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：小心泛化"
+      ],
+      "lineStart": 8561,
+      "lineEnd": 8568,
+      "assetRefs": [],
+      "excerptSha256": "26e27701c5e21713d781d048734bd99925bd93ffc8c2c587825f45da50d89ce4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    824,
+    711
+  ],
+  "scale": 0.94
+}

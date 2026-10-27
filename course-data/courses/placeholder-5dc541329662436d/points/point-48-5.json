@@ -1,0 +1,513 @@
+{
+  "id": "point-48-5",
+  "title": "NFSv2 协议",
+  "shortSummary": "介绍 NFSv2 的文件句柄、主要操作和请求响应格式及其设计意图。",
+  "keyTerms": [
+    "NFSv2",
+    "文件句柄",
+    "协议",
+    "请求响应"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "protocol-operation-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对文件句柄与协议操作的定义，按问题、句柄、操作、访问示例的顺序重排，并补充自包含请求的解释与检查题。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-stateless-protocol",
+          "text": "解释 NFSv2 如何在无状态约束下支持文件访问。"
+        },
+        {
+          "id": "describe-file-handle",
+          "text": "说明文件句柄的组成部分及世代号的作用。"
+        },
+        {
+          "id": "trace-protocol-operations",
+          "text": "按 LOOKUP、READ、WRITE、GETATTR 追踪一次文件访问的请求与响应。"
+        }
+      ],
+      "misconceptions": [
+        "以为 NFSv2 服务器会保存每个客户端的打开文件描述符；实际上服务器不保存跨请求状态，每次请求都自带文件句柄等信息。",
+        "以为 inode 号足以唯一标识一个文件；实际上还需要卷标识符和世代号来避免 inode 号复用带来的误访问。"
+      ],
+      "modules": [
+        {
+          "id": "problem-framing",
+          "title": "无状态协议要解决的问题",
+          "role": "problem-introduction",
+          "description": "从 POSIX 调用出发，说明为什么协议必须把状态留在客户端。",
+          "outcomeRefs": [
+            "explain-stateless-protocol"
+          ],
+          "order": 0
+        },
+        {
+          "id": "file-handle",
+          "title": "文件句柄",
+          "role": "core-concept",
+          "description": "拆解文件句柄的卷标识符、inode 号与世代号。",
+          "outcomeRefs": [
+            "describe-file-handle"
+          ],
+          "order": 1
+        },
+        {
+          "id": "operations",
+          "title": "主要操作与请求响应格式",
+          "role": "mechanism",
+          "description": "按期望输入和返回结果梳理 LOOKUP、READ、WRITE、GETATTR 等操作。",
+          "outcomeRefs": [
+            "trace-protocol-operations",
+            "explain-stateless-protocol"
+          ],
+          "order": 2
+        },
+        {
+          "id": "walkthrough",
+          "title": "一次文件访问的协议过程",
+          "role": "worked-example",
+          "description": "以打开并读取 /foo.txt 为例串起句柄、属性与读写请求。",
+          "outcomeRefs": [
+            "trace-protocol-operations",
+            "describe-file-handle"
+          ],
+          "order": 3
+        },
+        {
+          "id": "achievement-check",
+          "title": "达成检查与小结",
+          "role": "check",
+          "description": "用一次具体读取检查学习者能否迁移请求响应格式。",
+          "outcomeRefs": [
+            "explain-stateless-protocol",
+            "describe-file-handle",
+            "trace-protocol-operations"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-stateless-protocol",
+          "describe-file-handle",
+          "trace-protocol-operations"
+        ],
+        "method": "完成一次具体读取的请求字段判断，并说明哪些状态由客户端维护。",
+        "successCriteria": [
+          "能指出取得句柄需要 LOOKUP",
+          "能写出 READ 的句柄、偏移与字节数",
+          "能说明服务器为何不保存跨请求状态"
+        ],
+        "exerciseBlockId": "model-protocol-check",
+        "summaryBlockId": "model-protocol-summary",
+        "nextPointId": "point-48-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-open",
+        "moduleId": "problem-framing",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：从协议定义出发",
+        "markdown": "NFSv2 是 NFS 的无状态文件协议。教材在第 48.5 节不先铺陈整体架构，而是直接检视协议定义，把问题归结为一个：怎样让网络协议在无状态的前提下支持文件访问。\n\n这一节的组织方式是先给出问题，再依次说明文件句柄、主要操作，以及请求与响应的字段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000658"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "NFSv2 协议"
+              ],
+              "lineStart": 12740,
+              "lineEnd": 12743,
+              "assetRefs": [],
+              "excerptSha256": "9f5d7e883375e929b3bc8aae2b02bf6e6e6ba217d4bb19c1178cf6ecd5942a2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-key-question",
+        "moduleId": "problem-framing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：无状态文件协议的关键问题",
+        "markdown": "教材把关键问题写成“如何定义无状态文件协议”。像 `open()` 这样的有状态调用不能直接放进协议，因为它要求服务器记住某些东西；但客户端应用仍然会调用 `open()`、`read()`、`write()`、`close()` 等 POSIX 接口。\n\n于是协议必须换一种方式表达相同语义：把完成一次访问所需的全部信息放进单个请求，让服务器不必记得前一次交互。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000659"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何定义无状态文件协议"
+              ],
+              "lineStart": 12744,
+              "lineEnd": 12806,
+              "assetRefs": [],
+              "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stateless-contract",
+        "moduleId": "problem-framing",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：一次请求就是一份完整契约",
+        "markdown": "无状态的关键不是“完全没有状态”，而是“服务器不保存跨请求的状态”。客户端仍然维护打开文件表、描述符到文件句柄的映射和当前偏移量，只是每次调用服务器时把这些必要信息一并带上。\n\n因此判断一个请求设计是否合格，可以检查它能否独立回答三个问题：操作对象是谁（文件句柄）、要做什么（操作码与参数）、结果如何返回（数据、属性或错误码）。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-open",
+            "tb-key-question"
+          ]
+        }
+      },
+      {
+        "id": "tb-file-handle",
+        "moduleId": "file-handle",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：文件句柄",
+        "markdown": "文件句柄（file handle）用于唯一描述一个文件或目录。可以把它拆成三个重要组成部分：\n\n- 卷标识符：指出请求指向哪个文件系统，因为一个 NFS 服务器可以导出多个文件系统；\n- inode 号：指出该分区中的哪个文件；\n- 世代号：inode 号被复用时递增，避免旧句柄误访问新分配的文件。\n\n三项合起来，才构成客户端希望访问对象的唯一标识。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000659"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何定义无状态文件协议"
+              ],
+              "lineStart": 12744,
+              "lineEnd": 12806,
+              "assetRefs": [],
+              "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-handle-components",
+        "moduleId": "file-handle",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：三个字段各自防住什么错误",
+        "markdown": "把三个字段看成三道检查：卷标识符防止跨文件系统串号，inode 号定位分区内的具体对象，世代号防止“同一个 inode 号换了主人”造成的陈旧访问。\n\n这也是为什么 NFSv2 不依赖服务器保存的目录状态：句柄是自包含的、可以重复发送的标识。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-file-handle"
+          ]
+        }
+      },
+      {
+        "id": "model-generation-example",
+        "moduleId": "file-handle",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充例子：世代号如何拦住陈旧句柄",
+        "markdown": "假设文件 A 被删除，其 inode 号随后分配给新建的文件 B。若没有世代号，仍持有 A 旧句柄的客户端会直接读写到 B。有了世代号，服务器发现句柄中的世代号与当前 inode 不匹配，就可以返回错误，而不是让错误悄悄发生。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-file-handle"
+          ]
+        }
+      },
+      {
+        "id": "tb-operation-table",
+        "moduleId": "operations",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：NFSv2 主要操作与请求响应字段",
+        "markdown": "教材给出的协议片段可以按“期望输入到返回结果”来读：\n\n| 操作 | 请求携带 | 返回 |\n|---|---|---|\n| `NFSPROC_GETATTR` | 文件句柄 | 属性 |\n| `NFSPROC_SETATTR` | 文件句柄、属性 | 无 |\n| `NFSPROC_LOOKUP` | 目录句柄、名字 | 文件句柄 |\n| `NFSPROC_READ` | 文件句柄、偏移、字节数 | 数据、属性 |\n| `NFSPROC_WRITE` | 文件句柄、偏移、字节数、数据 | 属性 |\n| `NFSPROC_CREATE` | 目录句柄、文件名、属性 | 无 |\n| `NFSPROC_REMOVE` | 目录句柄、文件名 | 无 |\n| `NFSPROC_MKDIR` | 目录句柄、目录名、属性 | 文件句柄 |\n| `NFSPROC_RMDIR` | 目录句柄、目录名 | 无 |\n| `NFSPROC_READDIR` | 目录句柄、字节数、cookie | 目录项、cookie |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000659"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何定义无状态文件协议"
+              ],
+              "lineStart": 12744,
+              "lineEnd": 12806,
+              "assetRefs": [],
+              "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lookup",
+        "moduleId": "operations",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：LOOKUP 是取得句柄的入口",
+        "markdown": "在整组操作里，`LOOKUP` 的地位特殊：它是客户端取得文件句柄的途径。客户端传入目录句柄和要查找的名字，服务器返回目标文件或目录的句柄及其属性。\n\n这意味着路径解析由客户端驱动：客户端从根目录句柄出发，对路径的每一段依次发送 `LOOKUP`，逐段换取下一级句柄。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-operation-table"
+          ]
+        }
+      },
+      {
+        "id": "tb-read-write",
+        "moduleId": "operations",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：READ 与 WRITE 的数据通路",
+        "markdown": "有了文件句柄，客户端就可以对文件发出 `READ` 和 `WRITE`。`READ` 请求携带文件句柄、文件内偏移量和要读取的字节数，服务器据此判断从哪个卷、哪个 inode 的哪个位置读取，并把数据和属性返回给客户端，出错时返回错误码。\n\n`WRITE` 的处理方式类似，只是数据从客户端传向服务器，成功时返回属性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000659"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何定义无状态文件协议"
+              ],
+              "lineStart": 12744,
+              "lineEnd": 12806,
+              "assetRefs": [],
+              "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-getattr",
+        "moduleId": "operations",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：GETATTR 为什么值得单独注意",
+        "markdown": "`GETATTR` 只需要一个文件句柄就能取回属性，包括最后修改时间。对无状态协议来说这一点很重要：服务器不记录客户端缓存了什么，客户端可以在每次需要时重新取属性，用修改时间等信息判断本地缓存是否仍然有效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-read-write",
+            "tb-operation-table"
+          ]
+        }
+      },
+      {
+        "id": "tb-attributes",
+        "moduleId": "walkthrough",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：属性是什么",
+        "markdown": "属性（attributes）是文件系统为每个文件维护的元信息，包括创建时间、上次修改时间、大小、所有权和权限等，也就是对文件调用 `stat()` 会返回的信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000659"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何定义无状态文件协议"
+              ],
+              "lineStart": 12744,
+              "lineEnd": 12806,
+              "assetRefs": [],
+              "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-attribute-caching",
+        "moduleId": "walkthrough",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：属性把数据与元数据分开传递",
+        "markdown": "NFSv2 的响应经常同时返回数据和属性，这使客户端既拿到本次读取的内容，又拿到判断缓存是否可用的元数据。把两者放在同一个响应里，可以减少一次额外的往返。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-attributes"
+          ]
+        }
+      },
+      {
+        "id": "tb-open-example",
+        "moduleId": "walkthrough",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：打开 /foo.txt 的协议过程",
+        "markdown": "假设客户端已经持有文件系统根目录的目录句柄。应用要打开 `/foo.txt` 时，客户端向服务器发送 `LOOKUP`，传递根目录句柄和名字 `foo.txt`；成功时服务器返回 `foo.txt` 的文件句柄和属性。\n\n拿到句柄后，客户端就可以对该文件发出 `READ` 和 `WRITE`。教材还提醒，客户端与服务器最初如何建立连接属于 NFS 挂载协议（mount protocol），这里不作展开。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000659"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何定义无状态文件协议"
+              ],
+              "lineStart": 12744,
+              "lineEnd": 12806,
+              "assetRefs": [],
+              "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-request-response",
+        "moduleId": "walkthrough",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：请求与响应的固定套路",
+        "markdown": "把这些操作放在一起看，会发现统一的套路：请求由文件句柄加操作参数（偏移、字节数、数据或名字）组成；响应返回数据或属性，或者错误码。服务器端不为某个客户端保存“这次打开的是哪个文件”这样的记忆，因此崩溃重启后仍能继续响应后续请求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-open-example",
+            "tb-attributes"
+          ]
+        }
+      },
+      {
+        "id": "model-protocol-check",
+        "moduleId": "achievement-check",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "检查：补全一次访问的请求",
+        "markdown": "设想客户端要在文件中读取 4096 字节，当前偏移量为 12288。\n\n1. 若客户端只有路径名而没有句柄，它应先发送哪个操作？需要携带哪些字段？\n2. 真正读取数据时应发送哪个操作？三个关键参数是什么？\n3. 服务器响应里除了数据，还可能带回什么，用来判断缓存是否有效？\n\n参考答案要点：先用 `LOOKUP` 逐段取得句柄；读取用 `READ`，携带文件句柄、偏移 12288、字节数 4096；响应包含数据和属性（如最后修改时间）。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-operation-table",
+            "tb-open-example"
+          ]
+        }
+      },
+      {
+        "id": "model-protocol-summary",
+        "moduleId": "achievement-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：无状态协议的设计要点",
+        "markdown": "- 用文件句柄（卷标识符、inode 号、世代号）代替服务器保存的打开状态；\n- 用 `LOOKUP`、`READ`、`WRITE`、`GETATTR` 等自包含请求重建 POSIX 语义；\n- 每个请求携带完成操作所需的全部信息，响应返回数据、属性或错误码；\n- 客户端承担路径解析、偏移量维护和缓存校验，服务器只按请求作答。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-protocol-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "read-request-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-protocol-check",
+        "moduleId": "achievement-check",
+        "depth": "advanced",
+        "outcomeRefs": [
+          "trace-protocol-operations"
+        ],
+        "learningPurpose": "检查学习者能否把请求响应格式迁移到一次具体读取。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-operation-table",
+            "tb-open-example"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "没有交互时，按题目在纸上写出 LOOKUP 与 READ 的字段，再对照正文核对。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Sun 的网络文件系统(NFS)",
+  "clusterId": "chapter-48",
+  "clusterIds": [
+    "chapter-48"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000658"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "NFSv2 协议"
+      ],
+      "lineStart": 12740,
+      "lineEnd": 12743,
+      "assetRefs": [],
+      "excerptSha256": "9f5d7e883375e929b3bc8aae2b02bf6e6e6ba217d4bb19c1178cf6ecd5942a2d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000659"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "关键问题：如何定义无状态文件协议"
+      ],
+      "lineStart": 12744,
+      "lineEnd": 12806,
+      "assetRefs": [],
+      "excerptSha256": "27634d3c5264f3d7ddeef03abe09a2f01d56b79ff32af72c1082b0099440e8e6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2810,
+    -388
+  ],
+  "scale": 0.88
+}

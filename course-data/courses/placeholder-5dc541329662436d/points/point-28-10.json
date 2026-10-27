@@ -1,0 +1,438 @@
+{
+  "id": "point-28-10",
+  "title": "链接的加载和条件式存储指令",
+  "shortSummary": "介绍链接加载和条件式存储指令，以及它们如何支持无锁同步与原子更新。",
+  "keyTerms": [
+    "链接加载",
+    "条件式存储",
+    "LL/SC",
+    "无锁同步"
+  ],
+  "animationType": "loadLinkedStoreConditional",
+  "animationSuggestion": "按时间轴展示两个线程的 LL 与 SC：先让两者都建立链接并读到 0，再让第一个 SC 成功、第二个链接显示失效并重试，用状态标签和返回值说明为何只有一个线程进入临界区。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-with-race-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 LL/SC 语义、图 28.4 与图 28.5 代码以及竞争失败路径的表述，按“语义直觉→链接状态→锁实现→失败诊断→精简写法”重排，并补充状态机式走查与自检问题。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-llsc",
+          "text": "解释链接的加载与条件式存储各自的动作、成功条件和返回值。"
+        },
+        {
+          "id": "trace-link-state",
+          "text": "追踪一次 LL/SC 序列中链接何时有效、何时失效。"
+        },
+        {
+          "id": "build-lock",
+          "text": "读懂并说明用 LL/SC 构造自旋锁的获取与释放过程。"
+        },
+        {
+          "id": "diagnose-sc-failure",
+          "text": "诊断两个线程竞争时条件式存储失败的原因，并说明正确的重试方式。"
+        },
+        {
+          "id": "read-concisely",
+          "text": "读懂更短的短路写法，并说明它与完整循环版本为何等价。"
+        }
+      ],
+      "misconceptions": [
+        "把条件式存储失败当成程序错误或锁已被占用；它只表示链接已失效，需要重新执行尝试。",
+        "把链接的加载和条件式存储理解成两条普通读、写指令，忽略两者之间可能被其他写入打断。",
+        "认为更短的短路版本改变了同步语义，其实两种写法依赖的是同一个链接有效性条件。"
+      ],
+      "modules": [
+        {
+          "id": "pair-and-intuition",
+          "title": "指令对与乐观尝试的直觉",
+          "role": "activate-prior-knowledge",
+          "outcomeRefs": [
+            "explain-llsc"
+          ],
+          "order": 0
+        },
+        {
+          "id": "semantics-and-link-state",
+          "title": "语义与链接状态",
+          "role": "concept-explanation",
+          "outcomeRefs": [
+            "explain-llsc",
+            "trace-link-state"
+          ],
+          "order": 1
+        },
+        {
+          "id": "lock-construction",
+          "title": "用 LL/SC 构造自旋锁",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-link-state",
+            "build-lock"
+          ],
+          "order": 2
+        },
+        {
+          "id": "race-and-failure",
+          "title": "竞争与失败诊断",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "build-lock",
+            "diagnose-sc-failure"
+          ],
+          "order": 3
+        },
+        {
+          "id": "concise-and-transfer",
+          "title": "精简写法与迁移",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "diagnose-sc-failure",
+            "read-concisely"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-llsc",
+          "trace-link-state",
+          "build-lock",
+          "diagnose-sc-failure",
+          "read-concisely"
+        ],
+        "method": "完成两线程竞争自检题，并用链接有效性解释为何只有一个线程能成功写入。",
+        "successCriteria": [
+          "能准确说明 LL 与 SC 的返回值含义",
+          "能指出 SC 失败后必须重新执行 LL 而不是直接进入临界区",
+          "能解释短路写法与图 28.5 完整写法等价"
+        ],
+        "exerciseBlockId": "check-two-sc",
+        "summaryBlockId": "recap-and-bridge",
+        "nextPointId": "point-28-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-instruction-pair",
+        "moduleId": "pair-and-intuition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材引入：成对使用的两条指令",
+        "markdown": "一些处理器平台提供成对使用的**链接的加载（load-linked，LL）**和**条件式存储（store-conditional，SC）**指令，用它们可以构造临界区以及其他并发结构。教材以 MIPS 为例，并指出 Alpha、PowerPC 和 ARM 也提供类似指令。\n\n链接的加载先像普通加载一样把内存中的值读入寄存器，但它同时把该地址“链接”到本次执行；条件式存储只在这次链接之后、该地址没有被更新时才执行写入并返回成功。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000366"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "链接的加载和条件式存储指令"
+              ],
+              "lineStart": 6772,
+              "lineEnd": 6814,
+              "assetRefs": [],
+              "excerptSha256": "798b7b6ea4a9d463d817925208f4a30f61448eb3ac13acee4edb802b9408b41a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-optimistic-intuition",
+        "moduleId": "pair-and-intuition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：先读后确认的乐观协议",
+        "markdown": "可以把 LL/SC 理解为一组“先读后确认”的乐观协议：LL 不只是读值，还留下一个“从我这次读取之后，这段内容有没有被别人改过”的凭据；SC 在真正写入前检查这个凭据是否仍然有效。\n\n与普通“读—判断—写”序列相比，关键差别在于：判断和写入由硬件的同一条条件式存储完成，因此其他线程无法把一次新的写入插进这两步之间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-instruction-pair"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pseudocode-semantics",
+        "moduleId": "semantics-and-link-state",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材图 28.4：语义与返回值",
+        "markdown": "教材用下面的伪代码描述这两条指令：\n\n```c\nint LoadLinked(int *ptr) {\n    return *ptr;\n}\nint StoreConditional(int *ptr, int value) {\n    if (no one has updated *ptr since the LoadLinked to this address) {\n        *ptr = value;\n        return 1; // success!\n    } else {\n        return 0; // failed to update\n    }\n}\n```\n\n成功时，条件式存储返回 1，并把该地址中的值更新为 `value`；失败时返回 0，并且不会更新值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000366"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "链接的加载和条件式存储指令"
+              ],
+              "lineStart": 6772,
+              "lineEnd": 6814,
+              "assetRefs": [],
+              "excerptSha256": "798b7b6ea4a9d463d817925208f4a30f61448eb3ac13acee4edb802b9408b41a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-link-state-machine",
+        "moduleId": "semantics-and-link-state",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "模型补充：把语义读成链接状态机",
+        "markdown": "用三个状态就能读出指令的行为：\n\n1. **未链接**：执行 LL，读出当前值并建立到该地址的链接。\n2. **链接有效**：若期间没有对同一地址的写入，执行 SC 会写入新值并返回 1。\n3. **链接失效**：若期间发生了对同一地址的写入，SC 返回 0，内存保持不变。\n\n失败不是异常，而是协议的一部分：调用者需要回到 LL 重新读取当前值并重新尝试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pseudocode-semantics"
+          ]
+        }
+      },
+      {
+        "id": "textbook-llsc-lock",
+        "moduleId": "lock-construction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材图 28.5：用 LL/SC 实现锁",
+        "markdown": "图 28.5 用 LL/SC 实现了锁：`lock()` 先自旋等待 `flag` 变为 0，然后用条件式存储尝试把 `flag` 设为 1；成功便返回并进入临界区，失败则从头重试。`unlock()` 直接把 `flag` 写回 0。\n\n```c\nvoid lock(lock_t *lock) {\n    while (1) {\n        while (LoadLinked(&lock->flag) == 1)\n            ; // spin until it's zero\n        if (StoreConditional(&lock->flag, 1) == 1)\n            return; // if set-it-to-1 was a success: all done\n        // otherwise: try it all over again\n    }\n}\n\nvoid unlock(lock_t *lock) {\n    lock->flag = 0;\n}\n```\n\n内层循环只读取 `flag`，直到看到它为 0；真正获取锁的动作交给外层的条件式存储。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000366"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "链接的加载和条件式存储指令"
+              ],
+              "lineStart": 6772,
+              "lineEnd": 6814,
+              "assetRefs": [],
+              "excerptSha256": "798b7b6ea4a9d463d817925208f4a30f61448eb3ac13acee4edb802b9408b41a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lock-walkthrough",
+        "moduleId": "lock-construction",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次成功获取的走查",
+        "markdown": "假设锁空闲，即 `flag == 0`：\n\n1. 线程 A 执行 LL，读到 0，并建立到 `flag` 的链接。\n2. 线程 A 执行 SC，把 1 写入 `flag`，返回 1，获得锁。\n3. 其他线程的 LL 会读到 1，在内层循环继续自旋。\n4. A 调用 `unlock()` 把 `flag` 写回 0，等待者才有机会在下一轮 SC 中成功。\n\nSC 写入的是常数 1，而不是“加一”，因此这个锁只表达“被持有”和“空闲”两种状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-llsc-lock"
+          ]
+        }
+      },
+      {
+        "id": "textbook-failure-analysis",
+        "moduleId": "race-and-failure",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材分析：条件式存储为何会失败",
+        "markdown": "教材特别分析了两个线程同时尝试获取锁时的失败路径。线程 A 调用 `lock()`，执行链接的加载并读到 0；在它执行条件式存储之前发生中断，线程 B 进入 `lock()`，也执行链接的加载并读到 0。此时两个线程都持有刚才链接的地址，接下来都要执行条件式存储。\n\n结果只有一个线程能成功把 `flag` 更新为 1 并获得锁。第二个执行条件式存储的线程会失败，因为在前一次链接的加载之后，该地址已经被另一个线程成功更新过；它必须重新尝试获取锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000367"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：代码越少越好（劳尔定律）"
+              ],
+              "lineStart": 6815,
+              "lineEnd": 6829,
+              "assetRefs": [],
+              "excerptSha256": "1f25065396849d5c4ff5a5ee427e90255b5172f3b801bf708bdab737d5f002ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-checklist",
+        "moduleId": "race-and-failure",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：检查 LL/SC 代码的四个问题",
+        "markdown": "判断一段 LL/SC 同步代码是否保留了原子性，可以按顺序问四个问题：\n\n- LL 读到的地址和 SC 要写的地址是否是同一个？\n- 从这次 LL 到 SC 之间，有没有其他写入可能落到这个地址？\n- SC 返回 0 后，代码是否回到 LL 重试，而不是直接进入临界区？\n- 成功路径是否只执行一次写入并立即离开重试循环？\n\n只要有一条不满足，两个线程就可能同时进入临界区，或者某次更新会静默丢失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-failure-analysis"
+          ]
+        }
+      },
+      {
+        "id": "check-two-sc",
+        "moduleId": "race-and-failure",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：两个线程都执行 SC 会怎样",
+        "markdown": "线程 A 和线程 B 都已执行链接的加载，并且都读到 `flag == 0`，现在两者都要执行条件式存储。它们是否可能都成功把 `flag` 设为 1？\n\n请先写出结论，再用“链接是否仍然有效”解释原因，并说明失败方接下来应该做什么。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-failure-analysis",
+            "model-failure-checklist"
+          ]
+        }
+      },
+      {
+        "id": "textbook-concise-version",
+        "moduleId": "concise-and-transfer",
+        "depth": "support",
+        "kind": "code",
+        "title": "教材提示：劳尔定律与更短的等价写法",
+        "markdown": "教材在本节末尾给出“提示：代码越少越好”（劳尔定律）。Hugh Lauer 在讨论构建一个飞行员操作系统时说：“如果给同样这些人两倍的时间，他们可以只用一半的代码来实现”。简洁的代码更易懂，缺陷更少。\n\n据此，教材给出了 David Capel 的等价短路写法：\n\n```c\nvoid lock(lock_t *lock) {\n    while (LoadLinked(&lock->flag) || !StoreConditional(&lock->flag, 1))\n        ; // spin\n}\n```\n\n当 LL 读到 1 时，`||` 直接短路，继续自旋；只有读到 0 时才执行 SC，SC 失败则整个条件为真，循环再试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000367"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：代码越少越好（劳尔定律）"
+              ],
+              "lineStart": 6815,
+              "lineEnd": 6829,
+              "assetRefs": [],
+              "excerptSha256": "1f25065396849d5c4ff5a5ee427e90255b5172f3b801bf708bdab737d5f002ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-equivalence",
+        "moduleId": "concise-and-transfer",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：两种写法为什么等价",
+        "markdown": "两种写法做的是同一件事，只是把嵌套循环压成了一个条件：\n\n- 外层 `while (1)` 与内层自旋合并为 `while (LL(...) || !SC(...))`。\n- 若 LL 返回 1，说明锁被占用，短路后不执行 SC。\n- 若 LL 返回 0，则执行 SC；SC 返回 1 表示获取成功，取反后条件为假，退出循环。\n- 若 SC 返回 0，说明链接已被其他写者破坏，条件为真，重新 LL。\n\n两种版本都依赖同一个不变量：只有在 LL 之后该地址没有被更新，SC 才会成功写入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-llsc-lock",
+            "textbook-failure-analysis",
+            "textbook-concise-version"
+          ]
+        }
+      },
+      {
+        "id": "recap-and-bridge",
+        "moduleId": "concise-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "回顾与下一点桥接",
+        "markdown": "LL/SC 把一次同步更新拆成“建立链接”和“验证后写入”两步，但验证与写入在条件式存储内部不可分割：只要 LL 之后同一地址被更新，SC 就返回 0 且不写入，调用者必须重新尝试。用这个协议，`lock()` 可以把“看到 0”与“把自己设为 1”安全地连成一个获取动作。\n\n下一节将讨论另一条原子指令——获取并增加，以及它如何进一步支持票据锁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-instruction-pair",
+            "model-link-state-machine",
+            "textbook-llsc-lock",
+            "textbook-failure-analysis",
+            "model-equivalence"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "llsc-race-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-two-sc",
+        "moduleId": "race-and-failure",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-sc-failure"
+        ],
+        "learningPurpose": "检查学习者能否用链接有效性解释两线程竞争时只有一个 SC 成功，并选择正确的重试动作。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-failure-analysis"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写下你的结论，并说明先成功的 SC 如何使另一个线程已建立的链接失效。"
+        }
+      }
+    ]
+  },
+  "subtitle": "锁",
+  "clusterId": "chapter-28",
+  "clusterIds": [
+    "chapter-28"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000366"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "链接的加载和条件式存储指令"
+      ],
+      "lineStart": 6772,
+      "lineEnd": 6814,
+      "assetRefs": [],
+      "excerptSha256": "798b7b6ea4a9d463d817925208f4a30f61448eb3ac13acee4edb802b9408b41a"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000367"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：代码越少越好（劳尔定律）"
+      ],
+      "lineStart": 6815,
+      "lineEnd": 6829,
+      "assetRefs": [],
+      "excerptSha256": "1f25065396849d5c4ff5a5ee427e90255b5172f3b801bf708bdab737d5f002ab"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1062,
+    1613
+  ],
+  "scale": 0.9
+}

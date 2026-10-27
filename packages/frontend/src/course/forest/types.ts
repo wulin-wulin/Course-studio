@@ -202,6 +202,7 @@ export type CourseMeta = {
   revision?: string | number;
   clusters?: number;
   points?: number;
+  placeholder?: boolean;
 };
 
 export type CoursePointDetail = ForestPoint & {

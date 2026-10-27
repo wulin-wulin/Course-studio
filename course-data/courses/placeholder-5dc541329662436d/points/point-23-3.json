@@ -1,0 +1,496 @@
+{
+  "id": "point-23-3",
+  "title": "一个真实的地址空间",
+  "shortSummary": "说明 VAX/VMS 中真实地址空间的布局及其对用户进程的影响。",
+  "keyTerms": [
+    "真实地址空间",
+    "VAX/VMS",
+    "进程布局",
+    "内存映射"
+  ],
+  "animationType": "segmentRegisterSwitch",
+  "animationSuggestion": "逐步演示从进程 A 切换到进程 B 时 P0、P1 指针的变化，用不同底色标出用户区映射的更换，并保持 S 区的高亮不变，最后标注重播按钮以回到 A 运行的初始状态。",
+  "difficulty": "中等",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-23-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-boundary-case-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 VAX/VMS 地址空间布局、零页调试支持、内核共享映射和保护位的原始结论，围绕“布局即设计”的目标补充区域对照表、上下文切换追踪和访问路径推理。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "describe-real-layout",
+          "text": "描述 VAX/VMS 真实地址空间中用户部分（P0、P1）与系统部分（S）的分工。"
+        },
+        {
+          "id": "explain-zero-page",
+          "text": "解释代码为什么不从第 0 页开始，以及不可访问的零页如何把空指针访问变成可检测的陷阱。"
+        },
+        {
+          "id": "explain-kernel-mapping",
+          "text": "说明内核地址空间如何映射进每个用户地址空间，以及上下文切换时哪些寄存器改变、哪些保持不变。"
+        },
+        {
+          "id": "analyze-layout-design",
+          "text": "分析这种布局在调试、系统调用数据传递、页表换出和保护上的收益与代价。"
+        },
+        {
+          "id": "predict-access-outcome",
+          "text": "预测空指针访问或用户态访问系统空间时系统的处理路径，并说明依据。"
+        }
+      ],
+      "misconceptions": [
+        "认为进程地址空间从虚拟地址 0 开始、代码段就放在最前面；实际上零页被特意标记为不可访问。",
+        "认为每个进程各有一份独立的内核副本；实际上内核结构与代码是被映射到每个用户地址空间中的同一份系统空间。"
+      ],
+      "modules": [
+        {
+          "id": "from-simple-to-real",
+          "title": "从简化模型到真实布局",
+          "role": "concept-contrast",
+          "outcomeRefs": [
+            "describe-real-layout"
+          ],
+          "order": 0
+        },
+        {
+          "id": "user-space-regions",
+          "title": "用户空间的分区与切换",
+          "role": "structure-explanation",
+          "outcomeRefs": [
+            "describe-real-layout",
+            "analyze-layout-design"
+          ],
+          "order": 1
+        },
+        {
+          "id": "zero-page-debugging",
+          "title": "零页与调试支持",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "explain-zero-page",
+            "predict-access-outcome"
+          ],
+          "order": 2
+        },
+        {
+          "id": "kernel-in-every-space",
+          "title": "内核映射进每个地址空间",
+          "role": "mechanism-walkthrough",
+          "outcomeRefs": [
+            "explain-kernel-mapping",
+            "analyze-layout-design"
+          ],
+          "order": 3
+        },
+        {
+          "id": "protection-levels",
+          "title": "共享映射下的保护",
+          "role": "boundary-analysis",
+          "outcomeRefs": [
+            "analyze-layout-design",
+            "predict-access-outcome"
+          ],
+          "order": 4
+        },
+        {
+          "id": "synthesis-and-transfer",
+          "title": "设计清单与迁移",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "describe-real-layout",
+            "explain-zero-page",
+            "explain-kernel-mapping",
+            "analyze-layout-design",
+            "predict-access-outcome"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-real-layout",
+          "explain-zero-page",
+          "explain-kernel-mapping",
+          "analyze-layout-design",
+          "predict-access-outcome"
+        ],
+        "method": "完成一道访问路径判断题，并用布局分区、零页约定和内核映射三条依据解释结论。",
+        "successCriteria": [
+          "能区分 P0、P1 与 S 的归属和切换行为",
+          "能说明空指针访问为什么会在零页处失败",
+          "能解释内核映射为何减少了用户与内核之间的数据复制复杂度",
+          "能指出保护位与共享映射各自解决什么问题"
+        ],
+        "summaryBlockId": "model-synthesis",
+        "nextPointId": "point-23-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-real-overview",
+        "moduleId": "from-simple-to-real",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：真实地址空间比简化模型更复杂",
+        "markdown": "教材用图 23.1 展示 VAX/VMS 的真实地址空间，并提醒读者：此前讨论的地址空间只假设了用户代码、用户数据和用户堆，这样的模型足以讲清基本的地址转换，却不足以描述一个真正运行程序的系统。真实的地址空间显然更复杂，它还要容纳调试支持、内核代码与数据，以及不同保护级别的页面。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "一个真实的地址空间"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5561,
+              "assetRefs": [
+                "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+              ],
+              "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-layout-matters",
+        "moduleId": "from-simple-to-real",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：布局本身就是设计",
+        "markdown": "简化模型只回答一个问题：虚拟地址如何翻译成物理地址。真实布局还要同时回答另外三个问题：程序出错时如何尽早暴露、内核如何方便地访问用户数据、用户代码如何被挡住而不能碰内核。\n\n把地址空间画成一张图，其实是在看设计者把这些问题的答案放在了哪些位置。下文会依次看到三个具体决定：零页不可访问、内核映射进每个地址空间、页表项带保护位。它们都不是装饰性的细节，而是可以单独解释和评价的设计取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-real-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-user-layout",
+        "moduleId": "user-space-regions",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：进程空间 P0、P1 与系统空间 S",
+        "markdown": "在 VAX/VMS 的布局中，进程地址空间由 P0 与 P1 两部分组成，它们各自有页表；地址空间的上半部分称为系统空间 S，受保护的操作系统代码和数据驻留其中。上下文切换时，操作系统改变 P0 和 P1 寄存器，使它们指向即将运行进程的适当页表；但 S 的基址和界限寄存器不变。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "一个真实的地址空间"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5561,
+              "assetRefs": [
+                "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+              ],
+              "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-region-table",
+        "moduleId": "user-space-regions",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充：三类区域的职责对照",
+        "markdown": "把教材的描述整理成一张对照表，切换行为和保护约束就会清楚很多：\n\n| 区域 | 归属 | 上下文切换时 | 访问约束 |\n|---|---|---|---|\n| P0 | 当前进程的一段地址空间，由该进程的页表描述 | 基址与界限切换到新进程 | 受页表项保护位和用户态权限约束 |\n| P1 | 同一进程的另一段地址空间，由该进程的另一张页表描述 | 随进程一起切换 | 同上 |\n| S | 内核代码与数据结构，被映射进每个用户地址空间 | 基址与界限保持不变 | 保护级别高于用户代码，用户态访问会触发陷阱 |\n\n这张表的重点是最后一行：P0、P1 是“换成谁的”，S 是“始终都在的”。理解这一点，后面的空指针路径和系统调用收益才有落脚点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-user-layout"
+          ]
+        }
+      },
+      {
+        "id": "tb-zero-page",
+        "moduleId": "zero-page-debugging",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：代码不从第 0 页开始",
+        "markdown": "教材指出，代码段永远不会从第 0 页开始；相反，这一页被标记为不可访问，以便为检测空指针访问提供支持。设计地址空间时需要考虑对调试的支持，而不可访问的零页正是这种支持的体现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "一个真实的地址空间"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5561,
+              "assetRefs": [
+                "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+              ],
+              "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-null-pointer-path",
+        "moduleId": "zero-page-debugging",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：一次空指针访问的完整路径",
+        "markdown": "把零页约定放进一次具体访问中，就能看清它为什么有用。程序写下 `int *p = NULL;` 再执行 `*p = 10;` 时，这个写入访问的是虚拟地址 0，也就是第 0 页。硬件先在 TLB 中查找该页，未命中后查询页表，发现第 0 页的页表项被标记为无效，于是产生一次无效访问的陷阱，把控制权交给操作系统。在 UNIX 类系统中，操作系统向进程发送信号；如果进程没有捕获这个信号，就会被终止。\n\n这条路径说明，零页的不可访问并不只是为了“少用一个页”，而是把一个常见的编程错误从静默破坏内存，转化为可定位的故障。代价是每个进程都少了一个可用的页，收益是错误发生时能立刻停下来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-zero-page"
+          ]
+        }
+      },
+      {
+        "id": "tb-kernel-shared",
+        "moduleId": "kernel-in-every-space",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：内核空间是每个用户地址空间的一部分",
+        "markdown": "教材强调，内核虚拟地址空间——也就是内核的数据结构和代码——是每个用户地址空间的一部分。上下文切换时，操作系统改变 P0 和 P1 寄存器，以指向即将运行的进程的适当页表；但它不会更改 S 的基址和界限寄存器，因此相同的内核结构被映射到每个用户的地址空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "一个真实的地址空间"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5561,
+              "assetRefs": [
+                "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+              ],
+              "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-context-switch-trace",
+        "moduleId": "kernel-in-every-space",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：上下文切换只换用户部分的映射",
+        "markdown": "假设从进程 A 切换到进程 B，可以按寄存器变化追踪一遍：\n\n1. 切换前，P0、P1 寄存器指向 A 的页表，S 寄存器指向系统空间。\n2. 操作系统保存 A 的上下文，把 P0、P1 寄存器改成指向 B 的页表。\n3. S 的基址与界限寄存器保持原值，因此 B 现在看到的内核代码和数据与 A 看到的完全一致。\n4. 切换完成后，B 的用户地址开始按自己的页表翻译，而内核部分不需要重新映射，也不需要复制。\n\n关键区别在于“换映射”与“换副本”：内核没有被复制成多份，只是同一份系统空间同时出现在每个进程的地址空间里。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-kernel-shared"
+          ]
+        }
+      },
+      {
+        "id": "tb-kernel-reasons",
+        "moduleId": "kernel-in-every-space",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：为什么要把内核映射进来",
+        "markdown": "教材给出了几条理由。若操作系统收到用户程序递交的指针（例如在 `write()` 系统调用中），它很容易把数据从该指针处复制到自己的结构里，因为内核是写好并编译好的，无需担心所访问的数据来自哪里。相反，如果内核完全位于物理内存中，把页表的交换页换到磁盘会非常困难；如果内核被赋予自己的地址空间，在用户应用程序和内核之间移动数据又会变得复杂而痛苦。教材还指出，这种构造现在已被广泛使用，内核几乎就像应用程序库一样，只不过它是受保护的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "一个真实的地址空间"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5561,
+              "assetRefs": [
+                "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+              ],
+              "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-syscall-benefit",
+        "moduleId": "kernel-in-every-space",
+        "depth": "support",
+        "kind": "application",
+        "title": "补充：系统调用中的指针为什么可以直接用",
+        "markdown": "以 `write(fd, buf, n)` 为例：`buf` 是用户空间里的一个指针。由于内核映射也在同一个地址空间里，内核在处理这次调用时可以直接按这个指针读取用户缓冲区，再复制到自己的数据结构中，不需要先做一次跨地址空间的“搬运”。\n\n教材同时提醒了另一面：内核映射使得页表本身可以放在内核虚拟内存里，从而能在内存紧张时被交换到磁盘。但这也让地址转换多了一层——转换用户地址时，硬件可能需要先查阅系统页表才能找到用户页表。教材指出，VAX 的硬件管理 TLB 让这种查找通常被绕过，这正是机制与硬件配合的设计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-kernel-shared",
+            "tb-kernel-reasons"
+          ]
+        }
+      },
+      {
+        "id": "tb-protection",
+        "moduleId": "protection-levels",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用页表保护位区分特权级",
+        "markdown": "教材指出，操作系统显然不希望用户应用程序读取或写入操作系统的数据或代码，因此硬件必须支持页面的不同保护级别。VAX 通过在页表项的保护位中指定 CPU 访问特定页面所需的特权级别来实现这一点：系统数据和代码被设置为比用户数据和代码更高的保护级别。试图从用户代码访问这些信息，会在操作系统中产生一个陷阱，并可能终止违规进程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "一个真实的地址空间"
+              ],
+              "lineStart": 5547,
+              "lineEnd": 5561,
+              "assetRefs": [
+                "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+              ],
+              "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sharing-vs-protection",
+        "moduleId": "protection-levels",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：共享映射不等于没有边界",
+        "markdown": "“内核映射进每个地址空间”容易让人误以为用户也能随便读内核。教材的保护位说明正好补上这个边界：映射解决的是“能不能到达”，保护解决的是“到达后允不允许访问”。\n\n| 问题 | 由什么回答 | 若缺失会怎样 |\n|---|---|---|\n| 内核代码是否在当前地址空间中 | 系统空间 S 的映射 | 每次系统调用都要切换地址空间或复制数据 |\n| 用户能否读写内核页面 | 页表项中的保护位与 CPU 特权级 | 用户程序可任意篡改内核数据 |\n| 越权访问如何被发现 | 硬件检查保护位并触发陷阱 | 越权行为可能静默成功 |\n\n因此，内核映射与保护位是一对配套设计：前者提供便利，后者划定边界；只保留其中一个都会出问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-kernel-shared",
+            "tb-protection"
+          ]
+        }
+      },
+      {
+        "id": "model-trap-path",
+        "moduleId": "protection-levels",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：越权访问的处理步骤",
+        "markdown": "当用户态代码试图读取系统空间时，可以按以下顺序理解硬件的动作：\n\n1. CPU 用当前 P0 或 P1 页表翻译用户给出的虚拟地址。\n2. 若地址落在 S 段，硬件读取对应页表项的保护字段。\n3. 发现当前特权级低于该页要求的级别，判定为保护违规。\n4. 产生陷阱，把控制权交给操作系统的陷阱处理程序。\n5. 操作系统通常向进程发送信号；若信号未被处理，进程被终止。\n\n这条路径与零页路径的区别在于触发原因：零页是页表项被标记为无效，越权是保护位不允许。两者的共同点是都由硬件在访问发生的那一刻拦截，而不是靠事后检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-protection"
+          ]
+        }
+      },
+      {
+        "id": "model-synthesis",
+        "moduleId": "synthesis-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "补充：用三个问题检查一个地址空间设计",
+        "markdown": "学完这一节，可以用三个问题来检查任何地址空间设计：\n\n1. **调试问题**：错误地址会不会尽早失败？VAX 的答案是保留一个不可访问的零页，让空指针立刻触发陷阱。\n2. **内核问题**：内核如何方便地访问用户数据、又如何管理自己的页表？VAX 的答案是把系统空间映射进每个用户地址空间，切换时只换 P0、P1。\n3. **保护问题**：共享的映射如何防止越权？VAX 的答案是页表项中的保护位，由硬件在访问发生时检查。\n\n这三个问题也解释了这一节的标题为什么叫“一个真实的地址空间”：真实感不来自它画得复杂，而来自每个区域都能对应一个实际约束。带着这张清单进入下一节，页替换策略会进一步展示：当物理内存不足时，这些布局与保护机制如何与换页决策配合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-real-overview",
+            "tb-zero-page",
+            "tb-kernel-shared",
+            "tb-protection"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "address-space-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-synthesis",
+        "moduleId": "synthesis-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "predict-access-outcome",
+          "analyze-layout-design"
+        ],
+        "learningPurpose": "检查学习者能否把零页、内核映射和保护位三条布局约定迁移到新的访问场景，而不是复述区域名称。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-zero-page",
+            "tb-kernel-shared",
+            "tb-protection"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "某进程执行空指针写入，随后又试图直接读取内核中的一个全局变量。请分别说明两次访问会在哪里被拦住、由谁处理，并指出两次拦截依据的机制有何不同。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请用不超过 200 字回答：空指针访问与用户态访问内核页面分别会触发什么陷阱？二者依据的页表项信息有何不同？"
+        }
+      }
+    ]
+  },
+  "subtitle": "VAX/VMS 虚拟内存系统",
+  "clusterId": "chapter-23",
+  "clusterIds": [
+    "chapter-23"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000319"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "一个真实的地址空间"
+      ],
+      "lineStart": 5547,
+      "lineEnd": 5561,
+      "assetRefs": [
+        "parts/part-0003/images/b6155dfc48dc0d4bfce3066d614a17251a1bbbd5c5c3fac82c42fdaa282752b5.jpg"
+      ],
+      "excerptSha256": "68d3e6af9fb3cd7e2f581a6d90977c8fbfb7b9392aa3aaed64a2f650aa1b72d0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4155,
+    1728
+  ],
+  "scale": 0.87
+}

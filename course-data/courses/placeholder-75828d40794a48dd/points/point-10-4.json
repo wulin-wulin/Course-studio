@@ -1,0 +1,492 @@
+{
+  "id": "point-10-4",
+  "title": "随机读写数据文件",
+  "shortSummary": "介绍文件定位函数与随机访问方式，说明读写位置控制和二进制记录存取。",
+  "keyTerms": [
+    "随机读写",
+    "fseek",
+    "ftell",
+    "文件定位"
+  ],
+  "animationType": "filePosition",
+  "animationSuggestion": "在记录条带图上显示文件位置标记的移动：每次 fseek 后标记从当前位置跳到目标记录起点，fread 后标记后移一个记录长度；可切换顺序读取对照，比较两种方式经过的记录数。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-10-2",
+    "point-10-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-worked-example",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材“文件位置标记 + rewind/fseek/ftell”的术语与讲解顺序，围绕按记录随机存取补充偏移计算、常见错误与检查表。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-position-marker",
+          "text": "说明文件位置标记的含义，并解释顺序读写与随机读写的区别。"
+        },
+        {
+          "id": "control-position",
+          "text": "按需要正确选用 rewind、fseek、ftell 控制或查询文件读写位置。"
+        },
+        {
+          "id": "compute-record-offset",
+          "text": "用记录下标与记录长度计算位移量，为定长记录的二进制文件编写随机读取代码。"
+        },
+        {
+          "id": "diagnose-position-errors",
+          "text": "根据症状判断定位参数或偏移计算中的错误，并按检查表修正程序。"
+        }
+      ],
+      "misconceptions": [
+        "把文件位置标记当成内存中的指针，或与 FILE * 文件指针混为一谈。",
+        "以为顺序读到文件末尾后就不能再读，忽略重新定位可以继续读写。",
+        "把“第几个记录”直接乘以记录长度当作位移量，导致整体错开一条记录。",
+        "以为可以不区分文件类型，在文本文件上也按字节任意定位。"
+      ],
+      "modules": [
+        {
+          "id": "why-random-access",
+          "title": "问题导入：顺序读写的效率代价",
+          "role": "opening",
+          "description": "从查第 1000 个数据和查城市人口资料两个情境说明随机访问的动机。",
+          "outcomeRefs": [
+            "explain-position-marker"
+          ],
+          "order": 0
+        },
+        {
+          "id": "position-marker",
+          "title": "核心概念：文件位置标记",
+          "role": "concept",
+          "description": "定义文件读写位置标记，辨析它与内存指针和 FILE * 的差别。",
+          "outcomeRefs": [
+            "explain-position-marker"
+          ],
+          "order": 1
+        },
+        {
+          "id": "position-functions",
+          "title": "操作流程：rewind、fseek 与 ftell",
+          "role": "procedure",
+          "description": "逐个说明三个定位函数的调用形式、参数含义、返回值与边界。",
+          "outcomeRefs": [
+            "control-position"
+          ],
+          "order": 2
+        },
+        {
+          "id": "record-offset",
+          "title": "定量机理：按记录计算位移量",
+          "role": "worked-example",
+          "description": "用教材例 10.6 推导下标、记录长度与文件偏移的关系。",
+          "outcomeRefs": [
+            "compute-record-offset"
+          ],
+          "order": 3
+        },
+        {
+          "id": "error-check",
+          "title": "故障诊断：定位错误的症状与检查表",
+          "role": "diagnosis",
+          "description": "把常见定位错误对应到可观察症状，并给出上机前的检查清单。",
+          "outcomeRefs": [
+            "diagnose-position-errors"
+          ],
+          "order": 4
+        },
+        {
+          "id": "wrap-up",
+          "title": "达成检查与下一节桥接",
+          "role": "check",
+          "description": "用一道偏移计算练习检验迁移，并小结三个定位函数的分工。",
+          "outcomeRefs": [
+            "explain-position-marker",
+            "control-position",
+            "compute-record-offset",
+            "diagnose-position-errors"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-position-marker",
+          "control-position",
+          "compute-record-offset",
+          "diagnose-position-errors"
+        ],
+        "method": "完成定长记录文件的位移量计算练习，并说明所用定位函数与起始点的选择依据。",
+        "successCriteria": [
+          "能写出 rewind、fseek、ftell 各自的作用与返回情况",
+          "能把“第 k 个记录”换算为 (k-1)×记录长度 的偏移",
+          "能指出读到相邻记录或读不到数据时的可能原因"
+        ],
+        "exerciseBlockId": "practice-and-bridge",
+        "summaryBlockId": "practice-and-bridge",
+        "nextPointId": "point-10-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "sequential-vs-random",
+        "moduleId": "why-random-access",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "顺序读写的效率代价与随机访问",
+        "markdown": "顺序读写时，文件位置标记按字节依次移动：要读第 $n$ 个数据，就必须先读过前面的 $n-1$ 个数据。教材用两个情境说明代价：文件中存有 1000 个数据而只要查第 1000 个，也必须逐个读入前 999 个；如果文件中存放一个城市几百万人的资料，按这种方法查某一个人的情况，等待时间可能无法忍受。\n\n随机访问不按数据在文件中的物理位置次序进行读写，而是可以对任何位置上的数据进行访问，显然这种方法比顺序访问效率高得多。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-ac7818a0e746eafd347c6fa0",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "对文件的输入输出",
+                "随机读写数据文件"
+              ],
+              "lineStart": 18612,
+              "lineEnd": 18826,
+              "assetRefs": [
+                "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+                "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+              ],
+              "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "efficiency-intuition",
+        "moduleId": "why-random-access",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充直觉：磁带与唱片",
+        "markdown": "可以把顺序读写想成只能从头播放的磁带：想听最后一首，也要先快进经过前面所有内容；随机读写则像带目录的唱片，可以直接落到某一轨。\n\n这个类比只解释“为什么要定位”，不改变教材的结论：随机访问仍要先把文件位置标记移到目标数据处，定位本身也有代价，只是不再需要把中间数据全部读入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "sequential-vs-random"
+          ]
+        }
+      },
+      {
+        "id": "position-marker-definition",
+        "moduleId": "position-marker",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：文件读写位置标记",
+        "markdown": "为了对读写进行控制，系统为每个文件设置了一个文件读写位置标记（简称文件位置标记或文件标记），用来指示“接下来要读写的下一个字符的位置”。\n\n对字符文件顺序读时，标记指向文件开头，读第 1 个字符后向后移一个位置，下一次读操作就读入标记当前指向的第 2 个字符，依此类推直到文件尾。顺序写时，每写完一个数据标记也向后移，全部数据写完后标记停在最后一个数据之后。\n\n教材特别提醒：这里说的“位置”是外部文件中的读写位置，不是内存地址，因此不宜与 C 语言中表示内存地址的指针混为一谈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-ac7818a0e746eafd347c6fa0",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "对文件的输入输出",
+                "随机读写数据文件"
+              ],
+              "lineStart": 18612,
+              "lineEnd": 18826,
+              "assetRefs": [
+                "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+                "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+              ],
+              "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "marker-not-file-pointer",
+        "moduleId": "position-marker",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "辨析：位置标记不是 FILE * 文件指针",
+        "markdown": "常见混淆是把文件位置标记与 `FILE *` 文件指针当成同一个东西。`FILE *fp` 是程序中指向文件控制块的指针，`fseek`、`ftell` 等函数操作的是这个文件内部的读写位置；而文件存储在外部介质上，不存在内存地址，所以位置标记不能像变量指针那样解引用。\n\n判断依据可以简化为一句话：文件指针回答“操作哪个文件”，位置标记回答“接下来从文件的哪个字节开始读写”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "position-marker-definition"
+          ]
+        }
+      },
+      {
+        "id": "rewind-function",
+        "moduleId": "position-functions",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "rewind：把标记返回文件开头",
+        "markdown": "`rewind` 函数的作用是使文件位置标记重新返回文件的开头，该函数没有返回值。\n\n教材例 10.5 要求先把 file1.dat 的内容显示在屏幕上，再把它复制到另一文件。两个任务连续做会出现问题：第 1 次读完文件内容后，文件位置标记已指到文件末尾，再接着读就遇到文件结束标志，`feof` 的值为真，无法再读数据。因此程序在两段循环之间调用 `rewind(fp1)`，使标记重新定位于文件开头，同时 `feof` 的值恢复为 0，第 2 次循环才能从文件头重新逐个读字符并输出到 file2.dat。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-ac7818a0e746eafd347c6fa0",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "对文件的输入输出",
+                "随机读写数据文件"
+              ],
+              "lineStart": 18612,
+              "lineEnd": 18826,
+              "assetRefs": [
+                "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+                "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+              ],
+              "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "rewind-boundary",
+        "moduleId": "position-functions",
+        "depth": "support",
+        "kind": "note",
+        "title": "rewind 的适用边界",
+        "markdown": "`rewind` 只解决“回到开头”这一种需求；如果目标位置不是文件头，应当改用 `fseek` 精确指定。\n\n它也没有返回值，因此不能用它判断定位是否成功。定位之后是否真的读到了数据，仍要依据读取函数的返回值与文件状态另行检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rewind-function"
+          ]
+        }
+      },
+      {
+        "id": "fseek-function",
+        "moduleId": "position-functions",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "fseek：按位移量与起始点定位",
+        "markdown": "`fseek` 函数的调用形式为 `fseek(文件类型指针, 位移量, 起始点)`。“起始点”用 0、1 或 2 代替，教材表 10.4 给出对应的标准名字：\n\n| 起始点 | 名字 | 用数字代表 |\n|---|---|---|\n| 文件开始位置 | `SEEK_SET` | 0 |\n| 文件当前位置 | `SEEK_CUR` | 1 |\n| 文件末尾位置 | `SEEK_END` | 2 |\n\n“位移量”指以起始点为基点移动的字节数，应为 `long` 型数据（在数字末尾加字母 `L` 即表示 `long` 型）。教材给出三个调用例子：\n\n```c\nfseek(fp, 100L, 0);  // 移到离文件开头 100 个字节处\nfseek(fp, 50L, 1);   // 移到离当前位置 50 个字节处\nfseek(fp, -10L, 2);  // 从文件末尾处向后退 10 个字节\n```\n\n教材同时说明，`fseek` 函数一般用于二进制文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-ac7818a0e746eafd347c6fa0",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "对文件的输入输出",
+                "随机读写数据文件"
+              ],
+              "lineStart": 18612,
+              "lineEnd": 18826,
+              "assetRefs": [
+                "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+                "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+              ],
+              "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "fseek-parameter-reading",
+        "moduleId": "position-functions",
+        "depth": "support",
+        "kind": "note",
+        "title": "读参数：哪个文件、相对哪里、走多远",
+        "markdown": "读 `fseek` 调用时按三段拆解：第一个参数指定操作哪个文件，第三个参数指定以哪个位置为基点，第二个参数指定移动多少字节。负位移表示朝文件开头方向移动，正位移表示朝文件末尾方向移动。\n\n教材强调 `fseek` 一般用于二进制文件，原因在于文本文件在读写时可能存在换行符转换等实现差异，按字节数定位不一定对应你期望的字符位置。本点后面的记录存取例子都是在 `rb` 打开的二进制文件上进行的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fseek-function"
+          ]
+        }
+      },
+      {
+        "id": "ftell-function",
+        "moduleId": "position-functions",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "ftell：报告当前位置",
+        "markdown": "`ftell` 函数的作用是得到流式文件中文件位置标记的当前位置。由于文件位置标记经常移动，人们往往不容易知道其当前位置，所以常用 `ftell` 查询，结果用相对于文件开头的位移量表示。\n\n如果调用函数时出错（例如不存在 `fp` 指向的文件），`ftell` 的返回值为 `-1L`。教材的写法是先取得位置再判断：\n\n```c\ni = ftell(fp);\nif (i == -1L) printf(\"error\\n\");\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-ac7818a0e746eafd347c6fa0",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "对文件的输入输出",
+                "随机读写数据文件"
+              ],
+              "lineStart": 18612,
+              "lineEnd": 18826,
+              "assetRefs": [
+                "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+                "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+              ],
+              "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "random-read-example",
+        "moduleId": "record-offset",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材例 10.6：读取第 1、3、5、7、9 个学生",
+        "markdown": "教材例 10.6 的磁盘文件上存有 10 个学生的数据，要求将第 1、3、5、7、9 个学生数据输入计算机并在屏幕上显示。思路是：以“二进制只读”方式打开文件，先把标记指向文件开头读入并显示一个学生，再把标记指向第 3、5、7、9 个学生数据区的开头，逐个读入显示，最后关闭文件。程序的核心循环如下：\n\n```c\nfor (i = 0; i < 10; i += 2)\n{\n    fseek(fp, i * sizeof(struct student_type), 0);   // 移动文件位置标记\n    fread(&stud[i], sizeof(struct student_type), 1, fp);  // 读一个数据块\n    printf(\"%-10s %4d %4d %-15s\\n\", stud[i].name, stud[i].num, stud[i].age, stud[i].addr);\n}\n```\n\n教材分析：起始点取 0，即以文件开头为参照点；位移量为 `i * sizeof(struct student_type)`。`i` 初值为 0，第 1 次执行 `fread` 读入第 1 个学生的信息，存放在 `stud[0]` 中；第 2 次循环时 `i` 增为 2，位移量是结构体长度的两倍，正好跳过一个结构体变量，移到第 3 个学生数据区的开头，读入后存放在 `stud[2]`。如此继续，每次位置移动量是结构体长度的两倍，就读到了第 1、3、5、7、9 个学生。\n\n教材还提醒：应当保证磁盘中存在所指定的文件 `stu.dat`，并且其中存在这些学生的信息，否则会出错。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-ac7818a0e746eafd347c6fa0",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "对文件的输入输出",
+                "随机读写数据文件"
+              ],
+              "lineStart": 18612,
+              "lineEnd": 18826,
+              "assetRefs": [
+                "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+                "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+              ],
+              "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "offset-formula",
+        "moduleId": "record-offset",
+        "depth": "core",
+        "kind": "formula",
+        "title": "从例 10.6 提炼偏移公式",
+        "markdown": "把例 10.6 的写法提炼成公式。若文件由等长记录顺序存放，每条记录占 $S$ 字节，记录下标为 $i$（从 0 开始），则第 $i$ 条记录的起始位置是\n\n$$\\text{offset} = i \\times S$$\n\n因此读取下标为 $i$ 的记录可以写成：\n\n```c\nfseek(fp, (long)i * S, SEEK_SET);\nfread(&rec, S, 1, fp);\n```\n\n例 10.6 中 $S$ 就是 `sizeof(struct student_type)` 的值，要读的第 1、3、5、7、9 个学生对应下标 $i=0,2,4,6,8$。关键对应关系是：第 $k$ 个记录的起始偏移要跳过它前面的 $k-1$ 条记录，即 $(k-1) \\times S$。把“第几个”直接当成偏移倍数，会整体错开一条记录。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "random-read-example"
+          ]
+        }
+      },
+      {
+        "id": "position-error-checklist",
+        "moduleId": "error-check",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "定位错误的上机检查表",
+        "markdown": "按记录随机访问前，逐项核对下面几点：\n\n1. 文件是否以二进制方式（`rb`）打开，且文件确实存在、长度足够；\n2. 起始点是否写对：从头定位用 0/`SEEK_SET`，相对当前用 1/`SEEK_CUR`，从末尾回退用 2/`SEEK_END`；\n3. 位移量是否用 `long`（如 `100L`），是否已按“下标 × 记录长度”计算；\n4. 是否把“第几个记录”与“下标”混用，导致偏移多算或少算一条记录；\n5. `fread` 的返回值是否检查，实际读入的记录条数与预期是否一致。\n\n典型症状对照：读到相邻学生的数据，多半是偏移少算或多算了一条记录；读到乱码或提前结束，往往是文件不是按同一结构体布局写入，或者定位超出了文件长度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fseek-function",
+            "random-read-example",
+            "offset-formula"
+          ]
+        }
+      },
+      {
+        "id": "practice-and-bridge",
+        "moduleId": "wrap-up",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查与小结",
+        "markdown": "**练习**：某二进制文件顺序存放 20 条定长记录，每条 30 字节。要求只读第 4、8、12 条记录。请回答：\n\n1. 三次 `fseek` 的位移量分别是多少？\n2. 起始点应取 0 还是 2？为什么？\n3. 如果程序读到的第一条记录实际是第 5 条，偏移错在哪里？\n\n参考要点：第 4 条记录的下标是 3，位移量为 $3 \\times 30 = 90$ 字节，起始点取 0（以文件开头为基准最不易受当前位置影响）；若第一条读到第 5 条，说明把记录序号直接当成下标，多算了一条记录。\n\n**小结**：顺序读写由位置标记按字节依次移动完成；随机读写的关键是把标记移动到需要的位置再读写。`rewind` 回到文件开头，`fseek` 按“文件 + 位移量 + 起始点”定位，`ftell` 报告当前位置。下一知识点讨论文件读写的出错检测，用返回值与状态判断确认这些操作是否真正成功。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "random-read-example",
+            "offset-formula",
+            "position-error-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "offset-calculation-check",
+        "type": "formative-check",
+        "anchorBlockId": "offset-formula",
+        "moduleId": "record-offset",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-record-offset"
+        ],
+        "learningPurpose": "检查学习者能否把下标与记录长度的偏移关系迁移到另一组记录序号上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "random-read-example",
+            "offset-formula"
+          ]
+        },
+        "config": {
+          "recordSize": 30,
+          "targetRecords": [
+            4,
+            8,
+            12
+          ],
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "文件有 20 条定长记录，每条 30 字节。请写出读取第 4、8、12 条记录时 `fseek` 的位移量与起始点，并说明为什么不能直接用序号乘以 30。"
+        }
+      }
+    ]
+  },
+  "subtitle": "对文件的输入输出",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-10-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-ac7818a0e746eafd347c6fa0",
+      "blockIds": [
+        "block-000075"
+      ],
+      "headingPath": [
+        "对文件的输入输出",
+        "随机读写数据文件"
+      ],
+      "lineStart": 18612,
+      "lineEnd": 18826,
+      "assetRefs": [
+        "parts/part-0004/images/6be4cdc0f761a35f3409a6a8f1471653e67ba1890c1dba40e70685b189c0a14a.jpg",
+        "parts/part-0004/images/abdc1371dbb7e4ae064a6f91cbeb5b24d76427d83d02079808ed1a9417ba82ff.jpg"
+      ],
+      "excerptSha256": "07f0edddb22e7ff888c9bc23437d93184bda731d51b534702aebbf5e9bbca02f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1886,
+    572
+  ],
+  "scale": 0.66
+}

@@ -1,0 +1,406 @@
+{
+  "id": "point-43-5",
+  "title": "通过间接解决方案：inode映射",
+  "shortSummary": "解释 inode 映射如何把 inode 号定位到磁盘位置。",
+  "keyTerms": [
+    "inode 映射",
+    "定位",
+    "LFS",
+    "索引结构"
+  ],
+  "animationType": "imapLookup",
+  "animationSuggestion": "逐步高亮 inode 号、imap 表项、inode 块和数据块，每步显示当前地址与跳数；可切换对照视图，演示 imap 放在固定区域时追加写要多一次寻道。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于 imap 定义、更新规则与写入位置的论述，围绕“为什么需要间接层、它怎样定位 inode、代价是什么”重排讲解，并补充指针链演练与常见误解纠正。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-imap",
+          "text": "解释 inode 映射为什么能解决 LFS 中 inode 不断移动、无法用固定公式定位的问题。"
+        },
+        {
+          "id": "trace-lookup",
+          "text": "依据 imap → inode → 数据块的顺序，写出按 inode 号定位文件数据块的磁盘访问链。"
+        },
+        {
+          "id": "evaluate-tradeoff",
+          "text": "比较 imap 放在固定区域与随新数据追加写入两种策略的取舍，并说明间接层的额外开销。"
+        }
+      ],
+      "misconceptions": [
+        "把 imap 当成 inode 的内存缓存，以为查表后就拿到了 inode 内容；实际上表项只存放 inode 的磁盘地址。",
+        "认为 imap 放在磁盘固定区域一定更简单更快；它更新频繁，固定位置会带来额外的磁盘寻道。",
+        "以为引入间接层没有代价，忽略了每次写 inode 都要更新 imap 以及读路径多一次间接查找。"
+      ],
+      "modules": [
+        {
+          "id": "indirection-idea",
+          "title": "问题与间接层：imap 是什么",
+          "role": "concept-introduction",
+          "description": "从 LFS 中 inode 位置不断变化的问题出发，引出 imap 的定义、表项含义与更新规则。",
+          "outcomeRefs": [
+            "explain-imap"
+          ],
+          "order": 0
+        },
+        {
+          "id": "placement-policy",
+          "title": "写在哪里：放置策略与指针链",
+          "role": "mechanism-explanation",
+          "description": "分析 imap 的持久化要求，比较固定区域与随写追加两种放置策略，并读出 imap、inode、数据块之间的地址链。",
+          "outcomeRefs": [
+            "trace-lookup"
+          ],
+          "order": 1
+        },
+        {
+          "id": "cost-and-boundary",
+          "title": "代价与边界",
+          "role": "tradeoff-analysis",
+          "description": "列出间接层在写放大、读路径和空间上的开销，并纠正对 imap 与固定位置策略的常见误解。",
+          "outcomeRefs": [
+            "evaluate-tradeoff"
+          ],
+          "order": 2
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与下一步",
+          "role": "formative-check",
+          "description": "用定位演练检查掌握程度，并桥接到 imap 入口固定化的问题。",
+          "outcomeRefs": [
+            "trace-lookup",
+            "evaluate-tradeoff"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-imap",
+          "trace-lookup",
+          "evaluate-tradeoff"
+        ],
+        "method": "完成定位演练，并说明两种放置策略的取舍与间接层代价。",
+        "successCriteria": [
+          "能写出 imap 表项的含义与更新时机",
+          "能按地址顺序复述 imap → inode → 数据块的读取链",
+          "能指出固定位置策略的额外寻道代价"
+        ],
+        "exerciseBlockId": "indirection-check",
+        "summaryBlockId": "imap-summary",
+        "nextPointId": "point-43-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "imap-mechanism",
+        "moduleId": "indirection-idea",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：imap 的定义与更新规则",
+        "markdown": "在 LFS 中，inode 会被分散写入磁盘；又因为 LFS 从不覆盖旧数据，最新版本的 inode 位置会不断移动。传统 UNIX 文件系统可以靠“inode 表起始地址加上 inode 号乘以 inode 大小”直接算出磁盘地址，但在 LFS 中这个固定公式失效了。\n\nLFS 的解决办法是引入一层间接：**inode 映射（inode map，imap）**。imap 以 inode 号为输入，输出该 inode 最新版本的磁盘地址。它通常被实现为一个简单数组，每个条目占 4 个字节，存放一个磁盘指针。每当某个 inode 被写入磁盘，imap 中对应的条目就更新为这个新位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000607"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "通过间接解决方案：inode映射"
+              ],
+              "lineStart": 11876,
+              "lineEnd": 11879,
+              "assetRefs": [],
+              "excerptSha256": "daa68e9d028c7b4bf9fc52ac498e5787f10ca2be1eee1df2c8ed610303773e6b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "imap-intuition",
+        "moduleId": "indirection-idea",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把 imap 当作目录卡片",
+        "markdown": "可以把 imap 想成图书馆的目录卡片：书会被搬到新的书架，但目录里只改一行“编号 → 位置”的记录；读者凭编号先查目录，再去对应的书架取书，而不必记住每本书的实际位置。\n\n这个类比也提示了边界：imap 表项存的是 inode 的磁盘地址，不是 inode 的内容。查到地址之后，仍然必须真正去读那个地址上的 inode 块。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "imap-mechanism"
+          ]
+        }
+      },
+      {
+        "id": "indirection-tradeoff",
+        "moduleId": "indirection-idea",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：间接层的一般价值与代价",
+        "markdown": "教材把这种手法概括为“使用一个间接层”：虚拟内存是间接层，LFS 的 imap 则是 inode 号的虚拟化。间接层的价值在于，结构可以自由移动，而无需修改对它的每一个引用；代价则是额外开销——多一层查找就多一次访问。\n\n对 LFS 来说还有一个硬性条件：imap 必须持久化到磁盘。只有把它写下来，崩溃时仍能记录 inode 的位置，LFS 才能按设想运行。于是问题变成：imap 应该驻留在磁盘的哪个位置？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000608"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用一个间接层"
+              ],
+              "lineStart": 11880,
+              "lineEnd": 11893,
+              "assetRefs": [
+                "parts/part-0005/images/e8b294cfbf399e850694f5de2f2a4d212b646a9b3e9a23659bb96752b7795193.jpg"
+              ],
+              "excerptSha256": "91056021d4e4fc729de17e59515eef3a3d543527fb98cb8a2f287dd1bc6d8850"
+            }
+          ]
+        }
+      },
+      {
+        "id": "imap-placement",
+        "moduleId": "placement-policy",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材：固定区域与随写追加",
+        "markdown": "一种直觉做法是把 imap 放在磁盘的固定部分。但 imap 更新得非常频繁：每次写 inode 都要更新它。如果固定区域与数据写入位置相距较远，写入流程就变成“先更新文件结构，再跳到固定位置写 imap”，其间多出磁盘寻道，性能受损。\n\nLFS 选择了相反的策略：把 inode 映射的块放在它写入所有其他新信息的位置旁边。当把数据块追加到文件 k 时，LFS 实际上把新数据块、该文件的 inode 和一段 inode 映射一起写入磁盘。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000608"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用一个间接层"
+              ],
+              "lineStart": 11880,
+              "lineEnd": 11893,
+              "assetRefs": [
+                "parts/part-0005/images/e8b294cfbf399e850694f5de2f2a4d212b646a9b3e9a23659bb96752b7795193.jpg"
+              ],
+              "excerptSha256": "91056021d4e4fc729de17e59515eef3a3d543527fb98cb8a2f287dd1bc6d8850"
+            }
+          ]
+        }
+      },
+      {
+        "id": "placement-reasoning",
+        "moduleId": "placement-policy",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：两种策略的 I/O 对比",
+        "markdown": "两种策略可以在同一组维度上比较：\n\n| 维度 | imap 放固定区域 | imap 随新数据追加 |\n|---|---|---|\n| 写入额外寻道 | 每次写 inode 都要跳到固定区域，可能多一次寻道 | 元数据与新数据相邻，写入更接近顺序追加 |\n| 热点 | 固定区域成为被频繁更新的热点 | 更新分散到新写入的区域 |\n| 后续定位 | 入口地址固定，直接可读 | imap 片段分散，需要额外一层固定入口 |\n\n取舍的关键不是哪一边绝对更好，而是 LFS 的写入模式偏向大量顺序追加，因此把 imap 与数据、inode 放在一起更划算；代价则是必须另想办法找到分散的 imap 片段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "indirection-tradeoff",
+            "imap-placement"
+          ]
+        }
+      },
+      {
+        "id": "imap-write-chain",
+        "moduleId": "placement-policy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：一次追加写入中的地址链",
+        "markdown": "图中的写入链说明了这种布局：标为 imap 的块记录“inode k 位于磁盘地址 A1”；地址 A1 上的 inode 记录“数据块 D 位于地址 A0”。于是 imap、inode 和数据块构成一条指针链，并且被追加写在同一片新区域。\n\n也就是说，imap 自身也被打散、随新数据一起写入，而不是集中在一个更新频繁的固定位置。它的固定入口问题留待检查点区域解决。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000608"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：使用一个间接层"
+              ],
+              "lineStart": 11880,
+              "lineEnd": 11893,
+              "assetRefs": [
+                "parts/part-0005/images/e8b294cfbf399e850694f5de2f2a4d212b646a9b3e9a23659bb96752b7795193.jpg"
+              ],
+              "excerptSha256": "91056021d4e4fc729de17e59515eef3a3d543527fb98cb8a2f287dd1bc6d8850"
+            }
+          ]
+        }
+      },
+      {
+        "id": "imap-lookup-trace",
+        "moduleId": "placement-policy",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：按 inode 号定位数据块的读路径",
+        "markdown": "把上面的地址链反过来当作查找步骤，给定 inode 号 k：\n\n1. 在 imap 中查条目 k，得到该 inode 的磁盘地址 A1；\n2. 读取地址 A1，拿到最新版本的 inode；\n3. 依据 inode 中的直接或间接指针，得到数据块地址 A0；\n4. 读取地址 A0，得到文件数据 D。\n\n与老 UNIX 文件系统相比，多出的工作是第 1 步——先在 imap 中查一次地址。整个 imap 一旦被读入并缓存在内存中，这次查找通常很便宜，这也解释了为什么 LFS 的读路径仍能保持与典型文件系统相近的 I/O 次数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "imap-mechanism",
+            "imap-write-chain"
+          ]
+        }
+      },
+      {
+        "id": "imap-cost",
+        "moduleId": "cost-and-boundary",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：间接层的代价清单",
+        "markdown": "把代价与收益分开列清楚，才谈得上取舍：\n\n- **写放大**：每次写 inode，都要连带把 imap 中的对应条目写成新版本；\n- **读路径**：多一次间接查找，命中内存缓存时才便宜；\n- **空间**：imap 自身要占磁盘，并且必须持久化。\n\n收益则是 inode 可以落在任何新位置，而不必修改所有引用它的地方。教材的提醒很直接：下次遇到问题时可以尝试间接层，但务必先考虑这样做的开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "indirection-tradeoff",
+            "imap-placement",
+            "imap-write-chain"
+          ]
+        }
+      },
+      {
+        "id": "imap-boundaries",
+        "moduleId": "cost-and-boundary",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：三个常见误解",
+        "markdown": "1. **“imap 就是 inode 缓存。”** 不是。表项只保存磁盘地址，读 inode 仍需访问地址指向的磁盘块；缓存的角色由文件系统在内存中读入整张 imap 来承担。\n2. **“放固定位置总是更简单更快。”** 查找确实简单，但 imap 更新频繁，固定区域会造成额外寻道和热点写。\n3. **“间接层没有代价。”** 多一层就多一次访问、多一份空间，还要保证持久化，因此必须结合写入模式判断是否值得。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "imap-cost"
+          ]
+        }
+      },
+      {
+        "id": "indirection-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：复述地址链并判断额外 I/O",
+        "markdown": "设 `imap[k] = A1`，地址 A1 上的 inode 的数据指针为 A0。\n\n1. 写出读取文件 k 数据块的完整顺序，标明每一步取到的是地址还是内容。\n2. 若把 imap 放在磁盘固定区域，追加写文件 k 时可能多出哪一类 I/O？\n3. 再想一步：既然 imap 片段也分散在磁盘各处，文件系统启动时又该先读什么，才能找到第一段 imap？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "imap-lookup-trace",
+            "imap-cost"
+          ]
+        }
+      },
+      {
+        "id": "imap-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "imap 用“inode 号 → 最新 inode 磁盘地址”的映射，把 LFS 中不断移动的 inode 虚拟化；它随新数据一起追加写入，以避免热点和额外寻道，同时自身也必须持久化。\n\n由于 imap 片段被打散，文件系统还需要一个固定且已知的入口。磁盘上唯一稳定的位置是检查点区域，它保存指向最新 imap 片段的指针——这正是下一点的主题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "imap-write-chain",
+            "imap-cost"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "imap-lookup-check",
+        "type": "formative-check",
+        "anchorBlockId": "indirection-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-lookup",
+          "evaluate-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否把 imap 的地址链复述为可执行的读取顺序，并判断固定位置策略的额外 I/O。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "imap-lookup-trace",
+            "imap-cost"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "fields": [
+            "读取顺序",
+            "额外 I/O 类型",
+            "imap 入口的下一步线索"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 `imap[k] = A1`、inode 位于 A1、数据块位于 A0 时的读取顺序，并说明把 imap 放在固定区域会给追加写带来哪类额外 I/O。"
+        }
+      }
+    ]
+  },
+  "subtitle": "日志结构文件系统",
+  "clusterId": "chapter-43",
+  "clusterIds": [
+    "chapter-43"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000607"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "通过间接解决方案：inode映射"
+      ],
+      "lineStart": 11876,
+      "lineEnd": 11879,
+      "assetRefs": [],
+      "excerptSha256": "daa68e9d028c7b4bf9fc52ac498e5787f10ca2be1eee1df2c8ed610303773e6b"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000608"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：使用一个间接层"
+      ],
+      "lineStart": 11880,
+      "lineEnd": 11893,
+      "assetRefs": [
+        "parts/part-0005/images/e8b294cfbf399e850694f5de2f2a4d212b646a9b3e9a23659bb96752b7795193.jpg"
+      ],
+      "excerptSha256": "91056021d4e4fc729de17e59515eef3a3d543527fb98cb8a2f287dd1bc6d8850"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -564,
+    155
+  ],
+  "scale": 0.96
+}

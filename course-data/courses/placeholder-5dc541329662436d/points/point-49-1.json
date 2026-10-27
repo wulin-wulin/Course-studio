@@ -1,0 +1,327 @@
+{
+  "id": "point-49-1",
+  "title": "AFS 版本 1",
+  "shortSummary": "介绍 AFSv1 的整体设计、全文件缓存策略和服务器职责划分。",
+  "keyTerms": [
+    "AFS",
+    "全文件缓存",
+    "服务器",
+    "架构"
+  ],
+  "animationType": "nfsProtocolSteps",
+  "animationSuggestion": "用客户端与服务器两列示意，逐步播放 open 的 Fetch、本地读写、close 的 Store 和下次访问的 TestAuth，并用高亮标出每一步是否发生网络通信。",
+  "difficulty": "中等",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-48-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于 AFSv1 可扩展性目标、全文件缓存与 Venus/Vice 协议的定义，围绕一次 open 到 close 的访问流程重排讲解，并补充与 NFS 的对比和自检题。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-afs-v1-design",
+          "text": "说明 AFSv1 为什么以可扩展性为首要设计目标，以及客户端与服务器的职责划分。"
+        },
+        {
+          "id": "trace-whole-file-caching",
+          "text": "按 open、read/write、close 的顺序描述全文件缓存与回写流程。"
+        },
+        {
+          "id": "assess-cache-validation",
+          "text": "解释 TestAuth 在缓存有效性验证中的作用及其可扩展性代价。"
+        },
+        {
+          "id": "compare-nfs-caching",
+          "text": "从缓存位置、缓存粒度和一致性检查方式对比 AFSv1 与 NFS。"
+        }
+      ],
+      "misconceptions": [
+        "认为 AFSv1 的每次 read() 和 write() 都要与服务器通信，实际上它们被重定向到本地副本。",
+        "认为 AFSv1 以块为单位缓存文件，实际上客户端在本地磁盘上缓存整个文件。",
+        "认为 close() 一定触发写回服务器，实际上只有文件被修改过才会发送 Store。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-architecture",
+          "title": "目标与架构",
+          "role": "concept",
+          "description": "从可扩展性问题引出协议设计，说明客户端与服务器的分工。",
+          "outcomeRefs": [
+            "explain-afs-v1-design"
+          ],
+          "order": 0
+        },
+        {
+          "id": "whole-file-caching",
+          "title": "全文件缓存流程",
+          "role": "procedure",
+          "description": "按一次完整访问追踪缓存、读写与回写。",
+          "outcomeRefs": [
+            "trace-whole-file-caching"
+          ],
+          "order": 1
+        },
+        {
+          "id": "protocol-and-validation",
+          "title": "协议消息与缓存验证",
+          "role": "concept-check",
+          "description": "理解 TestAuth 的作用与代价，并用自检题确认掌握。",
+          "outcomeRefs": [
+            "assess-cache-validation"
+          ],
+          "order": 2
+        },
+        {
+          "id": "comparison-and-limits",
+          "title": "与 NFS 的对比及小结",
+          "role": "comparison",
+          "description": "用统一维度比较两种缓存设计，并总结 AFSv1 的取舍。",
+          "outcomeRefs": [
+            "compare-nfs-caching"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-afs-v1-design",
+          "trace-whole-file-caching",
+          "assess-cache-validation",
+          "compare-nfs-caching"
+        ],
+        "method": "完成访问流程复述、NFS 对比与自检题，并说明每一步是否发生网络通信。",
+        "successCriteria": [
+          "能正确指出 open、close 与 TestAuth 是网络交互点",
+          "能区分全文件缓存与 NFS 的块缓存",
+          "能解释验证流量为何限制可扩展性"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-49-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-context",
+        "moduleId": "problem-and-architecture",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材背景：先解决可扩展性",
+        "markdown": "Andrew 文件系统由卡内基梅隆大学的研究人员于 20 世纪 80 年代提出，主要目标很简单：扩展（scale），即让分布式文件服务器能支持尽可能多的客户端。教材指出，影响可扩展性的设计方面很多，最重要的是客户端与服务器之间的协议。以 NFS 为例，协议要求客户端定期检查服务器，以确定缓存内容是否已改变；每次检查都占用服务器资源（CPU 和网络带宽），因此频繁检查会限制服务器能响应的客户端数量。\n\nAFS 还把合理的、用户可见的行为放在首位。NFS 的缓存一致性难以描述，因为它依赖客户端缓存超时等底层实现细节；AFS 的缓存一致性则简单易讲：文件打开时，客户端通常会从服务器收到最新的一致副本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000669"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "Andrew 文件系统（AFS）"
+              ],
+              "lineStart": 12966,
+              "lineEnd": 12973,
+              "assetRefs": [],
+              "excerptSha256": "948acbbd968e8be5529a2dd147af393c8929a7acffe4dfe42fa0efadfe2d1c81"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-protocol-pressure",
+        "moduleId": "problem-and-architecture",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "协议成本为什么决定规模",
+        "markdown": "可扩展性不只是服务器硬件问题，更是“每个客户端单位时间要占用多少服务器资源”的问题。只要每次访问都要求服务器参与验证，客户端数量增加就会线性放大服务器负载。\n\n这解释了 AFSv1 的设计重心：减少必须与服务器交互的时刻，同时保留“open 时看到一致副本”这种可理解的行为。后文关注 open、close 与缓存验证，而不是每次 read/write，原因就在这里。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-context"
+          ]
+        }
+      },
+      {
+        "id": "textbook-whole-file-caching",
+        "moduleId": "whole-file-caching",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：全文件缓存与 Venus/Vice 协议",
+        "markdown": "AFSv1（原系统称为 ITC 分布式文件系统）已有一些基本设计，但没有像期望那样可扩展，这促成了后来的重新设计和 AFSv2。\n\n所有 AFS 版本的基本原则之一，是在访问文件的客户端计算机本地磁盘上做全文件缓存（whole-file caching）。open() 时从服务器获取整个文件（如果存在），存入本地磁盘；后续 read() 和 write() 被重定向到存储文件的本地文件系统，因此不需要网络通信，速度很快；close() 时，若文件已被修改，则把整个文件写回服务器。与 NFS 的明显不同是，NFS 缓存块（不是整个文件，虽然也可以缓存整个文件的每个块），并且缓存在客户端内存而不是本地磁盘。\n\n客户端代码 Venus 在首次 open() 时向文件服务器组 Vice 发送 Fetch 协议消息，携带所需文件的完整路径名（例如 /home/remzi/notes.txt）；服务器沿路径名查找文件，并把整个文件送回客户端，客户端将其写入本地磁盘。后续 read() 和 write() 系统调用严格本地，不与服务器通信；已访问的块还可以缓存在客户端内存中。关闭时若文件被修改，客户端用 Store 协议消息把新版本、整个文件与路径名发回服务器持久保存。\n\n下次访问时，客户端先用 TestAuth 协议消息确定文件是否已改变；若未改变，就使用本地缓存副本，避免网络传输。表 49.1 列出 AFSv1 的协议消息：TestAuth、GetFileStat、Fetch、Store、SetFileStat 和 ListDir。注意早期协议只缓存文件内容，目录仍只保存在服务器上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000670"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFS 版本 1"
+              ],
+              "lineStart": 12974,
+              "lineEnd": 12988,
+              "assetRefs": [],
+              "excerptSha256": "2ee78dbd8c1dfda883c0a6b5f947550a7c8139df8a5ad306afc76f78ccebc2fd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-open-close-flow",
+        "moduleId": "whole-file-caching",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把一次访问拆成四步",
+        "markdown": "以一次典型访问为例，可以把 AFSv1 的流程固定为四步：\n\n1. 应用调用 open()：Venus 发送 Fetch（携带完整路径名），Vice 返回整个文件，客户端把它写入本地磁盘。\n2. 应用调用 read()/write()：全部在本地完成，修改先停留在本地副本上。\n3. 应用调用 close()：若写入过，Venus 发送 Store 回写整个文件；若未修改，则不回写。\n4. 下一次 open()：客户端先发送 TestAuth 验证缓存；文件未改变就复用本地副本。\n\n按这条流程检查每一步是否发生网络通信，就能避免“每次读写都联网”的误解。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-whole-file-caching"
+          ]
+        }
+      },
+      {
+        "id": "model-cache-validation",
+        "moduleId": "protocol-and-validation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "TestAuth 验证了什么，代价是什么",
+        "markdown": "TestAuth 的作用是验证本地缓存条目是否仍然有效：只有服务器确认文件未改变，客户端才可以安全地直接使用本地副本。\n\n如果每次访问都依赖这种询问，验证流量会随客户端数量和访问次数增长，成为可扩展性的压力点。这正是 AFSv1 后来需要重新设计的原因之一。教材还强调，早期协议只缓存文件内容，目录数据仍留在服务器上，因此目录操作不能完全享受本地缓存的收益。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-whole-file-caching"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "protocol-and-validation",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：交互点与缓存粒度",
+        "markdown": "1. 判断：AFSv1 中每次 read() 都需要向服务器发送消息。（错误，read() 被重定向到本地副本。）\n2. 判断：AFSv1 在 close() 时一定会把文件写回服务器。（错误，只有文件被修改过才发送 Store。）\n3. 简述：为什么频繁使用 TestAuth 会限制可扩展性？（每次验证都消耗服务器的 CPU 和网络带宽，客户端增多时负载被放大。）",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-whole-file-caching",
+            "model-cache-validation"
+          ]
+        }
+      },
+      {
+        "id": "model-compare-nfs",
+        "moduleId": "comparison-and-limits",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "用三个维度对比 AFSv1 与 NFS",
+        "markdown": "把两种设计放在同一组维度上比较：\n\n- 缓存位置：AFSv1 使用客户端本地磁盘；NFS 使用客户端内存。\n- 缓存粒度：AFSv1 缓存整个文件；NFS 按块缓存。\n- 一致性检查：AFSv1 在再次访问时用 TestAuth 询问；NFS 定期向服务器检查缓存是否已失效，频繁检查会消耗服务器资源。\n\n两者都把一部分一致性责任交给客户端缓存协议，但不同的缓存位置、粒度和检查方式，直接决定了服务器能服务多少客户端。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-context",
+            "textbook-whole-file-caching"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "comparison-and-limits",
+        "depth": "support",
+        "kind": "summary",
+        "title": "AFSv1 的核心取舍",
+        "markdown": "AFSv1 用“open 取回整个文件、close 回写修改”的粗粒度缓存，换取 read/write 的本地性能；再用 TestAuth 在再次访问时验证缓存，换取简单可讲的一致性。它的代价是重复的验证流量和服务器持续承担的验证开销，这两点会在下一节展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-open-close-flow",
+            "model-compare-nfs",
+            "model-cache-validation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "afs-v1-flow-check",
+        "type": "formative-check",
+        "title": "AFSv1 访问流程检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "protocol-and-validation",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-whole-file-caching",
+          "assess-cache-validation"
+        ],
+        "learningPurpose": "检查学习者能否判断一次访问中哪些步骤需要网络通信，以及 TestAuth 的验证代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-whole-file-caching",
+            "model-cache-validation"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出 AFSv1 的一次 open、read/write、close 流程，并标出其中哪些步骤会与服务器通信。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Andrew 文件系统(AFS)",
+  "clusterId": "chapter-49",
+  "clusterIds": [
+    "chapter-49"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000669"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "Andrew 文件系统（AFS）"
+      ],
+      "lineStart": 12966,
+      "lineEnd": 12973,
+      "assetRefs": [],
+      "excerptSha256": "948acbbd968e8be5529a2dd147af393c8929a7acffe4dfe42fa0efadfe2d1c81"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000670"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "AFS 版本 1"
+      ],
+      "lineStart": 12974,
+      "lineEnd": 12988,
+      "assetRefs": [],
+      "excerptSha256": "2ee78dbd8c1dfda883c0a6b5f947550a7c8139df8a5ad306afc76f78ccebc2fd"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3402,
+    -626
+  ],
+  "scale": 1.23
+}

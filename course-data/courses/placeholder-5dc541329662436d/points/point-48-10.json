@@ -1,0 +1,365 @@
+{
+  "id": "point-48-10",
+  "title": "评估 NFS 的缓存一致性",
+  "shortSummary": "分析 NFS 缓存一致性机制的语义、代价和适用场景，并评估其取舍。",
+  "keyTerms": [
+    "NFS",
+    "缓存一致性",
+    "语义",
+    "代价"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-48-9"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对关闭时刷新和属性缓存的评价，围绕可见性、性能与可预测性三个维度重排讲解，并补充场景判断和自检。",
+      "estimatedMinutes": 11,
+      "outcomes": [
+        {
+          "id": "explain-consistency-semantics",
+          "text": "说明 NFSv2 客户端缓存一致性方案实际承诺的可见性语义。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "从可见性保证、性能代价和可预测性三个维度评估该方案的取舍。"
+        },
+        {
+          "id": "predict-observed-version",
+          "text": "针对给定的打开、关闭与属性缓存状态，判断客户端可能读到的文件版本。"
+        }
+      ],
+      "misconceptions": [
+        "认为关闭时刷新保证任意时刻、任意客户端都能读到最新版本。",
+        "认为属性缓存只是纯粹的性能优化，不会改变用户可观察的一致性语义。"
+      ],
+      "modules": [
+        {
+          "id": "eval-framing",
+          "title": "评估视角与维度",
+          "role": "problem-framing",
+          "description": "先建立“承诺了什么、付出什么代价”的评估框架。",
+          "outcomeRefs": [
+            "explain-consistency-semantics",
+            "evaluate-tradeoffs"
+          ],
+          "order": 0
+        },
+        {
+          "id": "flush-on-close-cost",
+          "title": "关闭时刷新的性能代价",
+          "role": "cost-analysis",
+          "description": "分析关闭时刷新对短期文件带来的额外写回开销。",
+          "outcomeRefs": [
+            "evaluate-tradeoffs"
+          ],
+          "order": 1
+        },
+        {
+          "id": "attribute-cache-uncertainty",
+          "title": "属性缓存与版本不确定性",
+          "role": "semantics-analysis",
+          "description": "说明属性缓存如何使确切版本难以推断，并界定语义来源。",
+          "outcomeRefs": [
+            "explain-consistency-semantics",
+            "predict-observed-version"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scenario-analysis",
+          "title": "场景判断与取舍",
+          "role": "worked-example",
+          "description": "用具体访问场景检验机制在什么时点提供何种可见性。",
+          "outcomeRefs": [
+            "predict-observed-version"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "纠正常见误解，完成自检，并引出服务器端写缓冲。",
+          "outcomeRefs": [
+            "explain-consistency-semantics",
+            "evaluate-tradeoffs",
+            "predict-observed-version"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-consistency-semantics",
+          "evaluate-tradeoffs",
+          "predict-observed-version"
+        ],
+        "method": "完成场景判断与自检题，并说明依据的时间点和机制。",
+        "successCriteria": [
+          "能区分关闭时刷新与属性缓存各自覆盖的时间窗口",
+          "能用三个维度说明代价与收益",
+          "判断版本时能引用打开验证或缓存超时状态"
+        ],
+        "exerciseBlockId": "model-completion-check",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-48-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-evaluation-framing",
+        "moduleId": "eval-framing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材提出的评估视角",
+        "markdown": "教材在讨论 NFS 缓存一致性时，既承认关闭时刷新等机制“有意义”，也指出它们带来了新的代价。评估这类机制不能只看它是否提供了一致性承诺，还要看它为兑现承诺付出了多少网络交互，以及它让用户实际观察到的行为变得多可预测。\n\n教材最后强调，NFS 客户端缓存的这些“奇怪之处”是一个典型例子：**实现细节定义了用户可观察的语义**，而不是先规定语义再让实现去满足。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000665"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "评估 NFS 的缓存一致性"
+              ],
+              "lineStart": 12887,
+              "lineEnd": 12894,
+              "assetRefs": [],
+              "excerptSha256": "bfc0fd1bfa769254eccf278c38adf4fc1fcba65e1d74acf4b179d6eac8445989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-evaluation-dimensions",
+        "moduleId": "eval-framing",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "三个评估维度",
+        "markdown": "可以用三个维度来评价 NFS 的缓存一致性方案：\n\n| 维度 | 要回答的问题 | 教材中的对应现象 |\n|---|---|---|\n| 可见性保证 | 在哪个时间点之后，其他客户端一定能看到更新？ | 关闭时刷新让重新打开后能看到更新 |\n| 性能代价 | 为兑现保证，增加了多少网络或写回开销？ | 短期文件也被强制写回服务器 |\n| 可预测性 | 用户能否仅凭调用序列判断会读到哪个版本？ | 属性缓存未超时时可能返回旧版本 |\n\n评价时要把“承诺了什么”和“为此付出了什么”分开讨论，否则容易把某一维度上的优点误当成整体更优。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-evaluation-framing"
+          ]
+        }
+      },
+      {
+        "id": "textbook-flush-on-close-cost",
+        "moduleId": "flush-on-close-cost",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "关闭时刷新的性能代价",
+        "markdown": "教材指出，关闭时刷新的行为虽然“有意义”，却带来了一定的性能问题：如果客户端创建了临时或短期文件，随后很快删除，它仍然会被强制写到服务器。\n\n更理想的实现可能会把这类短暂文件保留在内存中，直到它们被删除，从而完全消除这次服务器交互，提高性能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000665"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "评估 NFS 的缓存一致性"
+              ],
+              "lineStart": 12887,
+              "lineEnd": 12894,
+              "assetRefs": [],
+              "excerptSha256": "bfc0fd1bfa769254eccf278c38adf4fc1fcba65e1d74acf4b179d6eac8445989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-flush-tradeoff",
+        "moduleId": "flush-on-close-cost",
+        "depth": "support",
+        "kind": "example",
+        "title": "短期文件场景中的代价",
+        "markdown": "以编辑器写出临时文件再立即删除为例：文件从未被其他客户端看到，却仍然要经历一次写回服务器的过程。\n\n教材提到，更理想的做法是让这类短暂文件留在内存中，直到被删除，从而免去服务器交互。这里体现的是典型取舍：关闭时刷新用额外的写回换取“重新打开可见”的保证，而优化短期文件则要判断该保证是否真的需要。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-flush-on-close-cost"
+          ]
+        }
+      },
+      {
+        "id": "textbook-attribute-cache-uncertainty",
+        "moduleId": "attribute-cache-uncertainty",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "属性缓存带来的版本不确定性",
+        "markdown": "教材认为更重要的是：NFS 加入属性缓存后，客户端很难知道或推断自己得到的是文件的哪个确切版本。\n\n有时读到最新版本，有时读到旧版本，因为属性缓存还没有超时，客户端就直接提供了内存中的内容。多数情况下这没有问题，但它偶尔（教材写作时仍然如此）会导致奇怪的行为。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000665"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "评估 NFS 的缓存一致性"
+              ],
+              "lineStart": 12887,
+              "lineEnd": 12894,
+              "assetRefs": [],
+              "excerptSha256": "bfc0fd1bfa769254eccf278c38adf4fc1fcba65e1d74acf4b179d6eac8445989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-observable-semantics",
+        "moduleId": "attribute-cache-uncertainty",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "协议承诺与可观察语义",
+        "markdown": "这里的关键区分是：**协议承诺的语义**与**实现实际暴露的可观察语义**。NFS 没有承诺“任意时刻任意客户端都能读到最新数据”；它承诺在打开文件这一时间点进行验证，并在关闭时把脏数据刷回服务器。属性缓存省略了部分验证，于是“读到哪个版本”变成依赖缓存超时状态的问题。\n\n因此评估时不能只问“它是否保证强一致”，而应问“它在什么时间点、以多大代价、提供多强的可见性”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attribute-cache-uncertainty",
+            "textbook-evaluation-framing"
+          ]
+        }
+      },
+      {
+        "id": "model-scenario-walkthrough",
+        "moduleId": "scenario-analysis",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "三个场景检验可见性",
+        "markdown": "假设客户端 C1 打开文件 F，读到旧版本 F[v1] 并放入缓存；随后 C2 改写 F。下面三个场景分别检验这套机制的取舍。\n\n1. **C2 尚未关闭文件**：C2 的更新可能仍留在客户端。此时应关注“更新可见性”，其他客户端不能假设马上看到新数据。\n2. **C2 已关闭文件，C1 仍保持打开**：关闭时刷新已把更新送到服务器，但 C1 没有重新执行打开时的验证，其缓存中的 F[v1] 仍可能被继续使用。\n3. **C1 关闭后重新打开**：打开时会检查文件属性，若服务器上的修改时间晚于缓存提取时间，就使缓存失效并重新读取；否则继续使用缓存。\n\n三个场景共同说明：关闭时刷新解决“重新打开后可见”，打开时的属性检验解决“打开时是否过期”，两者都不承诺“一直可见”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-flush-on-close-cost",
+            "textbook-attribute-cache-uncertainty"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-check",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解：把窗口保证当成持续一致",
+        "markdown": "**常见误解：启用关闭时刷新后，NFS 就能保证任何时刻读到最新版本。**\n\n关闭时刷新保证的是文件被关闭后，后续打开可以看到更新；它并不覆盖“其他客户端一直持有打开文件”或“属性缓存尚未超时”的窗口。把“打开时验证 + 关闭时刷新”误读成持续强一致，会错误估计系统的实际行为。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-flush-on-close-cost",
+            "textbook-attribute-cache-uncertainty"
+          ]
+        }
+      },
+      {
+        "id": "model-completion-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：会读到哪个版本",
+        "markdown": "**自检**：某客户端在属性缓存尚未超时时，读取一个已被其他客户端关闭并更新过的文件，它最可能读到什么？为什么？\n\n参考答案要点：仍可能读到旧版本；因为在该窗口内客户端直接使用内存中的缓存内容，没有向服务器重新验证。作答时应说明“保证发生在哪个时间点”，而不是笼统回答“一致”或“不一致”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-scenario-walkthrough",
+            "textbook-attribute-cache-uncertainty"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "评估 NFS 缓存一致性的结论可以概括为：它以放弃部分可预测性为代价，换取了显著减少的网络通信；关闭时刷新保证打开时的可见性，属性缓存则把一致性判断推迟到超时窗口。\n\n理解这一点后，就能自然过渡到服务器端写缓冲：客户端可见性的讨论，还要叠加服务器何时真正把数据持久化的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attribute-cache-uncertainty",
+            "model-scenario-walkthrough"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "consistency-scenario-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-scenario-walkthrough",
+        "moduleId": "scenario-analysis",
+        "depth": "core",
+        "outcomeRefs": [
+          "predict-observed-version",
+          "evaluate-tradeoffs"
+        ],
+        "learningPurpose": "检查学习者能否把打开验证、关闭刷新与属性缓存窗口组合起来，判断一个具体场景中可能读到的版本。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-flush-on-close-cost",
+            "textbook-attribute-cache-uncertainty",
+            "model-scenario-walkthrough"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenarios": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断：属性缓存尚未超时时，读取一个已被其他客户端关闭并更新的文件，会得到哪个版本？说明你依据的时间窗口。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Sun 的网络文件系统(NFS)",
+  "clusterId": "chapter-48",
+  "clusterIds": [
+    "chapter-48"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000665"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "评估 NFS 的缓存一致性"
+      ],
+      "lineStart": 12887,
+      "lineEnd": 12894,
+      "assetRefs": [],
+      "excerptSha256": "bfc0fd1bfa769254eccf278c38adf4fc1fcba65e1d74acf4b179d6eac8445989"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2640,
+    -674
+  ],
+  "scale": 0.89
+}

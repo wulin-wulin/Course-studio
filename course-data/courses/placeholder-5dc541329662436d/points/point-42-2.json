@@ -1,0 +1,436 @@
+{
+  "id": "point-42-2",
+  "title": "解决方案1：文件系统检查程序",
+  "shortSummary": "说明 fsck 如何扫描文件系统并修复不一致的元数据与数据块。",
+  "keyTerms": [
+    "fsck",
+    "文件系统检查",
+    "元数据",
+    "修复"
+  ],
+  "animationType": "fsckRepair",
+  "animationSuggestion": "用分层的磁盘结构视图按阶段逐步高亮 fsck 当前检查的对象，出现冲突时标出位图与 inode 的矛盾，再显示以 inode 为准写回位图、修正链接计数、清除坏指针或把孤立 inode 移入 lost+found，最后停在“元数据一致，可以挂载”的终态，并支持重播。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-42-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-diagnostics",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 fsck 各检查阶段与修复动作的原始表述，围绕“症状—证据—修复”重排讲解顺序，补充目标边界说明、代价判断与自测。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-fsck-goal",
+          "text": "说明 fsck 的运行时机，并解释它只保证文件系统元数据内部一致，而不是数据内容正确。"
+        },
+        {
+          "id": "trace-fsck-checks",
+          "text": "按顺序说明 fsck 对超级块、空闲块、inode 状态、链接计数、重复指针、坏块和目录的检查内容与修复动作。"
+        },
+        {
+          "id": "evaluate-fsck-limits",
+          "text": "判断 fsck 在什么情况下无法发现或修复问题，并解释全盘扫描的代价为什么促使人们采用日志方案。"
+        }
+      ],
+      "misconceptions": [
+        "认为 fsck 能恢复文件内容或保证数据正确，实际上它只让元数据彼此一致。",
+        "认为 fsck 可以在文件系统已挂载、正在被读写时执行，忽略了它要求启动早期独占运行的前提。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-position",
+          "title": "问题定位：先让不一致发生，再统一修复",
+          "role": "framing",
+          "description": "交代 fsck 的出现背景、目标边界与运行前提。",
+          "outcomeRefs": [
+            "explain-fsck-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "check-sequence",
+          "title": "检查序列：从超级块到目录项",
+          "role": "procedure",
+          "description": "按教材顺序走查各阶段的检查对象与依据。",
+          "outcomeRefs": [
+            "trace-fsck-checks"
+          ],
+          "order": 1
+        },
+        {
+          "id": "repair-rules",
+          "title": "修复规则：信任谁、怎么修",
+          "role": "synthesis",
+          "description": "把分散的修复动作归纳为可复用的判断原则。",
+          "outcomeRefs": [
+            "trace-fsck-checks"
+          ],
+          "order": 2
+        },
+        {
+          "id": "cost-and-limits",
+          "title": "代价与边界：全盘扫描为什么不再可行",
+          "role": "critique",
+          "description": "评估 fsck 的性能代价和无能为力的故障类型。",
+          "outcomeRefs": [
+            "evaluate-fsck-limits"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-close",
+          "title": "达成检查与下一步",
+          "role": "assessment",
+          "description": "用情境题检验三条学习成果，并桥接到日志方案。",
+          "outcomeRefs": [
+            "explain-fsck-goal",
+            "trace-fsck-checks",
+            "evaluate-fsck-limits"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-fsck-goal",
+          "trace-fsck-checks",
+          "evaluate-fsck-limits"
+        ],
+        "method": "完成三道情境判断题，并为每题写出所依据的检查阶段或修复原则。",
+        "successCriteria": [
+          "能指出 fsck 修复的是元数据内部一致性",
+          "能把具体不一致映射到正确的检查阶段与修复动作",
+          "能说明大容量磁盘和 RAID 下 fsck 的代价并解释日志方案要解决什么"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-42-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-fsck-goal",
+        "moduleId": "problem-and-position",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：fsck 的出现与目标边界",
+        "markdown": "早期的文件系统对崩溃采用一种偷懒策略：先让不一致发生，等到重启时再修复。UNIX 工具 **fsck** 正是这种方法的典型代表，它扫描磁盘上的文件系统结构，找出不一致并加以修复；其他系统上也有功能类似的检查和修复工具。\n\n教材同时强调了这个方法的能力边界：它无法解决所有问题。例如元数据看起来彼此一致、但 inode 指向垃圾数据的情况，fsck 既不容易发现也无从修复。因此它唯一真正的目标，是确保**文件系统元数据内部一致**。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "解决方案1：文件系统检查程序"
+              ],
+              "lineStart": 11496,
+              "lineEnd": 11521,
+              "assetRefs": [],
+              "excerptSha256": "2344fd29bfb375638053d5ff4fa9827737ceecca65883abd7ffa7ea5c195fb7a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-consistency-vs-correctness",
+        "moduleId": "problem-and-position",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：一致不等于数据正确",
+        "markdown": "「一致」是一个逻辑条件：位图、inode、链接计数、目录项彼此不矛盾。它不是内容质量条件。\n\n设想追加写入的数据块已经落盘，inode 指针和位图也都更新完毕，但某个块里其实是旧内容或垃圾。此时所有元数据完全自洽，fsck 不会报告任何问题。\n\n所以判断一个修复工具是否够用时，要先问它检查的是哪一层：fsck 检查的是结构矛盾，而不是块里字节的语义是否正确。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fsck-goal"
+          ]
+        }
+      },
+      {
+        "id": "textbook-run-before-mount",
+        "moduleId": "problem-and-position",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "教材：分阶段运行与挂载前前提",
+        "markdown": "fsck 分许多阶段运行，如 McKusick 和 Kowalski 的论文所述。它必须在文件系统**挂载并可用之前**运行，并假定运行期间没有其他文件系统活动。\n\n全部阶段完成后，磁盘上的文件系统应当处于一致状态，此时才允许用户访问它。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "解决方案1：文件系统检查程序"
+              ],
+              "lineStart": 11496,
+              "lineEnd": 11521,
+              "assetRefs": [],
+              "excerptSha256": "2344fd29bfb375638053d5ff4fa9827737ceecca65883abd7ffa7ea5c195fb7a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-exclusive",
+        "moduleId": "problem-and-position",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么必须独占运行",
+        "markdown": "独占不是性能偏好，而是正确性前提。如果文件系统已经挂载，用户和其他内核路径仍在持续修改 inode、位图和目录项；fsck 根据扫描结果写回的修复值，可能立刻被一次新的分配覆盖，甚至覆盖掉别人的正确更新。\n\n这也解释了 fsck 为什么总出现在启动早期：只有在没有任何并发写入的时间窗口里，扫描所得到的快照与写回的修复结果才可能自洽。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-run-before-mount"
+          ]
+        }
+      },
+      {
+        "id": "textbook-superblock-bitmap",
+        "moduleId": "check-sequence",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：超级块与空闲块检查",
+        "markdown": "**超级块**：fsck 首先检查超级块是否合理，主要做健全性检查，例如确保文件系统大小大于已分配的块数。这类检查的目的是找出可疑的、与其他信息冲突的超级块；一旦发现，系统或管理员可以决定改用超级块的备用副本。\n\n**空闲块**：接下来扫描 inode、间接块、双重间接块等结构，弄清当前在文件系统中实际分配了哪些块，并据此生成正确版本的分配位图。若位图与 inode 之间存在不一致，就通过信任 inode 内的信息来解决；同时对所有 inode 执行同样的检查，确保所有看起来在用的 inode 都在 inode 位图中被标记。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "解决方案1：文件系统检查程序"
+              ],
+              "lineStart": 11496,
+              "lineEnd": 11521,
+              "assetRefs": [],
+              "excerptSha256": "2344fd29bfb375638053d5ff4fa9827737ceecca65883abd7ffa7ea5c195fb7a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trust-inode",
+        "moduleId": "check-sequence",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么默认信任 inode",
+        "markdown": "位图只是一个派生索引：它记录「哪些块被占用」，却不记录「被谁占用」。真正说明归属关系的是 inode 的直接指针和各级间接块。因此当两者冲突时，从引用关系出发重建位图，比反过来修改 inode 更可能保留文件。\n\n这条规则有两个可预期的后果：位图误标为已占用的无主块会被回收，消除空间泄漏；位图漏标的已用块会被重新标记。但如果 inode 本身已经损坏，信任它就会把错误一起继承下来，这正是后面 inode 状态检查和坏块检查要补的一层。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-superblock-bitmap"
+          ]
+        }
+      },
+      {
+        "id": "textbook-inode-link-dir",
+        "moduleId": "check-sequence",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：inode、链接、重复、坏块和目录检查",
+        "markdown": "**inode 状态**：检查每个 inode 是否存在损坏或其他问题，例如确保每个已分配的 inode 具有有效的类型字段（常规文件、目录、符号链接等）。如果字段问题不易修复，该 inode 会被视为可疑并被清除，inode 位图也相应更新。\n\n**inode 链接**：验证每个已分配 inode 的链接数。链接计数表示包含该文件的引用（即链接）的不同目录数量。为了验证它，fsck 从根目录开始扫描整棵目录树，为每个文件和目录重新计算链接计数；与新计算值不符时通常修正 inode 中的计数。如果发现已分配却没有任何目录引用的 inode，就把它移入 `lost+found` 目录。\n\n**重复指针**：检查两个不同 inode 是否引用同一个块。若一个 inode 明显有问题，可能被清除；否则可以复制被指向的块，让每个 inode 各自拥有副本。\n\n**坏块**：扫描所有指针列表时会检查坏块指针。指向有效范围之外（例如地址大于分区大小）的指针被视为坏指针，fsck 无法做更聪明的事，只能把它从 inode 或间接块中删除。\n\n**目录检查**：fsck 不了解用户文件的内容，但目录格式由文件系统自己定义，因此它会对每个目录做额外完整性检查：确保 `.` 和 `..` 是排在最前面的目录项，目录项引用的每个 inode 都已分配，并确保整个层次结构中没有目录被引用超过一次。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "解决方案1：文件系统检查程序"
+              ],
+              "lineStart": 11496,
+              "lineEnd": 11521,
+              "assetRefs": [],
+              "excerptSha256": "2344fd29bfb375638053d5ff4fa9827737ceecca65883abd7ffa7ea5c195fb7a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-repair-table",
+        "moduleId": "repair-rules",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充：把检查阶段整理成症状—证据—动作",
+        "markdown": "| 检查对象 | 典型症状 | 判断依据 | 默认修复动作 |\n|---|---|---|---|\n| 超级块 | 文件系统大小与已分配块数矛盾 | 超级块字段之间的健全性关系 | 改用备用超级块副本 |\n| 空闲块 | 位图与 inode 对同一块说法不同 | inode 与各级间接块的引用 | 以 inode 为准重建分配位图 |\n| inode 状态 | 类型字段无效或字段难以修复 | inode 字段合法性 | 标记可疑并清除，更新 inode 位图 |\n| 链接计数 | inode 记录值与实际目录引用数不符 | 从根目录遍历整棵目录树重算 | 修正 inode 计数；无人引用的移入 `lost+found` |\n| 重复指针 | 两个 inode 指向同一块 | 跨 inode 的指针比对 | 清除明显异常的 inode，或复制块 |\n| 坏块指针 | 指针超出分区有效范围 | 指针地址与分区边界 | 从 inode 或间接块中删除该指针 |\n| 目录项 | `.`/`..` 位置错误、引用未分配 inode、目录被多次引用 | 目录格式约定与 inode 位图 | 按目录格式修正或清除异常项 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-inode-link-dir",
+            "textbook-superblock-bitmap"
+          ]
+        }
+      },
+      {
+        "id": "model-repair-principles",
+        "moduleId": "repair-rules",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "补充：修复动作背后的两条原则",
+        "markdown": "把上表压缩成两条原则，就能在遇到新症状时自己推断修复方向。\n\n第一，**以更接近真实引用关系的结构为准**。inode 和间接块描述了数据块的归属，位图只是缓存式的汇总；目录树描述了文件的可见位置，链接计数只是汇总。冲突时修正汇总方，而不是破坏原始引用。\n\n第二，**能恢复就恢复，不能恢复就隔离或删除**。链接计数错误可以重算后写回；孤立但仍完整的 inode 可以挂到 `lost+found` 等待人工处理；重复指针可以复制块保留双方；坏指针无法解释，只能删除。\n\n这也说明 fsck 的修复是启发式的：它保证结果自洽，却不保证内容无损。被清除的 inode、被复制的块、被删除的坏指针都可能伴随数据丢失或空间浪费，因此它不是数据恢复工具。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-repair-table"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cost",
+        "moduleId": "cost-and-limits",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：fsck 的复杂性与性能代价",
+        "markdown": "构建一个真正有效的 fsck 需要复杂的文件系统知识，要保证它在所有情况下都正常工作也很有挑战。\n\n更根本的问题是它**太慢**。对于非常大的磁盘卷，扫描整个磁盘以找出所有已分配块、并读取整棵目录树，可能需要几分钟甚至几小时；随着磁盘容量增长和 RAID 普及，fsck 的性能变得令人望而却步。\n\n教材用类比点出这种浪费：只向磁盘写入了 3 个块，却为了修复这 3 个块引发的问题而扫描整个磁盘，就像钥匙掉在卧室地板上，却从地下室开始搜遍整座房子。这种做法有效，但很浪费。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "解决方案1：文件系统检查程序"
+              ],
+              "lineStart": 11496,
+              "lineEnd": 11521,
+              "assetRefs": [],
+              "excerptSha256": "2344fd29bfb375638053d5ff4fa9827737ceecca65883abd7ffa7ea5c195fb7a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-limits",
+        "moduleId": "cost-and-limits",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充：fsck 的三类边界",
+        "markdown": "判断什么时候不该只依赖 fsck，可以对照三类边界：\n\n1. **元数据一致但内容错误**：inode 指向垃圾数据时，所有汇总结构吻合，fsck 没有可用的矛盾作为线索，因而不会修复。\n2. **恢复时间随规模增长**：扫描成本与磁盘容量、目录树规模成正比，大卷与 RAID 会把恢复窗口拉长到不可接受，系统可用性因此受损。\n3. **修复逻辑本身需要可信前提**：fsck 假定运行期间没有并发活动、且磁盘读取结果可信；这些前提一旦被打破，修复结论也会被污染。\n\n正因如此，后续方案改变的是恢复的工作量而不是检查的细致程度：先把「将要做什么」写成日志注记，崩溃后只需查看注记并重做那几步，而不必扫描整个磁盘。这就是下一节的预写日志。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cost",
+            "textbook-fsck-goal"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-close",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "达成检查：三个崩溃现场",
+        "markdown": "先自己作答，再对照后面的要点。\n\n**情境一**：位图显示 5 号块空闲，某个 inode 的直接指针指向 5 号块，且 inode 其余字段合法。fsck 会怎么处理？依据是哪条原则？\n\n**情境二**：inode 指向 5 号块，位图也标记 5 号块已分配，但 5 号块里是被覆盖的旧数据。fsck 会报告问题吗？为什么？\n\n**情境三**：一个容量很大的 RAID 卷每次掉电后都要扫描数小时。仅靠 fsck 的主要瓶颈是什么？日志方案试图把这项工作替换成什么？\n\n要点：情境一以 inode 为准重建位图，因为 inode 记录了块的真实归属；情境二不会报告，因为元数据彼此一致，fsck 不检查数据语义；情境三的瓶颈是与容量成正比的全盘扫描，日志把恢复变成只重放最近写下的小注记。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-limits",
+            "model-repair-principles"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-close",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "fsck 是「先放任不一致、启动时统一修复」这一思路的代表：它在挂载前独占运行，先检查超级块，再以 inode 和间接块为准重建分配位图，随后逐项处理 inode 状态、链接计数、重复指针、坏块和目录项，并把无法归属的 inode 放入 `lost+found`。\n\n它保证的是元数据内部自洽，代价是与磁盘规模成正比的扫描时间，而且对「一致但内容错误」无能为力。下一个知识点讨论日志：先写下将要做的更新，再覆写结构，让崩溃恢复只需重放最近的注记。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check",
+            "model-repair-principles"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fsck-scenario-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-close",
+        "depth": "support",
+        "outcomeRefs": [
+          "explain-fsck-goal",
+          "trace-fsck-checks",
+          "evaluate-fsck-limits"
+        ],
+        "learningPurpose": "用三个崩溃现场检验学习者能否把 fsck 的目标边界、检查阶段与代价判断应用到新情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-check"
+          ]
+        },
+        "config": {
+          "mode": "scenario",
+          "scenarios": [
+            "位图与 inode 对 5 号块说法不同",
+            "元数据一致但数据块内容是垃圾",
+            "大容量 RAID 卷恢复耗时过长"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "依次回答三道情境题：位图与 inode 冲突时修谁、元数据一致而内容错误时 fsck 能否发现、大卷下 fsck 的瓶颈是什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "崩溃一致性:FSCK和日志",
+  "clusterId": "chapter-42",
+  "clusterIds": [
+    "chapter-42"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000586"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "解决方案1：文件系统检查程序"
+      ],
+      "lineStart": 11496,
+      "lineEnd": 11521,
+      "assetRefs": [],
+      "excerptSha256": "2344fd29bfb375638053d5ff4fa9827737ceecca65883abd7ffa7ea5c195fb7a"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    562,
+    49
+  ],
+  "scale": 0.88
+}

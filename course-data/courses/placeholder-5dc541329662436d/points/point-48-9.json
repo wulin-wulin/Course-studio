@@ -1,0 +1,468 @@
+{
+  "id": "point-48-9",
+  "title": "缓存一致性问题",
+  "shortSummary": "说明客户端缓存导致的缓存一致性问题，以及 NFS 采用的失效与验证方式。",
+  "keyTerms": [
+    "缓存一致性",
+    "客户端缓存",
+    "NFS",
+    "失效"
+  ],
+  "animationType": "attrCacheConsistency",
+  "animationSuggestion": "按事件时间轴逐步展示服务器版本推进、C2 的缓冲区写入窗口、C1 打开时的 GETATTR 校验与失效重读，以及属性缓存有效期内直接命中缓存的路径，并支持重播同一轨迹。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-48-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "symptom-scenario-diagnosis-fix",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三客户端场景、两个子问题划分和 NFSv2 的两项机制，按症状、定位、修复、取舍的顺序重排讲解，并补充对照表、时间线与诊断题。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "describe-stale-read",
+          "text": "描述多客户端缓存下读到旧版本文件的触发场景与可见现象。"
+        },
+        {
+          "id": "distinguish-subproblems",
+          "text": "区分更新可见性与陈旧缓存两个子问题，并说明各自的旧副本位置。"
+        },
+        {
+          "id": "explain-nfs-fixes",
+          "text": "解释关闭时刷新与打开时 GETATTR 失效如何分别应对两个子问题。"
+        },
+        {
+          "id": "evaluate-attribute-cache",
+          "text": "评估属性缓存用可能陈旧换取低网络开销的取舍及其时间窗。"
+        }
+      ],
+      "misconceptions": [
+        "把缓存一致性问题等同于写丢失：写其实已经成功，问题在于其他客户端在多长时间内仍看到旧版本。",
+        "认为关闭时刷新能保证写入过程中实时可见：它保证的是关闭之后其他节点再次打开时看到最新版本。",
+        "以为属性缓存消除了陈旧缓存问题：它只是把可能的陈旧限制在一个超时窗口内。"
+      ],
+      "modules": [
+        {
+          "id": "symptom-scenario",
+          "title": "症状与场景导入",
+          "role": "problem-introduction",
+          "description": "从教材的三客户端场景出发，明确要判断的是缓存副本是否已经落后。",
+          "outcomeRefs": [
+            "describe-stale-read"
+          ],
+          "order": 0
+        },
+        {
+          "id": "two-subproblems",
+          "title": "定位：两个子问题",
+          "role": "concept-diagnosis",
+          "description": "把症状拆成更新可见性与陈旧缓存，并用统一维度对照。",
+          "outcomeRefs": [
+            "describe-stale-read",
+            "distinguish-subproblems"
+          ],
+          "order": 1
+        },
+        {
+          "id": "nfs-remedies",
+          "title": "修复：NFSv2 的两项机制",
+          "role": "mechanism-explanation",
+          "description": "讲解关闭时刷新与打开时 GETATTR 校验、失效与重读的流程。",
+          "outcomeRefs": [
+            "explain-nfs-fixes"
+          ],
+          "order": 2
+        },
+        {
+          "id": "attribute-cache-tradeoff",
+          "title": "代价：GETATTR 风暴与属性缓存",
+          "role": "tradeoff-analysis",
+          "description": "分析校验请求带来的开销，以及属性缓存的时间窗取舍。",
+          "outcomeRefs": [
+            "explain-nfs-fixes",
+            "evaluate-attribute-cache"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "用一道诊断题检查能否把现象归入正确子问题并判断机制是否生效。",
+          "outcomeRefs": [
+            "distinguish-subproblems",
+            "explain-nfs-fixes",
+            "evaluate-attribute-cache"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-stale-read",
+          "distinguish-subproblems",
+          "explain-nfs-fixes",
+          "evaluate-attribute-cache"
+        ],
+        "method": "完成诊断题并说明现象属于哪个子问题、对应机制为何未生效。",
+        "successCriteria": [
+          "能指出旧副本位于何处、服务器是否已是最新",
+          "能把机制名称与子问题一一对应",
+          "能说明属性缓存超时窗口内为何仍可能读到旧版本"
+        ],
+        "exerciseBlockId": "model-check-and-bridge",
+        "nextPointId": "point-48-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-three-clients",
+        "moduleId": "symptom-scenario",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材场景：两个客户端和一个服务器",
+        "markdown": "教材用两个客户端和一个服务器展示缓存一致性问题。客户端 C1 读取文件 F，并把文件的副本保存在本地缓存中。随后另一个客户端 C2 覆盖文件 F，改变其内容，产生新版本 F[v2]，而 C1 缓存中保存的是旧版本 F[v1]。还有第三个客户端 C3，尚未访问过文件 F。\n\n此时同一份文件可能同时存在多个副本：服务器上的版本、C1 缓存中的副本，而 C2 的改动还可能停留在它自己的缓存中。问题在于：当某个客户端再次读取 F 时，它拿到的到底是哪一版？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000664"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性问题"
+              ],
+              "lineStart": 12866,
+              "lineEnd": 12886,
+              "assetRefs": [
+                "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+              ],
+              "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-problem-frame",
+        "moduleId": "symptom-scenario",
+        "depth": "support",
+        "kind": "note",
+        "title": "把场景抽象成可检验的问题",
+        "markdown": "把上面的场景抽象成一个可检验的问题：一份文件同时存在于服务器和多个客户端缓存中，缓存副本在什么条件下仍然可信？\n\n判断依据不是“缓存里有没有数据”，而是“客户端缓存中的版本是否已经落后于服务器上的版本”。只要存在多个缓存副本和一个可写服务器，就必须回答两件事：写入何时对别人可见，以及旧副本何时被判定为失效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-three-clients"
+          ]
+        }
+      },
+      {
+        "id": "tb-visibility",
+        "moduleId": "two-subproblems",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "子问题一：更新可见性",
+        "markdown": "第一个子问题是更新可见性：来自一个客户端的更新，什么时候被其他客户端看见？\n\n教材指出，客户端 C2 可能先把写入缓存在本地一段时间，再发送给服务器。在这段时间里，F[v2] 只存在于 C2 的内存中，服务器和其他客户端看到的仍是 F[v1]。因此，在客户端缓冲写入，可能导致其他客户端获得文件的陈旧版本。极端情况下，同一用户在 C2 上更新 F，随后在 C3 上读取，得到的却是旧版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000664"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性问题"
+              ],
+              "lineStart": 12866,
+              "lineEnd": 12886,
+              "assetRefs": [
+                "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+              ],
+              "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-draft-analogy",
+        "moduleId": "two-subproblems",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充类比：未提交的本地草稿",
+        "markdown": "可以把它类比成一份还没提交的本地草稿：只有写草稿的人看得到改动，其他人打开共享文档时仍然看到上一版。\n\n这里的关键不是“写丢失”，而是可见性被延迟。写缓冲本身提升了 write() 的返回速度，代价是把“别人什么时候能看到这次写”变成了一个必须明确回答的语义问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-visibility"
+          ]
+        }
+      },
+      {
+        "id": "tb-stale-cache",
+        "moduleId": "two-subproblems",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "子问题二：陈旧缓存",
+        "markdown": "第二个子问题是陈旧缓存：C2 最终把它的写入发送给文件服务器，服务器因此持有最新版本 F[v2]，但 C1 的缓存中仍然是 F[v1]。\n\n如果运行在 C1 上的程序此时读取文件 F，它就会得到过时的版本 F[v1]，而不是最新的版本 F[v2]，这通常不是期望的结果。与更新可见性不同，这里服务器已经是最新的，落后的是某个客户端手里那份过期的缓存副本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000664"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性问题"
+              ],
+              "lineStart": 12866,
+              "lineEnd": 12886,
+              "assetRefs": [
+                "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+              ],
+              "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-subproblem-compare",
+        "moduleId": "two-subproblems",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "两个子问题的对照",
+        "markdown": "两个子问题可以用同一组维度区分：\n\n| 子问题 | 旧副本在哪里 | 服务器是否已是最新 | 典型触发点 |\n|---|---|---|---|\n| 更新可见性 | 尚未发送的写入只在 C2 的内存中 | 否，服务器仍是 v1 | 写入被缓冲、尚未刷回 |\n| 陈旧缓存 | C1 缓存中的 v1 | 是，服务器已是 v2 | 其他客户端已写回，本客户端仍用旧缓存 |\n\n分清这一点很重要：更新可见性问的是“写什么时候传播出去”，陈旧缓存问的是“本地副本什么时候该被作废”。两者需要不同的机制来应对。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-visibility",
+            "tb-stale-cache"
+          ]
+        }
+      },
+      {
+        "id": "tb-flush-on-close",
+        "moduleId": "nfs-remedies",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "NFSv2 的应对之一：关闭时刷新",
+        "markdown": "NFSv2 实现以两种方式解决这些缓存一致性问题。首先，针对更新可见性，客户端实现了有时称为“关闭时刷新”（flush-on-close，即 close-to-open）的一致性语义。\n\n具体来说，当应用程序写入文件并随后关闭文件时，客户端会把所有更新（缓存中的脏页面）刷新到服务器。通过关闭时刷新的一致性语义，NFS 能够确保后续从另一个节点打开该文件时，看到的是最新的文件版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000664"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性问题"
+              ],
+              "lineStart": 12866,
+              "lineEnd": 12886,
+              "assetRefs": [
+                "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+              ],
+              "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-close-to-open-scope",
+        "moduleId": "nfs-remedies",
+        "depth": "support",
+        "kind": "note",
+        "title": "语义边界：保证的是关闭之后、再次打开时",
+        "markdown": "这里要准确理解 close-to-open 的边界：它保证的是“关闭之后、其他节点再次打开时”可见，而不是写入过程中实时可见。\n\n因此在“写完就关、别人再打开”的常见节奏下它有效，但并不能让两个客户端在同一时刻对同一文件的中间状态保持一致。判断某个场景会不会出问题，先问一句：这次读取发生在对方写入并关闭之前，还是之后？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-flush-on-close"
+          ]
+        }
+      },
+      {
+        "id": "tb-getattr-invalidate",
+        "moduleId": "nfs-remedies",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "NFSv2 的应对之二：打开时 GETATTR 校验",
+        "markdown": "针对陈旧缓存，NFSv2 客户端会先检查文件是否已经更改，然后再使用其缓存内容。具体做法是：在打开文件时，客户端文件系统发出 GETATTR 请求，以获取文件的属性。\n\n重要的是，属性中包含服务器上次修改该文件的信息。如果文件的修改时间晚于文件被取到客户端缓存的时间，客户端就会让该文件失效（invalidate），把它从客户端缓存中删除，并确保后续的读取转向服务器，取得该文件的最新版本。反之，如果客户端确认自己持有最新版本，就会继续使用缓存的内容，从而提高性能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000664"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性问题"
+              ],
+              "lineStart": 12866,
+              "lineEnd": 12886,
+              "assetRefs": [
+                "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+              ],
+              "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-invalidate-timeline",
+        "moduleId": "nfs-remedies",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "沿时间线走一遍失效判断",
+        "markdown": "把机制走成一条时间线：C1 在 $t_1$ 读取 F 并把 v1 放入缓存；C2 在 $t_2$ 写入并关闭，服务器上的 F 变成 v2，修改时间晚于 $t_1$；C1 在 $t_3$ 打开 F，GETATTR 返回的修改时间也晚于 $t_1$。\n\n由于“服务器修改时间晚于缓存获取时间”，C1 判定缓存已过期，删除 v1，并在后续读取时转向服务器取得 v2。如果 C1 再次打开时属性显示修改时间并未晚于缓存时间，说明缓存仍然有效，可以直接从内存服务，省去一次网络读取。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-getattr-invalidate"
+          ]
+        }
+      },
+      {
+        "id": "tb-attribute-cache",
+        "moduleId": "attribute-cache-tradeoff",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "属性缓存：为常见情况而设计",
+        "markdown": "当 Sun 最初的团队实现陈旧缓存的这个解决方案时，他们意识到一个新问题：NFS 服务器突然充斥着 GETATTR 请求。教材把它归结为一条工程原则：为常见情况而设计，让它运作良好。\n\n这里的常见情况是文件只由一个客户端访问（可能反复访问），但该客户端仍必须不断向服务器发送 GETATTR，确认没人改变该文件，等于不停追问“有没有人修改过这个文件”，而大部分时间都没有人修改。\n\n为了解决这种情况（在某种程度上），系统为每个客户端增加了一个属性缓存（attribute cache）。客户端在访问文件之前仍会验证文件，但大多数情况下只查看属性缓存以获取属性。首次访问某文件时，该文件的属性被放入缓存，然后在一定时间（例如 3 秒）后超时。于是，在这 3 秒内，所有文件访问都会断定使用缓存的文件没有问题，并且没有与服务器的网络通信。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000664"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存一致性问题"
+              ],
+              "lineStart": 12866,
+              "lineEnd": 12886,
+              "assetRefs": [
+                "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+              ],
+              "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-attribute-tradeoff",
+        "moduleId": "attribute-cache-tradeoff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "取舍：用一段时间的可能陈旧换取零校验开销",
+        "markdown": "属性缓存是一个明确的取舍：用一段时间的可能陈旧，换取这段时间内的零网络校验。\n\n| 校验方式 | 网络开销 | 可能读到旧版本的时间窗 |\n|---|---|---|\n| 每次打开都向服务器发 GETATTR | 高，常见访问模式下形成请求风暴 | 很短 |\n| 属性缓存（例如 3 秒超时） | 低，窗口内不与服务器通信 | 最长约一个超时周期 |\n\n因此，属性缓存不是把一致性问题消除了，而是把它限定在一个可接受的时间窗内。判断某个读取是否安全时，除了问“有没有 GETATTR 校验”，还要问“此刻是否处在属性缓存的有效期内”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-attribute-cache",
+            "tb-getattr-invalidate"
+          ]
+        }
+      },
+      {
+        "id": "model-check-and-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "诊断练习",
+        "markdown": "自检：某客户端在 3 秒属性缓存有效期内，读取了另一个客户端刚刚写入并关闭的文件，它可能读到旧版本吗？请先判断这属于哪一个子问题，再说明 NFSv2 的哪个机制本应处理它、为什么在属性缓存窗口内没有生效。\n\n参考思路：服务器已是最新而本地缓存仍旧，属于陈旧缓存；打开时的 GETATTR 校验本应触发失效，但属性缓存让客户端在这 3 秒内没有向服务器确认，因此仍可能提供旧数据。\n\n下一节将系统评估 NFS 缓存一致性机制的语义、代价与适用场景。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-subproblem-compare",
+            "model-attribute-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "subproblem-classify-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-subproblem-compare",
+        "moduleId": "two-subproblems",
+        "depth": "core",
+        "outcomeRefs": [
+          "distinguish-subproblems"
+        ],
+        "learningPurpose": "检查学习者能否把具体现象归入更新可见性或陈旧缓存，并说出判断依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-visibility",
+            "tb-stale-cache"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenarios": [
+            "C2 刚写入 F 但尚未关闭，C3 打开 F 读取。",
+            "C2 已写入并关闭 F，C1 仍在用自己缓存中的旧副本。"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "对每个场景判断：旧副本在哪里？服务器是否已是最新？据此说明它属于更新可见性还是陈旧缓存。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Sun 的网络文件系统(NFS)",
+  "clusterId": "chapter-48",
+  "clusterIds": [
+    "chapter-48"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000664"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "缓存一致性问题"
+      ],
+      "lineStart": 12866,
+      "lineEnd": 12886,
+      "assetRefs": [
+        "parts/part-0005/images/b1b5cf15540e75be9ee7563bed0fc86ffd0310e4727a88ca5646b557780c8b1c.jpg"
+      ],
+      "excerptSha256": "597f360e592d26545cfbf51f19fb6d9b5feb4d13b1fd272a02cdbba23d33362f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2719,
+    -629
+  ],
+  "scale": 0.97
+}

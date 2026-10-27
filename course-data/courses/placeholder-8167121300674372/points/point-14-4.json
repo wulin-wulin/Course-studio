@@ -1,0 +1,676 @@
+{
+  "id": "point-14-4",
+  "title": "符号",
+  "shortSummary": "说明符号表、符号导出与重定位，理解链接器如何解析跨文件的外部引用。",
+  "keyTerms": [
+    "符号",
+    "符号表",
+    "重定位",
+    "链接"
+  ],
+  "animationType": "lazyBindingGot",
+  "animationSuggestion": "分步显示 main → 桩函数 → GOT → 动态链接器 → 地址回写 → 第二次调用直达，并用标签标出每一步读取的地址来源。",
+  "difficulty": "中等",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-14-2",
+    "point-14-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-application-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对符号、重定位、动态绑定与可见性的定义和结论，围绕「名字何时变成地址」重排讲解，并补充状态表、链接后果与检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-symbol",
+          "text": "解释符号与符号表在目标文件中的作用，并能读懂 nm 输出的基本类型。"
+        },
+        {
+          "id": "trace-relocation",
+          "text": "说明静态链接如何依据重定位表把未定义符号解析为确定地址。"
+        },
+        {
+          "id": "explain-dynamic-binding",
+          "text": "解释桩函数、GOT 与延迟绑定如何避免重复解析并减少启动开销。"
+        },
+        {
+          "id": "apply-visibility",
+          "text": "根据标签写法判断其符号可见性，并据此定位跨文件链接错误。"
+        }
+      ],
+      "misconceptions": [
+        "把所有汇编标签都当作会进入符号表的符号。",
+        "认为动态链接必须在程序载入时一次性重写所有外部函数调用。",
+        "认为编译链接时提供动态链接库是为了把库的机器指令复制进可执行文件。",
+        "认为 .tbd 文件里含有系统库的实际指令。"
+      ],
+      "modules": [
+        {
+          "id": "why-symbols",
+          "title": "问题导入：三个未确定的地址",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-symbol"
+          ],
+          "order": 0
+        },
+        {
+          "id": "symbol-table",
+          "title": "符号表：名字被记录在哪里",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-symbol"
+          ],
+          "order": 1
+        },
+        {
+          "id": "relocation",
+          "title": "重定位：静态链接补齐地址",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-relocation"
+          ],
+          "order": 2
+        },
+        {
+          "id": "dynamic-binding",
+          "title": "动态绑定：桩函数、GOT 与延迟解析",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-relocation",
+            "explain-dynamic-binding"
+          ],
+          "order": 3
+        },
+        {
+          "id": "link-time-dylib",
+          "title": "链接期契约：为什么还要给出动态库",
+          "role": "application",
+          "outcomeRefs": [
+            "explain-dynamic-binding"
+          ],
+          "order": 4
+        },
+        {
+          "id": "debug-visibility",
+          "title": "调试符号与可见性",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-symbol",
+            "apply-visibility"
+          ],
+          "order": 5
+        },
+        {
+          "id": "check-transfer",
+          "title": "达成检查与迁移",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-symbol",
+            "trace-relocation",
+            "explain-dynamic-binding",
+            "apply-visibility"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-symbol",
+          "trace-relocation",
+          "explain-dynamic-binding",
+          "apply-visibility"
+        ],
+        "method": "完成可见性排查练习，并用符号解析链路解释从 nm 的 U 到最终地址的过程。",
+        "successCriteria": [
+          "能区分已定义符号与未定义符号，并说明 U 的含义",
+          "能按顺序说出静态重定位的改写对象",
+          "能说明第一次与后续动态调用在 GOT 上的状态差异",
+          "能判断标签写法对跨文件链接的影响"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-15-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-symbol-question",
+        "moduleId": "why-symbols",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材引入：三个悬而未决的地址问题",
+        "markdown": "教材在讲完静态链接、动态链接与调试后，指出有一个问题一直被掩盖：这些过程中究竟如何解析符号？\n\n教材用三个场景把它摆出来：\n\n- 静态链接时，`14-main.o` 需要 `bar1` 和 `bar2` 两个函数，但生成目标文件时并不知道它们的地址，因此编码 `bl` 指令时操作数无法确定，链接器必须在合并目标文件时把调用处的编码改成正确的地址。\n- 生成动态链接程序时，`14-main-dynamic` 同样不知道 `bar1`、`bar2` 的地址，要等程序载入内存后由动态链接器告诉进程。\n- 调试时想在 `main` 下断点，也需要先知道可执行程序中哪个地址是 `main`。\n\n这三个问题的共同核心，就是本节要讲的「符号」（Symbol）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号"
+              ],
+              "lineStart": 2631,
+              "lineEnd": 2640,
+              "assetRefs": [],
+              "excerptSha256": "4aca835a0b0d3994ba99ce86b9e2caea984d26a870f9de5526b2178370bb3326"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why",
+        "moduleId": "why-symbols",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：符号是名字与地址之间的可解析约定",
+        "markdown": "把三个场景放在一起看，会发现它们缺的是同一样东西：一个稳定的**名字**，以及把这个名字解析为地址的**机制**。\n\n- 源代码里，我们用 `bar1`、`main` 这样的名字引用代码。\n- 目标文件里，这些名字被记录成符号，但地址可能尚未确定。\n- 链接器和动态链接器的工作，就是在合适的时机把符号绑定到具体地址。\n\n所以本点可以改写成三个连续的问题：符号被记录在哪里、谁在什么时候为它填上地址、填好之后又受什么可见性约束。后续四节分别回答「记录」「静态填地址」「延迟填地址」和「可见范围」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-symbol-question"
+          ]
+        }
+      },
+      {
+        "id": "tb-symbol-table",
+        "moduleId": "symbol-table",
+        "depth": "core",
+        "kind": "definition",
+        "title": "符号表",
+        "markdown": "在汇编程序中写下的绝大部分标签（Label），在生成目标文件时都会在二进制程序的符号表中存成对应符号。教材用 `nm` 查看：\n\n```bash\nnm 14-main.o\n```\n\n输出显示 `bar1` 和 `bar2` 确实**以字符串的形式**存储在二进制程序的符号表中。教材中的 `nm` 输出截图（`14-nm-main.png`）就是这一结果的直观呈现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000123"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "符号表"
+              ],
+              "lineStart": 2641,
+              "lineEnd": 2654,
+              "assetRefs": [
+                "./assets/14-nm-main.png"
+              ],
+              "excerptSha256": "3368506a0e44dc158a1b3172cc268de630265d66899d42b31f47edbaa02bf8aa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-symbol-kinds",
+        "moduleId": "symbol-table",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：怎样读 nm 的符号表",
+        "markdown": "教材截图之外，`nm` 的一行通常由「地址、类型字母、名字」组成，类型字母是排查链接问题的入口：\n\n| 类型 | 含义 | 对本点的意义 |\n|---|---|---|\n| `U` | 未定义，地址尚未确定 | 本目标文件需要别处提供，必须重定位或由动态链接器解析 |\n| `T` / `t` | 位于代码段的已定义符号 | 本文件提供了该函数，可供其他目标文件引用 |\n| 局部符号 | 仅本目标文件可见 | 未用 `.globl` 导出的标签 |\n| 全局符号 | 可被其他目标文件解析 | 用 `.globl` 导出的标签 |\n\n注意 `U` 不是「不存在」，而是「本文件不负责给出地址」。这个区别正是下一节重定位的起点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-symbol-table"
+          ]
+        }
+      },
+      {
+        "id": "tb-relocation",
+        "moduleId": "relocation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "重定位表",
+        "markdown": "生成目标文件时，所有在汇编阶段无法确认地址的符号——包括不在本文件中定义的函数，以及 `@PAGE`、`@PAGEOFF` 这类与位置相关的引用——都会被放进**重定位表**。\n\n用 `nm` 查看符号表时，名字前面的 `U` 就表示该符号目前无法确认地址，需要重定位。静态链接时，链接器会查看所有被链接目标文件的符号：它根据 `14-main.o` 的重定位表得知需要 `bar1` 和 `bar2`，在确认 `lib14-foo-static.a` 提供了这两个符号之后，用正确地址修改 `14-main.o` 中的函数调用语句。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "重定位"
+              ],
+              "lineStart": 2655,
+              "lineEnd": 2658,
+              "assetRefs": [],
+              "excerptSha256": "674a2f55688bdd0aebc8f9178a5d70d717013064aa5bc73f96aba15b62a3aef4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reloc-worked",
+        "moduleId": "relocation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次静态重定位的推演",
+        "markdown": "把教材的描述展开成一次具体推演：\n\n1. 汇编 `14-main.o` 时遇到 `bl bar1`，此时 `bar1` 的地址未知，指令先留下占位编码，并在重定位表登记「这条指令的哪几位需要改」。\n2. 链接器读入 `14-main.o`，看到重定位表里对 `bar1`、`bar2` 的请求。\n3. 链接器扫描 `lib14-foo-static.a` 的符号表，找到两个符号的定义，得到它们在最终可执行文件中的地址。\n4. 链接器回到 `14-main.o` 中登记的指令位置，把占位编码改写为按 PC 相对计算的正确目标地址。\n5. 全部重定位完成后，可执行文件中的 `bl` 才真正指向确定的函数。\n\n关键点是：**重定位改的是已生成机器指令中的地址字段，而不是重新编译源码**。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-relocation"
+          ]
+        }
+      },
+      {
+        "id": "tb-dynamic-question",
+        "moduleId": "dynamic-binding",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么动态链接不能照搬重定位",
+        "markdown": "动态链接时的符号被称为**间接符号**，解析思路与静态重定位相似：告诉动态链接器哪个地址的指令需要重写，载入内存后解析并改写。\n\n教材指出这条路理论上可行，但动态链接发生在执行程序时，花的是用户的时间，而不是开发者的时间，因此必须尽量减少开销。照搬方案有两个问题：\n\n- **多处指令调用同一个外部函数**：例如多处都调用 `printf`，就要用同一个地址重写很多条指令，造成冗余。\n- **不会被执行的指令也在调用外部函数**：这些指令虽被静态链接进可执行程序，但实际不会运行，一并重写同样是冗余。\n\n教材的解法是引入**延迟绑定**和 **GOT 表**。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000125"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "动态绑定"
+              ],
+              "lineStart": 2659,
+              "lineEnd": 2673,
+              "assetRefs": [],
+              "excerptSha256": "80ce475339ece82a797d110aa94901077ad93475b83a7c2b9e5e56e4bdb04f40"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dynamic-compare",
+        "moduleId": "dynamic-binding",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：两种重写时机的取舍",
+        "markdown": "对比两种方案，可以看清延迟绑定到底省了什么：\n\n| 维度 | 载入时全部重写 | 延迟绑定 |\n|---|---|---|\n| 重写发生的时机 | 程序载入时 | 第一次真正调用该函数时 |\n| 未执行代码的开销 | 仍然要解析并重写 | 不调用就不解析 |\n| 同一函数被多处调用 | 每处指令都要改 | 只改 GOT 中的一项地址 |\n| 后续调用成本 | 直接调用 | 直接经 GOT 间接跳转 |\n\n代价是每次调用多一次间接跳转，换来的是启动阶段不做无用功。这是典型的以少量运行时开销换启动速度的取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dynamic-question"
+          ]
+        }
+      },
+      {
+        "id": "tb-binding-process",
+        "moduleId": "dynamic-binding",
+        "depth": "core",
+        "kind": "code",
+        "title": "动态绑定过程",
+        "markdown": "以对 `bar1` 的调用为例，教材把 `14-main-dynamic` 粗略理解为：\n\n```armasm\n_main:\n    ...\n    bl     bar1_stub\n    ...\n\nbar1_stub:\n    adrp   x16, bar1_sym@GOTPAGE\n    add    x16, x16, bar1_sym@GOTPAGEOFF\n    br     x16\n\n    .section __DATA, __got\nbar1_sym:\n    .quad  some_addr\n```\n\n链接器首先在 `__TEXT` 段的 `__stubs` 节生成若干桩函数，原来对 `bar1`、`bar2` 的调用处被替换为对相应桩函数的调用。桩函数会间接跳转到保存在 `__DATA` 段 `__got` 节或 `__la_symbol_ptr` 等节中的地址；这些地址一开始是动态链接器某些函数的地址，因此第一次调用桩函数会进入动态链接器。动态链接器解析符号后，把该地址重写为真正的函数地址。第二次调用同一桩函数时，GOT 中已是正确地址，不再需要动态链接器参与；又因为只有第一次调用才解析，也避免了不会执行的指令产生冗余解析。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "动态绑定",
+                "动态绑定过程"
+              ],
+              "lineStart": 2674,
+              "lineEnd": 2709,
+              "assetRefs": [],
+              "excerptSha256": "09ed8990a548365a71fac725e924ad87a14628dd945275ef906a5a3b10415d19"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-got-walkthrough",
+        "moduleId": "dynamic-binding",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "模型补充：第一次与第二次调用的状态差",
+        "markdown": "把动态绑定压成一张状态表，便于逐步核对：\n\n| 时刻 | GOT 表项 `bar1_sym` 的内容 | 实际跳到哪里 | 是否进入动态链接器 |\n|---|---|---|---|\n| 载入后、首次调用前 | 动态链接器解析函数的地址 | 动态链接器 | 是 |\n| 首次调用中、解析完成 | 被改写为 `bar1` 的真实地址 | `bar1` | 否，本次由解析器转发 |\n| 第二次及以后调用 | 保持 `bar1` 的真实地址 | `bar1` | 否 |\n\n可以据此自检：如果第二次调用仍然进入动态链接器，说明地址没有被成功回写，或者调用走了另一个尚未解析的表项。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-binding-process"
+          ]
+        }
+      },
+      {
+        "id": "tb-dylib-link",
+        "moduleId": "link-time-dylib",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "编译链接时为什么仍要给出动态链接库",
+        "markdown": "既然运行前不需要动态链接库的代码，为什么链接时仍要在命令行给出？教材给出两个原因：\n\n- **在可执行程序中存储动态链接库的名字**：链接器把这些名字写进可执行程序，执行时动态链接器据此直接把库载入内存。可以用 `otool -L 14-main-dynamic` 查看记录的名字。\n- **确保所有符号都会被解析**：如果某个符号连动态链接库中都不存在，执行时动态链接器就无法解析，程序会崩溃；链接时检查可以减小开发者失误的可能。\n\n因此在编译链接时，实际只需要动态链接库的名字和它提供的符号。新版 macOS 的系统库大量采用 `.tbd` 文件：只含库名与符号，不含实际指令，从而缩小 SDK 体积，也降低系统库被逆向的可能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000127"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "动态绑定",
+                "编译链接时的动态链接库"
+              ],
+              "lineStart": 2710,
+              "lineEnd": 2732,
+              "assetRefs": [],
+              "excerptSha256": "dc52fa877003a72629e4f1abde0c0cd1e75257123ba141cb3033f03519a5e39a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dylib-check",
+        "moduleId": "link-time-dylib",
+        "depth": "support",
+        "kind": "application",
+        "title": "模型补充：用两个命令验证两条理由",
+        "markdown": "两条理由都可以在终端里观察：\n\n```bash\notool -L 14-main-dynamic\nnm -u 14-main-dynamic\n```\n\n前者列出可执行程序记录的动态库名字，对应第一条理由；后者列出仍然未定义的符号，配合动态库的 `.tbd` 或符号表，可以检查第二条理由是否满足。\n\n由此也能纠正一个常见误解：链接时给出 `.dylib` 并不是把库的机器指令复制进可执行文件；复制代码是静态链接 `.a` 的行为。动态链接只记录依赖与符号契约，真正的代码在载入或首次调用时才被使用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dylib-link"
+          ]
+        }
+      },
+      {
+        "id": "tb-debug-symbols",
+        "moduleId": "debug-visibility",
+        "depth": "core",
+        "kind": "note",
+        "title": "调试符号",
+        "markdown": "使用调试器时，可以根据符号表中的符号直接下断点，因此可以说「对 `main` 函数下断点」，而不必给出具体地址。\n\n教材还指出，现代调试信息不止符号表。在 macOS 上用 C 等高级语言编译并指定生成调试文件的选项，会产生 `.dSYM` 文件，其中以 DWARF 格式存储调试信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000128"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "调试符号"
+              ],
+              "lineStart": 2733,
+              "lineEnd": 2738,
+              "assetRefs": [],
+              "excerptSha256": "5521574136d39e0734a67002a9f9fe4b13228aff6c51b8c5c1e402e2f058ea74"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-visibility",
+        "moduleId": "debug-visibility",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "可见性",
+        "markdown": "绝大多数标签会变成符号，但并非全部。链接器层面有一套基本的访问控制：\n\n- **以 `L` 或 `l` 开头的标签**：不会出现在符号表中。控制语句中的标签和一些字符串常量的标签通常采用这种形式。教材注明这一规定来自 LLVM 源码中的检查（`lld/MachO/SyntheticSections.cpp` 的 `SymtabSection::finalizeContents()`），并未找到相应文档。\n- **其它不用 `.globl` 声明的标签**：以局部符号的形式出现在符号表中，对其它目标文件不可见。所以如果不以 `.globl` 标记 `bar1` 和 `bar2`，静态链接时无法正确链接。\n- **以 `.globl` 声明的标签**：以全局符号的形式出现在符号表中，可以被其它目标文件中的未定义符号解析。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000129"
+              ],
+              "headingPath": [
+                "汇编、链接与调试",
+                "符号",
+                "可见性"
+              ],
+              "lineStart": 2739,
+              "lineEnd": 2752,
+              "assetRefs": [],
+              "excerptSha256": "1a4833c40053f54647f21d9c1f35595b1b380e00924e7cb4361ae29d9bc4812e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-visibility-table",
+        "moduleId": "debug-visibility",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：三种标签的链接后果",
+        "markdown": "把三种情况放进同一张检查表：\n\n| 写法 | 是否进入符号表 | 其它目标文件能否引用 | 典型后果 |\n|---|---|---|---|\n| `Lfoo` / `lfoo` | 否 | 否 | 只能在本文件内按位置使用，不参与链接解析 |\n| `foo:` 且未 `.globl` | 是，局部符号 | 否 | 别的文件引用它会留下 `U`，链接失败 |\n| `foo:` 且 `.globl foo` | 是，全局符号 | 是 | 可解析其它文件的未定义引用 |\n\n排查「找不到符号」时，先看引用方是否有 `U`，再看提供方是否真的用 `.globl` 导出，最后确认标签名没有以 `L` 或 `l` 开头。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-visibility"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：问题出在哪一步",
+        "markdown": "某同学把 `bar1` 写在 `14-foo.s` 中，但忘了写 `.globl bar1`，随后链接 `14-main.o` 时报错说 `bar1` 未定义。请回答：\n\n1. `nm 14-main.o` 中 `bar1` 应显示为什么类型？为什么？\n2. `nm 14-foo.o` 中 `bar1` 是否仍然出现？它属于哪种可见性？\n3. 修复只需要改哪一处，为什么不需要改 `14-main.o`？\n\n参考要点：引用方仍是 `U`，因为它没有定义；`14-foo.o` 里 `bar1` 以局部符号出现，存在但对其他目标文件不可见；只需在定义处补 `.globl bar1`，因为调用方本来就期待由外部提供地址。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-visibility",
+            "model-visibility-table"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "把本点串成一条链：\n\n- **记录**：标签在目标文件中变成符号，`nm` 可查看。\n- **静态解析**：地址未定的符号进入重定位表，链接器依据它改写调用指令。\n- **动态解析**：调用先经过桩函数，GOT 表项在首次调用时由动态链接器改写，之后直达。\n- **链接期契约**：可执行文件记录动态库名字，并在链接时检查所有符号可解析。\n- **可见性**：`L` 或 `l` 标签不进符号表，未 `.globl` 为局部符号，`.globl` 才可被外部解析。\n\n下一知识点「目标文件链接」会把这条符号与地址的链路延伸到汇编目标文件与 C 目标文件的互相链接。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-symbol-table",
+            "tb-relocation",
+            "tb-binding-process",
+            "tb-dylib-link",
+            "tb-visibility"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "visibility-link-check",
+        "type": "formative-check",
+        "title": "可见性排查检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-visibility"
+        ],
+        "learningPurpose": "检查学习者能否根据标签写法和 nm 输出定位跨文件链接失败的原因。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-visibility",
+            "model-visibility-table"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "expectedReasoning": "引用方为 U，定义方缺少 .globl 导致符号仅为局部，因此不可被外部解析。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请说明：当定义方忘记写 `.globl` 时，引用方与定义方的 `nm` 输出各是什么状态，以及应修改哪一处。"
+        }
+      }
+    ]
+  },
+  "subtitle": "汇编、链接与调试",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000122"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号"
+      ],
+      "lineStart": 2631,
+      "lineEnd": 2640,
+      "assetRefs": [],
+      "excerptSha256": "4aca835a0b0d3994ba99ce86b9e2caea984d26a870f9de5526b2178370bb3326"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000123"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "符号表"
+      ],
+      "lineStart": 2641,
+      "lineEnd": 2654,
+      "assetRefs": [
+        "./assets/14-nm-main.png"
+      ],
+      "excerptSha256": "3368506a0e44dc158a1b3172cc268de630265d66899d42b31f47edbaa02bf8aa"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000124"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "重定位"
+      ],
+      "lineStart": 2655,
+      "lineEnd": 2658,
+      "assetRefs": [],
+      "excerptSha256": "674a2f55688bdd0aebc8f9178a5d70d717013064aa5bc73f96aba15b62a3aef4"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000125"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "动态绑定"
+      ],
+      "lineStart": 2659,
+      "lineEnd": 2673,
+      "assetRefs": [],
+      "excerptSha256": "80ce475339ece82a797d110aa94901077ad93475b83a7c2b9e5e56e4bdb04f40"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000126"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "动态绑定",
+        "动态绑定过程"
+      ],
+      "lineStart": 2674,
+      "lineEnd": 2709,
+      "assetRefs": [],
+      "excerptSha256": "09ed8990a548365a71fac725e924ad87a14628dd945275ef906a5a3b10415d19"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000127"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "动态绑定",
+        "编译链接时的动态链接库"
+      ],
+      "lineStart": 2710,
+      "lineEnd": 2732,
+      "assetRefs": [],
+      "excerptSha256": "dc52fa877003a72629e4f1abde0c0cd1e75257123ba141cb3033f03519a5e39a"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000128"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "调试符号"
+      ],
+      "lineStart": 2733,
+      "lineEnd": 2738,
+      "assetRefs": [],
+      "excerptSha256": "5521574136d39e0734a67002a9f9fe4b13228aff6c51b8c5c1e402e2f058ea74"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000129"
+      ],
+      "headingPath": [
+        "汇编、链接与调试",
+        "符号",
+        "可见性"
+      ],
+      "lineStart": 2739,
+      "lineEnd": 2752,
+      "assetRefs": [],
+      "excerptSha256": "1a4833c40053f54647f21d9c1f35595b1b380e00924e7cb4361ae29d9bc4812e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2236,
+    495
+  ],
+  "scale": 0.93
+}

@@ -1,0 +1,509 @@
+{
+  "id": "point-17-2",
+  "title": "底层机制",
+  "shortSummary": "介绍分裂与合并、空闲链表和边界标记等空闲空间管理的底层机制与实现细节。",
+  "keyTerms": [
+    "分裂",
+    "合并",
+    "空闲链表",
+    "边界标记"
+  ],
+  "animationType": "freeListSplitMerge",
+  "animationSuggestion": "用一条水平堆条带表示地址空间，节点显示起始地址与长度；分配时高亮被选中的空闲块并出现分割切口，释放时高亮归还块并演示与左右相邻空闲块的合并吸合；允许切换到“不合并”模式对比同一序列产生的碎片，并可重播同一请求序列。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-17-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于分割、合并、头块、嵌入空闲列表与堆增长的定义和数值示例，围绕“一次分配与释放改了哪些字段”重组讲解，并补充地址核算与边界讨论。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-split-coalesce",
+          "text": "说明分配器何时分割空闲块、何时合并相邻空闲块，以及两种操作各自防止的问题。"
+        },
+        {
+          "id": "trace-alloc-free",
+          "text": "依据头块与嵌入的空闲链表，追踪一次 malloc 与一次 free 之后地址、块大小和链表节点的变化。"
+        },
+        {
+          "id": "judge-heap-growth",
+          "text": "判断堆耗尽或碎片化时应当合并空闲块还是向操作系统申请增长，并说明各自代价。"
+        }
+      ],
+      "misconceptions": [
+        "以为释放内存只需把块加回空闲列表，不合并也不会影响后续分配。",
+        "以为 free(ptr) 的调用者必须再告诉库这块内存有多大。",
+        "以为头块里的幻数能防止越界写，把它当成安全防护而不是一致性检查。"
+      ],
+      "modules": [
+        {
+          "id": "mechanism-overview",
+          "title": "先看机制，不急着挑策略",
+          "role": "orientation",
+          "outcomeRefs": [
+            "explain-split-coalesce"
+          ],
+          "order": 0
+        },
+        {
+          "id": "split-coalesce",
+          "title": "分割与合并：同一个堆的两种整形动作",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-split-coalesce"
+          ],
+          "order": 1
+        },
+        {
+          "id": "header-tracking",
+          "title": "头块：让 free 只凭指针就知道大小",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-alloc-free"
+          ],
+          "order": 2
+        },
+        {
+          "id": "embedded-free-list",
+          "title": "在空闲空间内部存放空闲链表",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-alloc-free"
+          ],
+          "order": 3
+        },
+        {
+          "id": "heap-growth",
+          "title": "堆耗尽时：失败还是增长",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "judge-heap-growth"
+          ],
+          "order": 4
+        },
+        {
+          "id": "mechanism-check",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-split-coalesce",
+            "trace-alloc-free",
+            "judge-heap-growth"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-split-coalesce",
+          "trace-alloc-free",
+          "judge-heap-growth"
+        ],
+        "method": "完成检查题中的分配路径判断，并写出一次释放后的空闲列表状态。",
+        "successCriteria": [
+          "能指出分割发生在请求小于空闲块时，合并发生在释放且相邻块空闲时",
+          "能从指针反推头块位置并给出实际消耗的字节数",
+          "能区分“碎片导致找不到连续块”和“堆真的用完了”两种失败原因"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-17-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "mechanism-map",
+        "kind": "explanation",
+        "title": "教材：三种通用机制",
+        "moduleId": "mechanism-overview",
+        "depth": "core",
+        "markdown": "本节先不谈“该选哪一块空闲空间”，而是介绍大多数分配程序都采用的通用机制：先是空间**分割**与**合并**的基本知识，其次是如何快速、相对轻松地追踪已分配空间的大小，最后是如何利用空闲区域内部的空间维护一个简单列表，来追踪空闲与已分配的空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000213"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "底层机制"
+              ],
+              "lineStart": 3904,
+              "lineEnd": 3907,
+              "assetRefs": [],
+              "excerptSha256": "2455a4dc782104dbeb8ea2f04adb91186f49b76d9fc08750bf84fb4d8b125cc9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mechanism-order",
+        "kind": "explanation",
+        "title": "模型补充：机制与策略是两层问题",
+        "moduleId": "mechanism-overview",
+        "depth": "support",
+        "markdown": "把机制和策略分开看，后面的内容会清楚很多。\n\n**机制**回答“能不能做”：怎么把一块空闲空间切成两段，怎么把相邻两段拼回去，怎么从裸指针找回这块内存的大小，怎么在没有额外存储的情况下保存链表。**策略**回答“选哪一个”：同一个请求，是从链表头第一块开始试，还是遍历全部挑最合适的。\n\n同一套机制可以配任何策略，所以本节的操作在下一点讨论首次适配、最优适配时都不需要改动。反过来说，策略再聪明也救不了缺失的机制：不会合并的话，一个完全空闲的堆也会因为被切成碎片而拒绝大请求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "mechanism-map"
+          ]
+        }
+      },
+      {
+        "id": "split-and-coalesce",
+        "kind": "mechanism",
+        "title": "教材：分割与合并",
+        "moduleId": "split-coalesce",
+        "depth": "core",
+        "markdown": "空闲列表记录堆中哪些空间还没有分配。假设堆只有 30 字节，布局是“空闲 10、已用 10、空闲 10”，空闲列表就有两个元素：一个描述字节 0～9，另一个描述字节 20～29。此时任何大于 10 字节的请求都会失败并返回 `NULL`，因为没有足够大的连续空闲空间；恰好 10 字节的请求可以用两块中任意一块满足。\n\n如果只申请 1 个字节，分配程序会执行**分割（splitting）**：找到一块能满足请求的空闲空间，切成两段，第一段返回给用户，第二段留在空闲列表。教材的例子中选择第二块，`malloc()` 返回地址 20，随后空闲列表中第二个节点的起始位置由 20 变成 21，长度由 10 变成 9，其余基本不变。所以只要请求空间小于某块空闲块，分配程序通常就会分割。\n\n释放时问题方向相反。仍看这个堆，如果调用 `free(10)` 归还中间那块，而分配程序只是简单地把空闲空间加回列表，结果是：整个堆已经全部空闲，看起来却被切成 3 个 10 字节区域；这时请求 20 字节，遍历列表找不到合适块，于是失败。\n\n**合并（coalescing）** 就是为此存在：归还一块内存时，分配程序仔细查看这块内存的地址与紧邻它的空闲块，只要新归还的空间与一个（或两个）原有空闲块相邻，就把它们并成一个更大的空闲块。合并后空闲列表回到分配前的样子，大块空闲空间又能提供给应用程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000214"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "分割与合并"
+              ],
+              "lineStart": 3908,
+              "lineEnd": 3939,
+              "assetRefs": [
+                "parts/part-0002/images/18ac2d3ad0901fa608b6e222bf1537f01b1fcbd48f98b6f671cd96ac60736262.jpg",
+                "parts/part-0002/images/4ee0a8306a4ef34b35663b08eee3bc4f65c4c9175b8e4aa3abd49b139e9a32e6.jpg",
+                "parts/part-0002/images/3c77e30d16e1cca9a0eedf637be98b3b9e494a89004417a9411c90463c3eafec.jpg",
+                "parts/part-0002/images/89753caf03d6d33d74bee080320d6d0a5d33cd925bc47615aa461383ad37c4de.jpg"
+              ],
+              "excerptSha256": "e49ca06f0be6e359163f3dae1cc2658c3fe5d967ab8d56a6d9494bef6ee9e830"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-split-boundary",
+        "kind": "note",
+        "title": "模型补充：分割的阈值与合并的定位成本",
+        "moduleId": "split-coalesce",
+        "depth": "support",
+        "markdown": "教材说请求小于空闲块时“通常会分割”，但“通常”留出了工程空间：如果切完剩下的空间连一个链表节点都放不下，再把它挂进空闲列表反而是纯开销，分配器往往会把整块给出。具体阈值属于实现选择，教材本段没有给出数值，这里只把它记为需要意识到的边界。\n\n合并的难点在“相邻”。分配程序手里只有一个指针，它无法凭空知道这块内存前后是什么状态，也不知道前一块的起始地址——除非这块内存自己记录了大小。这正是下一节引入头块的原因：没有大小信息，连“往左看一步”都做不到。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "split-and-coalesce"
+          ]
+        }
+      },
+      {
+        "id": "header-tracking",
+        "kind": "mechanism",
+        "title": "教材：追踪已分配空间的大小",
+        "moduleId": "header-tracking",
+        "depth": "core",
+        "markdown": "`free(void *ptr)` 接口没有块大小参数，因此它必须假定：给定一个指针，内存分配库能很快确定要释放的空间有多大。\n\n大多数分配程序在**头块（header）** 中保存一点额外信息，位置通常在返回给用户的内存块之前。教材的例子是一个 20 字节的已分配块，`ptr = malloc(20)` 之后，头块中至少有分配空间的大小（这里是 20），也可能包含加速释放的指针、用于完整性检查的幻数等。一个简单的头块定义是：\n\n```c\ntypedef struct header_t {\n    int size;\n    int magic;\n} header_t;\n```\n\n调用 `free(ptr)` 时，库用简单指针运算得到头块位置：`header_t *hptr = (void *)ptr - sizeof(header_t);`。先检查幻数是否符合预期（`assert(hptr->magic == 1234567)`）作为正常性检查，再计算要释放的空间大小。这里有个小但重要的细节：实际释放的是**头块大小加上分配给用户的空间**。所以用户请求 N 字节时，库寻找的不是大小为 N 的空闲块，而是 N 加上头块大小的空闲块。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000215"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "追踪已分配空间的大小"
+              ],
+              "lineStart": 3940,
+              "lineEnd": 3969,
+              "assetRefs": [
+                "parts/part-0002/images/592570e20abd549cf99eae0e9a69d7498ed563c676253b9cb08b4bf25868695c.jpg",
+                "parts/part-0002/images/dbac8979c3c3728d69ebb1a143144fa343319ab40180efb586f758ee65523f7b.jpg"
+              ],
+              "excerptSha256": "62b7089493860b1c75520e26396c0aff5a98b14f4a4e62af612bca903779b41e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-header-accounting",
+        "kind": "worked-example",
+        "title": "模型补充：把 8 字节头块算进每次分配",
+        "moduleId": "header-tracking",
+        "depth": "support",
+        "markdown": "用教材后文的设定算一遍更直观：头块由两个整数组成，占 8 字节。一次 100 字节请求实际从空闲块中取走 108 字节，其中 8 字节是头块，100 字节给用户；分配器内部“找块”的判断都用 108 这类含头块的尺寸，而不是用户看到的 100。\n\n两个推论值得记住：小块请求的开销比例很高，1 字节的请求实际占用 9 字节；幻数只能发现“这个位置看起来不像我写的头块”这类粗粒度异常，属于健全性检查，不构成安全边界——越界写仍然可以改掉相邻块的头块并伪造一个合法幻数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "header-tracking"
+          ]
+        }
+      },
+      {
+        "id": "embedded-free-list",
+        "kind": "procedure",
+        "title": "教材：在空闲空间内部嵌入空闲列表",
+        "moduleId": "embedded-free-list",
+        "depth": "core",
+        "markdown": "到此为止空闲列表还是概念上的存在。真正的问题是：在空闲内存自己内部怎么建立并维护这个列表？通常的链表做法是先 `malloc()` 一个节点，但分配库内部不能这么做。\n\n教材用 4096 字节的堆演示。初始化后列表只有一个条目，记录大小为 4096 减去头块大小之后的空间，节点结构为 `typedef struct node_t { int size; struct node_t *next; } node_t;`。假设堆通过 `mmap()` 获得，初始化代码把第一个空闲节点直接放在这块空间上：`head->size = 4096 - sizeof(node_t); head->next = NULL;`，执行后列表只有一个 4088 字节的条目，`head` 指向区域起始地址（教材假设为 16KB）。\n\n接着来一个 100 字节请求。库里只有一个 4088 字节块，于是选中并分割：一块足够满足请求（含 8 字节头块），一块是剩余空闲块。这次分配取走 108 字节，返回指针 `ptr`，头块信息写在它前面连续的 8 字节中，空闲节点缩小为 3980 字节（4088 − 108）。\n\n再经过两次 100 字节分配，堆的前 324 字节已分配，其中有 3 个头块和 3 个 100 字节用户区，空闲列表仍只有一个节点，但只剩 3764 字节。\n\n现在调用 `free(16500)` 归还中间那块：这个地址等于堆起始 16384 加上前一块的 108，再加上本块头块的 8 字节。库立刻弄清要释放的大小，把空闲块插回列表（教材选择插入头部），此时列表有两个元素：头部一个 100 字节的小空闲块，另一个是 3764 字节的大空闲块。\n\n最后一个例子：如果剩余两块已分配空间也被释放，而分配程序忘了合并，整个内存虽然全部空闲，却被切成许多小段，空闲列表非常破碎。解决办法就是遍历列表，把相邻块合并，堆又变回一个整体。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000216"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "嵌入空闲列表"
+              ],
+              "lineStart": 3970,
+              "lineEnd": 4032,
+              "assetRefs": [
+                "parts/part-0002/images/e2781c222d99f406efcc5abdaa9f7e376dcc6cb3228c205d2f3c848ea964bc1b.jpg",
+                "parts/part-0002/images/819af1cb829f7573cfcb9b57c860a2fdb9efb20c878795c3da462c0b08d68b59.jpg",
+                "parts/part-0002/images/abc384723623b72d291100e5f2d037a50bff1fdeeef8c9bbd923cfca16a209b5.jpg",
+                "parts/part-0002/images/492de096a8538fb1a7ed8e1beb1aec6939749f6562b0589842f6c8a3a05edabb.jpg"
+              ],
+              "excerptSha256": "3230dedc448842b1b5fe0cd331ea7054b96605fe1096853cb2ab02357d00e052"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-embed-trace",
+        "kind": "worked-example",
+        "title": "模型补充：跟着地址核对状态变化",
+        "moduleId": "embedded-free-list",
+        "depth": "core",
+        "markdown": "把教材的 4KB 例子压成可核对的核算，重点看地址与尺寸如何互相印证。\n\n| 时刻 | 空闲列表 | 说明 |\n|---|---|---|\n| 初始化 | 一个节点，4088 字节，起始 16384 | 4096 中先扣掉节点自身 |\n| 一次 100 字节分配后 | 一个节点，3980 字节 | 取走 108 = 8 头块 + 100 用户区 |\n| 三次分配后 | 一个节点，3764 字节 | 324 = 3 × 108 已分配 |\n| `free(16500)` 之后 | 两个节点：100 与 3764 | 归还块插入表头，彼此不相邻 |\n| 其余两块也释放且不合并 | 多个小节点 | 堆全空闲，但满足不了 20 字节的连续请求 |\n\n`free` 的地址值得单独算：16384 + 108（第一块整体）+ 8（本块头块）= 16500，正好是用户区起点，库再由 `ptr - 8` 找到本块头块读出 100。这说明“释放”只需要用户手里的指针，尺寸信息完全来自头块。\n\n最后一行也提示了顺序：合并发生在**释放时**，不是等下一次分配才补救；教材的结论是遍历列表合并相邻块，也就是每次归还都维护一次连续性，代价是一两次相邻检查，换来的是大块空闲空间不至于被人为切碎。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "embedded-free-list"
+          ]
+        }
+      },
+      {
+        "id": "heap-growth",
+        "kind": "explanation",
+        "title": "教材：让堆增长",
+        "moduleId": "heap-growth",
+        "depth": "core",
+        "markdown": "最后一个很多分配库都有的机制是：堆中内存耗尽时怎么办？最简单的方式是返回失败，返回 `NULL` 在某些情况下也是唯一的选择。\n\n大多数传统分配程序从很小的堆开始，空间不足时再向操作系统申请更大的空间，通常通过某种系统调用（例如多数 UNIX 系统中的 `sbrk`）让堆增长。操作系统执行 `sbrk` 时会找到空闲的物理内存页，把它们映射到请求进程的地址空间，并返回新的堆末尾地址。于是堆变大，先前失败的请求就能成功满足。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000217"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "让堆增长"
+              ],
+              "lineStart": 4033,
+              "lineEnd": 4038,
+              "assetRefs": [],
+              "excerptSha256": "f3af8d0c059a74cb78040a9ca589027b41b65a537b5e1340d896a489bf966f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-growth-tradeoff",
+        "kind": "comparison",
+        "title": "模型补充：增长解决“没有空间”，不解决“空间不连续”",
+        "moduleId": "heap-growth",
+        "depth": "support",
+        "markdown": "两种失败要分开诊断，修法完全不同。\n\n| 症状 | 真实原因 | 该做什么 |\n|---|---|---|\n| 请求比任何单个空闲块都大，且堆已无剩余 | 堆容量耗尽 | 用 `sbrk` 一类接口增长，或返回 `NULL` |\n| 空闲总量足够，但没有一块连续空间 | 缺少合并，堆被切碎 | 释放时合并相邻块，增长无济于事 |\n\n增长有意义的前提是堆仍是一块连续字节区域，所以 `sbrk` 只能扩展末尾，无法填上中间的洞；它还会触发系统调用、由操作系统分配并映射物理页，可能失败。务实做法是先尝试在现有空闲列表中找块，找不到再考虑增长——如果合并机制正常，很多看似需要增长的请求其实只是被碎片挡住了。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "heap-growth",
+            "embedded-free-list"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "kind": "exercise",
+        "title": "模型补充：达成检查",
+        "moduleId": "mechanism-check",
+        "depth": "core",
+        "markdown": "请先不看上文作答，再对照答案检查路径是否完整。\n\n1. 堆布局为“空闲 10、已用 10、空闲 10”，请求 1 字节。写出分配后的空闲列表节点（起始地址与长度）。\n2. 同一布局下调用 `free(10)`，但分配程序没有合并。此时请求 20 字节会成功吗？为什么？\n3. 执行 `ptr = malloc(100)`（头块 8 字节）后 `free(ptr)`，库内部寻找的空闲块至少多大？它如何从 `ptr` 得到这个数值？\n4. 同一请求在两种情形下都返回 `NULL`：堆已全部用完；或堆还剩 512 字节但被切成 8 个 64 字节的空闲块。分别应当合并还是增长？\n\n要点：第 1 题应给出起始 21、长度 9 的节点（若按策略切另一块，也须给出对应的起始与长度变化）；第 2 题失败，因为空闲总量够了却没有连续 20 字节；第 3 题为 108，库用 `ptr - 8` 找到头块读出 100 再与头块大小相加；第 4 题中碎成小块的堆应先合并相邻块，只有真正没有剩余空间时才考虑增长，因为增长无法填补中间的洞。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "split-and-coalesce",
+            "header-tracking",
+            "embedded-free-list",
+            "heap-growth",
+            "model-growth-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "kind": "summary",
+        "title": "模型补充：机制小结与下一点桥接",
+        "moduleId": "mechanism-check",
+        "depth": "support",
+        "markdown": "把这些机制串成一条链：**头块**让 `free` 只凭指针就知道大小，也让合并能向前定位；**空闲链表节点嵌入空闲空间本身**，使分配库不必为元数据另找存储；**分割**按请求切开大块，**合并**在释放时把相邻块拼回去，共同控制碎片；**堆增长**在真的没有空间时向操作系统要更多页。\n\n需要注意的是，机制只保证分配器“能工作”，不保证“工作得好”。同样一套机制下，先试链表头还是遍历挑最小块，会显著影响碎片与速度，这就是下一点要讨论的基本策略。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check",
+            "model-growth-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "alloc-free-trace-check",
+        "type": "formative-check",
+        "title": "分配与释放路径检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "mechanism-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-alloc-free",
+          "explain-split-coalesce"
+        ],
+        "learningPurpose": "检查学习者能否把教材的 30 字节堆例子迁移到新的请求上，并说明分割与缺失合并各自的后果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "split-and-coalesce",
+            "header-tracking"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": 4
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "画出“空闲 10、已用 10、空闲 10”的堆，标出一次 1 字节分配后的两个空闲区；再标注一次未合并的 free 之后，为什么 20 字节请求会失败。"
+        }
+      }
+    ]
+  },
+  "subtitle": "空闲空间管理",
+  "clusterId": "chapter-17",
+  "clusterIds": [
+    "chapter-17"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000213"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "底层机制"
+      ],
+      "lineStart": 3904,
+      "lineEnd": 3907,
+      "assetRefs": [],
+      "excerptSha256": "2455a4dc782104dbeb8ea2f04adb91186f49b76d9fc08750bf84fb4d8b125cc9"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000214"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "分割与合并"
+      ],
+      "lineStart": 3908,
+      "lineEnd": 3939,
+      "assetRefs": [
+        "parts/part-0002/images/18ac2d3ad0901fa608b6e222bf1537f01b1fcbd48f98b6f671cd96ac60736262.jpg",
+        "parts/part-0002/images/4ee0a8306a4ef34b35663b08eee3bc4f65c4c9175b8e4aa3abd49b139e9a32e6.jpg",
+        "parts/part-0002/images/3c77e30d16e1cca9a0eedf637be98b3b9e494a89004417a9411c90463c3eafec.jpg",
+        "parts/part-0002/images/89753caf03d6d33d74bee080320d6d0a5d33cd925bc47615aa461383ad37c4de.jpg"
+      ],
+      "excerptSha256": "e49ca06f0be6e359163f3dae1cc2658c3fe5d967ab8d56a6d9494bef6ee9e830"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000215"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "追踪已分配空间的大小"
+      ],
+      "lineStart": 3940,
+      "lineEnd": 3969,
+      "assetRefs": [
+        "parts/part-0002/images/592570e20abd549cf99eae0e9a69d7498ed563c676253b9cb08b4bf25868695c.jpg",
+        "parts/part-0002/images/dbac8979c3c3728d69ebb1a143144fa343319ab40180efb586f758ee65523f7b.jpg"
+      ],
+      "excerptSha256": "62b7089493860b1c75520e26396c0aff5a98b14f4a4e62af612bca903779b41e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000216"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "嵌入空闲列表"
+      ],
+      "lineStart": 3970,
+      "lineEnd": 4032,
+      "assetRefs": [
+        "parts/part-0002/images/e2781c222d99f406efcc5abdaa9f7e376dcc6cb3228c205d2f3c848ea964bc1b.jpg",
+        "parts/part-0002/images/819af1cb829f7573cfcb9b57c860a2fdb9efb20c878795c3da462c0b08d68b59.jpg",
+        "parts/part-0002/images/abc384723623b72d291100e5f2d037a50bff1fdeeef8c9bbd923cfca16a209b5.jpg",
+        "parts/part-0002/images/492de096a8538fb1a7ed8e1beb1aec6939749f6562b0589842f6c8a3a05edabb.jpg"
+      ],
+      "excerptSha256": "3230dedc448842b1b5fe0cd331ea7054b96605fe1096853cb2ab02357d00e052"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000217"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "让堆增长"
+      ],
+      "lineStart": 4033,
+      "lineEnd": 4038,
+      "assetRefs": [],
+      "excerptSha256": "f3af8d0c059a74cb78040a9ca589027b41b65a537b5e1340d896a489bf966f56"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    502,
+    2418
+  ],
+  "scale": 0.95
+}

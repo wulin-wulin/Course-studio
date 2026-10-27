@@ -1,0 +1,402 @@
+{
+  "id": "point-49-7",
+  "title": "AFSv2 的扩展性和性能",
+  "shortSummary": "分析 AFSv2 在大规模部署中的扩展性和性能表现及其设计原因。",
+  "keyTerms": [
+    "AFSv2",
+    "扩展性",
+    "性能",
+    "大规模"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.65,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的测量结论、工作负载分类与比值数据，围绕“按工作负载判断取舍”重排为统一比较维度、读写路径分析、决策清单与情境检查。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-scaling",
+          "text": "解释 AFSv2 扩展性提升的来源，并说明每服务器约 50 个客户端这一测量结论的机制。"
+        },
+        {
+          "id": "analyze-workloads",
+          "text": "按文件大小、读写模式与缓存命中条件，分析各类工作负载下 AFS 与 NFS 的相对性能。"
+        },
+        {
+          "id": "judge-tradeoff",
+          "text": "针对给定工作负载判断整文件缓存与块级按需传输的取舍，并说明依据。"
+        }
+      ],
+      "misconceptions": [
+        "认为 AFS 的读取一定比 NFS 慢，因为它把缓存副本放在本地磁盘上；实际上本地文件系统缓存会让重读接近内存命中。",
+        "认为整文件缓存总是更快；当只访问大文件的一小部分时，AFS 需要搬运整个文件而明显落后。",
+        "把扩展性视为与缓存策略无关的协议细节；AFS 的读请求大多留在客户端，才使服务器能支撑更多客户端。",
+        "认为顺序新写时 AFS 会因写本地磁盘而变慢；这些写入先进入页缓存，再在后台落盘。"
+      ],
+      "modules": [
+        {
+          "id": "scaling-evidence",
+          "title": "扩展性证据与机制",
+          "role": "concept-explanation",
+          "description": "先给出测量结论，再把结论拆成读路径与写路径的服务器负载。",
+          "outcomeRefs": [
+            "explain-scaling"
+          ],
+          "order": 0
+        },
+        {
+          "id": "workload-model",
+          "title": "比较基线：符号、假设与读表方法",
+          "role": "quantitative-setup",
+          "description": "固定记号、缓存容量假设与延迟关系，建立解读比值列的方向感。",
+          "outcomeRefs": [
+            "analyze-workloads"
+          ],
+          "order": 1
+        },
+        {
+          "id": "read-paths",
+          "title": "读取路径的胜负与原因",
+          "role": "comparison-analysis",
+          "description": "比较首次读取、重读与大文件局部读取，并还原背后的缓存单位差异。",
+          "outcomeRefs": [
+            "analyze-workloads"
+          ],
+          "order": 2
+        },
+        {
+          "id": "write-paths",
+          "title": "写入路径的代价结构",
+          "role": "comparison-analysis",
+          "description": "比较顺序新写、顺序覆写与单次写入，识别整文件协议的额外读取代价。",
+          "outcomeRefs": [
+            "analyze-workloads"
+          ],
+          "order": 3
+        },
+        {
+          "id": "decision-and-transfer",
+          "title": "情境化取舍与检查",
+          "role": "decision-checklist",
+          "description": "把比较结果转成判断清单，并用混合工作负载情境检验迁移。",
+          "outcomeRefs": [
+            "judge-tradeoff",
+            "explain-scaling"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-scaling",
+          "analyze-workloads",
+          "judge-tradeoff"
+        ],
+        "method": "完成工作负载判断清单并在情境题中给出比值、机制与结论变化。",
+        "successCriteria": [
+          "能说明 AFS 扩展性提升与本地读命中、关闭时整文件提交之间的关系",
+          "能按首次访问与重读分别判断读写性能，并引用表 49.4 的比值方向",
+          "能指出整文件缓存受益与受损的工作负载类型"
+        ],
+        "exerciseBlockId": "model-workload-check",
+        "summaryBlockId": "textbook-conclusion",
+        "nextPointId": "point-49-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-scaling",
+        "moduleId": "scaling-evidence",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材测量结论",
+        "markdown": "有了新协议后，人们对 AFSv2 进行了测量，发现它比原来的版本更具可扩展性：每台服务器可以支持大约 50 个客户端，而不是仅仅 20 个。另一个好处是客户端性能通常非常接近本地性能，因为在通常情况下，所有文件访问都是本地的。文件读取通常转到本地磁盘缓存（可能还有本地内存）。只有当客户端创建新文件或写入现有文件时，才需要向服务器发送 Store 消息，从而用新内容更新文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000678"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFSv2 的扩展性和性能"
+              ],
+              "lineStart": 13057,
+              "lineEnd": 13089,
+              "assetRefs": [],
+              "excerptSha256": "4c524b2304f764e522a5a5f371f62458487fc685cc9c266ee7c88c04730a3f2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scaling-mechanism",
+        "moduleId": "scaling-evidence",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "把扩展性拆成两条负载路径",
+        "markdown": "扩展性提升可以沿两条路径理解：\n\n- **读路径**：客户端优先使用本地缓存副本，服务器不必为每次读取提供数据，也不必逐次验证。\n- **写路径**：更新只在文件关闭时以整文件 Store 提交，服务器接收到的是批量结果，而不是大量小块请求。\n\n因此服务器的主要工作从“服务每一次读写”转为“维护回调承诺并在关闭时接收更新”。客户端和文件数量增长时，服务器需要处理的逐请求往返次数比按块服务模式更少，这就是 20 到 50 这一提升的来源。\n\n需要注意，这是特定测量下的结论，并不是任意规模下的保证：回调状态仍占用服务器内存，崩溃恢复还需要额外协议。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scaling"
+          ]
+        }
+      },
+      {
+        "id": "textbook-workload-model",
+        "moduleId": "workload-model",
+        "depth": "core",
+        "kind": "table",
+        "title": "比较所用符号与假设",
+        "markdown": "表 49.4 用统一的符号比较 AFS 与 NFS 在 11 类工作负载上的大致时间。分析前先固定记号与假设：\n\n| 记号 | 含义 |\n|---|---|\n| $N_s$、$N_m$、$N_L$ | 小文件、中文件、大文件包含的块数 |\n| $L_{net}$ | 跨网络访问远端服务器上文件块的耗时 |\n| $L_{mem}$ | 访问本地内存的耗时 |\n| $L_{disk}$ | 访问本地磁盘的耗时 |\n\n一般假设为 $L_{net} > L_{disk} > L_{mem}$。中小文件可以放入客户端内存，大文件可以放入本地磁盘但不能放入客户端内存。最后假设第一次访问文件没有任何缓存命中；如果相关缓存容量足够保存文件，后续的“重新读取”会在缓存中命中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000678"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFSv2 的扩展性和性能"
+              ],
+              "lineStart": 13057,
+              "lineEnd": 13089,
+              "assetRefs": [],
+              "excerptSha256": "4c524b2304f764e522a5a5f371f62458487fc685cc9c266ee7c88c04730a3f2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ratio-reading",
+        "moduleId": "workload-model",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "如何读 AFS/NFS 比值列",
+        "markdown": "表中最右列是 AFS 时间与 NFS 时间的比值，读法先定方向：\n\n- 比值等于 1：两者大致相当，同一瓶颈（网络或内存）主导。\n- 比值小于 1：AFS 更快，通常因为它命中了更靠近客户端的缓存层。\n- 比值大于 1：AFS 更慢，通常因为它以整个文件为搬运单位。\n\n还要把“首次访问”和“重新读取”分开：两者在两种系统中的缓存落点不同，用单个平均数字概括会掩盖这种差异。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-workload-model"
+          ]
+        }
+      },
+      {
+        "id": "textbook-read-comparison",
+        "moduleId": "read-paths",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "读取类工作负载的教材结论",
+        "markdown": "读取类工作负载的结论可以归为四点：\n\n1. 小、中、大文件的首次顺序读取（工作负载 1、3、5）在两种系统上耗时相当，主要由从远程服务器获取文件决定；AFS 写本地磁盘的开销被客户端文件系统缓存缓冲，因此并不明显。\n2. 小文件与中文件的重读（工作负载 2、4）都在客户端内存命中，两者相当。\n3. 大文件顺序重读（工作负载 6）出现差异：AFS 具有大型本地磁盘缓存，重读时从磁盘取得数据；NFS 只能在客户端内存中缓存块，当文件大于内存时必须重新从服务器获取整个文件。该场景 AFS 大约快一倍，同时 NFS 会增加服务器负载，进而影响扩展性。\n4. 只访问大文件中一小部分数据的工作负载（工作负载 7）在 NFS 上表现更好：AFS 在文件打开时获取整个文件，而 NFS 作为基于块的协议，I/O 量与读写大小成比例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000678"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFSv2 的扩展性和性能"
+              ],
+              "lineStart": 13057,
+              "lineEnd": 13089,
+              "assetRefs": [],
+              "excerptSha256": "4c524b2304f764e522a5a5f371f62458487fc685cc9c266ee7c88c04730a3f2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-why",
+        "moduleId": "read-paths",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "差异背后的缓存单位与缓存位置",
+        "markdown": "把上面的输赢还原成因果链：\n\n1. AFS 的缓存单位是**整个文件**，常驻位置是**本地磁盘**；NFS 的缓存单位是**块**，主要位置是**客户端内存**。\n2. 当工作集大于内存但能放进本地磁盘时，AFS 仍能命中缓存，NFS 则退化为远程访问。\n3. 当一次操作只碰到文件的一小部分时，整文件缓存就变成额外搬运。\n\n所以“AFS 缓存更大”不是无条件优势，它依赖访问模式：完整而重复的顺序访问受益，稀疏或单次访问受损。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-read-comparison",
+            "textbook-workload-model"
+          ]
+        }
+      },
+      {
+        "id": "textbook-write-comparison",
+        "moduleId": "write-paths",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "写入类工作负载的教材结论",
+        "markdown": "写入类工作负载的教材结论：\n\n- **顺序新写（工作负载 8、9）**：两种系统性能相近。AFS 先把文件写入本地缓存副本，关闭文件时按协议强制写回服务器；NFS 把写入缓冲在客户端内存，并在关闭时刷新。AFS 的本地磁盘写入先提交到页缓存，随后在后台落盘，因此利用了客户端操作系统的内存缓存。\n- **大文件顺序覆写（工作负载 10）**：AFS 约慢一倍。文件已存在时，客户端会先完整取回旧文件，随后又整体覆盖；NFS 只覆盖相应块，避免了这次无用的读取。\n- **大文件单次写入（工作负载 11）**：AFS 约慢 $2N_L$ 倍。整文件读入再整文件写回的代价被叠加起来。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000678"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFSv2 的扩展性和性能"
+              ],
+              "lineStart": 13057,
+              "lineEnd": 13089,
+              "assetRefs": [],
+              "excerptSha256": "4c524b2304f764e522a5a5f371f62458487fc685cc9c266ee7c88c04730a3f2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-cost",
+        "moduleId": "write-paths",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "写入代价取决于何时、以什么粒度提交",
+        "markdown": "写入性能的关键在于“何时、以什么粒度提交”：\n\n- **顺序新写**：本地页缓存把磁盘写入延迟摊到后台，关闭时一次 Store 提交，因此与 NFS 的关闭刷新大致同级。\n- **顺序覆写**：整文件协议要求先取回旧内容再整体写回，额外的一次整文件读是结构性成本，而不是实现缺陷。\n- **单次小块写**：读和写都按整个文件计费，代价被文件规模放大。\n\n这解释了为什么工作负载 10、11 的比值分别是 2 和 $2N_L$，而顺序新写仍为 1。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-write-comparison"
+          ]
+        }
+      },
+      {
+        "id": "textbook-conclusion",
+        "moduleId": "decision-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材总结：差异是否重要取决于工作负载",
+        "markdown": "总的来说，NFS 和 AFS 做出了不同的假设，并因此实现了不同的性能结果。这些差异是否重要，总是要看工作负载。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000678"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFSv2 的扩展性和性能"
+              ],
+              "lineStart": 13057,
+              "lineEnd": 13089,
+              "assetRefs": [],
+              "excerptSha256": "4c524b2304f764e522a5a5f371f62458487fc685cc9c266ee7c88c04730a3f2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decision-checklist",
+        "moduleId": "decision-and-transfer",
+        "depth": "core",
+        "kind": "application",
+        "title": "把比较转成判断清单",
+        "markdown": "1. **访问是否覆盖整个文件、且会重复访问？** 若是，AFS 的本地整文件缓存更有利，大文件重读约快一倍。\n2. **是否只访问大文件的一小部分？** 若是，NFS 的块级按需传输更合适，AFS 可能慢到 $N_L$ 倍。\n3. **是否以顺序新写为主？** 两者相当，可让命名空间、安全、管理等其他因素决定。\n4. **是否存在大量顺序覆写或单次写？** 需计入 AFS 的整文件读取代价，约为 2 倍到 $2N_L$ 倍。\n5. **服务器扩展是否是瓶颈？** AFS 把读负载留在客户端，减少逐请求服务；但回调和崩溃恢复需要额外状态与协议成本。\n\n结论不是“AFS 一定更快”，而是“在整文件、顺序、可缓存的访问下 AFS 的优势成立，在稀疏、单次访问下 NFS 更经济”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-conclusion",
+            "textbook-read-comparison",
+            "textbook-write-comparison"
+          ]
+        }
+      },
+      {
+        "id": "model-workload-check",
+        "moduleId": "decision-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "情境检查：混合负载该选谁",
+        "markdown": "**情境**：某集群主要用于大文件顺序重读，另有少量新的中等文件顺序写入，几乎不做覆写或随机小块访问。\n\n请回答：\n\n1. 按表 49.4 的分类，这两类工作负载的 AFS/NFS 比值大致是多少？\n2. 服务器扩展性上，AFS 的读路径为什么能减轻服务器负载？\n3. 如果负载改为对大文件随机读取少量记录，结论会如何变化？\n\n**参考要点**：大文件顺序重读的比值约为 $L_{disk}/L_{net}$，小于 1，AFS 更快；中等文件顺序新写约为 1，两者相当；AFS 的读取命中本地磁盘缓存，服务器无需参与每次读；随机小块访问使 AFS 退化为整文件传输，NFS 更合适。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-decision-checklist",
+            "textbook-workload-model"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "workload-decision-check",
+        "type": "formative-check",
+        "title": "工作负载取舍检查",
+        "anchorBlockId": "model-decision-checklist",
+        "moduleId": "decision-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "judge-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否把读写性能比较迁移到混合工作负载情境，并给出依据而非只记结论。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-read-comparison",
+            "textbook-write-comparison",
+            "textbook-conclusion"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "针对“大文件顺序重读 + 中等文件顺序新写 + 少量随机小块读取”的混合负载，分别判断 AFS 与 NFS 的相对优劣，并写出所依据的工作负载分类与缓存假设。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Andrew 文件系统(AFS)",
+  "clusterId": "chapter-49",
+  "clusterIds": [
+    "chapter-49"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000678"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "AFSv2 的扩展性和性能"
+      ],
+      "lineStart": 13057,
+      "lineEnd": 13089,
+      "assetRefs": [],
+      "excerptSha256": "4c524b2304f764e522a5a5f371f62458487fc685cc9c266ee7c88c04730a3f2d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3662,
+    -615
+  ],
+  "scale": 0.89
+}

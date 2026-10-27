@@ -1,0 +1,475 @@
+{
+  "id": "point-8-2",
+  "title": "尝试1：如何改变优先级",
+  "shortSummary": "分析仅依赖优先级变化的调度尝试为何会产生饥饿和不公平问题，以及需要哪些补充机制。",
+  "keyTerms": [
+    "优先级调整",
+    "饥饿",
+    "不公平",
+    "MLFQ"
+  ],
+  "animationType": "mlfqQueueMigration",
+  "animationSuggestion": "按时间轴逐步演示队列迁移：先让 A 从 Q2 逐级降到 Q0；再从 T=100 加入短工作 B，显示 B 在两个时间片内完成而 A 继续；最后切换为每 1ms 就发起 I/O 的 B，显示它因提前让出 CPU 而一直保持 Q2。每一步标注触发的是规则 3、4a 还是 4b。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-8-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三条规则、三个实例和三项问题结论，按“规则—实例—诊断”重排讲解顺序，并补充设计意图与结构性归因。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-rule-3-4",
+          "text": "说明规则 3、4a、4b 分别在工作进入、用完时间片和主动让出 CPU 时如何改变优先级。"
+        },
+        {
+          "id": "trace-examples",
+          "text": "追踪长工作、短工作到达和 I/O 交互型工作三类实例中的队列迁移与调度结果。"
+        },
+        {
+          "id": "diagnose-problems",
+          "text": "诊断该优先级调整策略导致的饥饿、欺骗调度器和行为漂移问题，并说明为何需要补充规则。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要让新工作从最高优先级开始，就能同时保证短工作响应快和长工作不被忽略。",
+        "把“时间片内主动让出 CPU 就不降级”当成对所有交互型工作都可靠的判断依据。"
+      ],
+      "modules": [
+        {
+          "id": "rules-and-intent",
+          "title": "问题导入与三条规则",
+          "role": "problem-framing",
+          "description": "从混合工作负载出发，引出规则 3、4a、4b 及其设计意图。",
+          "outcomeRefs": [
+            "explain-rule-3-4"
+          ],
+          "order": 0
+        },
+        {
+          "id": "single-long-job",
+          "title": "实例 1：单个长工作",
+          "role": "worked-example",
+          "description": "追踪一个长工作从最高优先级逐级降到最低队列的过程。",
+          "outcomeRefs": [
+            "explain-rule-3-4",
+            "trace-examples"
+          ],
+          "order": 1
+        },
+        {
+          "id": "short-job-arrival",
+          "title": "实例 2：短工作到达",
+          "role": "worked-example",
+          "description": "分析新到达的短工作如何在降级前完成，从而近似 SJF。",
+          "outcomeRefs": [
+            "trace-examples"
+          ],
+          "order": 2
+        },
+        {
+          "id": "io-interactive",
+          "title": "实例 3：I/O 与交互型工作",
+          "role": "worked-example",
+          "description": "分析规则 4b 如何让频繁进行 I/O 的工作保持在最高优先级。",
+          "outcomeRefs": [
+            "trace-examples"
+          ],
+          "order": 3
+        },
+        {
+          "id": "problem-diagnosis",
+          "title": "问题诊断：这个策略还缺什么",
+          "role": "diagnosis",
+          "description": "归纳饥饿、愚弄调度器和行为变化三类结构性缺陷。",
+          "outcomeRefs": [
+            "diagnose-problems",
+            "trace-examples"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-rule-3-4",
+          "trace-examples",
+          "diagnose-problems"
+        ],
+        "method": "用一次队列迁移推演和一次缺陷判断说明规则 3、4a、4b 的行为及其后果。",
+        "successCriteria": [
+          "能正确说明三条规则各自触发入队、降级或保持优先级的时机",
+          "能指出仅靠这三条规则无法保证长工作推进，也无法阻止工作伪装成交互型",
+          "能说明为什么需要周期提升优先级等补充机制"
+        ],
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-8-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-rule-3-4",
+        "moduleId": "rules-and-intent",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材规则：进入、用完时间片与主动让出",
+        "markdown": "MLFQ 需要决定工作在其生命周期中的优先级如何变化。教材同时考虑两类负载：运行时间很短、频繁放弃 CPU 的交互型工作，以及需要大量 CPU 时间但响应时间并不重要的计算密集型工作。第一次尝试给出三条规则。\n\n- 规则 3：工作进入系统时，放在最高优先级（最上层队列）。\n- 规则 4a：工作用完整个时间片后，降低其优先级，移入下一个队列。\n- 规则 4b：如果工作在其时间片以内主动释放 CPU，则优先级保持不变。\n\n规则 3 与 4a、4b 合起来构成了一个只用“是否用完时间片”来判断工作性质的反馈回路。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "尝试1：如何改变优先级"
+              ],
+              "lineStart": 2348,
+              "lineEnd": 2357,
+              "assetRefs": [],
+              "excerptSha256": "62f6ad266d67f0f9ff2eb53c9b980995e265c814bcdd2bf91768eec12b23bdf4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rule-intent",
+        "moduleId": "rules-and-intent",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：这套规则想学到什么",
+        "markdown": "三条规则背后的假设是：新工作最可能是短工作，因此先给它最高优先级；真正占用 CPU 很久的工作迟早会用完时间片，于是被逐级下移。这样一来，调度器不需要预先知道工作长度，只靠“用完时间片”这一可观察行为就能推断其类型，从而在运行中学习工作行为，用历史预测未来。\n\n需要强调的是：规则 4a 的触发条件是时间片被用尽，规则 4b 的触发条件是工作自己提前让出 CPU。二者互斥，因此每次运行结束都必然落入“降一级”或“保持不变”其中之一。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-rule-3-4"
+          ]
+        }
+      },
+      {
+        "id": "tb-long-job",
+        "moduleId": "single-long-job",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材实例 1：单个长工作的逐级下降",
+        "markdown": "设调度程序有三个队列、时间片为 10ms。系统中只有一个需要长时间运行的工作时，它首先进入最高优先级队列 Q2。执行一个 10ms 时间片后，规则 4a 将其优先级降低一级，进入 Q1；在 Q1 再执行一个时间片后，它最终被降到最低优先级队列 Q0，并一直留在那里。\n\n也就是说，一个纯 CPU 密集型工作最多经历两次降级就到达最低队列，此后每次仍然用完时间片，但因已在最低队列而不再下移。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000111"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "实例 1：单个长工作"
+              ],
+              "lineStart": 2358,
+              "lineEnd": 2368,
+              "assetRefs": [
+                "parts/part-0001/images/62b9c22f679d88d2494f3de0a8efb16c8950323f1c001b16d7c36c64fe3a3b74.jpg"
+              ],
+              "excerptSha256": "4fe4e1ba21a43fea918dea54f0b4e268f3ee96b4f09f3c16ab1a2b129c0064f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-long-job-reading",
+        "moduleId": "single-long-job",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充说明：降级阶梯是有限且记忆性的",
+        "markdown": "这个实例说明两件事。第一，降级阶梯的层数决定了一个工作被“误判”为长工作所需的惩罚次数：队列越少，工作越快沉到底部。第二，优先级一旦降下去就不会在本策略中回升，因此工作沉到 Q0 之后，它的历史被永久固定为“长工作”。正是这个单向性，为后文的饥饿问题埋下伏笔。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-long-job"
+          ]
+        }
+      },
+      {
+        "id": "tb-short-job-arrives",
+        "moduleId": "short-job-arrival",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材实例 2：短工作到达时近似 SJF",
+        "markdown": "现在考虑两个工作：A 是长时间运行的 CPU 密集型工作，B 是运行时间很短的交互型工作，B 在 A 执行一段时间后到达。由于 A 已经用完过时间片，它正在最低优先级队列执行。B 在时间 T=100 时到达，按规则 3 被加入最高优先级队列。B 只需要 20ms，因此在被移入最低优先级队列之前，经过两个时间片就执行完毕，随后 A 在低优先级继续运行。\n\n这一过程体现了算法的目标：如果不知道工作是短还是长，就在开始时假设它是短工作并赋予最高优先级；如果它确实是短工作，就会很快完成；否则会被慢慢移入低优先级队列，此时它也被当作长工作。通过这种方式，MLFQ 近似于 SJF。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "实例 2：来了一个短工作"
+              ],
+              "lineStart": 2369,
+              "lineEnd": 2376,
+              "assetRefs": [],
+              "excerptSha256": "f1fd9003484c7b2c0a918dd4e6771d99938ac98bfd8f429ef7676a51f82fab6d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sjf-approximation",
+        "moduleId": "short-job-arrival",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么这算“近似”而不是真正的最短任务优先",
+        "markdown": "真正的 SJF 需要事先知道每个工作的运行时间，而这里只用“是否在时间片内完成”来猜测。猜对的代价很低：短工作从最高队列开始，几乎立即获得 CPU；猜错的代价是长工作多经历几次降级。\n\n因此“近似”的含义是：短工作获得接近优先服务的响应，而长工作被推迟但没有被排除。这个性质能否保持，取决于长工作是否还有机会重新获得高优先级——而这正是本策略尚未解决的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-short-job-arrives"
+          ]
+        }
+      },
+      {
+        "id": "tb-io-interactive",
+        "moduleId": "io-interactive",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材实例 3：有 I/O 时规则 4b 的作用",
+        "markdown": "考虑带 I/O 的例子。按规则 4b，如果进程在时间片用完之前主动放弃 CPU，它的优先级保持不变。这条规则的意图很直接：交互型工作通常有大量 I/O 操作，例如等待键盘或鼠标输入，它会在时间片用完之前放弃 CPU；此时不应惩罚它，只需保持其优先级。\n\n教材中的运行过程是：交互型工作 B 每执行 1ms 就需要进行一次 I/O 操作，它与长时间运行的 A 竞争 CPU。因为 B 总是主动让出 CPU，MLFQ 让它保持在最高优先级，从而让交互型工作快速运行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000113"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "实例 3：如果有 I/O 呢"
+              ],
+              "lineStart": 2377,
+              "lineEnd": 2388,
+              "assetRefs": [
+                "parts/part-0001/images/d66976e42bcacf2f9cf7a798a9bebd0d3a66b4da427f29c9d873a644b2281723.jpg",
+                "parts/part-0001/images/759a70eac7c5b3a5b2851b6483a7d22fde6e42be30185ee3b0cb445710b6928c.jpg"
+              ],
+              "excerptSha256": "6751cfde16913871a0389d71899830528a938a921d87d248b1434bffd7e2f01a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-io-rule-risk",
+        "moduleId": "io-interactive",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充提醒：规则 4b 把“让出 CPU”当成了“是交互型”的证据",
+        "markdown": "对比实例 2 和实例 3 可以看到，同一套规则既能奖励真正的交互型工作，也会奖励任何在时间片结束前让出 CPU 的行为。规则本身并不检查工作让出 CPU 的原因，它只观察“时间片是否用完”。\n\n这在真实负载中通常成立，因为 I/O 等待无法避免；但它是一个可被主动满足的条件。记住这一点，就能理解后文为什么把“愚弄调度程序”列为该算法的严重缺点，而不是边缘情况。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-short-job-arrives",
+            "tb-io-interactive"
+          ]
+        }
+      },
+      {
+        "id": "tb-three-problems",
+        "moduleId": "problem-diagnosis",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材结论：当前 MLFQ 的三个严重问题",
+        "markdown": "至此得到的基本 MLFQ 看似不错：长工作之间可以公平地分享 CPU，短工作和交互型工作也有很好的响应时间。但教材指出它有三个非常严重的缺点。\n\n1. 饥饿（starvation）：如果系统有“太多”交互型工作，它们会不断占用 CPU，导致长工作永远得不到 CPU，也就是被饿死。即使在这种情况下，我们也希望长工作能有所进展。\n2. 愚弄调度程序（game the scheduler）：聪明的用户会重写程序，用不正当手段骗取远超公平份额的资源。上述算法对此束手无策——进程可以在时间片用完之前调用一次 I/O 操作（例如访问一个无关文件）主动释放 CPU，从而保持高优先级并占用更多 CPU 时间。做得好时（例如每运行 99% 的时间片时间就主动放弃一次 CPU），工作可以几乎独占 CPU。\n3. 行为变化：一个程序可能在不同时间表现不同。一个计算密集型进程可能在某段时间表现为交互型进程，但用目前的方法，它不会享受系统中其他交互型工作的待遇。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "当前MLFQ的一些问题"
+              ],
+              "lineStart": 2389,
+              "lineEnd": 2402,
+              "assetRefs": [],
+              "excerptSha256": "fe45d767087a7339b4c9d6bd932afa6874ac7175ebab017e2f655b55b46baa7c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-structural-diagnosis",
+        "moduleId": "problem-diagnosis",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "补充诊断：三个问题来自同一条规则链",
+        "markdown": "把三个问题放在一起看，会发现它们并非彼此独立的偶发缺陷，而是“优先级只降不升、且降级依据单一”这一结构的必然结果。\n\n- 只降不升导致饥饿：一旦长工作沉到最低队列，只要上层持续有工作到达，它就再也没有被选中的机会。\n- 单一依据导致可被愚弄：规则 4b 只奖励“提前让出 CPU”，而不区分让出是否由真实 I/O 等待引起，于是行为可以被人为构造。\n- 历史不可撤销导致无法适应阶段变化：一个阶段性的计算密集型进程即使后来表现得像交互型，也会因为之前的降级记录而被继续当作长工作对待。\n\n由此可以推出修补方向：需要一种机制让沉底的工作重新获得机会，并且判断依据不能只依赖“是否用完时间片”这一可被操纵的信号。教材的第二次尝试正是围绕“周期性提升优先级”展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-three-problems",
+            "tb-rule-3-4"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "problem-diagnosis",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "第一次尝试用规则 3、4a、4b 建立了一个只靠观察行为来调整优先级的反馈回路：新工作从最高优先级开始，用完时间片就降级，主动让出则保持。它让 MLFQ 在不预知工作长度的前提下近似 SJF，并给交互型工作很好的响应。\n\n代价是优先级单向下降：长工作可能被持续到达的交互型工作饿死，调度器可以被刻意提前让出 CPU 的程序欺骗，阶段性的行为变化也无法被识别。下一步的自然想法是给所有工作一个重新回到高优先级的机会。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-three-problems",
+            "tb-rule-3-4"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "priority-change-self-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-structural-diagnosis",
+        "moduleId": "problem-diagnosis",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-problems"
+        ],
+        "learningPurpose": "检查学习者能否把三条规则的触发条件与三类缺陷对应起来，而不是只记住问题名称。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-three-problems",
+            "model-structural-diagnosis"
+          ]
+        },
+        "config": {
+          "questions": [
+            {
+              "prompt": "一个长工作在 Q0，此时持续有交互型工作到达并被放入 Q2。按规则 3、4a、4b，长工作还能运行吗？",
+              "answer": "不能保证。优先级只降不升，只要高优先级队列持续非空，Q0 的工作就得不到 CPU，这就是饥饿。"
+            },
+            {
+              "prompt": "某进程每运行 99% 的时间片就主动发起一次无关 I/O。按规则 4b，它的优先级会怎样变化？",
+              "answer": "保持不变，因为它没有用完时间片就释放了 CPU，于是可以长期占据高优先级，这属于愚弄调度程序。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别描述一个会产生饥饿的场景和一个能愚弄调度程序的场景，并指出它们各自利用了规则 3、4a、4b 中的哪一条。"
+        }
+      }
+    ]
+  },
+  "subtitle": "调度:多级反馈队列",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000110"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "尝试1：如何改变优先级"
+      ],
+      "lineStart": 2348,
+      "lineEnd": 2357,
+      "assetRefs": [],
+      "excerptSha256": "62f6ad266d67f0f9ff2eb53c9b980995e265c814bcdd2bf91768eec12b23bdf4"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000111"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "实例 1：单个长工作"
+      ],
+      "lineStart": 2358,
+      "lineEnd": 2368,
+      "assetRefs": [
+        "parts/part-0001/images/62b9c22f679d88d2494f3de0a8efb16c8950323f1c001b16d7c36c64fe3a3b74.jpg"
+      ],
+      "excerptSha256": "4fe4e1ba21a43fea918dea54f0b4e268f3ee96b4f09f3c16ab1a2b129c0064f5"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000112"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "实例 2：来了一个短工作"
+      ],
+      "lineStart": 2369,
+      "lineEnd": 2376,
+      "assetRefs": [],
+      "excerptSha256": "f1fd9003484c7b2c0a918dd4e6771d99938ac98bfd8f429ef7676a51f82fab6d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000113"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "实例 3：如果有 I/O 呢"
+      ],
+      "lineStart": 2377,
+      "lineEnd": 2388,
+      "assetRefs": [
+        "parts/part-0001/images/d66976e42bcacf2f9cf7a798a9bebd0d3a66b4da427f29c9d873a644b2281723.jpg",
+        "parts/part-0001/images/759a70eac7c5b3a5b2851b6483a7d22fde6e42be30185ee3b0cb445710b6928c.jpg"
+      ],
+      "excerptSha256": "6751cfde16913871a0389d71899830528a938a921d87d248b1434bffd7e2f01a"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000114"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "当前MLFQ的一些问题"
+      ],
+      "lineStart": 2389,
+      "lineEnd": 2402,
+      "assetRefs": [],
+      "excerptSha256": "fe45d767087a7339b4c9d6bd932afa6874ac7175ebab017e2f655b55b46baa7c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4381,
+    3634
+  ],
+  "scale": 0.89
+}

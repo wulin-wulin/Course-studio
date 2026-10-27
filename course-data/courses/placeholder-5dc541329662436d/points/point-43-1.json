@@ -1,0 +1,405 @@
+{
+  "id": "point-43-1",
+  "title": "按顺序写入磁盘",
+  "shortSummary": "说明 LFS 如何把所有更新追加到日志末尾，把随机写转为顺序写。",
+  "keyTerms": [
+    "LFS",
+    "顺序写",
+    "日志结构",
+    "随机写"
+  ],
+  "animationType": "logStructuredAppend",
+  "animationSuggestion": "从左到右展示磁盘块与写指针，按顺序把 D 和 I 追加到空闲区并同步右移写指针，同时高亮旧块保持不变，让学习者看到一次含元数据的更新如何被排成一段连续写入。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-with-worked-example",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于 LFS 动机、读写不对称和追加写示例的原始论证与术语，补充因果链、逐步推演和边界检查，不改变教材事实与结论。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-sequential-write",
+          "text": "解释 LFS 为什么要把所有更新追加到磁盘末尾，以及为什么写可以顺序化而读不能。"
+        },
+        {
+          "id": "trace-update-placement",
+          "text": "追踪一次同时写入数据块与其 inode 的更新，说明这两个块在新布局中的落点。"
+        },
+        {
+          "id": "evaluate-write-order-value",
+          "text": "判断给定情境下顺序写的收益前提，并识别它无法单独解决的问题。"
+        }
+      ],
+      "misconceptions": [
+        "把“顺序写”误解为把数据写回原来的地址并保证连续，而 LFS 实际是追加到空闲区、从不覆写旧块。",
+        "认为顺序化也能改善读性能，但教材明确说明读所需块可能位于磁盘任意位置，读没有放置选择权。",
+        "把“把所有更新顺序写入磁盘”这一基本思想当作 LFS 的全部，忽略垃圾收集和 inode 定位等必要细节。"
+      ],
+      "modules": [
+        {
+          "id": "why-log-structured",
+          "title": "为什么转向日志结构",
+          "role": "motivation",
+          "description": "从写入占比、顺序与随机性能差距、传统布局的写入代价三条线索建立 LFS 的动机。",
+          "outcomeRefs": [
+            "evaluate-write-order-value"
+          ],
+          "order": 0
+        },
+        {
+          "id": "append-and-advance",
+          "title": "追加写原则与读写不对称",
+          "role": "concept",
+          "description": "回答问题“如何让所有写入变成顺序写入”，解释读与写在放置自由权上的差别。",
+          "outcomeRefs": [
+            "explain-sequential-write"
+          ],
+          "order": 1
+        },
+        {
+          "id": "data-and-inode-example",
+          "title": "数据块与 inode 的写盘示例",
+          "role": "worked-example",
+          "description": "用教材的最小例子完整走一遍一次更新包含哪些块、追加到哪里。",
+          "outcomeRefs": [
+            "trace-update-placement"
+          ],
+          "order": 2
+        },
+        {
+          "id": "details-and-boundary",
+          "title": "细节提醒与收益边界",
+          "role": "boundary-check",
+          "description": "结合教材提示划定顺序写收益成立的前提，并指出仍需其他机制解决的问题。",
+          "outcomeRefs": [
+            "evaluate-write-order-value"
+          ],
+          "order": 3
+        },
+        {
+          "id": "transfer-check",
+          "title": "情境迁移检查",
+          "role": "practice",
+          "description": "用两种写入节奏不同的工作负载检验学习者能否迁移追加写原则。",
+          "outcomeRefs": [
+            "explain-sequential-write",
+            "trace-update-placement",
+            "evaluate-write-order-value"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-sequential-write",
+          "trace-update-placement",
+          "evaluate-write-order-value"
+        ],
+        "method": "完成情境迁移练习，说明两种写入节奏下能否形成顺序写，并指出顺序写本身无法解决的后续问题。",
+        "successCriteria": [
+          "能说明写有放置选择权、读没有",
+          "能正确指出数据块 D 与 inode I 被追加到空闲区且旧块保持不变",
+          "能区分顺序写的基本思想与垃圾收集、inode 映射等后续机制"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-43-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-why-lfs",
+        "moduleId": "why-log-structured",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材背景：为什么写入成为瓶颈",
+        "markdown": "20 世纪 90 年代初，伯克利的研究者提出日志结构文件系统（LFS）时，出发点是一条关于工作负载的判断：内存不断变大，能缓存的数据越来越多，磁盘读取会大量落在内存里，因此磁盘流量将主要由写入构成，文件系统性能也就越来越取决于写入性能。\n\n与此同时，随机 I/O 与顺序 I/O 的差距在扩大：传输带宽每年增长约 50%～100%，而寻道和旋转延迟每年只下降约 5%～10%。能顺序使用磁盘，就能获得随时间放大的收益。\n\n教材还指出当时文件系统的三个具体问题：FFS 创建一个新文件要写 inode、inode 位图、目录数据块、目录 inode、数据块和数据位图等多个块，虽然它们位于同一块组，仍会造成多次短寻道；RAID-4 和 RAID-5 的小写问题会把一个逻辑块写放大为多次物理 I/O；现有文件系统也没有主动规避这类最坏写入。\n\nLFS 的回答是把所有更新（包括元数据）先缓冲在内存段中，段满后一次性写到磁盘的未使用位置。它从不覆写旧数据，而是始终追加到空闲区，因此写入接近磁盘的峰值带宽。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000600"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "日志结构文件系统"
+              ],
+              "lineStart": 11774,
+              "lineEnd": 11789,
+              "assetRefs": [],
+              "excerptSha256": "de1d8c670d3fd7ea16787316c881da400cd4a6bd35577e7d586a06d5a23da015"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-motivation-chain",
+        "moduleId": "why-log-structured",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：三条动机如何汇合",
+        "markdown": "把教材给出的动机连成一条因果链会更清楚：\n\n1. 内存变大，读大多在缓存中完成，磁盘流量以写为主；\n2. 顺序带宽增长快于定位延迟改善，顺序写比随机写越来越划算；\n3. 传统布局让一次逻辑更新分散成多个随机块，写性能被定位开销拖住。\n\n所以“追加到空闲位置”不是实现细节，而是针对这条因果链的策略选择：它把多次分散的寻址压缩成一次长传输。需要留意的是，这些动机都是关于写入的，读路径并不会因此自动变快。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-why-lfs"
+          ]
+        }
+      },
+      {
+        "id": "textbook-key-question",
+        "moduleId": "append-and-advance",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材关键问题：写入总有选择",
+        "markdown": "教材紧接着提出本章的核心问题：文件系统如何把所有写入变成顺序写入？\n\n答案的关键在于读写的不对称。对于读取，这个任务是不可能的，因为要读取的所需块可能位于磁盘上的任何位置；但是对于写入，文件系统总是有一个选择，而这正是我们需要利用的选择。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000601"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：如何让所有写入变成顺序写入？"
+              ],
+              "lineStart": 11790,
+              "lineEnd": 11793,
+              "assetRefs": [],
+              "excerptSha256": "8412cf3daa9f59e15a44644c2ef99f62a6eba353949f7f2701168dd26879e605"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-write-asymmetry",
+        "moduleId": "append-and-advance",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：为什么读做不到而写可以",
+        "markdown": "可以把这条不对称性理解成两种约束下的自由度差异：读请求的地址由已有数据布局决定，文件系统只能照着地址去找；写请求只需要让新版本可被后续读到，放在哪个空闲块都行。\n\n因此顺序化不是把随机访问“变成”顺序访问，而是放弃原地覆写、改用追加，把“写到哪”的自由度兑换成“连续写”的收益。代价是旧版本会留在磁盘上变成垃圾，这是后续垃圾收集要解决的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-key-question"
+          ]
+        }
+      },
+      {
+        "id": "textbook-write-example",
+        "moduleId": "data-and-inode-example",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材示例：写数据块 D 同时要写 inode I",
+        "markdown": "教材用最小的例子说明一次写入实际牵动什么。假设要写数据块 D，最直接的布局是把 D 放在磁盘地址 A0。\n\n但一次用户写入不只写数据，还有其他需要更新的元数据。在这个例子里，文件的 inode（记为 I）也要写入磁盘，并让它指向数据块 D，于是写盘后磁盘上同时出现 D 和 I 两个块。教材特别说明，图中 inode 看起来和数据块一样大只是示意，真实系统中数据块通常为 4KB，而 inode 小得多，大约 128B。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000602"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "按顺序写入磁盘"
+              ],
+              "lineStart": 11794,
+              "lineEnd": 11803,
+              "assetRefs": [
+                "parts/part-0005/images/8999d5c830b647bd1aa808d22413e61fdc84d2ca1993248e98c2a36bd46f7b85.jpg",
+                "parts/part-0005/images/6f3204283db42e5b72ec333c8ed39b218e08cc8d6b0ddd70341d3273db887828.jpg"
+              ],
+              "excerptSha256": "d681e7a1708c2c2383abc661abd89c5aca2b13c258accd91feaa5a72e5b36409"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-append-walkthrough",
+        "moduleId": "data-and-inode-example",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：把两块追加到末尾的完整推演",
+        "markdown": "把教材的例子放到 LFS 的规则下走一遍：\n\n- 初始状态：磁盘上有若干已占用块，其后的区域空闲，写指针指向空闲区起点；\n- 本次更新包含两块内容：数据块 D 和指向 D 的 inode I；\n- 按追加规则，D 先写到写指针处，I 紧接其后写入，写指针随之前移；\n- 终态：D 与 I 连续地位于旧的已用区之后，旧的 D、I 位置保持不变。\n\n这个推演说明了“随机写转顺序写”的确切含义：一次更新涉及多少个块并不重要，重要的是这些块被排成一段连续写入，而不是散落到各自的原位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-write-example"
+          ]
+        }
+      },
+      {
+        "id": "textbook-details-hint",
+        "moduleId": "details-and-boundary",
+        "depth": "support",
+        "kind": "warning",
+        "title": "教材提示：一般思想之外的细节",
+        "markdown": "教材在提示框里强调：所有有趣的系统都包含一些一般性的想法和一些细节。学习时如果觉得“已经抓住一般想法，其余只是细节说明”，其实对系统如何运作只是一知半解。\n\n在 LFS 中，简单地把所有更新（例如数据块、inode 等）顺序写入磁盘这一基本思想就是核心；理解这一点，就抓住了基本想法。但就像所有复杂的系统一样，真正构建一个能工作的系统，还必须仔细考虑所有棘手的情况，细节至关重要。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000603"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：细节很重要"
+              ],
+              "lineStart": 11804,
+              "lineEnd": 11809,
+              "assetRefs": [],
+              "excerptSha256": "ad249bca739caf8c2a5426716eb079975085626267805649e3ac41f25c2afc1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-benefit-boundary",
+        "moduleId": "details-and-boundary",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：顺序写收益的前提与边界",
+        "markdown": "结合教材的动机和提示，可以为“顺序写有收益”划出适用范围：\n\n- 收益成立的前提：写入确实占据磁盘流量的主要部分，且能积累足够多的更新一次性连续写出；\n- 不成立的情形：读密集且缓存命中率低时，顺序写并不能改善读的定位开销；更新量太小、必须立即落盘时，也无法形成长传输；\n- 需要额外机制补上的部分：追加会留下失效旧块，必须靠垃圾收集回收；inode 位置不再固定，必须靠 inode 映射定位。\n\n也就是说，顺序写是 LFS 的必要起点，却不是充分条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-details-hint",
+            "textbook-why-lfs"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型练习：判断更新落点",
+        "markdown": "情境：某工作负载每次只产生一个 4KB 的数据块更新，并且每写一次就要求立即持久化；另一工作负载每秒产生数千个更新，可以延迟几百毫秒再落盘。\n\n请判断：\n\n1. 两种情境下，“追加到末尾”分别能带来多少顺序写收益？\n2. 若要保留顺序写的基本思想，可以对哪种情境做缓冲，对哪种情境需要额外机制？\n3. 追加之后，旧块和 inode 的位置发生了什么变化，会引出哪些后续问题？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-append-walkthrough",
+            "model-benefit-boundary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "placement-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "title": "更新落点自检",
+        "outcomeRefs": [
+          "trace-update-placement",
+          "evaluate-write-order-value"
+        ],
+        "learningPurpose": "检查学习者能否把追加写规则迁移到不同写入节奏的情境，并识别它留下的后续问题。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-check"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别说明两种写入节奏下数据块与 inode 的落点，并指出哪些问题不能靠顺序写本身解决。"
+        }
+      }
+    ]
+  },
+  "subtitle": "日志结构文件系统",
+  "clusterId": "chapter-43",
+  "clusterIds": [
+    "chapter-43"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000600"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "日志结构文件系统"
+      ],
+      "lineStart": 11774,
+      "lineEnd": 11789,
+      "assetRefs": [],
+      "excerptSha256": "de1d8c670d3fd7ea16787316c881da400cd4a6bd35577e7d586a06d5a23da015"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000601"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "关键问题：如何让所有写入变成顺序写入？"
+      ],
+      "lineStart": 11790,
+      "lineEnd": 11793,
+      "assetRefs": [],
+      "excerptSha256": "8412cf3daa9f59e15a44644c2ef99f62a6eba353949f7f2701168dd26879e605"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000602"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "按顺序写入磁盘"
+      ],
+      "lineStart": 11794,
+      "lineEnd": 11803,
+      "assetRefs": [
+        "parts/part-0005/images/8999d5c830b647bd1aa808d22413e61fdc84d2ca1993248e98c2a36bd46f7b85.jpg",
+        "parts/part-0005/images/6f3204283db42e5b72ec333c8ed39b218e08cc8d6b0ddd70341d3273db887828.jpg"
+      ],
+      "excerptSha256": "d681e7a1708c2c2383abc661abd89c5aca2b13c258accd91feaa5a72e5b36409"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000603"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：细节很重要"
+      ],
+      "lineStart": 11804,
+      "lineEnd": 11809,
+      "assetRefs": [],
+      "excerptSha256": "ad249bca739caf8c2a5426716eb079975085626267805649e3ac41f25c2afc1e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -294,
+    116
+  ],
+  "scale": 1.23
+}

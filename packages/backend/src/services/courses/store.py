@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -65,6 +66,11 @@ _TEXTBOOK_BLOCK_KINDS = frozenset(
         "other",
     }
 )
+_COURSE_CATALOG_SCHEMA = "course-catalog/1.0"
+_COURSE_CATALOG_FILE = "course-catalog.json"
+_DEFAULT_CATALOG_GROUP_ID = "my-courses"
+_MAX_CATALOG_GROUPS = 200
+_MAX_CATALOG_GROUP_NAME = 80
 _LEGACY_POINT_CONTENT_FIELDS = frozenset(
     {
         "coreIdea",
@@ -1256,8 +1262,448 @@ class CourseStore:
                     "revision": self._stored_revision(course, fallback_revision),
                     "clusters": len(index.get("clusters") or []),
                     "points": len(index.get("points") or []),
+                    "placeholder": course.get("placeholder") is True,
                 })
             return courses
+
+    # ------------------------------------------------------------------
+    # User-managed course catalogue
+    # ------------------------------------------------------------------
+
+    @property
+    def _catalog_path(self) -> Path:
+        """The catalogue is beside ``courses/``, never inside a course package."""
+
+        return self.root.parent / _COURSE_CATALOG_FILE
+
+    def _catalog_course_ids(self) -> list[str]:
+        """Return package IDs without requiring every package to validate."""
+
+        if not self.root.exists():
+            return []
+        identifiers: list[str] = []
+        for item in self.root.iterdir():
+            if item.is_symlink():
+                raise CourseDataError(f"不允许符号链接：{item.name}")
+            if item.is_dir() and _ID_RE.fullmatch(item.name):
+                identifiers.append(item.name)
+        return sorted(identifiers)
+
+    def _read_catalog_raw(self) -> dict[str, Any] | None:
+        path = self._catalog_path
+        if not path.exists():
+            return None
+        if path.is_symlink() or not path.is_file():
+            raise CourseDataError("课程目录配置文件无效")
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CourseDataError(f"课程目录配置读取失败：{exc}") from exc
+        if not isinstance(value, dict):
+            raise CourseDataError("课程目录配置根节点必须是对象")
+        return value
+
+    @staticmethod
+    def _catalog_group_name(value: Any) -> str:
+        if not isinstance(value, str):
+            raise CourseDataError("学科大类名称必须是字符串")
+        name = value.strip()
+        if not name:
+            raise CourseDataError("学科大类名称不能为空")
+        if len(name) > _MAX_CATALOG_GROUP_NAME:
+            raise CourseDataError(f"学科大类名称不能超过 {_MAX_CATALOG_GROUP_NAME} 个字符")
+        return name
+
+    def _normalise_catalog(
+        self,
+        raw: dict[str, Any] | None,
+        course_ids: list[str],
+    ) -> tuple[dict[str, Any], bool]:
+        """Validate, repair, and complete a catalogue snapshot.
+
+        A missing file is intentionally different from an edited file: the
+        first snapshot creates ``我的课程`` and puts every existing package in
+        it.  Later snapshots keep empty groups and only place newly discovered
+        packages in the default/first group.
+        """
+
+        available = set(course_ids)
+        if raw is None:
+            groups: list[dict[str, Any]] = [{
+                "id": _DEFAULT_CATALOG_GROUP_ID,
+                "name": "我的课程",
+                "order": 0,
+                "course_ids": list(course_ids),
+                "edges": [],
+                "layout": {"mode": "hybrid", "positions": {}},
+            }]
+            return {
+                "schema_version": _COURSE_CATALOG_SCHEMA,
+                "revision": self._revision(),
+                "groups": groups,
+            }, True
+
+        if raw.get("schema_version", _COURSE_CATALOG_SCHEMA) != _COURSE_CATALOG_SCHEMA:
+            raise CourseDataError("不支持的课程目录版本")
+        raw_groups = raw.get("groups")
+        if not isinstance(raw_groups, list):
+            raise CourseDataError("课程目录 groups 必须是数组")
+        if len(raw_groups) > _MAX_CATALOG_GROUPS:
+            raise CourseDataError("学科大类数量超过上限")
+
+        parsed: list[tuple[int, dict[str, Any]]] = []
+        seen_ids: set[str] = set()
+        for position, item in enumerate(raw_groups):
+            if not isinstance(item, dict):
+                raise CourseDataError("课程目录中的学科大类必须是对象")
+            group_id = item.get("id")
+            _safe_id(group_id, "group.id")
+            if group_id in seen_ids:
+                raise CourseDataError(f"学科大类 ID 重复：{group_id}")
+            seen_ids.add(group_id)
+            name = self._catalog_group_name(item.get("name"))
+            order = item.get("order", position)
+            if not isinstance(order, int) or isinstance(order, bool):
+                order = position
+            raw_course_ids = item.get("course_ids", [])
+            if not isinstance(raw_course_ids, list):
+                raise CourseDataError(f"学科大类 {group_id} 的课程列表必须是数组")
+            clean_course_ids: list[str] = []
+            for course_id in raw_course_ids:
+                if not isinstance(course_id, str) or not _ID_RE.fullmatch(course_id):
+                    raise CourseDataError(f"课程 ID 无效：{course_id}")
+                if course_id in available and course_id not in clean_course_ids:
+                    clean_course_ids.append(course_id)
+            parsed.append((order, {
+                "id": group_id,
+                "name": name,
+                "order": order,
+                "course_ids": clean_course_ids,
+                "edges": item.get("edges", []),
+                "layout": item.get("layout"),
+            }))
+
+        parsed.sort(key=lambda entry: (entry[0], entry[1]["id"]))
+        groups = [group for _, group in parsed]
+        if not groups:
+            groups = [{
+                "id": _DEFAULT_CATALOG_GROUP_ID,
+                "name": "我的课程",
+                "order": 0,
+                "course_ids": [],
+                "edges": [],
+                "layout": {"mode": "hybrid", "positions": {}},
+            }]
+
+        # A course has one owner.  The first occurrence wins, and newly
+        # created packages go to the default group (or the first visible one
+        # if the original default was deliberately removed).
+        assigned: set[str] = set()
+        for group in groups:
+            unique_course_ids: list[str] = []
+            for course_id in group["course_ids"]:
+                if course_id in assigned:
+                    continue
+                assigned.add(course_id)
+                unique_course_ids.append(course_id)
+            group["course_ids"] = unique_course_ids
+        target = next(
+            (group for group in groups if group["id"] == _DEFAULT_CATALOG_GROUP_ID),
+            groups[0],
+        )
+        target["course_ids"].extend(
+            course_id for course_id in course_ids if course_id not in assigned
+        )
+        for order, group in enumerate(groups):
+            group["order"] = order
+            # External package removal or duplicate ownership can invalidate
+            # endpoints. Drop those edges while preserving the remaining graph.
+            edges = group["edges"]
+            if not isinstance(edges, list):
+                raise CourseDataError("学科大类的课程关系必须是数组")
+            members = set(group["course_ids"])
+            retained = []
+            for edge in edges:
+                if (
+                    not isinstance(edge, dict)
+                    or not isinstance(edge.get("fromId"), str)
+                    or not isinstance(edge.get("toId"), str)
+                ):
+                    raise CourseDataError("每条课程关系必须包含 fromId 和 toId")
+                if edge["fromId"] in members and edge["toId"] in members:
+                    retained.append(edge)
+            group["edges"] = self._validate_catalog_edges(retained, members)
+            group["layout"] = self._validate_catalog_layout(group.get("layout"), members)
+
+        revision = raw.get("revision")
+        if not isinstance(revision, str) or not revision:
+            revision = self._revision()
+        candidate = {
+            "schema_version": _COURSE_CATALOG_SCHEMA,
+            "revision": revision,
+            "groups": groups,
+        }
+        return candidate, candidate != raw
+
+    def _write_catalog(self, catalog: dict[str, Any]) -> dict[str, Any]:
+        catalog = _deepcopy_json(catalog)
+        catalog["schema_version"] = _COURSE_CATALOG_SCHEMA
+        catalog["revision"] = self._revision()
+        path = self._catalog_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(_json_bytes(catalog))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise CourseDataError(f"课程目录保存失败：{exc}") from exc
+        return catalog
+
+    def _catalog_for_mutation(self) -> dict[str, Any]:
+        catalog, changed = self._normalise_catalog(
+            self._read_catalog_raw(), self._catalog_course_ids()
+        )
+        return self._write_catalog(catalog) if changed else catalog
+
+    def _sync_catalog_after_course_change(self, removed_course_id: str | None = None) -> None:
+        """Keep the independent catalogue aligned with package creation/deletion.
+
+        Catalogue metadata must never make a course package impossible to
+        create or delete.  A malformed user-edited catalogue is therefore
+        left for the catalogue endpoint to report and repair explicitly.
+        """
+
+        try:
+            catalog = self._catalog_for_mutation()
+            if removed_course_id is not None:
+                for group in catalog["groups"]:
+                    group["course_ids"] = [
+                        course_id
+                        for course_id in group["course_ids"]
+                        if course_id != removed_course_id
+                    ]
+                    layout = group.get("layout")
+                    if isinstance(layout, dict) and isinstance(layout.get("positions"), dict):
+                        layout["positions"].pop(removed_course_id, None)
+            self._write_catalog(catalog)
+        except CourseDataError:
+            return
+
+    def list_catalog(self) -> dict[str, Any]:
+        with self._lock:
+            catalog, changed = self._normalise_catalog(
+                self._read_catalog_raw(), self._catalog_course_ids()
+            )
+            if changed:
+                catalog = self._write_catalog(catalog)
+            return _deepcopy_json(catalog)
+
+    @staticmethod
+    def _validate_catalog_layout(
+        layout: Any, members: set[str]
+    ) -> dict[str, Any]:
+        """Keep only finite, member-owned graph anchors."""
+        if layout is None:
+            return {"mode": "hybrid", "positions": {}}
+        if not isinstance(layout, dict):
+            raise CourseDataError("课程图谱布局必须是对象")
+        raw_positions = layout.get("positions", {})
+        if not isinstance(raw_positions, dict):
+            raise CourseDataError("课程图谱布局 positions 必须是对象")
+        clean: dict[str, dict[str, Any]] = {}
+        for course_id, raw_position in raw_positions.items():
+            if course_id not in members:
+                continue
+            if not isinstance(raw_position, dict):
+                raise CourseDataError("课程图谱节点位置必须是对象")
+            x, y = raw_position.get("x"), raw_position.get("y")
+            if (
+                isinstance(x, bool)
+                or not isinstance(x, (int, float))
+                or isinstance(y, bool)
+                or not isinstance(y, (int, float))
+                or not math.isfinite(float(x))
+                or not math.isfinite(float(y))
+                or abs(float(x)) > 100000
+                or abs(float(y)) > 100000
+            ):
+                raise CourseDataError("课程图谱节点位置必须是有限数字")
+            pinned = raw_position.get("pinned", True)
+            if not isinstance(pinned, bool):
+                raise CourseDataError("课程图谱节点 pinned 必须是布尔值")
+            clean[course_id] = {
+                "x": round(float(x), 3),
+                "y": round(float(y), 3),
+                "pinned": pinned,
+            }
+        return {"mode": "hybrid", "positions": clean}
+
+    @staticmethod
+    def _validate_catalog_edges(
+        edges: list[dict[str, Any]], members: set[str]
+    ) -> list[dict[str, str]]:
+        adjacency: dict[str, list[str]] = {course_id: [] for course_id in members}
+        indegree = {course_id: 0 for course_id in members}
+        seen: set[tuple[str, str]] = set()
+        clean: list[dict[str, str]] = []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                raise CourseDataError("每条课程关系必须是对象")
+            source, target = edge.get("fromId"), edge.get("toId")
+            if (
+                not isinstance(source, str)
+                or not isinstance(target, str)
+                or source not in members
+                or target not in members
+            ):
+                raise CourseDataError("课程关系的两端必须属于当前学科大类")
+            if source == target:
+                raise CourseDataError("课程不能与自身建立先后关系")
+            if (source, target) in seen:
+                raise CourseDataError("同一条课程先后关系不能重复")
+            seen.add((source, target))
+            adjacency[source].append(target)
+            indegree[target] += 1
+            clean.append({"fromId": source, "toId": target})
+        ready = [course_id for course_id, degree in indegree.items() if degree == 0]
+        visited = 0
+        while ready:
+            source = ready.pop()
+            visited += 1
+            for target in adjacency[source]:
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    ready.append(target)
+        if visited != len(members):
+            raise CourseDataError("课程先后关系不能形成循环")
+        return clean
+
+    def read_catalog_group(self, group_id: str) -> dict[str, Any]:
+        with self._lock:
+            _safe_id(group_id, "group_id")
+            catalog = self._catalog_for_mutation()
+            group = next((item for item in catalog["groups"] if item["id"] == group_id), None)
+            if group is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+            return _deepcopy_json(group)
+
+    def update_catalog_edges(self, group_id: str, edges: list[dict[str, Any]]) -> dict[str, Any]:
+        with self._lock:
+            _safe_id(group_id, "group_id")
+            catalog = self._catalog_for_mutation()
+            group = next((item for item in catalog["groups"] if item["id"] == group_id), None)
+            if group is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+            group["edges"] = self._validate_catalog_edges(edges, set(group["course_ids"]))
+            self._write_catalog(catalog)
+            return _deepcopy_json(group)
+
+    def update_catalog_layout(
+        self, group_id: str, positions: dict[str, dict[str, Any]]
+    ) -> dict[str, Any]:
+        with self._lock:
+            _safe_id(group_id, "group_id")
+            catalog = self._catalog_for_mutation()
+            group = next((item for item in catalog["groups"] if item["id"] == group_id), None)
+            if group is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+            group["layout"] = self._validate_catalog_layout(
+                {"mode": "hybrid", "positions": positions},
+                set(group["course_ids"]),
+            )
+            self._write_catalog(catalog)
+            return _deepcopy_json(group)
+
+    def create_catalog_group(self, name: str) -> dict[str, Any]:
+        with self._lock:
+            catalog = self._catalog_for_mutation()
+            clean_name = self._catalog_group_name(name)
+            if len(catalog["groups"]) >= _MAX_CATALOG_GROUPS:
+                raise CourseDataError("学科大类数量超过上限")
+            group_id = f"group-{uuid.uuid4().hex[:10]}"
+            group = {
+                "id": group_id,
+                "name": clean_name,
+                "order": len(catalog["groups"]),
+                "course_ids": [],
+                "edges": [],
+                "layout": {"mode": "hybrid", "positions": {}},
+            }
+            catalog["groups"].append(group)
+            self._write_catalog(catalog)
+            return _deepcopy_json(group)
+
+    def update_catalog_group(self, group_id: str, name: str) -> dict[str, Any]:
+        with self._lock:
+            _safe_id(group_id, "group_id")
+            catalog = self._catalog_for_mutation()
+            group = next((item for item in catalog["groups"] if item["id"] == group_id), None)
+            if group is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+            group["name"] = self._catalog_group_name(name)
+            self._write_catalog(catalog)
+            return _deepcopy_json(group)
+
+    def delete_catalog_group(self, group_id: str) -> None:
+        with self._lock:
+            _safe_id(group_id, "group_id")
+            catalog = self._catalog_for_mutation()
+            groups = catalog["groups"]
+            group = next((item for item in groups if item["id"] == group_id), None)
+            if group is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+            if len(groups) == 1:
+                raise CourseDataError("至少保留一个学科大类")
+            if group["course_ids"]:
+                raise CourseDataError("请先将该大类中的课程移入其他大类")
+            catalog["groups"] = [item for item in groups if item["id"] != group_id]
+            for order, item in enumerate(catalog["groups"]):
+                item["order"] = order
+            self._write_catalog(catalog)
+
+    def assign_course_to_catalog_group(self, course_id: str, group_id: str) -> dict[str, Any]:
+        with self._lock:
+            _safe_id(course_id, "course_id")
+            _safe_id(group_id, "group_id")
+            if course_id not in self._catalog_course_ids():
+                raise CourseNotFoundError(f"课程不存在：{course_id}")
+            catalog = self._catalog_for_mutation()
+            target = next((item for item in catalog["groups"] if item["id"] == group_id), None)
+            if target is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+            for group in catalog["groups"]:
+                if group is target:
+                    continue
+                group["course_ids"] = [item for item in group["course_ids"] if item != course_id]
+                group["edges"] = [
+                    edge
+                    for edge in group["edges"]
+                    if course_id not in (edge["fromId"], edge["toId"])
+                ]
+                layout = group.get("layout") or {"mode": "hybrid", "positions": {}}
+                if isinstance(layout, dict) and isinstance(layout.get("positions"), dict):
+                    layout["positions"].pop(course_id, None)
+            if course_id not in target["course_ids"]:
+                target["course_ids"].append(course_id)
+            self._write_catalog(catalog)
+            return _deepcopy_json(catalog)
+
+    def reorder_catalog_groups(self, group_ids: list[str]) -> dict[str, Any]:
+        with self._lock:
+            catalog = self._catalog_for_mutation()
+            current_ids = [group["id"] for group in catalog["groups"]]
+            if len(group_ids) != len(set(group_ids)) or set(group_ids) != set(current_ids):
+                raise CourseDataError("排序列表必须完整包含每个学科大类且不能重复")
+            by_id = {group["id"]: group for group in catalog["groups"]}
+            catalog["groups"] = [by_id[group_id] for group_id in group_ids]
+            for order, group in enumerate(catalog["groups"]):
+                group["order"] = order
+            self._write_catalog(catalog)
+            return _deepcopy_json(catalog)
 
     def read_course(self, course_id: str) -> dict[str, Any]:
         with self._lock:
@@ -2211,7 +2657,49 @@ class CourseStore:
             candidate_index.setdefault("points", [])
             self._validate_candidate_or_raise(course_id, course, candidate_index, {})
             self._write_package(course_id, course, candidate_index, {})
+            self._sync_catalog_after_course_change()
             return _deepcopy_json(course)
+
+    def create_placeholder_course(self, title: str, group_id: str) -> dict[str, Any]:
+        """Create an empty course package and assign it to one catalogue group.
+
+        Placeholder packages intentionally contain no clusters or points. They
+        are catalogue/graph presentation nodes only; replacing one with a
+        real course remains a delete-and-create operation.
+        """
+
+        with self._lock:
+            clean_title = title.strip() if isinstance(title, str) else ""
+            if not clean_title:
+                raise CourseDataError("占位课程名称不能为空")
+            if len(clean_title) > 200:
+                raise CourseDataError("占位课程名称不能超过 200 个字符")
+            _safe_id(group_id, "group_id")
+            catalog = self._catalog_for_mutation()
+            target = next((item for item in catalog["groups"] if item["id"] == group_id), None)
+            if target is None:
+                raise CourseNotFoundError(f"学科大类不存在：{group_id}")
+
+            course_id = f"placeholder-{uuid.uuid4().hex[:16]}"
+            course = self._touch_course({
+                "id": course_id,
+                "title": clean_title,
+                "description": "",
+                "language": "zh-CN",
+                "placeholder": True,
+                "schema_version": "1.0",
+            })
+            index = {
+                "schema_version": "1.0",
+                "courseId": course_id,
+                "clusters": [],
+                "points": [],
+            }
+            self._validate_candidate_or_raise(course_id, course, index, {})
+            self._write_package(course_id, course, index, {})
+            target["course_ids"].append(course_id)
+            self._write_catalog(catalog)
+            return {"course": _deepcopy_json(course), "group": _deepcopy_json(target)}
 
     def update_course(self, course_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -2236,6 +2724,7 @@ class CourseStore:
                 if relative.parts[0] != course_id
             }
             self._atomic_sync_tree(self.root, desired)
+            self._sync_catalog_after_course_change(course_id)
 
     def create_cluster(self, course_id: str, cluster: dict[str, Any]) -> dict[str, Any]:
         with self._lock:

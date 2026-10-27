@@ -1,0 +1,505 @@
+{
+  "id": "point-10-2",
+  "title": "内存交互指令",
+  "shortSummary": "介绍加载与存储指令、操作长度、端序和数据对齐对内存访问的影响。",
+  "keyTerms": [
+    "加载",
+    "存储",
+    "端序",
+    "数据对齐"
+  ],
+  "animationType": "memoryAccessLoadStore",
+  "animationSuggestion": "以四格内存和一个 64 位寄存器为主体，按 size 后缀逐字节高亮落位过程，直观展示小端序的低字节在低地址；随后切换到 ldrb 与 ldrsb，用不同底色显示高位是补零还是补符号位，并允许重播同一组数值。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-8-1",
+    "point-10-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "instruction-mechanism-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的指令形式、示例数值与对齐结论，按方向、宽度、扩展、端序、对齐重排讲解顺序，并补充表格、反推算例与达成检查。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-load-store",
+          "text": "说明 ldr 与 str 的读写方向，以及它们在寄存器与内存之间搬运数据的角色。"
+        },
+        {
+          "id": "choose-size-suffix",
+          "text": "根据本次访问的字节数与寄存器宽度，选择或省略正确的 size 后缀。"
+        },
+        {
+          "id": "explain-extension",
+          "text": "解释加载短数据时有符号与无符号扩展如何决定寄存器高位。"
+        },
+        {
+          "id": "trace-endianness",
+          "text": "依据小端序写出多字节值在连续内存单元中的字节分布。"
+        },
+        {
+          "id": "judge-alignment",
+          "text": "判断一次内存访问是否对齐，并说明性能后果与结构体填充的来源。"
+        }
+      ],
+      "misconceptions": [
+        "把 size 后缀当成寄存器宽度，例如认为 strb 会改写整个 32 位寄存器。",
+        "认为 Apple Silicon 会强制拒绝所有不对齐访问，因而把对齐当成正确性硬性要求。",
+        "认为结构体大小等于各字段大小之和，忽略编译器插入的填充字节。",
+        "认为 ldr 总是把与寄存器同宽的内容整体读出，忽略 size 只访问更少字节。"
+      ],
+      "modules": [
+        {
+          "id": "load-store-direction",
+          "title": "读写方向与基本形式",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-load-store"
+          ],
+          "order": 0
+        },
+        {
+          "id": "width-suffix",
+          "title": "操作长度与字节粒度",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "choose-size-suffix"
+          ],
+          "order": 1
+        },
+        {
+          "id": "sign-extension",
+          "title": "读取时的扩展",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-extension"
+          ],
+          "order": 2
+        },
+        {
+          "id": "endianness-bytes",
+          "title": "端序与字节分布",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-endianness"
+          ],
+          "order": 3
+        },
+        {
+          "id": "alignment-padding",
+          "title": "数据对齐与结构体填充",
+          "role": "application",
+          "outcomeRefs": [
+            "judge-alignment"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "summary",
+          "outcomeRefs": [
+            "choose-size-suffix",
+            "explain-extension",
+            "judge-alignment"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-load-store",
+          "choose-size-suffix",
+          "explain-extension",
+          "trace-endianness",
+          "judge-alignment"
+        ],
+        "method": "完成综合检查中的宽度、扩展、端序与对齐四类判断，并写出依据的规则。",
+        "successCriteria": [
+          "能按本次访问的字节数选出正确后缀，并说明何时可以省略",
+          "能区分 ldrb 与 ldrsb 对同一字节的不同扩展结果",
+          "能依据小端序写出多字节值的字节分布",
+          "能判断给定地址是否对齐并说明后果"
+        ],
+        "exerciseBlockId": "alignment-endian-check",
+        "summaryBlockId": "memory-checklist",
+        "nextPointId": "point-10-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "ldr-str-forms",
+        "moduleId": "load-store-direction",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：ldr 与 str 的基本形式",
+        "markdown": "`ldr` 与 `str` 是 ARM64 中最基本的两个内存交互指令，通用写法为：\n\n```plaintext\nldr{sign}{size}    dest_reg, [mem_addr]\nstr{size}          dest_reg, [mem_addr]\n```\n\n粗粒度地看，`ldr` 把内存中的数据读入寄存器，`str` 把寄存器中的数据写入内存。教材用三条示例覆盖了三种典型用法：\n\n- `strb w0, [mem_addr]`：把 `w0` 最低 1 个字节的内容写入地址 `mem_addr` 处的内存。\n- `ldrh x1, [mem_addr]`：把从 `mem_addr` 开始的 2 个字节读入 `x1`，并做无符号扩展。\n- `ldrsb w2, [mem_addr]`：把从 `mem_addr` 开始的 1 个字节读入 `w2`，并做有符号扩展。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "内存交互",
+                "内存交互指令"
+              ],
+              "lineStart": 1130,
+              "lineEnd": 1160,
+              "assetRefs": [],
+              "excerptSha256": "c8466291787ac8e213b1919b8817d88dc55a39f85362cf065b1d07f465654744"
+            }
+          ]
+        }
+      },
+      {
+        "id": "transfer-direction",
+        "moduleId": "load-store-direction",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：方向由助记符决定",
+        "markdown": "可以把寄存器想成手边的工作台、把内存想成仓库：`ldr` 是从仓库取货到工作台，`str` 是从工作台把货放回仓库。方向只由助记符决定，后面的 `{sign}` 与 `{size}` 描述的是取放多少字节、低位如何补齐，不会把方向反过来。所以 `strb` 一定是从寄存器写内存，绝不是从内存读一个字节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ldr-str-forms"
+          ]
+        }
+      },
+      {
+        "id": "size-suffix",
+        "moduleId": "width-suffix",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：操作长度与 size 后缀",
+        "markdown": "AArch64 的通用寄存器是 64 位（8 字节），汇编中能操作的寄存器宽度只有 8 字节（如 `x0`）和 4 字节（如 `w0`）两种，而内存的最小单位是 1 字节。为了让寄存器与内存之间能以 1 字节为粒度交互，`ldr` 和 `str` 后面需要跟 `{size}`：\n\n| 后缀 | 访问字节数 |\n|---|---|\n| `b` | 1 |\n| `h` | 2 |\n| `w` | 4 |\n\n例如 `strb` 表示存储 1 字节，`ldrw` 表示读取 4 字节。当访问宽度与目的操作数的宽度一致时可以省略后缀：把 `w0` 的全部 4 字节存入内存，既可以写 `strw w0, [mem_addr]`，也可以直接写 `str w0, [mem_addr]`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "内存交互",
+                "内存交互指令",
+                "操作长度"
+              ],
+              "lineStart": 1161,
+              "lineEnd": 1166,
+              "assetRefs": [],
+              "excerptSha256": "6f005201098a5c096926e5449d76672b93e3be84e50cc225efd3ab6729bc015c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "size-choice",
+        "moduleId": "width-suffix",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：按要访问的字节数选后缀",
+        "markdown": "选后缀时先问这次要动内存里的几个字节，再检查它与寄存器宽度是否匹配，而不是先看寄存器名字：\n\n- 只改 1 字节：用 `b`，寄存器写 32 位形式，如 `strb w0, [mem_addr]`。\n- 一次读写 2 字节：用 `h`，如 `ldrh x1, [mem_addr]`；内存只被读了 2 字节，写入的是 64 位寄存器的低位部分。\n- 一次读写 4 字节：用 `w` 或省略，如 `ldr w1, [mem_addr]` 把 4 字节读进 `w1`。\n- 读写整 8 字节：省略后缀，`ldr x1, [mem_addr]` 填满完整的 `x1`。\n\n后两条共同说明：后缀描述的是内存侧的访问宽度，不是寄存器侧的宽度；读不满寄存器时，高位怎么补齐由随后的扩展规则决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "size-suffix"
+          ]
+        }
+      },
+      {
+        "id": "sign-extension",
+        "moduleId": "sign-extension",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：读取时的有符号与无符号扩展",
+        "markdown": "`{size}` 让存储操作可以只写 1 字节、2 字节或 4 字节，但读取时还剩一个问题：如果只想从内存读 1 字节放进寄存器，寄存器里其余的字节该怎么办？\n\n教材沿用赋值指令一章的扩展规则回答这个问题：\n\n- 使用 `ldrsb` 时，内存中的这 1 字节会被有符号扩展后写入寄存器。\n- 直接使用 `ldrb` 时，则是无符号扩展。\n\n也就是说，`{sign}` 只出现在加载方向，用来说明读进来的短数据如何铺满寄存器；它不改变从内存读取的字节数，那个仍由 `{size}` 决定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000067"
+              ],
+              "headingPath": [
+                "内存交互",
+                "内存交互指令",
+                "扩展"
+              ],
+              "lineStart": 1167,
+              "lineEnd": 1172,
+              "assetRefs": [],
+              "excerptSha256": "a534d841affc7c47b6983eec3369136de95a5f74eb6e5a9fca35838eb2dc8283"
+            }
+          ]
+        }
+      },
+      {
+        "id": "extension-example",
+        "moduleId": "sign-extension",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：同一个字节的两种读数",
+        "markdown": "假设 `mem_addr` 处的一个字节内容是 `0xF0`：\n\n- `ldrb w2, [mem_addr]` 做无符号扩展，`w2` 得到 `0x000000F0`。\n- `ldrsb w2, [mem_addr]` 做有符号扩展；最高位是 1，按补码解释为负数，`w2` 得到 `0xFFFFFFF0`，即十进制的 `-16`。\n- 若目的寄存器写成 `x2`，有符号扩展会一直铺到 64 位，`ldrsb x2, [mem_addr]` 得到 `0xFFFFFFFFFFFFFFF0`。\n\n读的是同样的 1 字节，数值却完全不同，差别只在高位如何补齐：内存里的内容没有变，改变的是寄存器中高位字节的来源。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "sign-extension",
+            "size-suffix"
+          ]
+        }
+      },
+      {
+        "id": "endianness-order",
+        "moduleId": "endianness-bytes",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：端序决定多字节的分布",
+        "markdown": "端序解决的是一个多字节值在连续内存单元里按什么顺序摆放。教材的例子是 `w0` 的值为 `0x12345678`，存入从 `0x400000` 开始的内存：\n\n| 地址 | 小端序 | 大端序 |\n|---|---|---|\n| `0x400000` | `0x78` | `0x12` |\n| `0x400001` | `0x56` | `0x34` |\n| `0x400002` | `0x34` | `0x56` |\n| `0x400003` | `0x12` | `0x78` |\n\n小端序把寄存器中的低位字节放在低地址，大端序把低位字节放在高地址。教材指出 Apple Silicon 使用的是小端序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "内存交互",
+                "内存交互指令",
+                "端序"
+              ],
+              "lineStart": 1173,
+              "lineEnd": 1189,
+              "assetRefs": [],
+              "excerptSha256": "7ec694c038c2c548b71b789e4a3231ed5a70f92e35eb8a670df701a0e1d9d097"
+            }
+          ]
+        }
+      },
+      {
+        "id": "endian-trace",
+        "moduleId": "endianness-bytes",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：用小端序反推读回的值",
+        "markdown": "在 Apple Silicon 上按低字节放低地址反推：\n\n1. 把 `0x12345678` 拆成四个字节：`0x12`（最高位字节）、`0x34`、`0x56`、`0x78`（最低位字节）。\n2. 从 `0x400000` 起，低地址依次放最低位字节：`0x78`、`0x56`、`0x34`、`0x12`。\n3. 若用 `ldr w1, [mem_addr]` 从 `0x400000` 读回 4 字节，硬件按同样的小端规则重新拼合，`w1` 仍是 `0x12345678`。\n4. 若改用 `ldrh w1, [mem_addr]` 只读 2 字节，读到的是低地址的两个字节 `0x78` 与 `0x56`，拼成 `0x5678`，再经无符号扩展，`w1` 为 `0x00005678`。\n\n可见端序不影响整段读回的结果，但一旦改用更小的宽度读取，读到的只是低地址那一端的部分字节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "endianness-order",
+            "size-suffix"
+          ]
+        }
+      },
+      {
+        "id": "alignment-rule",
+        "moduleId": "alignment-padding",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：数据对齐要求与结构体填充",
+        "markdown": "数据对齐要求读写时使用的内存地址本身满足一定条件：一般来说，对齐的字节数与读取或写入的字节数相同。例如用 `ldrw` 读取 4 字节，那么读取的地址本身需要是 4 的倍数。\n\n在 Apple Silicon 上，这种对齐要求目前并不是强制的，但读写对齐的地址可以避免意外的性能损失。教材还提醒，在某些架构中不对齐的访问会直接产生异常，甚至不产生异常而出现错误的结果，这也是 Rust 同时提供 `ptr::read` 与 `ptr::read_unaligned` 的原因。\n\n对齐会反过来影响数据结构的大小。教材中的结构体：\n\n```c\nstruct AlignedStruct {\n    short a;\n    char b;\n    int c;\n};\n```\n\n编译运行后，`sizeof(short)` 为 2、`sizeof(char)` 为 1、`sizeof(int)` 为 4，但 `sizeof(struct AlignedStruct)` 是 8：`a` 在位置 0，`b` 在位置 2，`c` 在位置 4，也就是在 `b` 之后补了 1 字节填充。这样 `a` 以 2 字节对齐、`b` 以 1 字节对齐、`c` 以 4 字节对齐，三者都能落在对齐地址上。教材还把这种规整的排布联系到 IP 报文头一类的网络协议格式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000069"
+              ],
+              "headingPath": [
+                "内存交互",
+                "内存交互指令",
+                "数据对齐（Alignment）"
+              ],
+              "lineStart": 1190,
+              "lineEnd": 1240,
+              "assetRefs": [],
+              "excerptSha256": "f4c89dd94a7278350139920b38515c08aaa71366249af4dc5d6a307b020ea185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "alignment-layout",
+        "moduleId": "alignment-padding",
+        "depth": "core",
+        "kind": "table",
+        "title": "模型补充：把 8 字节摊开看",
+        "markdown": "把上面结构体的 8 个字节按偏移摊开，填充的位置就一目了然：\n\n| 偏移 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |\n|---|---|---|---|---|---|---|---|---|\n| 内容 | `a` 低位 | `a` 高位 | `b` | 填充 | `c` | `c` | `c` | `c` |\n\n规律可以概括为：每个字段都落在自身大小的整数倍偏移上（`a` 在 0、`b` 在 2、`c` 在 4），编译器在字段之间插入最少的填充字节来满足这一点，于是 7 字节的有效数据变成 8 字节的结构体。所以结构体大小不能简单地把各字段大小相加。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "alignment-rule"
+          ]
+        }
+      },
+      {
+        "id": "alignment-endian-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：宽度、端序与对齐",
+        "markdown": "在 Apple Silicon 上，`w0` 的值为 `0x12345678`。请回答：\n\n1. 执行 `strh w0, [mem_addr]` 后，从 `mem_addr` 开始的 2 个字节内容分别是什么？\n2. 接着执行 `ldrsb x1, [mem_addr]`，`x1` 的值是多少？\n3. 若某次 `ldr` 要读 4 字节，而地址写成 `0x400002`，这次访问是否对齐？会有什么后果？\n\n参考答案：`strh` 只写 2 字节，小端序下低地址先放最低位字节，因此是 `0x78` 与 `0x56`；`ldrsb` 读入 `0x78`，其最高位为 0，有符号扩展后 `x1` 为 `0x0000000000000078`；`0x400002` 不是 4 的倍数，属于不对齐访问，在 Apple Silicon 上不会强制出错，但可能带来意外的性能损失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "size-suffix",
+            "endianness-order",
+            "alignment-rule"
+          ]
+        }
+      },
+      {
+        "id": "memory-checklist",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：读一条内存指令的五个问题",
+        "markdown": "遇到 `ldr` 或 `str` 时按顺序问五个问题：\n\n1. 方向：是 `ldr`（内存到寄存器）还是 `str`（寄存器到内存）？\n2. 宽度：`{size}` 是 `b`、`h`、`w`，还是省略的 8 字节？\n3. 扩展：加载时是否带 `s`，高位按有符号还是无符号补齐？\n4. 端序：小端序下多字节值的低字节落在低地址。\n5. 对齐：地址是否是本次访问字节数的整数倍？\n\n这五个问题覆盖了本点的全部规则。下一点继续回答这里故意留空的 `[mem_addr]`：地址本身如何由基寄存器、偏移和索引计算出来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ldr-str-forms",
+            "size-suffix",
+            "sign-extension",
+            "endianness-order",
+            "alignment-rule"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "memory-width-check",
+        "type": "formative-check",
+        "anchorBlockId": "alignment-endian-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-size-suffix",
+          "explain-extension",
+          "judge-alignment"
+        ],
+        "learningPurpose": "检查学习者能否在同一情境中同时运用宽度、扩展、端序与对齐四条规则，而不是只记住单条定义。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "size-suffix",
+            "sign-extension",
+            "alignment-rule"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若交互不可用，请按题目手写作答，然后逐条对照练习块中的参考答案与对应规则。"
+        }
+      }
+    ]
+  },
+  "subtitle": "内存交互",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000065"
+      ],
+      "headingPath": [
+        "内存交互",
+        "内存交互指令"
+      ],
+      "lineStart": 1130,
+      "lineEnd": 1160,
+      "assetRefs": [],
+      "excerptSha256": "c8466291787ac8e213b1919b8817d88dc55a39f85362cf065b1d07f465654744"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000066"
+      ],
+      "headingPath": [
+        "内存交互",
+        "内存交互指令",
+        "操作长度"
+      ],
+      "lineStart": 1161,
+      "lineEnd": 1166,
+      "assetRefs": [],
+      "excerptSha256": "6f005201098a5c096926e5449d76672b93e3be84e50cc225efd3ab6729bc015c"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000067"
+      ],
+      "headingPath": [
+        "内存交互",
+        "内存交互指令",
+        "扩展"
+      ],
+      "lineStart": 1167,
+      "lineEnd": 1172,
+      "assetRefs": [],
+      "excerptSha256": "a534d841affc7c47b6983eec3369136de95a5f74eb6e5a9fca35838eb2dc8283"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000068"
+      ],
+      "headingPath": [
+        "内存交互",
+        "内存交互指令",
+        "端序"
+      ],
+      "lineStart": 1173,
+      "lineEnd": 1189,
+      "assetRefs": [],
+      "excerptSha256": "7ec694c038c2c548b71b789e4a3231ed5a70f92e35eb8a670df701a0e1d9d097"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000069"
+      ],
+      "headingPath": [
+        "内存交互",
+        "内存交互指令",
+        "数据对齐（Alignment）"
+      ],
+      "lineStart": 1190,
+      "lineEnd": 1240,
+      "assetRefs": [],
+      "excerptSha256": "f4c89dd94a7278350139920b38515c08aaa71366249af4dc5d6a307b020ea185"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1545,
+    1085
+  ],
+  "scale": 0.99
+}

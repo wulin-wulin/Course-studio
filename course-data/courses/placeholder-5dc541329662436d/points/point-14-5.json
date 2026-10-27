@@ -1,0 +1,323 @@
+{
+  "id": "point-14-5",
+  "title": "底层操作系统支持",
+  "shortSummary": "说明 malloc 和 free 如何借助 brk、mmap 等系统调用向操作系统申请和归还内存。",
+  "keyTerms": [
+    "brk",
+    "mmap",
+    "系统调用",
+    "堆管理"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-14-2",
+    "point-14-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-layering-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于库调用、brk 与 mmap 的界定和禁止直接调用 brk 的提醒，围绕接口分层补充追踪示例与使用边界。",
+      "estimatedMinutes": 10,
+      "outcomes": [
+        {
+          "id": "explain-division",
+          "text": "说明 malloc()/free() 是库调用，而底层通过系统调用向操作系统申请或归还内存。"
+        },
+        {
+          "id": "explain-brk",
+          "text": "说明 brk/sbrk 如何按新分断地址或增量改变堆的大小。"
+        },
+        {
+          "id": "explain-mmap",
+          "text": "说明匿名 mmap 区域与文件无关、与交换空间相关，可像堆一样管理。"
+        },
+        {
+          "id": "choose-boundary",
+          "text": "判断何时应坚持使用 malloc()/free() 而不直接调用 brk 或 mmap。"
+        }
+      ],
+      "misconceptions": [
+        "把 malloc()/free() 误认为系统调用，以为每次分配或释放都会直接进入内核。",
+        "认为既然 brk 和 mmap 能拿到内存，就可以绕过分配器直接调用它们。"
+      ],
+      "modules": [
+        {
+          "id": "library-and-syscall",
+          "title": "库调用与系统调用的分工",
+          "role": "concept-boundary",
+          "description": "先厘清 malloc()/free() 的层次位置，再说明为什么分配器需要内核支持。",
+          "outcomeRefs": [
+            "explain-division"
+          ],
+          "order": 0
+        },
+        {
+          "id": "brk-heap",
+          "title": "用 brk 调整堆边界",
+          "role": "mechanism-trace",
+          "description": "追踪分断位置的移动，理解堆如何扩大与缩小。",
+          "outcomeRefs": [
+            "explain-brk"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mmap-region",
+          "title": "用 mmap 获得匿名内存",
+          "role": "mechanism-contrast",
+          "description": "认识与文件无关的匿名映射区域及其与堆的异同。",
+          "outcomeRefs": [
+            "explain-mmap"
+          ],
+          "order": 2
+        },
+        {
+          "id": "safe-practice",
+          "title": "接口选择与使用边界",
+          "role": "application-check",
+          "description": "把分层认识转化为接口选择原则，并检查常见误判。",
+          "outcomeRefs": [
+            "choose-boundary"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-division",
+          "explain-brk",
+          "explain-mmap",
+          "choose-boundary"
+        ],
+        "method": "完成接口选择判断题，并说明其背后的分层依据。",
+        "successCriteria": [
+          "能区分库调用与系统调用",
+          "能说出 brk 与 mmap 获取内存的方式差异",
+          "能解释为什么不应直接调用 brk 或 sbrk"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-14-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-library-call",
+        "moduleId": "library-and-syscall",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "malloc 与 free 是库调用",
+        "markdown": "讨论 `malloc()` 和 `free()` 时容易忽略一点：它们不是系统调用，而是**库调用**。内存分配库在进程的虚拟地址空间内部管理空间，本身并不直接进入内核；它建立在一组系统调用之上，通过这些调用向操作系统请求更多内存，或把一些内容释放回系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "底层操作系统支持"
+              ],
+              "lineStart": 3340,
+              "lineEnd": 3349,
+              "assetRefs": [],
+              "excerptSha256": "61a7e7c2dac6a6b39476a9803330b9d5497f2ac5b4b5f9a657d7501cd17008cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-levels",
+        "moduleId": "library-and-syscall",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么要分成两层",
+        "markdown": "可以把这种分工理解成两级内存管理。操作系统负责把内存页交给进程，并在进程结束或请求归还时回收；进程内的分配器再在这些页面之上切分、复用和记账，服务程序提出的各种大小请求。\n\n分层带来的好处是接口稳定：程序只面对 `malloc()/free()`，不需要关心当前堆边界在哪里、背后用了哪个系统调用；而真正改变地址空间范围的动作由内核完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-library-call"
+          ]
+        }
+      },
+      {
+        "id": "textbook-brk",
+        "moduleId": "brk-heap",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "brk 与 sbrk 改变堆的结束位置",
+        "markdown": "`brk` 系统调用用来改变程序分断（break）的位置，也就是堆结束的位置。它接收一个参数——新分断的地址：新分断大于当前分断时，堆随之增大；小于当前分断时，堆随之减小。另一个调用 `sbrk` 要求传入一个增量，目的与之类似。\n\n教材特别提醒：不应直接调用 `brk` 或 `sbrk`，它们由内存分配库使用；直接使用很可能犯下一些错误，建议坚持使用 `malloc()` 和 `free()`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "底层操作系统支持"
+              ],
+              "lineStart": 3340,
+              "lineEnd": 3349,
+              "assetRefs": [],
+              "excerptSha256": "61a7e7c2dac6a6b39476a9803330b9d5497f2ac5b4b5f9a657d7501cd17008cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-brk-trace",
+        "moduleId": "brk-heap",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：一次堆扩展的追踪",
+        "markdown": "假设当前分断位于 `0x10000`，分配器发现库内空闲块不足，需要再要两页内存。它可以把 `brk` 的目标设为 `0x12000`，于是堆的结束位置向后移动，新增的两页进入分配库的管理范围，再由分配库切成程序请求的小块。\n\n反过来，如果堆尾部的大块空间被归还并变得连续空闲，分配库也可能把分断退回到 `0x10000`。但要注意：程序每次 `malloc()/free()` 成功，并不等于每次都发生了一次系统调用——大多数请求都在分配库已有的页面内完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-brk"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mmap",
+        "moduleId": "mmap-region",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "mmap 创建匿名内存区域",
+        "markdown": "除了 `brk`，还可以通过 `mmap()` 从操作系统获得内存。传入正确的参数后，`mmap()` 能在程序中创建一个**匿名**内存区域：这个区域不与任何特定文件相关联，而是与交换空间相关联。这样的内存也可以像堆一样被对待和管理。\n\n教材建议阅读 `mmap()` 的手册页以获取更多细节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "底层操作系统支持"
+              ],
+              "lineStart": 3340,
+              "lineEnd": 3349,
+              "assetRefs": [],
+              "excerptSha256": "61a7e7c2dac6a6b39476a9803330b9d5497f2ac5b4b5f9a657d7501cd17008cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mmap-uses",
+        "moduleId": "mmap-region",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：两种来源的差异",
+        "markdown": "`brk` 只推动一个连续的堆边界，因此扩展出来的空间必须紧接当前堆；`mmap` 得到的则是一段独立的映射区域，不必与既有堆在地址上连续，长度也可以单独指定。\n\n因此，分配库可以有不止一种向上要内存的方式：小请求通常靠调整堆边界来容纳，较大的请求则可能单独建立一块映射区域。具体采用哪种来源、阈值如何设定，属于分配器的实现选择；学习阶段只需抓住共同点——两者都是向操作系统获取可用内存页的途径。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mmap"
+          ]
+        }
+      },
+      {
+        "id": "model-choose-interface",
+        "moduleId": "safe-practice",
+        "depth": "core",
+        "kind": "application",
+        "title": "该如何选择接口",
+        "markdown": "把三层接口放在一起，实践原则就很清楚：\n\n- 程序代码只使用 `malloc()/free()`，让分配库决定何时用 `brk` 扩展堆、何时用 `mmap` 建立新区域；\n- 不要绕过分配库直接调用 `brk` 或 `sbrk` 来管理本应由 `malloc()/free()` 管理的内存，否则会与分配库的记账和空闲块结构脱节，产生难以定位的错误；\n- 只有当确实需要一块独立映射区域（例如自定义内存布局）时，才直接使用 `mmap()` 及其配套接口，并自行承担全部管理责任。\n\n换句话说，选择依据不是“哪个调用更底层”，而是“谁负责这块内存的记账与回收”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-library-call",
+            "textbook-brk",
+            "textbook-mmap"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "safe-practice",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "某程序反复在堆上 `malloc()/free()` 小块内存，观察发现程序分断（堆结束位置）始终没有变化。\n\n问题：这是否说明分配库从未向操作系统申请过内存？请结合库调用与系统调用的分工说明理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-choose-interface"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "interface-choice-check",
+        "type": "formative-check",
+        "title": "接口选择自查",
+        "anchorBlockId": "model-check",
+        "moduleId": "safe-practice",
+        "depth": "support",
+        "outcomeRefs": [
+          "choose-boundary"
+        ],
+        "learningPurpose": "检查学习者能否用分层与记账责任解释“堆边界不变”这一现象，而不是把它误判为从未申请内存。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-choose-interface",
+            "textbook-brk"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "堆边界不变并不等于从未申请过内存。分配库可能早已通过 `brk` 或 `mmap` 从操作系统获得足够页面，之后只是在自己的空闲块结构中反复切分和复用。系统调用只在库内空间不足或需要归还时才发生，因此程序看到的每次 `malloc()/free()` 都不会对应一次内核调用。"
+        }
+      }
+    ]
+  },
+  "subtitle": "插叙:内存操作API",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000176"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "底层操作系统支持"
+      ],
+      "lineStart": 3340,
+      "lineEnd": 3349,
+      "assetRefs": [],
+      "excerptSha256": "61a7e7c2dac6a6b39476a9803330b9d5497f2ac5b4b5f9a657d7501cd17008cb"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    752,
+    2925
+  ],
+  "scale": 0.88
+}

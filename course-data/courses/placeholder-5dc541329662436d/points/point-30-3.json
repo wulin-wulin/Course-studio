@@ -1,0 +1,371 @@
+{
+  "id": "point-30-3",
+  "title": "覆盖条件",
+  "shortSummary": "说明使用 while 循环和覆盖条件避免虚假唤醒与丢失唤醒。",
+  "keyTerms": [
+    "覆盖条件",
+    "while 循环",
+    "虚假唤醒",
+    "丢失唤醒"
+  ],
+  "animationType": "signalBroadcast",
+  "animationSuggestion": "分步对比 signal 与 broadcast：标出空闲字节、各线程的请求大小与被唤醒者，展示错误唤醒后真正可运行的线程仍沉睡，以及广播后逐线程重检条件的完整结果。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-30-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "problem-diagnosis-repair",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "围绕“单次 signal 为何会丢失唤醒、broadcast 如何覆盖所有场景”重排教材例子，保留原始代码与失败场景，并补充虚假唤醒对比、决策清单和检查题。",
+      "estimatedMinutes": 10,
+      "outcomes": [
+        {
+          "id": "explain-covering-condition",
+          "text": "解释覆盖条件为什么用广播唤醒所有等待线程，以及 while 重检在其中起什么作用。"
+        },
+        {
+          "id": "diagnose-lost-wakeup",
+          "text": "分析内存分配示例中单次 signal 只唤醒一个线程导致丢失唤醒的失败机制。"
+        },
+        {
+          "id": "choose-broadcast",
+          "text": "判断何时应使用广播或覆盖条件，并说明其性能代价与替代思路。"
+        }
+      ],
+      "misconceptions": [
+        "只要用 while 循环替代 if，就能解决所有唤醒问题；while 只能处理虚假唤醒，不能保证条件成立时一定有线程被唤醒。",
+        "被唤醒的线程一定已经满足等待条件，可以直接跳过条件检查继续执行。",
+        "广播唤醒没有代价，因此所有使用条件变量的地方都应默认改为 broadcast。"
+      ],
+      "modules": [
+        {
+          "id": "allocator-scenario",
+          "title": "内存分配器的等待场景",
+          "role": "motivation",
+          "outcomeRefs": [
+            "diagnose-lost-wakeup"
+          ],
+          "order": 0
+        },
+        {
+          "id": "wakeup-failure",
+          "title": "唤醒错线程的失败机制",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "diagnose-lost-wakeup"
+          ],
+          "order": 1
+        },
+        {
+          "id": "covering-condition",
+          "title": "覆盖条件：广播唤醒",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-covering-condition"
+          ],
+          "order": 2
+        },
+        {
+          "id": "tradeoff-decision",
+          "title": "代价与选择",
+          "role": "decision",
+          "outcomeRefs": [
+            "choose-broadcast"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与下一步",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-covering-condition",
+            "diagnose-lost-wakeup",
+            "choose-broadcast"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-covering-condition",
+          "diagnose-lost-wakeup",
+          "choose-broadcast"
+        ],
+        "method": "完成检查题，并说明广播如何让每个等待者重新检查自己的条件。",
+        "successCriteria": [
+          "能指出 signal 场景中哪个线程被错误唤醒",
+          "能说明广播后每个线程为何要重检 while 条件"
+        ],
+        "exerciseBlockId": "wakeup-exercise",
+        "summaryBlockId": "covering-summary",
+        "nextPointId": "point-30-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "allocator-code",
+        "moduleId": "allocator-scenario",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材示例：多线程内存分配器",
+        "markdown": "教材用 Lampson 和 Redell 论文中的多线程内存分配器说明问题：共享变量 `bytesLeft` 记录堆中剩余字节，分配线程在空间不足时等待，释放线程在归还内存后发信号。\n\n```c\nint bytesLeft = MAX_HEAP_SIZE;\ncond_t c;\nmutex_t m;\n\nvoid *allocate(int size) {\n    Pthread_mutex_lock(&m);\n    while (bytesLeft < size)\n        Pthread_cond_wait(&c, &m);\n    void *ptr = ...; // 从堆中取得内存\n    bytesLeft -= size;\n    Pthread_mutex_unlock(&m);\n    return ptr;\n}\n\nvoid free(void *ptr, int size) {\n    Pthread_mutex_lock(&m);\n    bytesLeft += size;\n    Pthread_cond_signal(&c); // 唤醒哪一个？\n    Pthread_mutex_unlock(&m);\n}\n```\n\n注意 `while (bytesLeft < size)` 这个守卫：线程被唤醒后必须重新检查条件，而不能假定条件已经满足。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000403"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "覆盖条件"
+              ],
+              "lineStart": 7992,
+              "lineEnd": 8037,
+              "assetRefs": [],
+              "excerptSha256": "b6bd1bed1f7d5f2221d606e4a027ab264512890733f54a43212f7f81454b22af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "allocator-wait-explained",
+        "moduleId": "allocator-scenario",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "等待线程检查的并不是同一个条件",
+        "markdown": "所有分配线程共享同一个条件变量 `c`，但它们等待的条件并不相同：请求 100 字节的线程需要 `bytesLeft >= 100`，请求 10 字节的线程只需要 `bytesLeft >= 10`。`Pthread_cond_wait()` 会让出互斥锁并睡眠，直到有人发出唤醒；`free()` 增加空闲字节，然后只发出一次唤醒。\n\n因此，“被唤醒”不等于“条件已满足”。唤醒只是一次提示，线程醒来后仍要回到 `while` 重新判断自己的 `bytesLeft < size` 是否成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "allocator-code"
+          ]
+        }
+      },
+      {
+        "id": "signal-mismatch",
+        "moduleId": "wakeup-failure",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "失败场景：应该唤醒哪个等待线程",
+        "markdown": "教材给出的失败场景很具体：假设当前没有空闲内存，线程 $T_a$ 先调用 `allocate(100)`，随后线程 $T_b$ 调用 `allocate(10)`，两者都因空间不足而在条件变量上睡眠。\n\n接着线程 $T_c$ 调用 `free(50)`，空闲字节变成 50，并调用 `pthread_cond_signal()` 唤醒一个等待线程。问题在于，这次唤醒可能选中 $T_a$：$T_a$ 醒来后发现 50 字节仍不够 100 字节，于是再次睡眠；而真正可以继续的 $T_b$ 始终没有被唤醒。\n\n这就是单次信号造成的丢失唤醒：系统中已经存在满足 $T_b$ 条件的状态，却没有任何机制通知它。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000403"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "覆盖条件"
+              ],
+              "lineStart": 7992,
+              "lineEnd": 8037,
+              "assetRefs": [],
+              "excerptSha256": "b6bd1bed1f7d5f2221d606e4a027ab264512890733f54a43212f7f81454b22af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "lost-vs-spurious",
+        "moduleId": "wakeup-failure",
+        "depth": "support",
+        "kind": "warning",
+        "title": "丢失唤醒与虚假唤醒不是一回事",
+        "markdown": "教材在前面提示过用 `while` 而不是 `if` 来应对虚假唤醒：线程可能在条件并未满足时被意外唤醒，所以醒来后必须重检条件。但 `while` 不能修复这里的丢失唤醒。\n\n- 虚假唤醒：线程被唤醒，条件却不成立；`while` 重检后继续睡，不会有线程被永久遗漏。\n- 丢失唤醒：条件已经成立，却没有线程再发出信号；等待者可能永远睡下去。\n\n`while` 保证“醒着时条件成立”，却不能保证“条件成立时一定有人被唤醒”。覆盖条件要解决的正是后者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "allocator-code",
+            "signal-mismatch"
+          ]
+        }
+      },
+      {
+        "id": "broadcast-covering",
+        "moduleId": "covering-condition",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "覆盖条件：用广播覆盖所有可能场景",
+        "markdown": "Lampson 和 Redell 的解决方案很直接：把 `pthread_cond_signal()` 换成 `pthread_cond_broadcast()`，一次唤醒所有等待线程。每个被唤醒的线程都会重新检查自己的条件：满足的继续执行，不满足的立即再次睡眠。\n\n这样，无论当前空闲字节能满足哪个或哪些请求，所有可能受益的线程都得到了检查机会，不会出现“该醒的线程没被叫到”的情况。作者把这种条件变量称为覆盖条件（covering condition），因为它用一次广播覆盖了所有需要唤醒线程的场景，是一种保守但可靠的策略。\n\n代价同样明确：广播会唤醒许多还不需要运行的线程，它们醒来、抢锁、重检条件后又睡回去，带来额外的上下文切换和锁竞争开销。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000403"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "覆盖条件"
+              ],
+              "lineStart": 7992,
+              "lineEnd": 8037,
+              "assetRefs": [],
+              "excerptSha256": "b6bd1bed1f7d5f2221d606e4a027ab264512890733f54a43212f7f81454b22af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "broadcast-trace",
+        "moduleId": "covering-condition",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "用广播重放同一场景",
+        "markdown": "把 $T_a$、$T_b$、$T_c$ 的场景换成广播来重放：\n\n1. $T_a$ 请求 100 字节、$T_b$ 请求 10 字节，二者都在 `bytesLeft = 0` 时等待。\n2. $T_c$ 释放 50 字节，`bytesLeft` 变为 50，并调用 `pthread_cond_broadcast()`。\n3. $T_a$ 和 $T_b$ 都被唤醒并竞争互斥锁。$T_b$ 检查到 $50 ≥ 10$ 成立，取得内存，`bytesLeft` 变为 40。\n4. $T_a$ 检查到 $50 ≥ 100$（或 $40 ≥ 100$）不成立，重新进入等待。\n\n最终 $T_b$ 成功分配，$T_a$ 继续等待下一次释放。广播没有改变条件本身的含义，只是保证每个可能满足条件的线程都有机会检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "broadcast-covering"
+          ]
+        }
+      },
+      {
+        "id": "when-to-broadcast",
+        "moduleId": "tradeoff-decision",
+        "depth": "support",
+        "kind": "note",
+        "title": "何时广播，何时继续查缺陷",
+        "markdown": "教材提醒：在单个条件变量的生产者/消费者问题中也可以用广播，但那里存在更精确的唤醒方式。一般来说，如果程序只有改成广播才能工作，而你原本认为不需要广播，这往往说明程序存在缺陷，应该找到并修复它；不过在内存分配器这个例子里，广播可能是最直接有效的方案。\n\n换句话说，覆盖条件是一种“保证正确、牺牲一些效率”的保守策略，而不是无条件的最优解。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000403"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "覆盖条件"
+              ],
+              "lineStart": 7992,
+              "lineEnd": 8037,
+              "assetRefs": [],
+              "excerptSha256": "b6bd1bed1f7d5f2221d606e4a027ab264512890733f54a43212f7f81454b22af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "broadcast-decision-checklist",
+        "moduleId": "tradeoff-decision",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "signal 与 broadcast 的选择清单",
+        "markdown": "| 比较维度 | `pthread_cond_signal()` | `pthread_cond_broadcast()` |\n|---|---|---|\n| 唤醒数量 | 至多一个等待者 | 所有等待者 |\n| 混合条件 | 可能唤醒条件不满足者，遗漏可运行者 | 所有等待者都有机会重检 |\n| 正确性风险 | 需要保证被唤醒者恰好能继续 | 不会因唤醒对象错误而丢失唤醒 |\n| 代价 | 唤醒少，通常更快 | 多余唤醒带来上下文切换与锁竞争 |\n| 适用情形 | 等待者条件一致，或能精确指定唤醒对象 | 多个不同条件共享一个条件变量，难以判断该唤醒谁 |\n\n判断顺序可以是：先确认是否存在“多个等待者、不同条件”的局面；如果存在且无法拆分条件变量或精确唤醒，就采用广播；如果等待条件一致，单次 signal 通常足够。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "broadcast-covering",
+            "when-to-broadcast"
+          ]
+        }
+      },
+      {
+        "id": "wakeup-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：三个等待者与一次释放",
+        "markdown": "沿用教材场景：内存耗尽时，$T_a$ 等待 100 字节，$T_b$ 等待 10 字节，$T_c$ 随后释放 50 字节。\n\n1. 如果只调用一次 `pthread_cond_signal()`，最坏会唤醒谁？为什么程序可能卡住？\n2. 如果改为 `pthread_cond_broadcast()`，$T_a$ 和 $T_b$ 分别会做什么？\n3. 广播后为什么仍然需要 `while` 重检条件？\n\n请用“空闲字节数、被唤醒者、重检结果”三个要素组织答案。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "when-to-broadcast",
+            "broadcast-decision-checklist"
+          ]
+        }
+      },
+      {
+        "id": "covering-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：覆盖条件保证唤醒覆盖",
+        "markdown": "覆盖条件的核心不是“唤醒更多线程”本身，而是保证所有可能满足条件的等待者都获得重检机会。它用广播换取正确性，代价是多余唤醒；`while` 则负责让被唤醒的线程在条件仍不成立时安全地回到等待。\n\n接下来可以总结条件变量的整体使用规则，把等待、唤醒、重检和覆盖条件放进同一套检查清单。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "broadcast-covering",
+            "broadcast-decision-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "broadcast-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "wakeup-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-lost-wakeup",
+          "choose-broadcast"
+        ],
+        "learningPurpose": "检查学习者能否判断广播是否必要，并指出单次 signal 场景中的丢失唤醒位置。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "signal-mismatch",
+            "broadcast-covering"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "两个线程分别请求 100 字节和 10 字节，第三个线程释放 50 字节"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若只用一次 signal，可能唤醒请求 100 字节的线程而遗漏请求 10 字节的线程；请说明改用 broadcast 后每个线程如何重检条件。"
+        }
+      }
+    ]
+  },
+  "subtitle": "条件变量",
+  "clusterId": "chapter-30",
+  "clusterIds": [
+    "chapter-30"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000403"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "覆盖条件"
+      ],
+      "lineStart": 7992,
+      "lineEnd": 8037,
+      "assetRefs": [],
+      "excerptSha256": "b6bd1bed1f7d5f2221d606e4a027ab264512890733f54a43212f7f81454b22af"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -126,
+    798
+  ],
+  "scale": 0.94
+}

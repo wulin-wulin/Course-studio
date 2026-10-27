@@ -1,0 +1,519 @@
+{
+  "id": "point-37-4",
+  "title": "I/O 时间：用数学",
+  "shortSummary": "用寻道时间、旋转延迟和传输时间建立磁盘 I/O 时间模型，并给出估算方法。",
+  "keyTerms": [
+    "寻道时间",
+    "旋转延迟",
+    "传输时间",
+    "I/O 时间"
+  ],
+  "animationType": "randomVsSequential",
+  "animationSuggestion": "用两条并列的时间轴与字节计数器展示同一秒内两种负载的进展：随机侧每次请求都要停顿约 6ms，字节数几乎不增长；顺序侧持续增长并接近峰值速率。重播回到相同的初始规格与工作负载。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-37-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-model",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的时间分解、驱动器参数与随机/顺序两组算例，补充单位检查、假设清单与参数敏感性，并把平均寻道推导整理成可复核的步骤。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-io-time",
+          "text": "把磁盘 I/O 时间分解为寻道、旋转和传输三部分，并说明 I/O 速率与时间的关系。"
+        },
+        {
+          "id": "estimate-workloads",
+          "text": "用驱动器规格估算随机与顺序工作负载的 I/O 时间与速率，并解释两者的数量级差异。"
+        },
+        {
+          "id": "justify-average-seek",
+          "text": "说明平均寻道时间约为完整寻道三分之一这一经验规则来自平均寻道距离的推导。"
+        }
+      ],
+      "misconceptions": [
+        "把 I/O 速率当作磁盘的固定属性，忽略它取决于请求大小和访问是否连续。",
+        "用完整寻道时间估算随机工作负载，得到明显偏高的单次延迟。",
+        "认为平均寻道时间是完整寻道时间的一半，而不是由平均寻道距离推得的三分之一。"
+      ],
+      "modules": [
+        {
+          "id": "io-time-model",
+          "title": "I/O 时间与速率的定义",
+          "role": "concept-model",
+          "description": "建立时间可加、速率由数据量除以时间的定量框架。",
+          "outcomeRefs": [
+            "explain-io-time"
+          ],
+          "order": 0
+        },
+        {
+          "id": "workloads-and-specs",
+          "title": "工作负载与驱动器参数",
+          "role": "parameter-setup",
+          "description": "明确两种工作负载的差别，并读取两款驱动器的规格表。",
+          "outcomeRefs": [
+            "explain-io-time",
+            "estimate-workloads"
+          ],
+          "order": 1
+        },
+        {
+          "id": "random-workload",
+          "title": "随机工作负载的估算",
+          "role": "worked-example",
+          "description": "逐步计算 4KB 随机读的组成、总时间与速率。",
+          "outcomeRefs": [
+            "estimate-workloads"
+          ],
+          "order": 2
+        },
+        {
+          "id": "sequential-workload",
+          "title": "顺序工作负载与设计提示",
+          "role": "comparison",
+          "description": "对照顺序大块传输，解释固定开销被摊薄后速率的跃升。",
+          "outcomeRefs": [
+            "estimate-workloads"
+          ],
+          "order": 3
+        },
+        {
+          "id": "average-seek",
+          "title": "补充：平均寻道距离的推导",
+          "role": "derivation",
+          "description": "用积分求出平均寻道距离为全长三分之一，并说明其适用边界。",
+          "outcomeRefs": [
+            "justify-average-seek"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-summary",
+          "title": "检查与小结",
+          "role": "synthesis",
+          "description": "用新参数重算一次，并把结论压缩为可迁移的估算规则。",
+          "outcomeRefs": [
+            "explain-io-time",
+            "estimate-workloads",
+            "justify-average-seek"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-io-time",
+          "estimate-workloads",
+          "justify-average-seek"
+        ],
+        "method": "独立完成换参数计算，并为每个时间项写出物理来源与单位。",
+        "successCriteria": [
+          "能写出三段时间模型和 I/O 速率公式",
+          "能根据规格表估算随机与顺序负载的速率差异",
+          "能说明平均寻道三分之一结论的推导前提"
+        ],
+        "exerciseBlockId": "model-transfer-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-37-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-io-time-formula",
+        "moduleId": "io-time-model",
+        "depth": "core",
+        "kind": "formula",
+        "title": "I/O 时间的三个组成部分",
+        "markdown": "教材把一次磁盘请求的时间写成三个部分之和：\n\n$$\nT_{\\mathrm{I/O}} = T_{\\text{寻道}} + T_{\\text{旋转}} + T_{\\text{传输}}\n$$\n\n比较驱动器时更常用 I/O 速率 $R_{\\mathrm{I/O}}$，它等于本次传输的数据量除以总时间：\n\n$$\nR_{\\mathrm{I/O}} = \\frac{\\text{大小}_{\\text{传输}}}{T_{\\mathrm{I/O}}}\n$$\n\n这两个式子是本点全部估算的起点：时间可以相加，速率则把数据量与时间合成为一个可比较的指标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "I/O 时间：用数学"
+              ],
+              "lineStart": 9792,
+              "lineEnd": 9822,
+              "assetRefs": [],
+              "excerptSha256": "f9c4d097bd4f8666227c2d723cf03225e10e4af92940a17182d8c49b679adc53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-three-terms",
+        "moduleId": "io-time-model",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "三项各自的物理来源",
+        "markdown": "三个时间项来自不同的物理过程，不能互相替代：\n\n- 寻道时间：磁盘臂把磁头移到目标磁道，包含加速、滑行、减速和停靠；\n- 旋转延迟：等待目标扇区转到磁头下方，平均约为半圈；\n- 传输时间：扇区经过磁头时读写数据，等于数据量除以传输速率。\n\n相加之前还要统一单位：寻道和旋转通常以 ms 计，传输时间常以 μs 表示，$1000\\ \\mu\\mathrm{s} = 1\\ \\mathrm{ms}$。若把 $30\\ \\mu\\mathrm{s}$ 误当成 $30\\ \\mathrm{ms}$ 相加，结果会差三个数量级。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-io-time-formula"
+          ]
+        }
+      },
+      {
+        "id": "textbook-workloads",
+        "moduleId": "workloads-and-specs",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "两种工作负载",
+        "markdown": "教材用两个对照工作负载来理解 I/O 时间：\n\n- 随机工作负载：向磁盘上的随机位置发出小的请求，例如每次 4KB。数据库管理系统是常见例子。\n- 顺序工作负载：从磁盘连续读取大量扇区，不跳过任何位置。\n\n两者的差别不在读取总量，而在每次请求之间是否要重新寻道和等待旋转。为了让估算有具体数字，教材选用两款驱动器：高性能 SCSI 的 Cheetah 15K.5，以及面向容量的 SATA 的 Barracuda。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "I/O 时间：用数学"
+              ],
+              "lineStart": 9792,
+              "lineEnd": 9822,
+              "assetRefs": [],
+              "excerptSha256": "f9c4d097bd4f8666227c2d723cf03225e10e4af92940a17182d8c49b679adc53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-drive-specs",
+        "moduleId": "workloads-and-specs",
+        "depth": "core",
+        "kind": "table",
+        "title": "两款驱动器的规格",
+        "markdown": "| 规格 | Cheetah 15K.5 | Barracuda |\n|---|---|---|\n| 容量 | 300GB | 1TB |\n| RPM | 15000 | 7200 |\n| 平均寻道时间 | 4ms | 9ms |\n| 最大传输速率 | 125MB/s | 105MB/s |\n| 磁盘数 | 4 | 4 |\n| 缓存 | 16MB | 16/32MB |\n| 连接方式 | SCSI | SATA |\n\n高性能驱动器用更高转速和更短寻道换取速度；容量驱动器把每字节成本放在首位，转速和寻道都更慢。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "I/O 时间：用数学"
+              ],
+              "lineStart": 9792,
+              "lineEnd": 9822,
+              "assetRefs": [],
+              "excerptSha256": "f9c4d097bd4f8666227c2d723cf03225e10e4af92940a17182d8c49b679adc53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spec-reading",
+        "moduleId": "workloads-and-specs",
+        "depth": "support",
+        "kind": "note",
+        "title": "读规格时的三个换算",
+        "markdown": "使用上表之前先做三个换算：\n\n1. RPM 是每分钟转数，除以 60 得到每秒转数，单圈时间等于其倒数；\n2. 平均旋转延迟按半圈计算，即单圈时间的一半；\n3. 表中的传输速率是峰值，传输时间等于数据量除以速率，小请求的传输时间往往不到 1ms。\n\n以 Cheetah 为例：$15000\\ \\mathrm{RPM} = 250\\ \\mathrm{RPS}$，单圈 $4\\ \\mathrm{ms}$，平均旋转延迟 $2\\ \\mathrm{ms}$。Barracuda 的 $7200\\ \\mathrm{RPM}$ 对应单圈约 $8.3\\ \\mathrm{ms}$，平均旋转延迟约 $4.2\\ \\mathrm{ms}$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-drive-specs"
+          ]
+        }
+      },
+      {
+        "id": "textbook-random-setup",
+        "moduleId": "random-workload",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "随机读：4KB 请求的时间组成",
+        "markdown": "先看随机工作负载。假设每次读取 4KB，且落在磁盘的随机位置，因此每次都要付出寻道和旋转。教材为 Cheetah 给出的组成是 $T_{\\text{寻道}} = 4\\ \\mathrm{ms}$，$T_{\\text{旋转}} = 2\\ \\mathrm{ms}$。\n\n传输时间远小于前两项：\n\n$$\nT_{\\text{传输}} = \\frac{4\\ \\mathrm{KB}}{125\\ \\mathrm{MB/s}} \\approx 0.03\\ \\mathrm{ms} = 30\\ \\mu\\mathrm{s}\n$$\n\n也就是说，随机读一个小块时，几乎全部时间都花在移动磁头和等待盘片转到正确位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000485"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "I/O 时间：用数学"
+              ],
+              "lineStart": 9792,
+              "lineEnd": 9822,
+              "assetRefs": [],
+              "excerptSha256": "f9c4d097bd4f8666227c2d723cf03225e10e4af92940a17182d8c49b679adc53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-random-result",
+        "moduleId": "random-workload",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "随机读的总时间与速率",
+        "markdown": "把三项相加得到 Cheetah 的单次随机读时间：\n\n$$\nT_{\\mathrm{I/O}} \\approx 4\\ \\mathrm{ms} + 2\\ \\mathrm{ms} + 0.03\\ \\mathrm{ms} \\approx 6\\ \\mathrm{ms}\n$$\n\n用 4KB 除以 6ms，得到 I/O 速率约 $0.66\\ \\mathrm{MB/s}$。对 Barracuda 做同样的计算：平均寻道 9ms、平均旋转约 4.2ms、传输约 0.04ms，总计约 13.2ms，速率约 $0.31\\ \\mathrm{MB/s}$。\n\n两组数字说明：接口相近、峰值传输速率也相近的两款磁盘，在随机小块负载下都只发挥出不到 1MB/s。教材提醒，制造商给出的是平均寻道时间，完整寻道可能需要两到三倍的时间；平均旋转延迟则直接由 RPM 换算，平均会遇到半圈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000486"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：顺序地使用磁盘"
+              ],
+              "lineStart": 9823,
+              "lineEnd": 9841,
+              "assetRefs": [],
+              "excerptSha256": "5dcbc19777eddd78c9b146f2a3c7cf6f2b45ac5be561b56414bdebc723622988"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-random-assumptions",
+        "moduleId": "random-workload",
+        "depth": "support",
+        "kind": "warning",
+        "title": "随机负载估算的假设清单",
+        "markdown": "这个 6ms 的结果依赖几条假设，改变任意一条都要重算：\n\n- 请求大小固定为 4KB；若改成 64KB，传输时间增加到约 0.5ms，但仍远小于寻道；\n- 位置是随机的，所以使用平均寻道时间；若请求集中在相邻磁道，寻道会明显更短；\n- 没有考虑驱动器缓存命中；若整条磁道被预取，后续同磁道请求可以省掉寻道和旋转；\n- 没有排队等待，测的是设备本身的单请求延迟。\n\n因此 $0.66\\ \\mathrm{MB/s}$ 应理解为“随机小块、无缓存命中”时的估计，而不是这块磁盘的固定性能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-drive-specs",
+            "textbook-random-result"
+          ]
+        }
+      },
+      {
+        "id": "textbook-sequential",
+        "moduleId": "sequential-workload",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "顺序工作负载：把固定开销摊薄",
+        "markdown": "顺序工作负载只在一长段传输开始前寻道和旋转一次。教材假设一次传输 100MB，于是固定开销只出现一次，传输时间成为主体：Cheetah 约 $100\\ \\mathrm{MB} / 125\\ \\mathrm{MB/s} = 800\\ \\mathrm{ms}$，Barracuda 约 $100\\ \\mathrm{MB} / 105\\ \\mathrm{MB/s} \\approx 950\\ \\mathrm{ms}$，对应的 I/O 速率接近各自的峰值 125MB/s 与 105MB/s。\n\n对比随机负载，Cheetah 的顺序速率约为随机的 200 倍，Barracuda 约为 300 倍。教材由此给出设计提示：尽可能顺序地传输数据；顺序不可行时，也至少应使用大块传输，块越大越好。小而随机的 I/O 会同时伤害性能和使用者体验。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000486"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：顺序地使用磁盘"
+              ],
+              "lineStart": 9823,
+              "lineEnd": 9841,
+              "assetRefs": [],
+              "excerptSha256": "5dcbc19777eddd78c9b146f2a3c7cf6f2b45ac5be561b56414bdebc723622988"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gap-intuition",
+        "moduleId": "sequential-workload",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "差距来自固定开销被摊薄",
+        "markdown": "把两组数字放在一起，差距的来源就很清楚：\n\n| 工作负载 | 每次请求的固定开销 | 传输量 | 结果速率 |\n|---|---|---|---|\n| 随机 4KB | 寻道 + 旋转约 6ms | 4KB | 约 0.66MB/s |\n| 顺序 100MB | 一次寻道 + 旋转约 6ms | 100MB | 约 125MB/s |\n\n固定开销没有消失，只是被更大的传输量分摊。这也解释了为什么单靠更换更快的磁盘对随机负载帮助有限：只要每次请求都要重新寻道，速率就受机械定位支配。\n\n一个实用的估算规则：若单次请求的数据量远小于“速率 × 定位时间”，性能就由定位时间决定；只有大块传输才接近峰值速率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-random-result",
+            "textbook-sequential"
+          ]
+        }
+      },
+      {
+        "id": "textbook-average-seek",
+        "moduleId": "average-seek",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "补充：平均寻道距离为什么是三分之一",
+        "markdown": "教材补充了一个常见经验规则的来源：平均寻道时间约为完整寻道时间的三分之一。\n\n把磁盘看成 $0$ 到 $N$ 的磁道集合，任意两磁道 $x$、$y$ 之间的寻道距离是 $|x-y|$。所有可能寻道距离之和为\n\n$$\n\\sum_{x=0}^{N}\\sum_{y=0}^{N}|x-y|\n$$\n\n除以可能的寻道次数 $N^2$ 才是平均值。为了计算这个和，改用积分形式：\n\n$$\n\\int_{0}^{N}\\int_{0}^{N}|x-y|\\,dx\\,dy\n$$\n\n先对 $y$ 分区间去掉绝对值，内层积分化为 $x^2 - Nx + \\frac{1}{2}N^2$；再对 $x$ 积分，结果为 $\\frac{N^3}{3}$。于是平均寻道距离为\n\n$$\n\\frac{N^3/3}{N^2} = \\frac{N}{3}\n$$\n\n即平均寻道距离是全部距离的三分之一，这也是许多文献把平均寻道时间近似为完整寻道时间三分之一的由来。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000487"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：计算“平均”寻道时间"
+              ],
+              "lineStart": 9842,
+              "lineEnd": 9877,
+              "assetRefs": [],
+              "excerptSha256": "728bba2fc46d5d9590f0cf655bf863b33089022b9ce875885647de020098d6d2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-average-seek-caveat",
+        "moduleId": "average-seek",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "经验规则的适用边界",
+        "markdown": "这个三分之一描述的是平均寻道距离，而不是严格意义上的平均寻道时间。把它当作时间比例需要额外假设：寻道时间与移动距离近似成正比。\n\n真实驱动器并不完全满足这个假设。短距离寻道要经历加速和减速，停靠开销基本固定，因此短寻道的时间占比往往高于距离占比；长距离寻道则接近全速滑行。所以工程估算中三分之一更适合作为数量级参考，精确值仍应使用厂商给出的平均寻道时间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-average-seek"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：换一组参数再算一次",
+        "markdown": "假设某磁盘转速 10000 RPM、平均寻道 8ms、峰值传输速率 100MB/s，请求随机读取 16KB。\n\n1. 单圈时间和平均旋转延迟各是多少？\n2. 单次随机读的 I/O 时间约为多少？速率约为多少？\n3. 若改为一次 100MB 的顺序传输，速率会接近哪个值？\n\n参考思路：单圈 $60000/10000 = 6\\ \\mathrm{ms}$，平均旋转延迟 $3\\ \\mathrm{ms}$；传输时间 $16\\ \\mathrm{KB}/100\\ \\mathrm{MB/s} \\approx 0.16\\ \\mathrm{ms}$，总时间约 $11.2\\ \\mathrm{ms}$，速率约 $1.4\\ \\mathrm{MB/s}$。顺序传输 100MB 只需一次定位，速率可接近 100MB/s 的峰值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-random-result",
+            "textbook-sequential",
+            "textbook-average-seek"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本点结论",
+        "markdown": "总结本点的量化结论：\n\n- $T_{\\mathrm{I/O}} = T_{\\text{寻道}} + T_{\\text{旋转}} + T_{\\text{传输}}$，速率等于传输量除以总时间；\n- 随机 4KB 请求下，Cheetah 约 6ms/0.66MB/s，Barracuda 约 13.2ms/0.31MB/s；\n- 顺序 100MB 传输时固定开销只付一次，速率接近峰值 125MB/s 与 105MB/s，差距达 200～300 倍；\n- 平均寻道时间约为完整寻道的三分之一，来自平均寻道距离 $N/3$ 的推导；\n- 设计含义：尽量顺序访问，无法顺序时增大传输块，以摊薄定位开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-io-time-formula",
+            "textbook-random-result",
+            "textbook-sequential",
+            "textbook-average-seek"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "io-workload-check",
+        "type": "formative-check",
+        "title": "换参数估算检查",
+        "anchorBlockId": "model-transfer-check",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "outcomeRefs": [
+          "estimate-workloads",
+          "justify-average-seek"
+        ],
+        "learningPurpose": "检查学习者能否把三段时间模型和平均寻道近似迁移到一组新参数上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-random-result",
+            "textbook-sequential",
+            "textbook-average-seek"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "某磁盘 10000 RPM、平均寻道 8ms、峰值传输 100MB/s，随机读取 16KB；请估算单次 I/O 时间与速率，并说明为何改成 100MB 顺序传输后速率接近峰值。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "单圈时间 $6\\ \\mathrm{ms}$，平均旋转延迟 $3\\ \\mathrm{ms}$；传输 $16\\ \\mathrm{KB}/100\\ \\mathrm{MB/s} \\approx 0.16\\ \\mathrm{ms}$，总时间约 $11.2\\ \\mathrm{ms}$，速率约 $1.4\\ \\mathrm{MB/s}$。顺序传输只付一次定位开销，因此速率接近 100MB/s。"
+        }
+      }
+    ]
+  },
+  "subtitle": "磁盘驱动器",
+  "clusterId": "chapter-37",
+  "clusterIds": [
+    "chapter-37"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000485"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "I/O 时间：用数学"
+      ],
+      "lineStart": 9792,
+      "lineEnd": 9822,
+      "assetRefs": [],
+      "excerptSha256": "f9c4d097bd4f8666227c2d723cf03225e10e4af92940a17182d8c49b679adc53"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000486"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：顺序地使用磁盘"
+      ],
+      "lineStart": 9823,
+      "lineEnd": 9841,
+      "assetRefs": [],
+      "excerptSha256": "5dcbc19777eddd78c9b146f2a3c7cf6f2b45ac5be561b56414bdebc723622988"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000487"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "补充：计算“平均”寻道时间"
+      ],
+      "lineStart": 9842,
+      "lineEnd": 9877,
+      "assetRefs": [],
+      "excerptSha256": "728bba2fc46d5d9590f0cf655bf863b33089022b9ce875885647de020098d6d2"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4404,
+    -27
+  ],
+  "scale": 0.94
+}

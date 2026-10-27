@@ -1,0 +1,563 @@
+{
+  "id": "point-38-6",
+  "title": "RAID 4级：通过奇偶校验节省空间",
+  "shortSummary": "介绍用专用奇偶校验盘节省空间的方法，以及小写更新带来的瓶颈。",
+  "keyTerms": [
+    "RAID 4",
+    "奇偶校验",
+    "校验盘",
+    "小写瓶颈"
+  ],
+  "animationType": "raidThroughputBottleneck",
+  "animationSuggestion": "并排显示 4 个数据盘和 1 个校验盘的队列：小写请求到达后，数据盘并行完成读写，校验盘则排起长队；用计时器累计完成的逻辑写数量，并实时显示吞吐曲线趋近 R/2。可对比切换到全条带写入，观察所有磁盘并行、吞吐恢复到 (N−1)·S。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-38-3",
+    "point-38-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 RAID-4 布局、XOR 不变量与性能推导，按布局、重构、评估、写路径重排，并补充跨级别对比与吞吐量检查。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-parity",
+          "text": "解释 RAID-4 如何用专用校验盘和 XOR 不变量提供单盘容错。"
+        },
+        {
+          "id": "explain-small-write",
+          "text": "说明减法奇偶校验的写入路径，并推导小写入问题导致的 $R/2$ 吞吐上限。"
+        },
+        {
+          "id": "evaluate-raid4",
+          "text": "从容量、可靠性、读性能和写性能四方面评估 RAID-4 的适用场景。"
+        }
+      ],
+      "misconceptions": [
+        "认为 RAID-4 的校验盘不存放用户数据，所以增加数据盘就能提升随机小写性能。",
+        "把“任何一块丢失都能恢复”误当成“可以容忍任意多块磁盘故障”。",
+        "认为减法奇偶校验不需要读取旧数据，只写新数据和新校验即可。"
+      ],
+      "modules": [
+        {
+          "id": "parity-layout",
+          "title": "布局与冗余不变量",
+          "role": "concept-building",
+          "description": "从条带布局和 XOR 规则建立 RAID-4 的冗余不变量。",
+          "outcomeRefs": [
+            "explain-parity"
+          ],
+          "order": 0
+        },
+        {
+          "id": "reconstruction",
+          "title": "故障重构",
+          "role": "mechanism",
+          "description": "利用不变量从剩余块恢复丢失块，并明确单盘故障的边界。",
+          "outcomeRefs": [
+            "explain-parity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "capacity-reliability",
+          "title": "容量、可靠性与读性能",
+          "role": "evaluation",
+          "description": "用统一的 RAID 评估维度衡量 RAID-4 的非写入特性。",
+          "outcomeRefs": [
+            "evaluate-raid4"
+          ],
+          "order": 2
+        },
+        {
+          "id": "write-path-and-small-write",
+          "title": "写路径与小写入问题",
+          "role": "quantitative-analysis",
+          "description": "从全条带写入到减法奇偶校验，推导校验盘串行化带来的吞吐上限。",
+          "outcomeRefs": [
+            "explain-small-write",
+            "evaluate-raid4"
+          ],
+          "order": 3
+        },
+        {
+          "id": "synthesis",
+          "title": "综合判断与迁移",
+          "role": "synthesis",
+          "description": "把容量、容错与写性能放在一起判断适用负载，并桥接到 RAID-5。",
+          "outcomeRefs": [
+            "explain-parity",
+            "explain-small-write",
+            "evaluate-raid4"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-parity",
+          "explain-small-write",
+          "evaluate-raid4"
+        ],
+        "method": "完成小写入吞吐量估算，并据此判断 RAID-4 在给定负载下是否合适。",
+        "successCriteria": [
+          "能写出减法奇偶校验公式并说明每次小写的 4 次 I/O",
+          "能解释为何增加数据盘不能提高随机小写吞吐",
+          "能给出 RAID-4 适合与不适合的负载类型"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-synthesis",
+        "nextPointId": "point-38-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-parity-layout",
+        "moduleId": "parity-layout",
+        "depth": "core",
+        "kind": "figure",
+        "title": "教材：专用校验盘的条带布局",
+        "markdown": "RAID-4 在条带化数据盘之外增加一个**专用校验盘**。以 5 个磁盘的阵列为例，磁盘 0 到 3 存放数据块，磁盘 4 存放奇偶校验块：条带 0 的 $P_0$ 保护块 0 到块 3，条带 1 的 $P_1$ 保护块 4 到块 7，依此类推。\n\n每个条带只需要一份校验块，因此冗余信息不再像镜像那样复制全部数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000513"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID 4级：通过奇偶校验节省空间"
+              ],
+              "lineStart": 10209,
+              "lineEnd": 10239,
+              "assetRefs": [],
+              "excerptSha256": "2a388df20a212cbc58ebaafd75aa5707461d85d84f40da74e22c53af6c290945"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-space-tradeoff",
+        "moduleId": "parity-layout",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么这样能省空间",
+        "markdown": "镜像用两份数据换一份容错，空间利用率只有 50%。RAID-4 的思路是：与其复制，不如只存一份“汇总信息”。5 盘阵列里 4 个盘放数据、1 个盘放校验，空间利用率升到 $\\frac{N-1}{N}$，本例为 80%。代价是写入路径更复杂，这一点在小写入问题中会集中爆发。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parity-layout"
+          ]
+        }
+      },
+      {
+        "id": "tb-xor-invariant",
+        "moduleId": "parity-layout",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：XOR 规则与偶校验不变量",
+        "markdown": "奇偶校验块由条带内所有数据块按位异或（XOR）得到。XOR 的规则可以记成：一组比特中 1 的个数为偶数时结果为 0，为奇数时结果为 1。\n\n| $C_0$ | $C_1$ | $C_2$ | $C_3$ | $P$ |\n|---|---|---|---|---|\n| 0 | 0 | 1 | 1 | 0 |\n| 0 | 1 | 0 | 0 | 1 |\n\n由此得到 RAID-4 必须始终维持的不变量：每个条带中，数据位与校验位里 1 的总数必须是偶数。不变量一旦被破坏，就说明某个块已损坏或未正确更新。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000513"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID 4级：通过奇偶校验节省空间"
+              ],
+              "lineStart": 10209,
+              "lineEnd": 10239,
+              "assetRefs": [],
+              "excerptSha256": "2a388df20a212cbc58ebaafd75aa5707461d85d84f40da74e22c53af6c290945"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-xor-worked-example",
+        "moduleId": "parity-layout",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "把按位异或推广到整块",
+        "markdown": "对块计算校验，就是对块内每个比特分别异或，结果写入校验块的对应位置。例如 4 个 2 位块 $00$、$10$、$11$、$10$：\n\n- $00 \\oplus 10 = 10$\n- $10 \\oplus 11 = 01$\n- $01 \\oplus 10 = 11$\n\n所以校验块是 $11$。逐列检查：第一个比特上 1 的个数是 3（奇数），第二个比特上 1 的个数是 1（奇数），因此两个校验位都是 1；加上校验位后，每列 1 的个数都变成偶数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-xor-invariant"
+          ]
+        }
+      },
+      {
+        "id": "tb-reconstruction",
+        "moduleId": "reconstruction",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用剩余块重构丢失数据",
+        "markdown": "如果条带中的一个块丢失，可以利用不变量把它算回来。假设 $C_2$ 所在列丢失，只需读取同一行其余的数据块和校验块，再做一次异或：缺的那一位由“1 的总数为偶数”唯一确定。教材的位级例子中，其余位为 $C_0=0$、$C_1=0$、$C_3=1$、$P=0$，因此缺失的 $C_2$ 必须是 1。\n\n注意重构的计算方式与当初计算校验完全一样：把剩余数据位和校验位一起异或。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000513"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID 4级：通过奇偶校验节省空间"
+              ],
+              "lineStart": 10209,
+              "lineEnd": 10239,
+              "assetRefs": [],
+              "excerptSha256": "2a388df20a212cbc58ebaafd75aa5707461d85d84f40da74e22c53af6c290945"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recovery-check",
+        "moduleId": "reconstruction",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "练习：反推丢失的块",
+        "markdown": "某条带的数据块为 $C_0=1$、$C_1=1$、$C_2=0$、$C_3=0$，校验块 $P$ 丢失。数据中已有两个 1，为保持偶数个 1，$P$ 应为 0；这也等于把四个数据块直接异或的结果。\n\n反过来，若数据盘丢了一块而校验盘还在，同样一次异或就能恢复。真正会失败的是同时丢失两个块：一个方程解不出两个未知数，这就是 RAID-4 只容许 1 块磁盘故障的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-reconstruction",
+            "tb-xor-invariant"
+          ]
+        }
+      },
+      {
+        "id": "tb-capacity-reliability",
+        "moduleId": "capacity-reliability",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：容量与可靠性",
+        "markdown": "从容量的角度看，RAID-4 使用 1 个磁盘存放它所保护的每组磁盘的校验信息，因此 $N$ 个磁盘的 RAID 组可用容量是 $(N-1)$ 个磁盘。可靠性方面，RAID-4 容许 1 个磁盘故障，不容许更多；同时丢失多个磁盘就无法重建丢失的数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID-4 分析"
+              ],
+              "lineStart": 10240,
+              "lineEnd": 10297,
+              "assetRefs": [],
+              "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-read-performance",
+        "moduleId": "capacity-reliability",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：连续读与随机读带宽",
+        "markdown": "连续读取可以利用除校验盘以外的所有磁盘，峰值有效带宽为 $(N-1) \\cdot S$ MB/s，其中 $S$ 是单盘连续带宽。随机读取的请求同样只落在数据盘上，因此有效性能为 $(N-1) \\cdot R$ MB/s，$R$ 是单盘随机 I/O 速率。校验盘在两种读负载中都不贡献带宽。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID-4 分析"
+              ],
+              "lineStart": 10240,
+              "lineEnd": 10297,
+              "assetRefs": [],
+              "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dimension-comparison",
+        "moduleId": "capacity-reliability",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "把非写入特性放在同一组维度上",
+        "markdown": "用统一的维度看，RAID-4 的容量和读性能接近条带化，容错能力则与镜像相同：\n\n| 维度 | RAID-4（$N$ 盘） | 说明 |\n|---|---|---|\n| 可用容量 | $N-1$ 个盘 | 只损失一份校验空间 |\n| 容错能力 | 1 个磁盘 | 再多丢一块就无法重建 |\n| 连续读带宽 | $(N-1) \\cdot S$ | 校验盘不参与 |\n| 随机读带宽 | $(N-1) \\cdot R$ | 请求只落数据盘 |\n\n真正的差异出现在写入路径上，下面单独分析。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-capacity-reliability",
+            "tb-read-performance"
+          ]
+        }
+      },
+      {
+        "id": "tb-full-stripe-write",
+        "moduleId": "write-path-and-small-write",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：全条带写入",
+        "markdown": "连续写入时，RAID-4 可以执行**全条带写入**：如果一次写入正好覆盖一个条带的全部数据块（例如块 0、1、2、3），RAID 直接对它们做 XOR 得到新的 $P_0$，然后把 4 个数据块和 1 个校验块并行写入 5 个磁盘。\n\n这是 RAID-4 最有效的写入方式，因此顺序写入的有效带宽同样是 $(N-1) \\cdot S$ MB/s。即使校验盘全程都在工作，客户也无法从它那里获得额外带宽。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID-4 分析"
+              ],
+              "lineStart": 10240,
+              "lineEnd": 10297,
+              "assetRefs": [],
+              "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-additive-subtractive",
+        "moduleId": "write-path-and-small-write",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：加法与减法奇偶校验",
+        "markdown": "随机写入必须先更新校验块，因为旧校验不再能保护新数据。只覆盖条带中一小部分块时，有两种更新方式。\n\n**加法奇偶校验**：并行读取条带内所有其他数据块，与新数据一起做 XOR 得到新校验。它需要读取的块数随阵列规模增长。\n\n**减法奇偶校验**：只读取被覆盖块的旧值 $C_{\\mathrm{old}}$ 和旧校验 $P_{\\mathrm{old}}$，再用下式求出新校验：\n\n$$P_{\\mathrm{new}} = (C_{\\mathrm{old}} \\oplus C_{\\mathrm{new}}) \\oplus P_{\\mathrm{old}}$$\n\n最后把新数据和新校验分别写回各自磁盘。计算要对块内所有比特执行，而不是只算一位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID-4 分析"
+              ],
+              "lineStart": 10240,
+              "lineEnd": 10297,
+              "assetRefs": [],
+              "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parity-derivation",
+        "moduleId": "write-path-and-small-write",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "减法公式为什么成立",
+        "markdown": "设 $O$ 是条带内其他数据块的异或。旧校验满足 $P_{\\mathrm{old}} = C_{\\mathrm{old}} \\oplus O$，新校验应满足 $P_{\\mathrm{new}} = C_{\\mathrm{new}} \\oplus O$。两式相消，$O$ 被消掉，就得到 $P_{\\mathrm{new}} = P_{\\mathrm{old}} \\oplus C_{\\mathrm{old}} \\oplus C_{\\mathrm{new}}$，与教材公式一致。\n\n因此一次小写需要 4 次物理 I/O：读旧数据、读旧校验、写新数据、写新校验。两组读可以并行，两组写也可以并行，但 I/O 次数无法再压缩。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-additive-subtractive"
+          ]
+        }
+      },
+      {
+        "id": "tb-latency",
+        "moduleId": "write-path-and-small-write",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：单次 I/O 的延迟",
+        "markdown": "再看单次 I/O 的延迟。单次读取（假设没有故障）只映射到一个磁盘，延迟与单盘请求相同。单次写入需要两次读取，然后两次写入；读之间可以并行，写之间也可以并行，因此总延迟大约是单盘的两倍。细节上还要等待两个读操作都完成，所以会承受较差的定位时间，但后续更新不会带来额外寻道。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID-4 分析"
+              ],
+              "lineStart": 10240,
+              "lineEnd": 10297,
+              "assetRefs": [],
+              "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-small-write-problem",
+        "moduleId": "write-path-and-small-write",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：小写入问题",
+        "markdown": "现在考虑大量小的随机写入。假设两个几乎同时到达的请求分别写块 4 和块 13：它们位于磁盘 0 和磁盘 1 上，数据读写可以并行，这没有问题。问题出在校验盘——两个请求都必须读取并写回各自的校验块 $P_1$ 和 $P_3$。\n\n于是所有写操作都被校验盘串行化。校验盘为每个逻辑 I/O 执行两次 I/O（一次读、一次写），所以 RAID-4 的小随机写吞吐只有 $(R/2)$ MB/s。增加数据盘不会改善这一瓶颈，这就是 RAID-4 的**小写入问题**。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "RAID-4 分析"
+              ],
+              "lineStart": 10240,
+              "lineEnd": 10297,
+              "assetRefs": [],
+              "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-small-write-quantify",
+        "moduleId": "write-path-and-small-write",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把串行化写成吞吐量",
+        "markdown": "设单盘随机 I/O 速率为 $R$。每个逻辑小写让校验盘承担 1 次读和 1 次写，共 2 次 I/O，因此校验盘每秒最多完成 $R/2$ 个逻辑写。与此同时，同一条带中其余数据盘几乎没有工作要做，只能空闲等待。\n\n这解释了三个结论：第一，RAID-4 的随机小写性能与数据盘数量无关；第二，阵列越大，校验盘被浪费的相对带宽越多；第三，顺序写之所以没有这个问题，是因为全条带写入把所有磁盘都用上了。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-small-write-problem",
+            "tb-full-stripe-write"
+          ]
+        }
+      },
+      {
+        "id": "model-synthesis",
+        "moduleId": "synthesis",
+        "depth": "core",
+        "kind": "summary",
+        "title": "RAID-4 的取舍与选择",
+        "markdown": "RAID-4 可以概括为：**用一份校验空间换来 1 块磁盘的容错，同时付出随机小写性能的代价**。它的容量和读性能接近 RAID 0，容错能力与 RAID 1 相同，但随机小写被专用校验盘压到 $R/2$。\n\n判断是否适用时先看负载：以大块顺序读写或随机读为主时，RAID-4 的空间优势很有价值；以大量小块随机写为主时，它会被校验盘拖住。改进方向也很清楚：如果校验不再固定在一个盘上，串行化就会被打散——这正是 RAID-5 旋转奇偶校验要处理的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-capacity-reliability",
+            "tb-read-performance",
+            "tb-small-write-problem"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "synthesis",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：估算小写入吞吐",
+        "markdown": "某 RAID-4 阵列有 5 个磁盘，单盘随机 I/O 速率为 $R$，负载是持续的大量小块随机写。\n\n1. 理论吞吐上限是多少？\n2. 如果把阵列扩大到 9 个磁盘，上限会提高到多少？\n\n参考答案：上限都是 $R/2$。每个逻辑写都必须由校验盘完成一次读和一次写，瓶颈不在数据盘数量。只有当写入覆盖整个条带、可以执行全条带写入时，增加磁盘才会带来收益。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-small-write-problem",
+            "model-small-write-quantify"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "raid4-small-write-check",
+        "type": "formative-check",
+        "title": "小写入吞吐估算",
+        "anchorBlockId": "model-check",
+        "moduleId": "synthesis",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-small-write"
+        ],
+        "learningPurpose": "检查学习者能否把校验盘串行化这一机制转化为吞吐量估算，并识别增加数据盘无效的原因。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-small-write-problem",
+            "model-small-write-quantify"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questionCount": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "在 5 盘 RAID-4 上持续执行小块随机写，单盘随机 I/O 速率为 $R$。请写出吞吐上限，并说明扩大阵列为何无效。"
+        }
+      }
+    ]
+  },
+  "subtitle": "廉价冗余磁盘阵列(RAID)",
+  "clusterId": "chapter-38",
+  "clusterIds": [
+    "chapter-38"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000513"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "RAID 4级：通过奇偶校验节省空间"
+      ],
+      "lineStart": 10209,
+      "lineEnd": 10239,
+      "assetRefs": [],
+      "excerptSha256": "2a388df20a212cbc58ebaafd75aa5707461d85d84f40da74e22c53af6c290945"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000514"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "RAID-4 分析"
+      ],
+      "lineStart": 10240,
+      "lineEnd": 10297,
+      "assetRefs": [],
+      "excerptSha256": "ec388117732931a095d4f67d401f94df666ce1b57929a2b8086bf66b778d2fbd"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3509,
+    122
+  ],
+  "scale": 0.91
+}

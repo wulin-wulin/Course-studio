@@ -1,0 +1,392 @@
+{
+  "id": "point-41-1",
+  "title": "问题：性能不佳",
+  "shortSummary": "以旧文件系统为例说明块分配不当导致的碎片和寻道开销，引出 FFS。",
+  "keyTerms": [
+    "性能问题",
+    "碎片",
+    "寻道开销",
+    "块分配"
+  ],
+  "animationType": "fragmentationSeek",
+  "animationSuggestion": "按“删除 B 和 D、再分配 E”的步骤推进，同步显示空闲块状态、E 的块分布和磁头移动，突出碎片造成的额外寻道。",
+  "difficulty": "基础",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-40-3",
+    "point-40-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "diagnosis-to-design",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的布局描述、性能测量和碎片例子，围绕“为什么慢、该如何改进”重排讲解，并补足块大小权衡的检查。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "describe-old-layout",
+          "text": "描述老 UNIX 文件系统的磁盘布局及其简单性优势。"
+        },
+        {
+          "id": "explain-performance-cause",
+          "text": "解释把磁盘当作随机存取内存、缺少空闲空间管理为何导致寻道和碎片开销。"
+        },
+        {
+          "id": "evaluate-block-size-tradeoff",
+          "text": "权衡块大小在内部碎片与定位、传输开销之间的取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为老 UNIX 文件系统慢只是因为磁盘容量或硬件老旧，与数据布局无关。",
+        "认为块越小越省空间，因此块大小可以无条件取小。"
+      ],
+      "modules": [
+        {
+          "id": "old-layout-and-simplicity",
+          "title": "旧布局与简单性",
+          "role": "concept",
+          "outcomeRefs": [
+            "describe-old-layout"
+          ],
+          "order": 0
+        },
+        {
+          "id": "why-seeks-hurt",
+          "title": "定位成本为何拖慢访问",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "explain-performance-cause"
+          ],
+          "order": 1
+        },
+        {
+          "id": "fragmentation-and-allocation",
+          "title": "碎片如何形成",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "explain-performance-cause"
+          ],
+          "order": 2
+        },
+        {
+          "id": "block-size-tradeoff",
+          "title": "块大小的两难",
+          "role": "comparison",
+          "outcomeRefs": [
+            "evaluate-block-size-tradeoff"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与下一节",
+          "role": "check",
+          "outcomeRefs": [
+            "describe-old-layout",
+            "explain-performance-cause",
+            "evaluate-block-size-tradeoff"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-old-layout",
+          "explain-performance-cause",
+          "evaluate-block-size-tradeoff"
+        ],
+        "method": "完成碎片分配检查，并用布局、定位成本和块大小三项依据解释老文件系统为何需要重新设计。",
+        "successCriteria": [
+          "能指出超级块、inode 区和数据区的职责",
+          "能说明 inode 与数据块分离造成的额外寻道",
+          "能说明空闲块分配规则如何产生碎片",
+          "能同时说出小块与大块各自的代价"
+        ],
+        "exerciseBlockId": "check-fragmentation",
+        "summaryBlockId": "summary-bridge",
+        "nextPointId": "point-41-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "old-unix-layout",
+        "moduleId": "old-layout-and-simplicity",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "老 UNIX 文件系统的磁盘布局",
+        "markdown": "老 UNIX 文件系统的磁盘布局非常直接：最前面是超级块 $S$，随后依次是 **inode 区** 和 **数据区**。超级块记录卷的大小、inode 数量，以及指向空闲列表块头部的指针；inode 区保存文件系统的全部 inode；磁盘其余的大部分空间用于数据块。\n\n这种布局的最大优点是简单，并且足以支撑文件系统要提供的基本抽象：文件和目录层次结构。与更早的基于记录的存储系统相比，它是一次明显的进步。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000569"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "局部性和快速文件系统"
+              ],
+              "lineStart": 11223,
+              "lineEnd": 11232,
+              "assetRefs": [],
+              "excerptSha256": "af94b1f97eb14c3c0b101dc3af50ca6e7693636d9e4e99afe01e21a57290bf07"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layout-intuition",
+        "moduleId": "old-layout-and-simplicity",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：布局只回答“放在哪”",
+        "markdown": "可以把这套布局想成一条按顺序摆放的存储带：先登记整体信息，再集中放 inode，最后铺开数据块。它只规定了各类东西放在哪里，并没有规定相关的数据要不要放得近。后面的性能问题正来自这个缺口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "old-unix-layout"
+          ]
+        }
+      },
+      {
+        "id": "performance-problem",
+        "moduleId": "why-seeks-hurt",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "性能为何糟糕",
+        "markdown": "问题在于性能很差。Kirk McKusick 及其在伯克利的同事的测量显示，老 UNIX 文件系统的性能一开始就不理想，并随着使用继续恶化，最终只提供总磁盘带宽的 2%。\n\n根本原因是文件系统把磁盘当作随机存取内存：数据散布在磁盘各处，没有考虑介质存在真实的定位成本。例如，文件的数据块通常离它的 inode 很远；而“先读 inode、再读数据块”是非常常见的操作，因此每次都可能付出昂贵的寻道代价。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000570"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：性能不佳"
+              ],
+              "lineStart": 11233,
+              "lineEnd": 11260,
+              "assetRefs": [],
+              "excerptSha256": "c29985ebe57e3464bf114ed205ab2df2e2b34d45f65179b91b5fb9cd5d97759e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-inode-data-separation",
+        "moduleId": "why-seeks-hurt",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：一次访问被拆成两段定位",
+        "markdown": "把一次常见的文件访问拆开看：系统先定位并读取 inode，取得数据块的位置，再定位并读取数据块。若这两类信息在磁盘上相隔很远，一次逻辑上连续的读取就会被迫插入额外寻道。文件越大、访问越频繁，这种定位浪费越明显。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "performance-problem"
+          ]
+        }
+      },
+      {
+        "id": "fragmentation-example",
+        "moduleId": "fragmentation-and-allocation",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "碎片如何把文件拆散",
+        "markdown": "更糟的是，空闲空间没有得到精心管理，文件系统会变得高度**碎片化**（fragmented）。空闲列表最终指向散布在磁盘各处的块；分配文件时，文件系统只是占用下一个空闲块。结果是逻辑上连续的文件在物理上来回分布，访问时必须反复移动磁头。\n\n教材用一个例子说明：数据区原有四个两块的文件 $A$、$B$、$C$、$D$，即 `A1 A2 B1 B2 C1 C2 D1 D2`。删除 $B$ 和 $D$ 后，空闲空间变成两块两块的空洞，而不是连续的 4 块。此时分配一个 4 块的文件 $E$，它会占据两段不相邻的空间，形成 `A1 A2 E1 E2 C1 C2 E3 E4` 一类的布局：读取 $E$ 时先读 $E1$、$E2$，寻道，再读 $E3$、$E4$，无法获得顺序访问的峰值性能。磁盘碎片整理工具正是为此而存在：它重新组织数据，让文件连续放置、空闲空间连成较大的区域，并更新 inode 等元数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000570"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：性能不佳"
+              ],
+              "lineStart": 11233,
+              "lineEnd": 11260,
+              "assetRefs": [],
+              "excerptSha256": "c29985ebe57e3464bf114ed205ab2df2e2b34d45f65179b91b5fb9cd5d97759e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-free-list-role",
+        "moduleId": "fragmentation-and-allocation",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：碎片来自分配规则与空闲列表的共同作用",
+        "markdown": "碎片不是删除本身造成的，而是“只取下一个空闲块”的分配规则与分散的空闲列表共同作用的结果。规则本身没有错，但它没有把同一文件的块尽量放在相邻位置，于是每次跨段访问都要为定位付费。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fragmentation-example"
+          ]
+        }
+      },
+      {
+        "id": "block-size-tradeoff",
+        "moduleId": "block-size-tradeoff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "原始块大小也太小",
+        "markdown": "还有一个问题：原始块大小太小，只有 512 字节。较小的块能减少**内部碎片**（internal fragmentation），也就是块内被浪费的空间；但访问每个块都可能需要一次定位开销。块太小意味着传同样多的数据要做更多次定位，数据传输因此低效。\n\n由此可以把问题概括为一句话：**如何组织磁盘数据，让文件系统具有“磁盘意识”，从而提高性能？** 这需要重新考虑文件系统数据结构的组织方式，以及在它们之上采用什么样的分配策略。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000570"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：性能不佳"
+              ],
+              "lineStart": 11233,
+              "lineEnd": 11260,
+              "assetRefs": [],
+              "excerptSha256": "c29985ebe57e3464bf114ed205ab2df2e2b34d45f65179b91b5fb9cd5d97759e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-block-size-summary",
+        "moduleId": "block-size-tradeoff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：块大小的双向取舍",
+        "markdown": "块大小是一组方向相反的取舍：块越大，定位次数越少，但块内浪费可能越多；块越小，内部碎片越少，但每次传输要付出更多定位开销。老系统的 512 字节块把天平压向了后者，所以即使布局问题被修正，块大小仍需要重新评估。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "block-size-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "check-fragmentation",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：预测碎片布局",
+        "markdown": "假设空闲列表顺序为第 3、4、7、8 块，现要分配一个 4 块的文件。请先写出分配后的块布局，再指出访问该文件时会在哪里发生额外寻道，并说明如果空闲块是连续 4 块，情况会怎样。\n\n参考要点：按“取下一个空闲块”的规则，文件会被分成两段；访问第二段前需要额外寻道；连续空闲块可以让文件一次顺序读完。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fragmentation-example",
+            "block-size-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "summary-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：三个必须修掉的设计缺口",
+        "markdown": "老 UNIX 文件系统的教训可以归纳为三点：布局简单不等于性能可接受；把磁盘当作随机存取内存会忽视定位成本；空闲块分配不当会把逻辑连续变成物理分散。下一节将看到，FFS 的核心回应是让文件系统的结构与分配策略具备“磁盘意识”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "performance-problem",
+            "fragmentation-example",
+            "block-size-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fragmentation-check",
+        "type": "formative-check",
+        "title": "碎片分配检查",
+        "anchorBlockId": "check-fragmentation",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-performance-cause"
+        ],
+        "learningPurpose": "检查学习者能否按空闲列表规则推导块分配结果，并解释碎片导致的额外寻道。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "fragmentation-example",
+            "block-size-tradeoff"
+          ]
+        },
+        "config": {
+          "question": "空闲列表顺序为第 3、4、7、8 块时，分配一个 4 块文件会发生什么？",
+          "options": [
+            "文件得到连续 4 块，访问时无需额外寻道",
+            "文件被分成两段，访问第二段前需要额外寻道",
+            "分配失败，因为空闲块不连续",
+            "文件会自动移动到连续区域"
+          ],
+          "answerIndex": 1
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出分配后的块布局，并指出访问该文件时是否需要额外寻道。"
+        }
+      }
+    ]
+  },
+  "subtitle": "局部性和快速文件系统",
+  "clusterId": "chapter-41",
+  "clusterIds": [
+    "chapter-41"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000569"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "局部性和快速文件系统"
+      ],
+      "lineStart": 11223,
+      "lineEnd": 11232,
+      "assetRefs": [],
+      "excerptSha256": "af94b1f97eb14c3c0b101dc3af50ca6e7693636d9e4e99afe01e21a57290bf07"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000570"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "问题：性能不佳"
+      ],
+      "lineStart": 11233,
+      "lineEnd": 11260,
+      "assetRefs": [],
+      "excerptSha256": "c29985ebe57e3464bf114ed205ab2df2e2b34d45f65179b91b5fb9cd5d97759e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1175,
+    110
+  ],
+  "scale": 1.17
+}

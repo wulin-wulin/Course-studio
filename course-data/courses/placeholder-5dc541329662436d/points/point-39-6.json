@@ -1,0 +1,378 @@
+{
+  "id": "point-39-6",
+  "title": "用 fsync()立即写入",
+  "shortSummary": "说明 fsync 如何强制把数据和元数据写入持久存储，以及其性能代价。",
+  "keyTerms": [
+    "fsync",
+    "持久化",
+    "数据写入",
+    "元数据"
+  ],
+  "animationType": "fsyncDurability",
+  "animationSuggestion": "按时间轴展示 write 返回后数据停留在内存缓冲、崩溃窗口存在，点击 fsync 后动画显示脏数据逐块写入磁盘并保持阻塞，全部完成后返回；允许在缓冲期和写入期插入模拟崩溃点，比较是否有持久性保证。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-39-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-trace-and-boundary-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 write 缓冲语义、fsync 强制落盘和目录 fsync 的定义与边界，补充时序直觉、崩溃情境和检查题以支持迁移。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-buffered-write",
+          "text": "解释 write() 的缓冲语义，以及为什么调用返回不代表数据已经持久化。"
+        },
+        {
+          "id": "apply-fsync",
+          "text": "说明 fsync(fd) 如何强制指定文件的脏数据落盘，以及何时才能认为写入安全完成。"
+        },
+        {
+          "id": "diagnose-durability",
+          "text": "判断仅对新建文件本身调用 fsync 是否足够，并说明目录 fsync 保护的是哪一层持久性。"
+        }
+      ],
+      "misconceptions": [
+        "把 write() 返回成功当作数据已经写入磁盘的证明。",
+        "认为 fsync(fd) 会刷新整个文件系统的所有脏数据，而不只是该文件描述符引用的文件。",
+        "认为对新建文件本身 fsync 之后，崩溃后一定能在目录中看到该文件。"
+      ],
+      "modules": [
+        {
+          "id": "buffered-write-problem",
+          "title": "缓冲写与崩溃窗口",
+          "role": "problem-introduction",
+          "description": "从 write() 的延迟写语义切入，说明调用返回与真正落盘之间的时间差。",
+          "outcomeRefs": [
+            "explain-buffered-write"
+          ],
+          "order": 0
+        },
+        {
+          "id": "fsync-mechanism",
+          "title": "fsync 的强制落盘机制",
+          "role": "mechanism",
+          "description": "解释 fsync 针对指定文件强制写出脏数据并等待完成。",
+          "outcomeRefs": [
+            "apply-fsync"
+          ],
+          "order": 1
+        },
+        {
+          "id": "code-trace",
+          "title": "走查 open–write–fsync 示例",
+          "role": "worked-example",
+          "description": "逐步核对示例代码中每一步的保证与返回时机。",
+          "outcomeRefs": [
+            "apply-fsync"
+          ],
+          "order": 2
+        },
+        {
+          "id": "directory-durability",
+          "title": "目录 fsync 与持久性边界",
+          "role": "boundary-analysis",
+          "description": "分析文件数据落盘与目录项落盘是两层不同的持久性要求。",
+          "outcomeRefs": [
+            "diagnose-durability"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与下一点桥接",
+          "role": "check-and-transfer",
+          "description": "用检查清单与情境题核对持久化保证，并引出文件重命名。",
+          "outcomeRefs": [
+            "explain-buffered-write",
+            "apply-fsync",
+            "diagnose-durability"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-buffered-write",
+          "apply-fsync",
+          "diagnose-durability"
+        ],
+        "method": "完成情境判断并写出所需的 fsync 调用顺序。",
+        "successCriteria": [
+          "能区分 write 返回与 fsync 返回各自的保证",
+          "能指出新建文件在崩溃后可能缺失目录项的原因",
+          "能说明 fsync 的性能代价来自强制等待落盘"
+        ],
+        "exerciseBlockId": "model-check-scenario",
+        "summaryBlockId": "model-durability-checklist",
+        "nextPointId": "point-39-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-write-buffering",
+        "moduleId": "buffered-write-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：write() 的缓冲语义",
+        "markdown": "大多数情况下，程序调用 `write()` 只是告诉文件系统：请在将来的某个时刻，把这份数据写入持久存储。出于性能原因，文件系统会先把写入在内存中缓冲一段时间（书中举例为 5 秒或 30 秒），稍后才真正发送到存储设备。\n\n因此从调用应用程序的角度看，写入似乎很快完成；只有在少数情况下，例如 `write()` 已返回但写入磁盘之前机器崩溃，数据才会丢失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000532"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "用 fsync()立即写入"
+              ],
+              "lineStart": 10539,
+              "lineEnd": 10559,
+              "assetRefs": [],
+              "excerptSha256": "ece8ebd00d412d670d418eb2d7ebb4fd8d8d5e49175a954abd63234e8f3184ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-return-meaning",
+        "moduleId": "buffered-write-problem",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充直觉：write 返回意味着什么",
+        "markdown": "把 `write()` 的返回理解成“数据已交给文件系统保管”，而不是“数据已经在磁盘上”。在这段缓冲期内，数据只存在于易失的内存中。\n\n于是存在一个崩溃窗口：从 `write()` 返回到缓冲区真正刷入磁盘之间的任何时刻发生断电或崩溃，这段数据都可能丢失。缓冲时间越长，窗口越大；文件系统用这个窗口换取更少的磁盘访问和更高的吞吐。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-write-buffering"
+          ]
+        }
+      },
+      {
+        "id": "textbook-fsync-semantics",
+        "moduleId": "fsync-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：fsync() 的语义",
+        "markdown": "有些应用程序需要比“将来会写”更强的保证。例如数据库管理系统的恢复协议，就要求能够频繁地强制写入磁盘。为支持这类应用，大多数文件系统提供了额外的控制 API；在 UNIX 中，这个接口是 `fsync(int fd)`。\n\n当进程针对某个文件描述符调用 `fsync()` 时，文件系统会强制把该文件描述符所引用文件的全部脏数据（即尚未写入磁盘的数据）写入磁盘。等所有这些写入完成后，`fsync()` 才返回。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000532"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "用 fsync()立即写入"
+              ],
+              "lineStart": 10539,
+              "lineEnd": 10559,
+              "assetRefs": [],
+              "excerptSha256": "ece8ebd00d412d670d418eb2d7ebb4fd8d8d5e49175a954abd63234e8f3184ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fsync-scope-and-blocking",
+        "moduleId": "fsync-mechanism",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：脏数据范围与阻塞行为",
+        "markdown": "这里的“脏”指已经修改但还没有写回存储设备的数据。`fsync()` 的作用范围是**该文件描述符引用的文件**，不是整个文件系统，因此不会顺带保证同一台机器上其他文件的持久性。\n\n另外，`fsync()` 是同步等待：调用线程会一直阻塞到相关写入完成才继续执行。这正是数据库等应用愿意付出的代价——用一次较慢的调用换取“返回即已落盘”的确定性；反过来，频繁 `fsync()` 也会显著拖慢写入性能，这就是普通写入默认不这样做的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fsync-semantics"
+          ]
+        }
+      },
+      {
+        "id": "textbook-fsync-example",
+        "moduleId": "code-trace",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：open–write–fsync 示例",
+        "markdown": "书中给出的示例先打开文件 `foo`，写入一个数据块，然后调用 `fsync()` 以确保立即强制写入磁盘：\n\n```c\nint fd = open(\"foo\", O_CREAT | O_WRONLY | O_TRUNC);\nassert(fd > -1);\nint rc = write(fd, buffer, size);\nassert(rc == size);\nrc = fsync(fd);\nassert(rc == 0);\n```\n\n一旦 `fsync()` 返回，应用程序就可以安全地继续执行，并知道数据已被保存（前提是 `fsync()` 的实现正确）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000532"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "用 fsync()立即写入"
+              ],
+              "lineStart": 10539,
+              "lineEnd": 10559,
+              "assetRefs": [],
+              "excerptSha256": "ece8ebd00d412d670d418eb2d7ebb4fd8d8d5e49175a954abd63234e8f3184ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-timeline",
+        "moduleId": "code-trace",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "逐步走查：每个断言的保证边界",
+        "markdown": "把示例按时间顺序拆开看：\n\n1. `open()` 成功后得到文件描述符，`assert(fd > -1)` 只检查打开是否成功。\n2. `write()` 返回写入的字节数；`assert(rc == size)` 说明数据已被文件系统接受并进入缓冲，但此刻数据可能仍在内存中。\n3. `fsync(fd)` 触发强制写回并等待完成；`assert(rc == 0)` 通过时，数据才真正落到持久存储。\n\n所以前两个断言检查的是**调用是否成功**，只有 `fsync()` 返回之后才获得**持久性保证**。如果把 `fsync()` 提前删掉，程序在正常运行时看不出差别，只有在崩溃时才暴露数据丢失的风险。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fsync-example"
+          ]
+        }
+      },
+      {
+        "id": "textbook-directory-fsync",
+        "moduleId": "directory-durability",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "教材：还需要对目录调用 fsync()",
+        "markdown": "有趣的是，上面这段代码并不能保证你所期望的一切。在某些情况下，还需要对包含 `foo` 文件的目录也调用 `fsync()`。\n\n这样做不仅能确保文件本身位于磁盘上，还能确保文件（如果是新建的）已经成为目录的一部分。书中指出，这种细节往往被忽略，进而导致许多应用程序级别的错误。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000532"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "用 fsync()立即写入"
+              ],
+              "lineStart": 10539,
+              "lineEnd": 10559,
+              "assetRefs": [],
+              "excerptSha256": "ece8ebd00d412d670d418eb2d7ebb4fd8d8d5e49175a954abd63234e8f3184ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-directory-crash-scenario",
+        "moduleId": "directory-durability",
+        "depth": "advanced",
+        "kind": "example",
+        "title": "补充：一个目录项未落盘的崩溃情境",
+        "markdown": "设想应用新建文件、写入内容并只对文件本身调用 `fsync()`，随后立即崩溃。文件的数据块和 inode 可能已经落盘，但把“文件名 → inode”记录进父目录的目录项更新可能仍在缓存中。重启后，文件内容或许还在磁盘上，却没有任何目录项指向它，应用按名字打开就会失败。\n\n因此持久化要分两层检查：\n\n- 文件**内容与元数据**：对文件描述符调用 `fsync()`；\n- 文件**在目录中的存在性**：在创建（或重命名）之后，对父目录的文件描述符调用 `fsync()`。\n\n两个层次都完成，才谈得上“文件已安全创建并保存”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fsync-example",
+            "textbook-directory-fsync"
+          ]
+        }
+      },
+      {
+        "id": "model-durability-checklist",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "持久化检查清单",
+        "markdown": "处理需要崩溃安全的文件写入时，可以按下面的清单核对：\n\n1. `write()` 返回只说明数据进入了缓冲，不构成持久化承诺。\n2. 需要持久性时，对目标文件调用 `fsync()`，并等待其成功返回。\n3. 如果本次操作创建或重命名了目录项，还要对父目录调用 `fsync()`。\n4. 每次 `fsync()` 都要付出等待磁盘写入的时间，应在确实需要时才使用。\n\n理解这两层保证后，就能看出下一步“文件重命名”为何重要：它提供了一种原子切换文件状态的手段，常与上述持久化步骤配合使用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fsync-semantics",
+            "model-directory-crash-scenario"
+          ]
+        }
+      },
+      {
+        "id": "model-check-scenario",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "情境检查：少了哪一步",
+        "markdown": "某程序新建文件 `log.txt`，写入一段记录，调用 `fsync(fd)` 成功后立刻向用户报告“已安全保存”，随后机器崩溃。重启后用户按名字打开 `log.txt` 却提示文件不存在。\n\n请回答：\n\n1. 为什么文件数据可能已经落盘，按名字却找不到它？\n2. 程序应当补上哪个系统调用、作用在什么对象上？\n3. 如果程序还需要保证这次操作的顺序可恢复，`fsync()` 的等待返回带来了什么价值？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-durability-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fsync-durability-check",
+        "type": "formative-check",
+        "title": "判断两层持久化是否都已完成",
+        "anchorBlockId": "model-check-scenario",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-durability"
+        ],
+        "learningPurpose": "检查学习者能否区分文件数据落盘与目录项落盘这两层持久性要求，并给出正确的 fsync 调用顺序。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-directory-fsync",
+            "model-directory-crash-scenario"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "expectedCalls": [
+            "fsync(file fd)",
+            "fsync(parent directory fd)"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "先对文件描述符调用 fsync() 保证内容落盘，再对父目录描述符调用 fsync() 保证目录项落盘；缺少后者时，崩溃后文件可能因没有目录项而无法按名字访问。"
+        }
+      }
+    ]
+  },
+  "subtitle": "插叙:文件和目录",
+  "clusterId": "chapter-39",
+  "clusterIds": [
+    "chapter-39"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000532"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "用 fsync()立即写入"
+      ],
+      "lineStart": 10539,
+      "lineEnd": 10559,
+      "assetRefs": [],
+      "excerptSha256": "ece8ebd00d412d670d418eb2d7ebb4fd8d8d5e49175a954abd63234e8f3184ab"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2638,
+    292
+  ],
+  "scale": 0.9
+}

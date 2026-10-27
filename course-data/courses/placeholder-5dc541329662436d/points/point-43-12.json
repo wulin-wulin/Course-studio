@@ -1,0 +1,378 @@
+{
+  "id": "point-43-12",
+  "title": "崩溃恢复和日志",
+  "shortSummary": "说明 LFS 如何利用日志和检查点区域实现崩溃后的一致性恢复。",
+  "keyTerms": [
+    "崩溃恢复",
+    "日志",
+    "检查点",
+    "LFS"
+  ],
+  "animationType": "crashConsistency",
+  "animationSuggestion": "用时间轴演示在写段、写 CR 头、写 CR 体、写 CR 尾的不同时刻触发崩溃，高亮两个 CR 的时间戳是否一致，再沿日志指针逐段前滚并标出恢复停止的位置。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-42-3",
+    "point-43-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-recovery-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于双检查点区域、时间戳与前滚的定义和边界，围绕崩溃位置补充机制直觉、场景演练与达成检查。",
+      "estimatedMinutes": 11,
+      "outcomes": [
+        {
+          "id": "explain-log-structure",
+          "text": "解释 LFS 的段、段链日志与检查点区域在正常写入中的分工。"
+        },
+        {
+          "id": "apply-cr-protocol",
+          "text": "说明 LFS 如何借助双检查点区域与成对时间戳完成检查点的原子更新。"
+        },
+        {
+          "id": "recover-after-crash",
+          "text": "描述崩溃后的恢复流程、可能丢失的更新范围以及前滚如何缩小损失。"
+        }
+      ],
+      "misconceptions": [
+        "认为 LFS 崩溃后一定能恢复到崩溃前的最后一条写入。",
+        "认为两个检查点区域只是普通的主备副本，恢复时直接选较新的一个即可。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-log-structure",
+          "title": "问题导入与日志结构",
+          "role": "concept-introduction",
+          "description": "先明确崩溃发生在哪些写入环节，再建立段链日志与检查点区域的结构图景。",
+          "outcomeRefs": [
+            "explain-log-structure"
+          ],
+          "order": 0
+        },
+        {
+          "id": "cr-atomic-update",
+          "title": "检查点的原子更新",
+          "role": "mechanism-analysis",
+          "description": "拆解双 CR 与成对时间戳如何把一次更新变成可判定的完整或残缺。",
+          "outcomeRefs": [
+            "apply-cr-protocol"
+          ],
+          "order": 1
+        },
+        {
+          "id": "restart-recovery",
+          "title": "重启恢复与损失窗口",
+          "role": "failure-analysis",
+          "description": "说明重启时从哪个状态读起，以及为什么检查点之间会形成损失窗口。",
+          "outcomeRefs": [
+            "recover-after-crash"
+          ],
+          "order": 2
+        },
+        {
+          "id": "roll-forward",
+          "title": "前滚重建日志之后的更新",
+          "role": "procedure-walkthrough",
+          "description": "沿 CR 记录的日志结尾逐段校验并应用更新，理解恢复的实际停止条件。",
+          "outcomeRefs": [
+            "recover-after-crash",
+            "explain-log-structure"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-summary",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用崩溃场景检验恢复决策，并归纳恢复边界的统一表述。",
+          "outcomeRefs": [
+            "explain-log-structure",
+            "apply-cr-protocol",
+            "recover-after-crash"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-log-structure",
+          "apply-cr-protocol",
+          "recover-after-crash"
+        ],
+        "method": "针对给定的崩溃时刻判断应采用的检查点，并说明前滚从哪里开始、到哪里停止。",
+        "successCriteria": [
+          "能区分“写了一半的 CR”与“写完的最新 CR”",
+          "能指出恢复起点是最后一个一致 CR 而非最后一条写入",
+          "能用段链与有效性检查解释前滚的停止条件"
+        ],
+        "exerciseBlockId": "model-recovery-check",
+        "summaryBlockId": "model-recovery-summary",
+        "nextPointId": "point-43-13"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-log-structure",
+        "moduleId": "problem-and-log-structure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：段、日志与检查点区域",
+        "markdown": "在正常操作期间，LFS 先把多次写入缓冲在段中；当段写满或经过一段时间后，再把整段写入磁盘。这些段被组织成一条日志（log）：检查点区域（CR）记录日志的头部段与尾部段，而每个段又指向要写入的下一个段。因此，磁盘上的日志顺序记录了数据与元数据更新的先后。\n\n崩溃可能发生在这两个环节：写入段的时候，以及更新检查点区域的时候。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000615"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃恢复和日志"
+              ],
+              "lineStart": 11977,
+              "lineEnd": 11988,
+              "assetRefs": [],
+              "excerptSha256": "fff1b3e1f44f394911961b30700fd185d822434b14398536f50b9ad61f08abe5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-log-intuition",
+        "moduleId": "problem-and-log-structure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：追加式记事本与书签",
+        "markdown": "可以把日志想成一本只往后追加的记事本：新内容总写在空白页上，而 CR 是夹在记事本上的书签，说明这段记录从哪里开始、到哪里结束。书签只有在正文已经完整写入后才有意义，这正是检查点更新必须原子完成的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-log-structure"
+          ]
+        }
+      },
+      {
+        "id": "tb-cr-protocol",
+        "moduleId": "cr-atomic-update",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：双 CR 与成对时间戳",
+        "markdown": "为了确保 CR 更新以原子方式发生，LFS 在磁盘两端各保留一个 CR，并交替写入二者。当使用最新的指向 inode 映射和其他信息的指针更新 CR 时，LFS 采用一个谨慎的协议：先写出带时间戳的头部，然后写出 CR 的主体，最后写出同样带时间戳的结尾。如果系统在 CR 更新期间崩溃，LFS 可以通过一对不一致的时间戳检测到这种情况，并选择使用具有一致时间戳的最新 CR。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000615"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃恢复和日志"
+              ],
+              "lineStart": 11977,
+              "lineEnd": 11988,
+              "assetRefs": [],
+              "excerptSha256": "fff1b3e1f44f394911961b30700fd185d822434b14398536f50b9ad61f08abe5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cr-why-timestamps",
+        "moduleId": "cr-atomic-update",
+        "depth": "support",
+        "kind": "warning",
+        "title": "为什么不能直接选“最后被写过”的 CR",
+        "markdown": "崩溃可能发生在头部已写、主体尚未写完的中间状态：此时那个 CR 看起来更新，内容却不完整。成对时间戳的作用正是把“写完的最新 CR”与“写了一半的 CR”区分开。替换 CR 时交替使用磁盘两端，则保证在覆盖旧 CR 之前，另一端的旧 CR 仍然可用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cr-protocol"
+          ]
+        }
+      },
+      {
+        "id": "tb-restart-snapshot",
+        "moduleId": "restart-recovery",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：重启时的一致性快照",
+        "markdown": "由于 LFS 每隔 30 秒左右才写入一次 CR，文件系统的最后一致快照可能已经很旧。因此在重新启动时，LFS 可以简单地读取检查点区域、它指向的 imap 片段以及后续文件和目录，从而轻松地恢复；但最后许多秒的更新将会丢失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000615"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃恢复和日志"
+              ],
+              "lineStart": 11977,
+              "lineEnd": 11988,
+              "assetRefs": [],
+              "excerptSha256": "fff1b3e1f44f394911961b30700fd185d822434b14398536f50b9ad61f08abe5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-window",
+        "moduleId": "restart-recovery",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "损失窗口：已写段不等于已恢复",
+        "markdown": "丢失的并不一定是“已经写进磁盘的段”，而是“尚未被 CR 承认的更新”。段可能已经落在磁盘上，但如果不做额外处理，恢复时不知道这段日志是否完整、属于文件系统的哪一版，因此只能退回到最后一个一致 CR。恢复的起点是最后一个可验证的一致状态，而不是最后一条写入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-restart-snapshot"
+          ]
+        }
+      },
+      {
+        "id": "tb-roll-forward",
+        "moduleId": "roll-forward",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：前滚重建",
+        "markdown": "为了改进这一点，LFS 尝试通过数据库社区中称为前滚（roll forward）的技术重建其中许多段。基本思想是从最后一个检查点区域开始，找到日志的结尾（包含在 CR 中），然后用它来读取下一个段，并查看其中是否有任何有效更新。如果有，LFS 会相应地更新文件系统，从而恢复自上一个检查点以来写入的大部分数据和元数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000615"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃恢复和日志"
+              ],
+              "lineStart": 11977,
+              "lineEnd": 11988,
+              "assetRefs": [],
+              "excerptSha256": "fff1b3e1f44f394911961b30700fd185d822434b14398536f50b9ad61f08abe5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-roll-forward-walkthrough",
+        "moduleId": "roll-forward",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "走一遍前滚",
+        "markdown": "设最新一致 CR 记录的日志尾段为 S10，而 S10 的 next 指针指向 S11。重启后 LFS 先读取 CR 与它指向的 imap 片段，再沿指针依次读取 S11、S12，逐个检查段内更新是否有效，并把有效更新应用到 inode、imap 和目录上。一旦发现无效或断裂的段，前滚停止，文件系统停在最后一个通过检查的一致状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cr-protocol",
+            "tb-roll-forward"
+          ]
+        }
+      },
+      {
+        "id": "model-recovery-check",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：崩溃位置决定恢复决策",
+        "markdown": "场景一：LFS 写完 CR 主体、尚未写结尾时间戳时断电，重启后应使用哪一个 CR？\n\n场景二：重启后发现日志尾段之后仍有一个完整段，但 CR 并未包含它，应如何处理？\n\n参考思路：场景一选择时间戳成对一致的最新 CR；场景二从该 CR 记录的日志结尾出发前滚，只应用通过有效性检查的更新，无法验证的位置就是恢复边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cr-protocol",
+            "tb-restart-snapshot",
+            "tb-roll-forward"
+          ]
+        }
+      },
+      {
+        "id": "model-recovery-summary",
+        "moduleId": "check-and-summary",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：三种机制的配合",
+        "markdown": "LFS 的崩溃恢复由三件事配合完成：用段与段链日志组织写入，用双 CR 加成对时间戳保证检查点原子更新，用前滚把 CR 之后的完整段接回文件系统。恢复边界始终是“最后一个可验证的一致状态”。下一节将总结 LFS 在顺序写优势、垃圾收集代价与适用场景上的整体取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-log-structure",
+            "tb-cr-protocol",
+            "tb-restart-snapshot",
+            "tb-roll-forward"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "recovery-boundary-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-roll-forward-walkthrough",
+        "moduleId": "roll-forward",
+        "depth": "core",
+        "outcomeRefs": [
+          "recover-after-crash"
+        ],
+        "learningPurpose": "检查学习者能否把崩溃位置映射为 CR 选择与前滚停止条件，而不是笼统地回答“重新启动即可恢复”。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-cr-protocol",
+            "tb-roll-forward"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别判断：CR 写到一半崩溃时选哪个检查点；CR 之后还有完整段时是否以及如何前滚。用时间戳一致性与有效性检查说明依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "日志结构文件系统",
+  "clusterId": "chapter-43",
+  "clusterIds": [
+    "chapter-43"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000615"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "崩溃恢复和日志"
+      ],
+      "lineStart": 11977,
+      "lineEnd": 11988,
+      "assetRefs": [],
+      "excerptSha256": "fff1b3e1f44f394911961b30700fd185d822434b14398536f50b9ad61f08abe5"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -297,
+    221
+  ],
+  "scale": 0.88
+}

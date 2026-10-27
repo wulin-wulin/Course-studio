@@ -1,0 +1,410 @@
+{
+  "id": "point-6-2",
+  "title": "问题1：受限制的操作",
+  "shortSummary": "解释用户态与内核态、系统调用和陷阱机制如何限制进程执行特权操作。",
+  "keyTerms": [
+    "用户态",
+    "内核态",
+    "系统调用",
+    "陷阱"
+  ],
+  "animationType": "trapSystemCall",
+  "animationSuggestion": "按时间顺序展示用户态调用库函数、库执行陷阱、硬件保存现场并切换内核态、内核按陷阱表处理请求、从陷阱返回恢复用户态的过程，并高亮每一步的特权级别与寄存器现场。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-flow",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的用户态与内核态、陷阱和系统调用机制为主线，补充最小权限直觉、模式对照表和一次系统调用的控制流，不引入教材之外的新事实。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-restriction-rationale",
+          "text": "解释为什么直接在 CPU 上运行程序时必须限制特权操作。"
+        },
+        {
+          "id": "distinguish-execution-modes",
+          "text": "区分用户模式与内核模式的权限边界和进入方式。"
+        },
+        {
+          "id": "trace-system-call",
+          "text": "按顺序描述系统调用经陷阱进入内核、再由从陷阱返回恢复用户态的过程。"
+        },
+        {
+          "id": "apply-trap-table",
+          "text": "说明陷阱表的作用与设置权限，并据此判断相关场景是否安全。"
+        }
+      ],
+      "misconceptions": [
+        "把系统调用当成与普通函数调用完全相同的机制，忽略其内部隐藏的陷阱指令和特权级别切换。",
+        "认为用户程序可以自行指定陷入内核后的跳转地址。",
+        "认为用户态与内核态的区别只是运行速度快慢，而不是可访问资源和特权指令的边界。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-stakes",
+          "title": "受限操作的由来",
+          "role": "problem-introduction",
+          "outcomeRefs": [
+            "explain-restriction-rationale"
+          ],
+          "order": 0
+        },
+        {
+          "id": "execution-modes",
+          "title": "用户模式与内核模式",
+          "role": "concept",
+          "outcomeRefs": [
+            "distinguish-execution-modes"
+          ],
+          "order": 1
+        },
+        {
+          "id": "trap-and-system-call",
+          "title": "陷阱、系统调用与陷阱表",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-system-call",
+            "apply-trap-table"
+          ],
+          "order": 2
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-restriction-rationale",
+            "trace-system-call"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-restriction-rationale",
+          "distinguish-execution-modes",
+          "trace-system-call",
+          "apply-trap-table"
+        ],
+        "method": "完成模式对照与系统调用控制流复述，并判断三个常见说法是否正确。",
+        "successCriteria": [
+          "能说明不加限制会破坏保护的原因",
+          "能按顺序复述陷阱进入与从陷阱返回的关键步骤",
+          "能解释陷阱表为何必须由内核设置"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-6-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-restricted-operations",
+        "moduleId": "problem-and-stakes",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：直接执行遇到受限操作",
+        "markdown": "受限直接执行让程序直接在硬件 CPU 上运行，因此速度与预期一样快。但一旦进程希望执行受限操作——例如向磁盘发出 I/O 请求，或获得更多 CPU、内存等系统资源——就直接执行本身无法处理：这些操作会触及共享资源或越过进程隔离边界。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000069"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "问题1：受限制的操作"
+              ],
+              "lineStart": 1825,
+              "lineEnd": 1828,
+              "assetRefs": [],
+              "excerptSha256": "48aa6af1973a61a3cf097276bf0a03f507fd8219598ecdeea2e34fb7df6e937d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-protection",
+        "moduleId": "problem-and-stakes",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么必须限制",
+        "markdown": "可以用最小权限来理解教材的限制理由：进程大多数时间只需要计算和访问自己的地址空间，这些操作不需要内核代劳；只有读写磁盘、创建进程、分配内存等会触及共享资源或越过隔离边界的操作，才必须经过内核检查。\n\n若允许用户进程直接执行这些操作，保护就不再由操作系统掌握：一个进程可以直接改写任意磁盘块，文件权限、进程隔离和资源配额都会失去意义。因此限制不是为了让程序变慢，而是为了让“限制由谁执行、在什么模式下执行”变得可控。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-restricted-operations"
+          ]
+        }
+      },
+      {
+        "id": "tb-key-question",
+        "moduleId": "problem-and-stakes",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：关键问题",
+        "markdown": "教材把问题概括为：一个进程必须能够执行 I/O 和其他一些受限制的操作，但又不能让进程完全控制系统。问题于是变成——操作系统和硬件如何协作实现这一点？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000070"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "关键问题：如何执行受限制的操作"
+              ],
+              "lineStart": 1829,
+              "lineEnd": 1832,
+              "assetRefs": [],
+              "excerptSha256": "bb59105ac4fa0c9f3b5d64a92a3c598aa658cdb4ed10f278368541b78f0adc30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-execution-modes",
+        "moduleId": "execution-modes",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：两种执行模式与系统调用",
+        "markdown": "硬件通过提供不同的执行模式来协助操作系统。在用户模式（user mode）下，应用程序不能完全访问硬件资源；在内核模式（kernel mode）下，操作系统可以访问机器的全部资源。硬件还提供陷入（trap）内核和从陷阱返回（return-from-trap）到用户模式程序的指令，以及让操作系统告诉硬件陷阱表（trap table）位置的指令。\n\n为什么不干脆让所有进程做所有想做的事？教材给出的反例是文件系统：如果希望文件系统在授予访问权限前检查权限，就不能让任何用户进程直接向磁盘发出 I/O，否则一个进程就可以读取或写入整个磁盘，所有保护都会失效。因此在用户模式下运行的代码受到限制，例如不能发出 I/O 请求；一旦尝试，处理器会引发异常，操作系统可能会终止该进程。\n\n需要特权操作时，程序通过系统调用请求内核代劳。系统调用允许内核小心地向用户程序暴露某些关键功能，例如访问文件系统、创建和销毁进程、与其他进程通信以及分配更多内存。执行系统调用要发出特殊的陷阱指令：该指令同时跳入内核并把特权级别提升到内核模式；内核完成所需工作后，执行从陷阱返回指令，回到发起调用的用户程序，同时把特权级别降回用户模式。执行陷阱时硬件必须保存足够的调用者寄存器，例如在 x86 上把程序计数器、标志和其他一些寄存器压入每个进程的内核栈，从陷阱返回时再从栈中恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "提示：采用受保护的控制权转移"
+              ],
+              "lineStart": 1833,
+              "lineEnd": 1848,
+              "assetRefs": [],
+              "excerptSha256": "64f54d8e7f1ffb5b0f8300057a84c0efa84cf8b8f54e03847dacf3b7258398cc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mode-comparison",
+        "moduleId": "execution-modes",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：两种执行模式对照",
+        "markdown": "把教材中的两种模式整理为可比较的维度：\n\n| 对比维度 | 用户模式 | 内核模式 |\n|---|---|---|\n| 可访问资源 | 只能访问进程自己的地址空间和允许的指令 | 可访问机器的全部资源 |\n| 典型代码 | 应用程序、C 库中的用户态部分 | 操作系统内核、陷阱处理程序 |\n| 能否直接发 I/O | 不能，尝试会触发异常 | 可以执行特权 I/O 指令 |\n| 进入方式 | 内核通过从陷阱返回把 CPU 交给它 | 启动时即在内核模式，或由陷阱进入 |\n| 出错后果 | 进程可能被终止 | 错误可能破坏整个系统 |\n\n这张对照表不改变教材结论，只是把“模式”与“权限、进入方式、后果”对应起来，便于检查边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-execution-modes"
+          ]
+        }
+      },
+      {
+        "id": "model-trap-flow",
+        "moduleId": "trap-and-system-call",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：一次系统调用的完整控制流",
+        "markdown": "按时间顺序展开教材描述的协议，一次系统调用包含以下阶段：\n\n1. **用户态发起调用**：应用程序调用 C 库函数（如 `read()`），此时仍在用户模式。\n2. **库准备约定**：C 库按与内核一致的调用约定，把参数和系统调用号放到寄存器或栈中的约定位置。\n3. **执行陷阱指令**：陷阱指令把特权级别提升到内核模式，并跳转到陷阱表中登记的处理器；硬件同时把程序计数器、标志和其他寄存器保存到该进程的内核栈。\n4. **内核处理**：内核在确认请求合法后执行特权操作，例如读取磁盘。\n5. **从陷阱返回**：内核执行 return-from-trap，从内核栈恢复寄存器，把特权级别降回用户模式，并跳回陷阱指令之后的位置。\n6. **库返回结果**：C 库把内核返回值交给应用程序，程序继续执行。\n\n关键点在于：特权级别的切换、寄存器保存和跳转目标都由硬件与内核配合完成，用户代码只负责发出陷阱。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-execution-modes"
+          ]
+        }
+      },
+      {
+        "id": "tb-library-and-trap-table",
+        "moduleId": "trap-and-system-call",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：为什么系统调用像过程调用",
+        "markdown": "系统调用看起来完全像 C 中的典型过程调用，例如 `open()` 或 `read()`。原因是它确实是一次过程调用，只是在过程调用内部隐藏着陷阱指令：C 库按内核约定把参数和系统调用号放到众所周知的位置，然后执行硬件特定的陷阱指令，并在陷阱之后准备返回值。库里进行系统调用的部分通常用汇编手工编码，以严格遵循参数、返回值和硬件约定。\n\n陷阱如何知道在内核中运行哪些代码？发起调用的过程不能自行指定跳转地址，否则程序就能跳转到内核中的任意位置，例如跳到访问文件的代码但绕过权限检查，这是危险的。内核在启动时以特权（内核）模式运行，通过特权指令设置陷阱表，告诉硬件在系统调用、中断等异常事件发生时应运行哪些代码；硬件会记住这些处理程序的位置直到下一次重启。设置陷阱表的指令本身也是特权操作，用户模式下不允许执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "补充：为什么系统调用看起来像过程调用"
+              ],
+              "lineStart": 1849,
+              "lineEnd": 1869,
+              "assetRefs": [],
+              "excerptSha256": "c2ee09a1bf4f1fd80f5ffc7942e8d08de5e1213136f015170d6de3e4a3d99695"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trap-table",
+        "moduleId": "trap-and-system-call",
+        "depth": "core",
+        "kind": "warning",
+        "title": "补充：为什么陷阱表必须由内核掌控",
+        "markdown": "陷阱表是这套机制的安全支点。教材强调，发起系统调用的过程不能像普通过程调用那样指定跳转地址；否则程序可以跳到内核中“权限检查之后”的代码，从而让内核替它执行任意操作。\n\n因此，陷阱表只能由内核在启动时、仍处于内核模式时通过特权指令设置。硬件记住这些处理程序的位置直到重启；此后用户程序能做的只是触发哪一类事件，而不能决定进入内核后执行哪段代码。这条边界也解释了为什么设置陷阱表的指令本身必须被列为特权指令：一旦用户程序能改写它，整个保护模型就会被绕过。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-execution-modes",
+            "tb-library-and-trap-table"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：三个常见说法",
+        "markdown": "请先独立判断，再对照后面的解析：\n\n1. 用户程序调用 `open()` 时，是用户程序自己把跳转地址写进陷阱表吗？\n2. 系统调用看起来像普通函数调用，是否意味着它不会切换到内核模式？\n3. 如果用户模式下的进程试图直接向磁盘发出 I/O，硬件和操作系统通常会怎样处理？\n\n**解析**：1. 不是。陷阱表由内核在启动时设置，用户程序只执行陷阱指令，不能指定内核处理程序地址。2. 不是。`open()` 是 C 库过程调用，但库内部执行了陷阱指令，特权级别会切到内核模式。3. 用户模式不允许发 I/O；尝试会引发异常，操作系统可能终止该进程。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-trap-flow",
+            "model-trap-table"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "本点回答的是受限操作如何执行：硬件提供用户模式与内核模式，用户程序通过陷阱发起系统调用，内核在受控入口完成特权操作，再由从陷阱返回恢复用户态执行；陷阱表在内核启动时设置，保证跳转目标不被用户程序篡改。\n\n这套受保护的控制权转移只解决了进程主动请求内核的情况。如果进程一直不发起系统调用，操作系统如何重新获得 CPU 并切换到另一个进程？这正是下一点要讨论的进程间切换与时钟中断问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-trap-flow",
+            "model-trap-table",
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "restriction-mode-check",
+        "type": "formative-check",
+        "title": "执行模式与陷阱检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-system-call",
+          "apply-trap-table"
+        ],
+        "learningPurpose": "检查学习者能否把模式边界和陷阱表规则应用到具体说法上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-trap-flow",
+            "model-trap-table"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断：用户程序能否自行指定陷阱表地址？系统调用是否真的切换到内核模式？并写出教材中的依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "机制:受限直接执行",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000069"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "问题1：受限制的操作"
+      ],
+      "lineStart": 1825,
+      "lineEnd": 1828,
+      "assetRefs": [],
+      "excerptSha256": "48aa6af1973a61a3cf097276bf0a03f507fd8219598ecdeea2e34fb7df6e937d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000070"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "关键问题：如何执行受限制的操作"
+      ],
+      "lineStart": 1829,
+      "lineEnd": 1832,
+      "assetRefs": [],
+      "excerptSha256": "bb59105ac4fa0c9f3b5d64a92a3c598aa658cdb4ed10f278368541b78f0adc30"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000071"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "提示：采用受保护的控制权转移"
+      ],
+      "lineStart": 1833,
+      "lineEnd": 1848,
+      "assetRefs": [],
+      "excerptSha256": "64f54d8e7f1ffb5b0f8300057a84c0efa84cf8b8f54e03847dacf3b7258398cc"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000072"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "补充：为什么系统调用看起来像过程调用"
+      ],
+      "lineStart": 1849,
+      "lineEnd": 1869,
+      "assetRefs": [],
+      "excerptSha256": "c2ee09a1bf4f1fd80f5ffc7942e8d08de5e1213136f015170d6de3e4a3d99695"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2706,
+    3487
+  ],
+  "scale": 0.98
+}

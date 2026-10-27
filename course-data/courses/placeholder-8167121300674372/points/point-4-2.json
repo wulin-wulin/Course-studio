@@ -1,0 +1,516 @@
+{
+  "id": "point-4-2",
+  "title": "操作系统内核",
+  "shortSummary": "讲解内核的特权级、系统调用与内存虚拟化，理解用户程序受控访问硬件的方式。",
+  "keyTerms": [
+    "内核",
+    "特权级",
+    "系统调用",
+    "内存虚拟化"
+  ],
+  "animationType": "syscallTrapDispatch",
+  "animationSuggestion": "用一个固定的 EL0/EL1 双轨示意图：先高亮用户代码与 svc 指令，再显示级别提升到 EL1，逐步点亮 handle_svc、按 svc 号正负分出的两条分支、sysent 表项命中与处理函数，最后以异常返回收束到 EL0 的下一条指令；提供重播按钮，并在低动态模式下直接显示这条完整路径与各级别标注。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-3-1",
+    "point-4-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于特权级、系统调用与内存虚拟化的定义、术语和结论，按「能力边界—请求边界—地址边界」重排讲解顺序，补充对照表、地址翻译算例与检查题；教材中的目录细节只作提示，不作为学习结论。",
+      "estimatedMinutes": 25,
+      "outcomes": [
+        {
+          "id": "explain-kernel-position",
+          "text": "说明内核作为受控硬件访问中介所处的位置，以及它为什么不是「想访问什么就访问什么」的黑盒子。"
+        },
+        {
+          "id": "explain-privilege-levels",
+          "text": "解释 AArch64 异常级别如何区分应用与内核，并说明级别只能经由异常由低向高切换。"
+        },
+        {
+          "id": "trace-syscall",
+          "text": "描述一次系统调用从 svc 指令到内核查表分派的完整路径，并区分 Mach 与 Unix 系统调用。"
+        },
+        {
+          "id": "explain-virtual-memory",
+          "text": "解释逻辑地址与物理地址的区分、页级映射规则，以及地址空间大于物理内存时的换入换出。"
+        }
+      ],
+      "misconceptions": [
+        "把内核的特权理解成软件层面的「权限大」，忽略它依赖硬件对当前异常级别的检查。",
+        "认为用户程序可以像普通跳转一样主动切换到内核态，忽略级别提升必须由低级别发起异常。",
+        "把程序里拿到的地址当作物理地址，忽略 MMU 以内存页为单位维护的地址映射。"
+      ],
+      "modules": [
+        {
+          "id": "kernel-as-boundary",
+          "title": "内核是什么：黑盒子与三条边界",
+          "role": "problem-framing",
+          "description": "从应用开发者的黑盒视角切入，把本节拆成能力、请求、地址三条边界。",
+          "outcomeRefs": [
+            "explain-kernel-position"
+          ],
+          "order": 0
+        },
+        {
+          "id": "privilege-levels",
+          "title": "特权级：CPU 检查谁在运行",
+          "role": "concept-and-boundary",
+          "description": "异常级别的四级归属、检查规则与常见误解。",
+          "outcomeRefs": [
+            "explain-privilege-levels"
+          ],
+          "order": 1
+        },
+        {
+          "id": "syscall-path",
+          "title": "系统调用：从 svc 到系统调用表",
+          "role": "mechanism-walkthrough",
+          "description": "用户态请求内核代做特权功能的受控入口与分派路径。",
+          "outcomeRefs": [
+            "trace-syscall"
+          ],
+          "order": 2
+        },
+        {
+          "id": "virtual-memory",
+          "title": "内存虚拟化：逻辑地址如何变成物理地址",
+          "role": "quantitative-mechanism",
+          "description": "逻辑与物理地址的区分、4 KiB 页映射、页内偏移与换入换出。",
+          "outcomeRefs": [
+            "explain-virtual-memory"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundary-synthesis",
+          "title": "把三条边界合起来",
+          "role": "synthesis-and-application",
+          "description": "综合特权级、系统调用与地址映射，落到汇编与调试场景。",
+          "outcomeRefs": [
+            "explain-kernel-position",
+            "explain-privilege-levels",
+            "trace-syscall",
+            "explain-virtual-memory"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "用三道检查题确认机制理解，并桥接到可执行文件格式。",
+          "outcomeRefs": [
+            "explain-kernel-position",
+            "explain-privilege-levels",
+            "trace-syscall",
+            "explain-virtual-memory"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-kernel-position",
+          "explain-privilege-levels",
+          "trace-syscall",
+          "explain-virtual-memory"
+        ],
+        "method": "完成三道检查题并说明依据：异常级别的切换方向、svc 号分流与查表位置、页内偏移与物理地址换算。",
+        "successCriteria": [
+          "能指出级别提升只能由低异常级别发起异常，并说出异常返回的方向",
+          "能说明 svc 号正负如何决定 Mach 与 Unix 路径，Unix 路径查 sysent",
+          "能按 4 KiB 页正确拆出页内偏移并算出物理地址",
+          "能说明逻辑地址对程序员可见、物理地址由 MMU 映射决定"
+        ],
+        "exerciseBlockId": "check-exercise",
+        "summaryBlockId": "summary-and-bridge",
+        "nextPointId": "point-4-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-kernel-blackbox",
+        "moduleId": "kernel-as-boundary",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材视角：内核是应用眼中的黑盒子",
+        "markdown": "从高层应用开发者的角度看，操作系统内核就是提供了进程管理、文件系统等核心功能的「黑盒子」：应用只需要使用这些功能，不必关心它们如何落到硬件上。教材随即把问题推进一层——从底层看，内核究竟代表什么？\n\n本节给出的答案分布在三处：特权级决定**谁能执行**特权操作，系统调用是用户请求内核**代做**特权功能的入口，内存虚拟化则把程序看到的地址与 CPU 实际使用的物理地址**分开**。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000017"
+              ],
+              "headingPath": [
+                "操作系统",
+                "操作系统内核"
+              ],
+              "lineStart": 432,
+              "lineEnd": 435,
+              "assetRefs": [],
+              "excerptSha256": "2ef6a061a7f353145c530c232b6bb8cda60dec408a8c29a88587e43d493ae986"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-kernel-three-boundaries",
+        "moduleId": "kernel-as-boundary",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把本节读成三条边界",
+        "markdown": "与其零散记住三节标题，不如把内核理解成三条边界：\n\n- **能力边界**：哪些指令和内存访问在当前特权级被允许（异常级别）；\n- **请求边界**：用户程序怎样把「我不能做、但需要有人替我做」的请求交给内核（系统调用）；\n- **地址边界**：程序使用的逻辑地址如何被翻译成真正的物理地址（内存虚拟化）。\n\n后面按这三条边界依次展开，最后再把它们合起来看。这个组织方式是本页的教学安排，不改变教材对三者的定义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-kernel-blackbox"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exception-level",
+        "moduleId": "privilege-levels",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：异常级别与特权检查",
+        "markdown": "从底层看，内核态与用户态的一大区别是：一些用户态不被允许执行的指令、不被允许访问的内存地址，在内核态可以执行和访问。CPU 靠**特权级**实现这一点，在 ARM 中它被称为**异常级别**（Exception Level，EL）。\n\n一般来说存在一个寄存器保存当前异常级别。CPU 执行指令、访问内存等操作时会检查当前级别，若该操作允许当前级别，就继续正常执行；否则不会放行。内核的异常级别高于用户态，于是获得了用户态没有的特权。\n\nAArch64 有四种异常级别：\n\n- `EL0`：普通应用处于此级别；\n- `EL1`：操作系统内核及相关函数处于此级别；\n- `EL2`：虚拟机监视器（Hypervisor）处于此级别；\n- `EL3`：安全监视器（Secure Monitor）处于此级别。\n\n级别的提升通过**异常**完成：只能由低异常级别发起异常，切换到更高的异常级别；异常返回时，再从高异常级别切换回低异常级别。教材还提到，Apple Silicon 上另有 SPRR 与 Guarded Exception Levels 之类的额外权限管理机制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000018"
+              ],
+              "headingPath": [
+                "操作系统",
+                "操作系统内核",
+                "特权级"
+              ],
+              "lineStart": 436,
+              "lineEnd": 464,
+              "assetRefs": [
+                "./assets/4-exception-level.png"
+              ],
+              "excerptSha256": "e2d87206b8e406db8f368cb882feaef49842f82b9a58d93f542295c4671635a8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-el-comparison-table",
+        "moduleId": "privilege-levels",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型整理：四级对照表",
+        "markdown": "把四个级别按典型执行者排成一张表，便于对照本节用到的两级：\n\n| 异常级别 | 典型执行者 | 与本节的关系 |\n| --- | --- | --- |\n| `EL0` | 普通应用 | 发起系统调用的一方 |\n| `EL1` | 操作系统内核 | 处理系统调用、管理内存映射 |\n| `EL2` | 虚拟机监视器 | 支撑虚拟化，普通程序不直接接触 |\n| `EL3` | 安全监视器 | 更底层的安全世界入口 |\n\n检查规则可以概括为：每个操作都对应一组允许执行的级别，当前级别不在其中就触发异常，而不是「悄悄跳过」。这段概括是为了串起教材的检查描述，教材本身只给出了检查与放行的判定，没有展开这张表。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exception-level"
+          ]
+        }
+      },
+      {
+        "id": "model-privilege-misconceptions",
+        "moduleId": "privilege-levels",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：两个常见误解",
+        "markdown": "1. **「内核是软件，所以它想访问什么就访问什么」**——不成立。内核的特权来自硬件对当前级别的检查：内核代码在 `EL1` 运行时，CPU 才放行特权指令与内核内存访问。把同一段代码放到 `EL0` 执行，它同样会被拦下，特权不来自函数名或代码位置。\n\n2. **「用户态可以自己跳到内核态」**——不成立。级别只能由低级别发起异常切到高级别，返回时走异常返回路径降回低级别，不能像普通跳转那样随意改写当前级别。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exception-level",
+            "model-el-comparison-table"
+          ]
+        }
+      },
+      {
+        "id": "textbook-syscall-dispatch",
+        "moduleId": "syscall-path",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：系统调用与系统调用表",
+        "markdown": "内核拥有许多特权功能，例如分配内存、创建文件。用户态程序通过**系统调用**（System Call）请求操作系统执行这些功能，系统调用实际上是特殊的机器指令（如 `svc`）。教材把它类比成使用框架：写应用时可以直接用 Cocoa、React 提供的 API，写汇编时也可以直接使用操作系统提供的系统调用；就像织衣服时不必自己养蚕缫丝，毛线不够时向提供者开口即可。\n\n当用户通过 `svc` 在用户态发起系统调用后，CPU 会切换到 `EL1` 进入内核态。XNU 由 Mach 与 BSD 两部分组成，因此内核根据 svc 号判断用户希望进行的是 Mach 系统调用还是 Unix 系统调用——这也是活动监视器里能分别看到「Mach 系统调用」和「Unix 系统调用」统计的原因。\n\n教材给出的 XNU 处理过程是：\n\n1. `osfmk/arm64/sleh.c` 中的 `handle_svc` 获得 svc 号；如果小于 0 则为 Mach 系统调用，否则为 Unix 系统调用。\n2. `bsd/dev/arm/systemcalls.c` 中的 `unix_syscall` 获得 Unix 系统调用号，访问由 `bsd/kern/syscalls.master` 生成的系统调用表 `sysent`，再用 `callp->sy_call` 完成系统调用。\n\n系统调用表因此是关键一环：面向内核的恶意软件 Rootkit 常通过修改内核内存中的这张表来劫持系统调用，现代内核则以只读内存页、不导出符号等方式加以保护。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "操作系统",
+                "操作系统内核",
+                "系统调用"
+              ],
+              "lineStart": 465,
+              "lineEnd": 491,
+              "assetRefs": [
+                "./assets/4-mach-syscall.png"
+              ],
+              "excerptSha256": "3c93592c495a887329774b84afb3684cbf7d86b667db28fbc66cf82bec3c1c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-syscall-trace",
+        "moduleId": "syscall-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型走查：一次 Unix 系统调用的六步",
+        "markdown": "把一次 Unix 系统调用按顺序走一遍（此处编号为示意，不对应真实调用号）：\n\n1. 用户程序在 `EL0` 执行到 `svc`，异常发生；\n2. CPU 提升到 `EL1`，进入内核的 `handle_svc`；\n3. `handle_svc` 读出 svc 号，本例为正数，判定为 Unix 系统调用；\n4. `unix_syscall` 取出系统调用号，用它在 `sysent` 表中定位表项；\n5. 通过表项的 `sy_call` 调用真正的处理函数；\n6. 内核把结果写回，异常返回到 `EL0` 的下一条指令。\n\n注意第 3 步的分支：同一个 `svc` 入口，svc 号的正负决定走 Mach 还是 Unix 路径。走查的顺序来自教材列出的 XNU 处理过程，每一步的寄存器与参数细节不在本节范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-syscall-dispatch"
+          ]
+        }
+      },
+      {
+        "id": "model-syscall-table-risk",
+        "moduleId": "syscall-path",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "模型补充：为什么系统调用表值得保护",
+        "markdown": "从上面这条路径可以读出两个工程结论：\n\n- **受控入口**：用户程序能让内核做的事，都要经过「特殊指令 + 编号 + 参数」这套约定，由内核在 `EL1` 中统一处理，而不是让应用直接操作设备或内核结构。\n- **可被劫持的间接层**：`sysent` 表项里存的是处理函数地址，谁改写了它，谁就改掉了对应系统调用的行为。所以内核既要让这张表所在的内存页只读，也要尽量不让攻击者拿到它的地址；攻击者若想修改，只能再去动那页内存的访问权限。\n\n后续在汇编中直接使用 `svc` 写程序时，走的就是这条路径；具体的调用号与传参约定在系统调用一章再展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-syscall-dispatch",
+            "model-syscall-trace"
+          ]
+        }
+      },
+      {
+        "id": "textbook-virtual-memory",
+        "moduleId": "virtual-memory",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：逻辑地址、物理地址与页映射",
+        "markdown": "内核的另一项重要职责是管理内存。所有进程都在内存中运行，现在常用的操作系统都采用**内存虚拟化**，把逻辑地址与物理地址区分开。内存中的存储单元以字节编址，相邻单元的地址相邻，这里说的是**物理地址**，即 CPU 向内存发出访问请求时使用的地址；而我们在编程中遇到的地址都是**逻辑地址**。\n\n一个进程启动时，操作系统会为它分配 64 位逻辑地址空间，并在 MMU（Memory Management Unit，内存管理单元）中维护逻辑地址到物理地址的映射。物理地址对程序员是透明的，程序员接触到的只有逻辑地址。\n\n映射以 **4 KiB（4096 字节）的页**为单位：一个页内相邻的逻辑地址对应的物理地址相邻，而页与页之间的物理地址关系不确定。\n\n64 位逻辑地址空间约 18 EB，远大于实际物理内存。教材说 macOS 会把一部分逻辑地址对应的页存放到硬盘上（原文把该位置写作 `/boot` 目录）：当 MMU 翻译时发现该逻辑地址在内存中没有对应物理页，就把磁盘上的数据调入内存，作为那部分逻辑地址的存储空间。教材由此强调：操作系统操作内存的最小单元一般是内存页，页的换入换出与访问权限控制都以页为单位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "操作系统",
+                "操作系统内核",
+                "内存虚拟化"
+              ],
+              "lineStart": 492,
+              "lineEnd": 501,
+              "assetRefs": [],
+              "excerptSha256": "0dbe6def775a6cd1cb2276bc081c303af7f8fb5b5f58b52eb52f24d9975c1eb3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-page-translation",
+        "moduleId": "virtual-memory",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型算例：页内偏移不变，页号被替换",
+        "markdown": "翻译的核心是：**页内偏移保持不变，页号被替换成物理页框号**。设页大小为 4 KiB，即 `0x1000`，页内偏移占低 12 位。\n\n```\n逻辑地址 0x0000_10A4  →  页号 0x00001，偏移 0x0A4\n物理页框  0x0000_7000  →  物理地址 0x0000_70A4\n```\n\n可以写成两条规则：\n\n- 偏移 = 逻辑地址 & `0xFFF`；\n- 物理地址 = 物理页框基址 + 偏移。\n\n因此 `0x10A4` 与 `0x10A8` 必定落在同一物理页的相邻位置；而 `0x10A4` 与 `0x20A4` 属于不同页，它们的物理地址可能完全不挨着。这个算例是教材页映射描述的展开，教材本身没有给出具体地址。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-virtual-memory"
+          ]
+        }
+      },
+      {
+        "id": "model-kernel-boundary-synthesis",
+        "moduleId": "boundary-synthesis",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型综合：三条边界合成一套受控访问",
+        "markdown": "回到本节开头的问题：内核究竟代表什么？把三条边界合起来看，它是一套**受控访问**机制：\n\n- **能做什么**由异常级别决定——特权指令与内核内存访问只在 `EL1` 被放行；\n- **想做什么**要通过系统调用表达——用户程序用 `svc` 请内核代做，内核按号查表分派；\n- **访问哪里**由页映射决定——程序给出逻辑地址，MMU 在页粒度上把它翻译成物理地址，并据此施加访问限制。\n\n三者缺一不可：只有特权级而没有系统调用，用户程序无法请求服务；只有系统调用而没有地址映射，内核也无法安全地把请求落到具体内存。对程序员最直接的后果是：你写的地址不是物理地址，你调用的「函数」可能只是一条 `svc`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exception-level",
+            "textbook-virtual-memory"
+          ]
+        }
+      },
+      {
+        "id": "model-apply-scenarios",
+        "moduleId": "boundary-synthesis",
+        "depth": "advanced",
+        "kind": "application",
+        "title": "模型应用：三个可对照的自检场景",
+        "markdown": "- **写汇编时直接发系统调用**：你在 `EL0` 用 `svc` 请求 `write`、`mmap` 之类的服务，参数放在约定的寄存器里；内核在 `EL1` 校验后执行，再把结果写回。\n- **调试时看到的地址**：调试器里打印的是逻辑地址；同一逻辑地址被映射到哪个物理页，由内核维护的映射决定，并不保证在两次运行之间保持不变。\n- **越界访问为什么直接失败**：访问一个当前没有映射、或权限不允许的页时，硬件会把控制权交给内核处理，而不是返回一个「随便的值」；这类失败通常即时暴露，而不是悄悄给出错误数据。\n\n这三个场景把教材的机制放回日常调试动作中，具体寄存器与调试命令在后续章节展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-kernel-boundary-synthesis"
+          ]
+        }
+      },
+      {
+        "id": "check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：三道题",
+        "markdown": "先自己回答，再对照文末答案：\n\n1. 用户程序执行 `svc` 后异常级别如何变化？返回时又如何？为什么不能说成 `EL1` 主动「跳」回 `EL0` 继续执行普通代码？\n2. 一次 `svc` 的 svc 号为 `-4`，它会进入 Mach 还是 Unix 系统调用路径？如果内核要定位处理函数，Unix 路径查的是哪张表，又通过哪个字段调用？\n3. 页大小 4 KiB，逻辑地址 `0x0000_2ABC` 的页内偏移是多少？若该页被映射到物理页框 `0x0000_9000`，物理地址是多少？\n\n参考答案：1. 由 `EL0` 经异常提升到 `EL1`，异常返回时降回 `EL0`；级别切换只能由低级别发起异常，返回走异常返回路径，不是任意跳转。2. 进入 Mach 路径；Unix 路径查 `sysent` 系统调用表，再用表项的 `sy_call` 调用处理函数。3. 偏移为 `0xABC`；物理地址为 `0x0000_9ABC`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-syscall-trace",
+            "model-page-translation",
+            "model-kernel-boundary-synthesis"
+          ]
+        }
+      },
+      {
+        "id": "summary-and-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一节",
+        "markdown": "带走一张清单：\n\n- **特权级**是硬件检查的「能做什么」，AArch64 用 `EL0`–`EL3` 表示，内核在 `EL1`；\n- **系统调用**是用户表达「请内核代做」的受控入口，`svc` 触发，XNU 按 svc 号分流到 Mach 或 Unix，Unix 查 `sysent` 表；\n- **内存虚拟化**是逻辑地址到物理地址的页级映射，物理地址对程序员透明，换入换出与访问限制都以页为单位。\n\n下一节转到可执行文件：进程的代码和数据要能被系统装入内存并运行，先要有一个约定的文件格式，这就是 Mach-O 文件结构要解决的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-kernel-boundary-synthesis",
+            "model-syscall-trace",
+            "model-page-translation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "kernel-boundary-check",
+        "type": "formative-check",
+        "title": "三条边界的自我检查",
+        "anchorBlockId": "check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-privilege-levels",
+          "trace-syscall",
+          "explain-virtual-memory"
+        ],
+        "learningPurpose": "确认学习者能分别用异常级别、系统调用路径与页映射解释同一个「受控访问」问题，而不是只记住三组术语。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-syscall-trace",
+            "model-page-translation"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3,
+          "answerKeyIn": "check-exercise"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "三道检查题与参考答案见上方「达成检查」正文：级别提升必须由低级别发起异常；svc 号为负走 Mach，为正走 Unix 并查 `sysent`；页内偏移等于逻辑地址与 `0xFFF` 按位与的结果。"
+        }
+      }
+    ]
+  },
+  "subtitle": "操作系统",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000017"
+      ],
+      "headingPath": [
+        "操作系统",
+        "操作系统内核"
+      ],
+      "lineStart": 432,
+      "lineEnd": 435,
+      "assetRefs": [],
+      "excerptSha256": "2ef6a061a7f353145c530c232b6bb8cda60dec408a8c29a88587e43d493ae986"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000018"
+      ],
+      "headingPath": [
+        "操作系统",
+        "操作系统内核",
+        "特权级"
+      ],
+      "lineStart": 436,
+      "lineEnd": 464,
+      "assetRefs": [
+        "./assets/4-exception-level.png"
+      ],
+      "excerptSha256": "e2d87206b8e406db8f368cb882feaef49842f82b9a58d93f542295c4671635a8"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000019"
+      ],
+      "headingPath": [
+        "操作系统",
+        "操作系统内核",
+        "系统调用"
+      ],
+      "lineStart": 465,
+      "lineEnd": 491,
+      "assetRefs": [
+        "./assets/4-mach-syscall.png"
+      ],
+      "excerptSha256": "3c93592c495a887329774b84afb3684cbf7d86b667db28fbc66cf82bec3c1c6f"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000020"
+      ],
+      "headingPath": [
+        "操作系统",
+        "操作系统内核",
+        "内存虚拟化"
+      ],
+      "lineStart": 492,
+      "lineEnd": 501,
+      "assetRefs": [],
+      "excerptSha256": "0dbe6def775a6cd1cb2276bc081c303af7f8fb5b5f58b52eb52f24d9975c1eb3"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2967,
+    2513
+  ],
+  "scale": 0.95
+}

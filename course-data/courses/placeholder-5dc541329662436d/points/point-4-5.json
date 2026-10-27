@@ -1,0 +1,443 @@
+{
+  "id": "point-4-5",
+  "title": "数据结构",
+  "shortSummary": "说明进程列表、进程控制块和寄存器上下文等数据结构如何支撑进程管理。",
+  "keyTerms": [
+    "进程列表",
+    "进程控制块",
+    "寄存器上下文",
+    "内核栈"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-4-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-structure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对进程列表、proc 结构与寄存器上下文的原始定义、字段和状态边界，仅在字段分组、状态词汇对应和唤醒推演处补充模型解释。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-process-list",
+          "text": "说明操作系统为什么需要进程列表，以及它如何支撑状态跟踪与正确唤醒。"
+        },
+        {
+          "id": "map-proc-fields",
+          "text": "把 xv6 proc 结构的关键字段按身份、内存、状态、资源和执行上下文归类。"
+        },
+        {
+          "id": "explain-context",
+          "text": "解释寄存器上下文的保存与恢复在恢复进程执行中的作用及其边界。"
+        },
+        {
+          "id": "distinguish-states",
+          "text": "区分运行、就绪、阻塞与 UNUSED、EMBRYO、ZOMBIE 等生命周期边界状态。"
+        },
+        {
+          "id": "apply-wakeup",
+          "text": "在 I/O 完成等事件中推演如何用这些结构定位、唤醒并恢复正确的进程。"
+        }
+      ],
+      "misconceptions": [
+        "把进程列表当成按程序代码存放的数组，而不是按状态和等待原因维护的记录集合。",
+        "认为保存寄存器上下文等于保存整个地址空间和进程的全部资源。",
+        "把 UNUSED、EMBRYO、ZOMBIE 与运行、就绪、阻塞混为同一层次的调度状态。"
+      ],
+      "modules": [
+        {
+          "id": "m-problem-lists",
+          "title": "问题导入：进程多了怎么记",
+          "role": "concept-introduction",
+          "description": "从跟踪每个进程状态出发，引出进程列表及正确唤醒的要求。",
+          "outcomeRefs": [
+            "explain-process-list"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-struct-fields",
+          "title": "进程结构的字段地图",
+          "role": "structure-analysis",
+          "description": "以 xv6 proc 结构为例，把内核需要保存的信息按职责分组。",
+          "outcomeRefs": [
+            "map-proc-fields"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-context",
+          "title": "寄存器上下文与执行连续性",
+          "role": "mechanism-explanation",
+          "description": "说明 context 保存什么、恢复它意味着什么，以及它与地址空间的区别。",
+          "outcomeRefs": [
+            "explain-context"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-states",
+          "title": "状态集合与生命周期边界",
+          "role": "concept-boundary",
+          "description": "对照教材状态枚举与运行、就绪、阻塞三分法，澄清僵尸等边界状态。",
+          "outcomeRefs": [
+            "distinguish-states"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-terms-check",
+          "title": "术语、推演与达成检查",
+          "role": "practice-transfer",
+          "description": "理清 PCB 与进程列表的层级，完成一次 I/O 完成唤醒推演并小结。",
+          "outcomeRefs": [
+            "apply-wakeup"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-process-list",
+          "map-proc-fields",
+          "explain-context",
+          "distinguish-states",
+          "apply-wakeup"
+        ],
+        "method": "完成一次 I/O 完成后的唤醒推演，并说明寄存器上下文在恢复执行中的作用。",
+        "successCriteria": [
+          "能按状态和等待原因定位应被唤醒的进程",
+          "能说明保存与恢复寄存器现场是恢复执行的必要条件",
+          "能指出进程列表与 PCB 之间的集合与元素层级"
+        ],
+        "exerciseBlockId": "model-io-wakeup-check",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-4-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-process-list",
+        "moduleId": "m-problem-lists",
+        "depth": "core",
+        "kind": "definition",
+        "title": "进程列表：操作系统如何记住每个进程",
+        "markdown": "操作系统本身也是一个程序，它需要用自己的数据结构记录系统中所有进程的信息。教材指出，为了跟踪每个进程的状态，操作系统通常会维护一个**进程列表（process list）**，保存所有就绪进程的记录；同时还要记录当前正在运行进程的附加信息，以及被阻塞进程的信息。\n\n进程列表不是一份简单的名单，而是与状态管理绑定的记录集合：进程进入或离开某个状态时，对应记录要随之更新。教材强调，当 I/O 事件完成时，操作系统必须能够找到并唤醒**正确的**那个进程，让它重新准备好运行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "数据结构"
+              ],
+              "lineStart": 1378,
+              "lineEnd": 1431,
+              "assetRefs": [],
+              "excerptSha256": "ae9262a4fc9885d85bedadb9e24b67b6fe4ef7986b3955561051a3f5c2edda3e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-multiple-queues",
+        "moduleId": "m-problem-lists",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么常用多个队列而不是一张表",
+        "markdown": "教材要求“唤醒正确的进程”，这自然提出一个实现要求：记录必须能按状态和等待原因被检索。以下是一般的实现思路，属于模型补充。\n\n许多内核把进程列表组织成多个结构：一个就绪队列、若干按等待事件组织的阻塞队列，以及一个指向当前运行进程的指针。当 I/O 完成时，中断处理程序先确定是哪个设备或等待通道完成，再从对应的阻塞队列中取出进程，把它的记录移入就绪队列。\n\n这样，“唤醒正确的进程”就转化为一次有明确键值的查找，而不必扫描全部进程。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-process-list"
+          ]
+        }
+      },
+      {
+        "id": "tb-proc-struct-fields",
+        "moduleId": "m-struct-fields",
+        "depth": "core",
+        "kind": "table",
+        "title": "xv6 的 proc 结构记录了哪些信息",
+        "markdown": "教材以 xv6 的 `struct proc` 为例，展示内核为每个进程保存的信息，并在图 4.3 中给出完整定义。下表按教材给出的字段整理：\n\n| 字段 | 教材注释中的含义 |\n|---|---|\n| `mem`、`sz` | 进程内存的起始位置与大小 |\n| `kstack` | 该进程内核栈的底部 |\n| `state` | 进程状态，类型为 `enum proc_state` |\n| `pid`、`parent` | 进程 ID 与父进程指针 |\n| `chan` | 非零表示正在某个通道上睡眠 |\n| `killed` | 非零表示进程已被杀死 |\n| `ofile[NOFILE]` | 打开文件表 |\n| `cwd` | 当前目录 |\n| `context` | “切换到这里以运行该进程”的上下文 |\n| `tf` | 当前中断的 trap frame |\n\n教材同时指出，真实的 Linux、macOS X 或 Windows 内核中都有类似但更复杂的进程结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "数据结构"
+              ],
+              "lineStart": 1378,
+              "lineEnd": 1431,
+              "assetRefs": [],
+              "excerptSha256": "ae9262a4fc9885d85bedadb9e24b67b6fe4ef7986b3955561051a3f5c2edda3e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-field-map",
+        "moduleId": "m-struct-fields",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：把字段按职责分组",
+        "markdown": "教材字段较多，按职责分组更容易回答“管理一个进程到底要记住什么”。分组本身是模型补充：\n\n| 职责 | 字段 |\n|---|---|\n| 身份与关系 | `pid`、`parent` |\n| 地址空间范围 | `mem`、`sz` |\n| 内核栈与陷入现场 | `kstack`、`tf` |\n| 调度与等待 | `state`、`chan`、`killed` |\n| 打开的资源 | `ofile`、`cwd` |\n| 可恢复的执行现场 | `context` |\n\n一个实用检查是：如果要让暂停的进程继续运行，需要哪些字段？地址空间范围、内核栈、恢复所需寄存器和陷入现场缺一不可，而 `pid` 只是标识，不直接参与恢复。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-proc-struct-fields"
+          ]
+        }
+      },
+      {
+        "id": "tb-context-struct",
+        "moduleId": "m-context",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "寄存器上下文：停止时保存，恢复时装载",
+        "markdown": "教材特别说明了 `struct context` 的作用，它保存进程停止时需要保存和恢复的寄存器内容：\n\n```c\n// the registers xv6 will save and restore\n// to stop and subsequently restart a process\nstruct context {\n    int eip;\n    int esp;\n    int ebx;\n    int ecx;\n    int edx;\n    int esi;\n    int edi;\n    int ebp;\n};\n```\n\n当一个进程停止时，它的寄存器内容被保存到内存中的这个位置。操作系统以后把这些值放回实际的物理寄存器，就能恢复运行该进程。教材把这种技术称为**上下文切换（context switch）**，并说明将在后面的章节中详细展开。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "数据结构"
+              ],
+              "lineStart": 1378,
+              "lineEnd": 1431,
+              "assetRefs": [],
+              "excerptSha256": "ae9262a4fc9885d85bedadb9e24b67b6fe4ef7986b3955561051a3f5c2edda3e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-context-boundary",
+        "moduleId": "m-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：上下文切换的边界",
+        "markdown": "这里需要区分两个层次：`context` 保存的是继续执行所需的寄存器现场，而不是整个地址空间；地址空间信息由 `mem`、`sz` 以及页表相关结构另行描述。\n\n教材把上下文切换的完整机制留到后续章节。就本节而言，只需建立一个边界认识：**保存与恢复寄存器现场是恢复执行的必要条件，但不是进程管理的全部。**",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-context-struct"
+          ]
+        }
+      },
+      {
+        "id": "tb-proc-states",
+        "moduleId": "m-states",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材中的进程状态集合",
+        "markdown": "教材给出的状态枚举比“运行、就绪、阻塞”三分法更完整：\n\n```c\nenum proc_state { UNUSED, EMBRYO, SLEEPING,\nRUNNABLE, RUNNING, ZOMBIE };\n```\n\n其中 `SLEEPING` 对应阻塞等待，`RUNNABLE` 对应就绪，`RUNNING` 对应正在运行。教材还说明了两类边界状态：进程创建时可以有一个初始（initial）状态；进程退出后、尚未被清理时可以停留在最终（final）状态，在基于 UNIX 的系统中称为**僵尸状态**。\n\n僵尸状态之所以有用，是因为它允许父进程检查刚结束进程的返回代码，判断其是否成功执行。父进程随后进行最后一次调用（例如 `wait()`），告诉操作系统可以清理该进程的所有相关数据结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "数据结构"
+              ],
+              "lineStart": 1378,
+              "lineEnd": 1431,
+              "assetRefs": [],
+              "excerptSha256": "ae9262a4fc9885d85bedadb9e24b67b6fe4ef7986b3955561051a3f5c2edda3e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-comparison",
+        "moduleId": "m-states",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：两套状态词汇的对应与差异",
+        "markdown": "把教材枚举与常用的三分法对照，可以避免把不同层次的概念混在一起：\n\n| 常用说法 | 教材枚举中的对应 | 说明 |\n|---|---|---|\n| 运行 | `RUNNING` | 正在占用 CPU |\n| 就绪 | `RUNNABLE` | 可运行，等待被调度 |\n| 阻塞 | `SLEEPING` | 在某个通道上等待事件 |\n| 未使用/创建中 | `UNUSED`、`EMBRYO` | 生命周期早期的边界状态 |\n| 已退出待清理 | `ZOMBIE` | 保留返回代码等待父进程回收 |\n\n前三项是调度视角的状态转换；`UNUSED`、`EMBRYO`、`ZOMBIE` 描述的是进程生命周期中的边界位置。进程列表需要同时容纳这些信息，才能既不丢失等待中的进程，也不丢失等待回收的退出状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-proc-states",
+            "tb-process-list"
+          ]
+        }
+      },
+      {
+        "id": "model-io-wakeup-check",
+        "moduleId": "m-terms-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：用数据结构推演一次唤醒",
+        "markdown": "**情境**：进程 A 因为从磁盘读取数据而进入 `SLEEPING`，并在对应通道上等待；进程 B 正在运行。此时磁盘 I/O 完成中断到达。\n\n请先自己回答：操作系统需要查看哪些结构、修改哪些字段，A 才能继续运行？\n\n**推演**：\n1. 中断处理程序根据完成事件确定是哪个设备或等待通道，从而定位对应的阻塞队列，而不是扫描全部进程。\n2. 从该队列取出 A 的进程控制块，把 `state` 由 `SLEEPING` 改为 `RUNNABLE`，并将它挂入就绪队列。\n3. 调度器下一次决策时，A 可能被选中；一旦被调度，操作系统把 `context` 中保存的寄存器值装载回物理寄存器，A 从暂停处继续执行。\n4. 若 A 已经结束、只是等待父进程回收，那么它处于僵尸状态，处理方式是父进程调用 `wait()` 获取返回代码并清理，而不是把它放回就绪队列。\n\n**自查**：如果只保存了 `pid` 而没有保存 `state` 和 `context`，上述哪一步会无法完成？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-process-list",
+            "tb-proc-states"
+          ]
+        }
+      },
+      {
+        "id": "tb-pcb-definition",
+        "moduleId": "m-terms-check",
+        "depth": "core",
+        "kind": "definition",
+        "title": "补充：进程控制块（PCB）",
+        "markdown": "教材的补充材料指出，操作系统充满了各种重要数据结构，进程列表是其中第一个。它的作用可以说得很简单：任何能同时运行多个程序的操作系统都会有类似结构，用来跟踪系统中正在运行的所有程序。\n\n教材还给出了一个常见术语：人们有时把存储单个进程信息的结构称为**进程控制块（Process Control Block，PCB）**，它就是用 C 结构表达每个进程信息的一种称呼。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000048"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "补充：数据结构——进程列表"
+              ],
+              "lineStart": 1432,
+              "lineEnd": 1435,
+              "assetRefs": [],
+              "excerptSha256": "70fa25a1f864e79891a52a404dc10778c28e0ab1fcf9fb7582fdd032f5c36b45"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pcb-and-proc",
+        "moduleId": "m-terms-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：PCB 是概念术语，不是固定字段表",
+        "markdown": "PCB 是描述“承载单个进程全部管理信息的结构”的术语，并没有规定必须包含哪些字段。xv6 中的 `struct proc` 是这个概念在该内核中的具体实现；其他系统会有不同字段与不同组织方式。\n\n同样要注意层级关系：进程列表是集合层面的结构，PCB 是元素层面的结构。列表中的每一项最终指向一个 PCB（或等价结构），而不是把进程信息复制成多份。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pcb-definition",
+            "tb-proc-struct-fields"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "m-terms-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "本节的三条线索可以串成一句话：**进程列表负责“找到谁”，PCB 负责“记住它是什么”，寄存器上下文负责“让它接着跑”。**\n\n- 集合层面：进程列表按状态与等待原因组织，使 I/O 完成时能定位并唤醒正确的进程。\n- 元素层面：PCB（xv6 中的 `struct proc`）保存内存、身份、打开资源、状态与陷入现场等信息。\n- 执行连续性：`struct context` 保存寄存器现场，恢复它才能在暂停处继续执行；完整机制留给上下文切换章节。\n\n下一节将小结进程抽象，把这些数据结构与进程状态、进程 API 放进同一张图景。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-process-list",
+            "tb-proc-struct-fields",
+            "tb-context-struct",
+            "tb-proc-states",
+            "tb-pcb-definition"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "io-wakeup-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-io-wakeup-check",
+        "moduleId": "m-terms-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-wakeup"
+        ],
+        "learningPurpose": "检查学习者能否把进程列表、状态字段与寄存器上下文串成一次完整的唤醒和恢复过程。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-process-list",
+            "tb-proc-states",
+            "tb-context-struct"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "format": "scenario"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用文字写出：I/O 完成中断到达后，操作系统依次查看哪个队列、修改哪个状态字段、如何让进程恢复执行。"
+        }
+      }
+    ]
+  },
+  "subtitle": "抽象:进程",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000047"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "数据结构"
+      ],
+      "lineStart": 1378,
+      "lineEnd": 1431,
+      "assetRefs": [],
+      "excerptSha256": "ae9262a4fc9885d85bedadb9e24b67b6fe4ef7986b3955561051a3f5c2edda3e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000048"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "补充：数据结构——进程列表"
+      ],
+      "lineStart": 1432,
+      "lineEnd": 1435,
+      "assetRefs": [],
+      "excerptSha256": "70fa25a1f864e79891a52a404dc10778c28e0ab1fcf9fb7582fdd032f5c36b45"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1629,
+    3587
+  ],
+  "scale": 0.9
+}

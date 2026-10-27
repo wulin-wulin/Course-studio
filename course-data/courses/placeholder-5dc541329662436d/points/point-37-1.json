@@ -1,0 +1,396 @@
+{
+  "id": "point-37-1",
+  "title": "接口",
+  "shortSummary": "介绍磁盘的块读写接口、扇区寻址方式和性能语义，为调度讨论铺垫。",
+  "keyTerms": [
+    "磁盘接口",
+    "块读写",
+    "扇区",
+    "寻址"
+  ],
+  "animationType": "none",
+  "difficulty": "基础",
+  "importance": 0.65,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-boundary-transfer",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对扇区接口、原子性和不成文合同的原始界定与例子，围绕正确性边界与性能语义补充类比、示例和自检。",
+      "estimatedMinutes": 11,
+      "outcomes": [
+        {
+          "id": "describe-disk-interface",
+          "text": "描述磁盘以扇区为单位、按编号寻址的块读写接口。"
+        },
+        {
+          "id": "explain-atomicity",
+          "text": "说明单扇区写原子性的准确边界以及 torn write 的产生条件。"
+        },
+        {
+          "id": "infer-performance",
+          "text": "依据不成文的合同判断不同访问模式的相对快慢。"
+        }
+      ],
+      "misconceptions": [
+        "把文件系统一次读写 4KB 误解为接口保证 4KB 写入的原子性。",
+        "认为扇区编号规则本身就承诺了相邻块的访问一定更快。"
+      ],
+      "modules": [
+        {
+          "id": "interface-and-address-space",
+          "title": "接口与地址空间",
+          "role": "concept",
+          "outcomeRefs": [
+            "describe-disk-interface"
+          ],
+          "order": 0
+        },
+        {
+          "id": "atomicity-boundary",
+          "title": "原子性边界",
+          "role": "concept-boundary",
+          "outcomeRefs": [
+            "explain-atomicity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "performance-contract",
+          "title": "不成文合同与性能语义",
+          "role": "concept-transfer",
+          "outcomeRefs": [
+            "infer-performance"
+          ],
+          "order": 2
+        },
+        {
+          "id": "application-check",
+          "title": "示例与自检",
+          "role": "practice",
+          "outcomeRefs": [
+            "describe-disk-interface",
+            "explain-atomicity",
+            "infer-performance"
+          ],
+          "order": 3
+        },
+        {
+          "id": "next-step-bridge",
+          "title": "通向磁盘几何",
+          "role": "bridge",
+          "outcomeRefs": [
+            "infer-performance"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-disk-interface",
+          "explain-atomicity",
+          "infer-performance"
+        ],
+        "method": "完成扇区寻址与原子性判断的自检题，并说明顺序访问为何更快。",
+        "successCriteria": [
+          "能写出合法扇区号范围，并说明多扇区读写本身不违反接口",
+          "能区分单扇区原子性与跨扇区更新的非原子性",
+          "能用不成文的合同解释顺序访问的性能优势"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-37-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-why-disk",
+        "moduleId": "interface-and-address-space",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：为什么先研究磁盘",
+        "markdown": "教材在进入磁盘细节前先给出理由：磁盘驱动器数十年来一直是计算机系统中持久数据存储的主要形式，文件系统技术的大部分发展都建立在磁盘行为之上。因此在构建管理磁盘的文件系统软件之前，有必要先了解磁盘操作的细节。\n\n本章要回答的关键问题是：现代磁盘驱动器如何存储数据？接口是什么？数据如何安排和访问？磁盘调度如何提高性能？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000477"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "磁盘驱动器"
+              ],
+              "lineStart": 9686,
+              "lineEnd": 9693,
+              "assetRefs": [],
+              "excerptSha256": "4d3c73c1a6d4e876d841a84bbd15d67d6f32c9dee5d9d855f063e97de474e36e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-contract-view",
+        "moduleId": "interface-and-address-space",
+        "depth": "support",
+        "kind": "note",
+        "title": "把接口看作一份合同",
+        "markdown": "可以把磁盘接口看作文件系统与硬件之间的合同：上层只依赖接口明文承诺的语义，而性能与可靠性上的许多假设来自接口之外。先弄清这份合同写了什么、没写什么，后面对磁盘几何、I/O 时间模型和调度策略的讨论才有统一的判断依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-disk"
+          ]
+        }
+      },
+      {
+        "id": "tb-sector-interface",
+        "moduleId": "interface-and-address-space",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：扇区与地址空间",
+        "markdown": "教材给出的基本接口很简单：驱动器由大量扇区组成，每个扇区是 512 字节的块，且每个扇区都可以单独读取或写入。具有 $n$ 个扇区的磁盘把扇区从 $0$ 编号到 $n-1$。因此，从软件角度看，磁盘就是一组扇区，$0$ 到 $n-1$ 构成驱动器的地址空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "接口"
+              ],
+              "lineStart": 9694,
+              "lineEnd": 9701,
+              "assetRefs": [],
+              "excerptSha256": "ad50512d2b9bf84b06705bf801161bf1b36341e7405f24764d0ce2428e0a485f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sector-array",
+        "moduleId": "interface-and-address-space",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充类比：一个很大的数组",
+        "markdown": "可以把接口暴露的磁盘想成一个很大的数组：下标是扇区号，读操作返回一个 512 字节块，写操作覆盖一个或多个块。这个数组视图只规定逻辑地址与块内容，并不要求上层了解数据在盘片上如何摆放；物理几何留到后续小节讨论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sector-interface"
+          ]
+        }
+      },
+      {
+        "id": "tb-multisector-atomicity",
+        "moduleId": "atomicity-boundary",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材要点：多扇区操作与单扇区原子性",
+        "markdown": "教材指出，多扇区操作是可能的，许多文件系统一次读取或写入 4KB 或更多。但在更新磁盘时，驱动器制造商唯一保证的是：单个 512 字节的写入是原子的，即它将完整地完成或者根本不会完成。因此，如果写入过程中不合时宜地掉电，较大写入可能只完成一部分，这种情况有时称为不完整写入（torn write）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "接口"
+              ],
+              "lineStart": 9694,
+              "lineEnd": 9701,
+              "assetRefs": [],
+              "excerptSha256": "ad50512d2b9bf84b06705bf801161bf1b36341e7405f24764d0ce2428e0a485f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-atomicity-scope",
+        "moduleId": "atomicity-boundary",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "常见误解：以为 4KB 写入是原子的",
+        "markdown": "常见误解是把“文件系统一次写 4KB”当成“4KB 写入具有原子性”。接口承诺的原子单位只有单个扇区：一个横跨 8 个扇区的 4KB 写入，在掉电时可能留下前几个新扇区、后几个旧扇区。接口没有为更大粒度的一致性背书，所以上层若要保证跨扇区更新的一致性，必须自己设计额外机制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-multisector-atomicity"
+          ]
+        }
+      },
+      {
+        "id": "tb-unwritten-contract",
+        "moduleId": "performance-contract",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材要点：不成文的合同",
+        "markdown": "教材提醒，大多数磁盘客户端会做出一些假设，但这些假设并未直接在接口中指定；Schlosser 和 Ganger 称之为磁盘驱动器的“不成文的合同”。通常可以假设：访问地址空间内彼此靠近的两个块，比访问两个相隔很远的块更快；访问连续块（即顺序读取或写入）是最快的访问模式，通常比更随机的访问模式快得多。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "接口"
+              ],
+              "lineStart": 9694,
+              "lineEnd": 9701,
+              "assetRefs": [],
+              "excerptSha256": "ad50512d2b9bf84b06705bf801161bf1b36341e7405f24764d0ce2428e0a485f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-agreements",
+        "moduleId": "performance-contract",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充理解：正确性与性能分属两份约定",
+        "markdown": "把两份约定分开看：明文接口负责正确性（扇区编号、512 字节块、单扇区原子性），不成文合同负责性能（就近更快、顺序最快）。由于接口本身并不承诺访问顺序的代价，文件系统需要主动把逻辑上相关的数据安排在相邻扇区，并尽量把随机访问改造成顺序访问，才能获得合同暗示的性能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-unwritten-contract",
+            "tb-sector-interface"
+          ]
+        }
+      },
+      {
+        "id": "model-4kb-walkthrough",
+        "moduleId": "application-check",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "示例：一次 4KB 覆盖写会怎样",
+        "markdown": "设想文件系统要覆盖写一个 4KB 数据块，而扇区是 512 字节，那么这次更新至少要拆成 8 次扇区写入。\n\n- 按不成文合同：如果这 8 个扇区相邻且按序写入，性能接近顺序访问；如果它们分散在地址空间各处，访问会明显变慢。\n- 按明文接口：若在第 3 个扇区写完后掉电，前 3 个扇区可能已是新内容，其余仍是旧内容，这正是 torn write。恢复逻辑不能假设这次 4KB 更新要么全成、要么全败。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-multisector-atomicity",
+            "tb-unwritten-contract"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "application-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "自检",
+        "markdown": "1. 若磁盘有 $n=1000$ 个扇区，合法扇区号的取值范围是什么？一次写 4 个扇区是否被接口禁止？\n2. 为什么“相邻块更快”不能从扇区编号规则直接推出？\n3. 一次 4KB 写入中途掉电，接口能保证什么、不能保证什么？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sector-interface",
+            "tb-multisector-atomicity",
+            "tb-unwritten-contract"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "next-step-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "下一步：编号与相邻关系从何而来",
+        "markdown": "到这里，磁盘对软件呈现为一个可按扇区号寻址的块数组，并附带一条明确的原子性边界和一条隐含的性能合同。接下来要问：这些编号与“相邻”关系在物理上对应什么？磁盘内部的旋转部件和读写部件如何决定一次访问要移动什么，从而解释顺序访问为何更快？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sector-interface",
+            "tb-unwritten-contract"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "sector-atomicity-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "application-check",
+        "depth": "support",
+        "outcomeRefs": [
+          "explain-atomicity",
+          "infer-performance"
+        ],
+        "learningPurpose": "检查学习者能否区分单扇区原子性与跨扇区更新的非原子性，并用不成文合同解释访问顺序的性能差异。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-multisector-atomicity",
+            "tb-unwritten-contract"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出一次 4KB 覆盖写在中途掉电后接口能保证与不能保证的结果，并说明顺序扇区访问为何更快。"
+        }
+      }
+    ]
+  },
+  "subtitle": "磁盘驱动器",
+  "clusterId": "chapter-37",
+  "clusterIds": [
+    "chapter-37"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000477"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "磁盘驱动器"
+      ],
+      "lineStart": 9686,
+      "lineEnd": 9693,
+      "assetRefs": [],
+      "excerptSha256": "4d3c73c1a6d4e876d841a84bbd15d67d6f32c9dee5d9d855f063e97de474e36e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000478"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "接口"
+      ],
+      "lineStart": 9694,
+      "lineEnd": 9701,
+      "assetRefs": [],
+      "excerptSha256": "ad50512d2b9bf84b06705bf801161bf1b36341e7405f24764d0ce2428e0a485f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4410,
+    194
+  ],
+  "scale": 1.16
+}

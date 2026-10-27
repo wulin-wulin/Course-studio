@@ -1,0 +1,435 @@
+{
+  "id": "point-31-5",
+  "title": "读者—写者锁",
+  "shortSummary": "介绍读者写者锁的语义、公平性和读写优先策略，并分析可能的饥饿问题。",
+  "keyTerms": [
+    "读者写者锁",
+    "公平性",
+    "读优先",
+    "写优先"
+  ],
+  "animationType": "readerWriterLock",
+  "animationSuggestion": "按事件时间线逐步显示读者进入与退出、readers 计数变化和 writelock 归属，并允许切换读优先与写者等待时关闭闸门两种策略，对比写者能否及时获得锁。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-31-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的接口语义、信号量实现与公平性结论，围绕读并发与写独占重排讲解，补充状态追踪、兼容矩阵与取舍判断，模型补充均显式标注。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-rw-semantics",
+          "text": "解释读者—写者锁为何区分读锁与写锁，以及两类锁的互斥关系。"
+        },
+        {
+          "id": "trace-rw-impl",
+          "text": "依据 lock、readers 与 writelock 追踪多读者并发读加一个写者等待的过程。"
+        },
+        {
+          "id": "evaluate-rw-fairness",
+          "text": "识别读优先实现下写者饥饿的成因，并说明写者等待时挡住新读者的方向。"
+        },
+        {
+          "id": "judge-rwlock-tradeoff",
+          "text": "结合额外解锁开销与 Hill 定律判断某场景是否值得使用读者—写者锁。"
+        }
+      ],
+      "misconceptions": [
+        "误以为读锁之间也必须互斥，忽略了无写者时多个读者可以同时持锁。",
+        "认为读者—写者锁天然公平，不会让任何一方长期等待。",
+        "认为读者—写者锁一定比普通自旋锁或互斥锁快。",
+        "把 Hill 定律误解为复杂的方案在工程上更可靠。"
+      ],
+      "modules": [
+        {
+          "id": "problem-motivation",
+          "title": "问题导入：为何需要区分的锁",
+          "role": "motivation",
+          "description": "从并发链表的插入与查找引出读写访问类型不同。",
+          "outcomeRefs": [
+            "explain-rw-semantics"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mechanism-semantics",
+          "title": "接口与语义：读并发、写独占",
+          "role": "concept",
+          "description": "给出两组接口与 writelock 的作用，整理锁兼容关系。",
+          "outcomeRefs": [
+            "explain-rw-semantics"
+          ],
+          "order": 1
+        },
+        {
+          "id": "implementation-walkthrough",
+          "title": "实现走查：readers 计数与 writelock 令牌",
+          "role": "worked-example",
+          "description": "逐行理解读锁、写锁的获取与释放，并用状态时间线核对。",
+          "outcomeRefs": [
+            "trace-rw-impl"
+          ],
+          "order": 2
+        },
+        {
+          "id": "fairness-and-starvation",
+          "title": "公平性与写者饥饿",
+          "role": "comparison",
+          "description": "分析读优先造成的写者饥饿，比较写优先的闸门式改进。",
+          "outcomeRefs": [
+            "evaluate-rw-fairness"
+          ],
+          "order": 3
+        },
+        {
+          "id": "simplicity-and-cost",
+          "title": "简单性与性能代价",
+          "role": "decision",
+          "description": "用 Hill 定律和额外解锁开销判断适用场景。",
+          "outcomeRefs": [
+            "judge-rwlock-tradeoff"
+          ],
+          "order": 4
+        },
+        {
+          "id": "summary-check",
+          "title": "达成检查与小结",
+          "role": "assessment",
+          "description": "用三个自检问题检验语义、实现与取舍三层理解。",
+          "outcomeRefs": [
+            "explain-rw-semantics",
+            "trace-rw-impl",
+            "evaluate-rw-fairness",
+            "judge-rwlock-tradeoff"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-rw-semantics",
+          "trace-rw-impl",
+          "evaluate-rw-fairness",
+          "judge-rwlock-tradeoff"
+        ],
+        "method": "完成自检中的三个问题，并说明每一步依据哪条语义或哪一行实现。",
+        "successCriteria": [
+          "能指出 readers 回到 0 之前写者无法获得 writelock",
+          "能说明 readers 的修改必须由 lock 保护",
+          "能引用额外解锁开销与 Hill 定律说明它并非总是更快"
+        ],
+        "exerciseBlockId": "model-self-check",
+        "nextPointId": "point-31-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-rw-motivation",
+        "moduleId": "problem-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：更灵活的锁定原语",
+        "markdown": "教材从并发链表引入这个问题。链表上同时存在插入和查找：插入会修改链表的状态，因此传统的临界区是必要的；而查找只是读取结构，只要没有插入操作同时进行，多个查找完全可以并发执行。\n\n读者—写者锁（reader-writer lock）就是为这种访问类型不同、读操作可以共享的需求设计的锁定原语，它承认对同一数据结构的读取与更新需要不同类型的锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000417"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "读者—写者锁"
+              ],
+              "lineStart": 8375,
+              "lineEnd": 8425,
+              "assetRefs": [],
+              "excerptSha256": "3d8b42c4f876844f4685c9a685f40eec97886d22de18bee116a2366366993587"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-board-analogy",
+        "moduleId": "problem-motivation",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：多人看板与独占改写",
+        "markdown": "可以把受保护的数据结构想成一块公告板：读者只是抬头看，多人同时看互不干扰；写者要把整块板擦掉重写，必须独占场地。于是读锁允许多个持有者并存，写锁与任何其他锁都互斥。\n\n这个类比只建立读共享、写独占的直觉，并不解释实现；下文才是教材给出的信号量实现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rw-motivation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rw-interface",
+        "moduleId": "mechanism-semantics",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：两组接口与 writelock",
+        "markdown": "接口分成两组。更新数据结构的线程调用 `rwlock_acquire_lock()` 获得写锁，用 `rwlock_release_writelock()` 释放；只读取的线程使用读锁接口。\n\n实现内部用一个 writelock 信号量保证同一时刻只有一个写者能获得锁并进入临界区，从而更新数据结构；其余想写的线程都在这个信号量上等待。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000417"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "读者—写者锁"
+              ],
+              "lineStart": 8375,
+              "lineEnd": 8425,
+              "assetRefs": [],
+              "excerptSha256": "3d8b42c4f876844f4685c9a685f40eec97886d22de18bee116a2366366993587"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compat-matrix",
+        "moduleId": "mechanism-semantics",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：锁兼容矩阵",
+        "markdown": "把上面的语义整理成兼容矩阵，可快速判断一次请求能否立即进入：\n\n| 当前持有 | 请求读锁 | 请求写锁 |\n|---|---|---|\n| 无锁 | 允许 | 允许 |\n| 若干读者 | 允许 | 等待 |\n| 一个写者 | 等待 | 等待 |\n\n该表只描述语义，不含公平性判断。若干读者一行持续放行新读者，正是后文写者饥饿的来源。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rw-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rw-readlock",
+        "moduleId": "implementation-walkthrough",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：读锁的获取与释放",
+        "markdown": "读锁的操作比写锁精巧，它协调三个共享量：`lock` 是二值信号量，用来保护读者计数的修改；`readers` 记录当前处于临界区的读者数量；`writelock` 充当写者令牌。\n\n- 获取读锁：先 `sem_wait(&rw->lock)` 进入计数临界区并把 `readers` 加一；如果这是第一个读者（`readers == 1`），它还要 `sem_wait(&rw->writelock)`，替所有读者拿走写者令牌；最后 `sem_post(&rw->lock)`。\n- 释放读锁：同样用 `lock` 保护计数并把 `readers` 减一；如果这是最后一个读者（`readers == 0`），就 `sem_post(&rw->writelock)` 把令牌交还给等待的写者；最后 `sem_post(&rw->lock)`。\n- 获取写锁与释放写锁各只有一行：`sem_wait(&rw->writelock)` 与 `sem_post(&rw->writelock)`。\n\n所以只要还有读者在场，writelock 就被第一个读者占着，写者无法进入；而 `readers` 已大于零时，新读者只需在 `lock` 上短暂排队，不必触碰 `writelock`。这就是多个读者能同时持有读锁、而写者必须等所有读者结束的实现方式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000417"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "读者—写者锁"
+              ],
+              "lineStart": 8375,
+              "lineEnd": 8425,
+              "assetRefs": [],
+              "excerptSha256": "3d8b42c4f876844f4685c9a685f40eec97886d22de18bee116a2366366993587"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-trace",
+        "moduleId": "implementation-walkthrough",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次完整的状态追踪",
+        "markdown": "用时间线核对上述规则。初始 `readers = 0`、writelock 可用，读者 R1、R2 先到，写者 W1 随后到：\n\n| 步骤 | 事件 | readers | writelock | 结果 |\n|---|---|---|---|---|\n| 1 | R1 获取读锁 | 0 → 1 | 被 R1 取走 | R1 进入 |\n| 2 | R2 获取读锁 | 1 → 2 | 仍被持有 | R2 直接进入 |\n| 3 | W1 获取写锁 | 2 | 被占用 | W1 阻塞 |\n| 4 | R1 释放读锁 | 2 → 1 | 仍被持有 | W1 继续等待 |\n| 5 | R2 释放读锁 | 1 → 0 | 归还 | W1 被唤醒进入 |\n\n注意第 2 步：读锁的并发不是因为跳过了 writelock，而是第一个读者已替全体读者持有它。读者计数必须由 lock 保护，否则两个读者可能同时看到 `readers == 0`，让计数或令牌状态出错。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rw-interface",
+            "textbook-rw-readlock"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rw-fairness",
+        "moduleId": "fairness-and-starvation",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：公平性缺陷与改进提示",
+        "markdown": "教材指出这个方案符合预期，但有一些缺陷，尤其是公平性：读者很容易饿死写者。原因就在上面的时间线里——只要读者不断到来，`readers` 很难回到 0，writelock 就一直被读者一方占着，等待的写者可能无限期拿不到锁。\n\n教材给出的改进提示是：有写者等待时，如何能够避免更多的读者进入并持有锁。也就是说，需要让新读者在写者排队时也一起等待，这类策略通常称为写优先（或至少是写者等待时不放行新读者）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000418"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：简单的笨办法可能更好（Hill定律）"
+              ],
+              "lineStart": 8426,
+              "lineEnd": 8435,
+              "assetRefs": [],
+              "excerptSha256": "cda8c271596e4f9353af3c53b812c12d4347112c517e92a312d664a3f1a43b56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-writer-preference",
+        "moduleId": "fairness-and-starvation",
+        "depth": "advanced",
+        "kind": "mechanism",
+        "title": "模型补充：用闸门信号量实现写者优先",
+        "markdown": "一种符合上述提示的最小改法是再加一个闸门信号量（例如 turnstile，初值为 1）：读者获取读锁前先 `sem_wait(&turnstile)`，取到读写令牌后再 `sem_post(&turnstile)`；写者在 `sem_wait(&writelock)` 之前先 `sem_wait(&turnstile)`，拿到写锁后立即 `sem_post(&turnstile)`。\n\n这样写者一旦开始等待就会关闭闸门，后续读者被挡在门外，现有读者退出后写者即可获得 writelock。这是模型补充的实现草图，教材只给出设计方向；实际实现还要处理闸门释放时机与唤醒顺序，否则可能反过来饿死读者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rw-fairness",
+            "textbook-rw-readlock"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hill-law",
+        "moduleId": "simplicity-and-cost",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：Hill 定律与性能提醒",
+        "markdown": "教材借这个例子提出 Hill 定律：简单的笨办法可能最好。某些时候简单的自旋锁反而最有效，因为容易实现而且高效；读者—写者锁听起来很酷，但很复杂，复杂可能意味着慢。\n\n这个建议来自 Mark Hill 的博士论文研究：在 CPU 缓存设计中，简单的直接映射缓存比花哨的集合关联设计更有效，原因之一是越简单的设计查找越快，他把它概括为大而笨更好。教材还提醒，读者—写者锁通常带来更多的解锁操作，尤其是复杂实现，因此与其他简单快速的锁相比，它在性能方面并没有优势。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000418"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：简单的笨办法可能更好（Hill定律）"
+              ],
+              "lineStart": 8426,
+              "lineEnd": 8435,
+              "assetRefs": [],
+              "excerptSha256": "cda8c271596e4f9353af3c53b812c12d4347112c517e92a312d664a3f1a43b56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-tradeoff",
+        "moduleId": "simplicity-and-cost",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：把提醒换成工程判断",
+        "markdown": "读者—写者锁的收益来自读操作可以并发，代价是每次读锁获取和释放都要多做若干次信号量操作（本例一次读锁是两次 `sem_wait` 加两次 `sem_post`，而自旋锁只有一次获取）。\n\n因此它只在读临界区较长、读操作占绝对多数、且线程数足以让读并发真正发生时才有希望抵消额外开销；如果临界区很短或写入频繁，直接用普通互斥锁往往更快也更简单，这正是 Hill 定律在此处的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-hill-law"
+          ]
+        }
+      },
+      {
+        "id": "model-self-check",
+        "moduleId": "summary-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：三个自检问题",
+        "markdown": "1. 一个写者正在等待，此时又来了一个读者：在教材给出的实现里这个读者能进入吗？为什么这可能导致写者饥饿？\n2. 若把 `readers` 的增减移出 `lock` 保护，会破坏哪一条不变量？\n3. 读操作占 95% 但临界区只有几条指令时，读者—写者锁一定比自旋锁快吗？请用额外解锁开销与 Hill 定律回答。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rw-fairness",
+            "textbook-hill-law",
+            "model-cost-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "rwlock-self-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-self-check",
+        "moduleId": "summary-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "evaluate-rw-fairness",
+          "judge-rwlock-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否用 readers 计数解释写者饥饿，并用开销与 Hill 定律判断适用性。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-rw-fairness",
+            "textbook-hill-law"
+          ]
+        },
+        "config": {
+          "questions": 3,
+          "feedback": "参考答案见正文各模块，重点看 readers 是否回到 0 以及额外解锁开销。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请书面回答三个问题：写者等待时新读者能否进入及其后果；readers 计数失去 lock 保护会破坏什么；短临界区且读占多数时是否一定更快。"
+        }
+      }
+    ]
+  },
+  "subtitle": "信号量",
+  "clusterId": "chapter-31",
+  "clusterIds": [
+    "chapter-31"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000417"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "读者—写者锁"
+      ],
+      "lineStart": 8375,
+      "lineEnd": 8425,
+      "assetRefs": [],
+      "excerptSha256": "3d8b42c4f876844f4685c9a685f40eec97886d22de18bee116a2366366993587"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000418"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：简单的笨办法可能更好（Hill定律）"
+      ],
+      "lineStart": 8426,
+      "lineEnd": 8435,
+      "assetRefs": [],
+      "excerptSha256": "cda8c271596e4f9353af3c53b812c12d4347112c517e92a312d664a3f1a43b56"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    838,
+    856
+  ],
+  "scale": 0.94
+}

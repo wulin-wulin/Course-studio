@@ -1,0 +1,337 @@
+{
+  "id": "point-43-4",
+  "title": "问题：查找 inode",
+  "shortSummary": "说明 LFS 中 inode 分散导致查找困难的问题，以及 inode 映射的作用。",
+  "keyTerms": [
+    "inode 查找",
+    "LFS",
+    "分散",
+    "索引"
+  ],
+  "animationType": "inodeRelocation",
+  "animationSuggestion": "在磁盘轨道上依次追加 inode 的新版本，高亮旧地址失效和新地址移动，并提供重播回到首次写入前。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "problem-contrast-bridge",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对老 UNIX、FFS 与 LFS 的对比和结论，围绕“位置能否由已知规则确定”这条线索补足直觉、诊断与到 inode 映射的桥接。",
+      "estimatedMinutes": 10,
+      "outcomes": [
+        {
+          "id": "explain-array-lookup",
+          "text": "解释老 UNIX 文件系统如何由 inode 号与数组起始地址直接算出 inode 位置。"
+        },
+        {
+          "id": "explain-ffs-split",
+          "text": "说明 FFS 把 inode 表拆分到柱面组后，查找为何仍然可以直接计算。"
+        },
+        {
+          "id": "diagnose-lfs-scatter",
+          "text": "诊断 LFS 中 inode 分散且不断移动为何使 inode 查找变得困难。"
+        },
+        {
+          "id": "anticipate-indirection",
+          "text": "说明该问题为何需要引入 inode 映射这样的间接层来解决。"
+        }
+      ],
+      "misconceptions": [
+        "误以为 LFS 的 inode 仍然存放在磁盘固定位置，因此可以像 FFS 一样直接计算地址。",
+        "误以为 inode 分散只影响读取速度；实际上最新版本会随每次写入移动，连“最新 inode 在哪里”都无法靠固定公式确定。"
+      ],
+      "modules": [
+        {
+          "id": "problem-opening",
+          "title": "问题导入：LFS 还能找到 inode 吗",
+          "role": "problem-statement",
+          "outcomeRefs": [
+            "diagnose-lfs-scatter"
+          ],
+          "order": 0
+        },
+        {
+          "id": "baseline-unix-ffs",
+          "title": "基线：固定数组与柱面组",
+          "role": "comparison",
+          "outcomeRefs": [
+            "explain-array-lookup",
+            "explain-ffs-split"
+          ],
+          "order": 1
+        },
+        {
+          "id": "lfs-scatter",
+          "title": "LFS 的分散与移动",
+          "role": "analysis",
+          "outcomeRefs": [
+            "diagnose-lfs-scatter"
+          ],
+          "order": 2
+        },
+        {
+          "id": "bridge",
+          "title": "结论与解决方向",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "diagnose-lfs-scatter",
+            "anticipate-indirection"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-array-lookup",
+          "explain-ffs-split",
+          "diagnose-lfs-scatter",
+          "anticipate-indirection"
+        ],
+        "method": "完成老 UNIX、FFS 与 LFS 的查找方式对比，并判断给定情形下能否直接算出 inode 地址。",
+        "successCriteria": [
+          "能写出老 UNIX 的 inode 地址计算思路",
+          "能说明 LFS 在空间分散与时间移动上的两层困难",
+          "能指出需要间接映射来定位最新 inode"
+        ],
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-43-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-problem",
+        "moduleId": "problem-opening",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "问题：在 LFS 中如何查找 inode",
+        "markdown": "在典型的 UNIX 文件系统中，按 inode 号找到 inode 几乎不费力：inode 集中存放，位置规则固定。LFS 却把更新追加到磁盘的新位置，inode 也随之散布到磁盘各处。于是同一个 inode 号会对应多个历史版本，最新版本还会继续移动。要读取一个文件，文件系统首先必须回答：这个 inode 号的最新版本现在在磁盘的哪里？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000606"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：查找 inode"
+              ],
+              "lineStart": 11866,
+              "lineEnd": 11875,
+              "assetRefs": [],
+              "excerptSha256": "32ad7cae25fc19a20252b4d5ef0514666c6192e00f5fef41e2db497a0ec0d8bc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-unix-array",
+        "moduleId": "baseline-unix-ffs",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "基线：老 UNIX 的固定 inode 数组",
+        "markdown": "老 UNIX 文件系统把全部 inode 保存在磁盘的固定位置，并按数组组织。给定 inode 号与数组起始地址，只需用 inode 号乘以每个 inode 的大小，再加上起始地址，就能算出该 inode 的确切磁盘地址。查找因此是一次直接的数组索引，快速而简单。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000606"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：查找 inode"
+              ],
+              "lineStart": 11866,
+              "lineEnd": 11875,
+              "assetRefs": [],
+              "excerptSha256": "32ad7cae25fc19a20252b4d5ef0514666c6192e00f5fef41e2db497a0ec0d8bc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-seat-analogy",
+        "moduleId": "baseline-unix-ffs",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：像按座位号找座位",
+        "markdown": "可以把这种定位想成剧场找座位：只要知道第几排从哪里开始、每个座位多宽，就能用“起点 + 编号乘以宽度”直接走到目标位置，不必逐个询问。关键前提是座位布局固定且连续。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-unix-array"
+          ]
+        }
+      },
+      {
+        "id": "textbook-ffs-split",
+        "moduleId": "baseline-unix-ffs",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "FFS：拆成柱面组后仍可计算",
+        "markdown": "FFS 把 inode 表拆分成多个块，并在每个柱面组中各放一组。查找给定 inode 号时，必须先知道每个 inode 块的大小以及每组 inode 的起始地址，之后仍可用类似的加法与乘法计算得到位置。相比老 UNIX 只稍微复杂，但定位规则依然确定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000606"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：查找 inode"
+              ],
+              "lineStart": 11866,
+              "lineEnd": 11875,
+              "assetRefs": [],
+              "excerptSha256": "32ad7cae25fc19a20252b4d5ef0514666c6192e00f5fef41e2db497a0ec0d8bc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lookup-rule",
+        "moduleId": "baseline-unix-ffs",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：判定查找是否仍然直接",
+        "markdown": "FFS 的例子说明，真正决定查找难易的不是 inode 是否连续存放，而是位置能否由已知元数据确定。只要 inode 块的划分和起始地址稳定且可查，查找就仍是计算，而不是搜索。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-ffs-split"
+          ]
+        }
+      },
+      {
+        "id": "textbook-lfs-scatter",
+        "moduleId": "lfs-scatter",
+        "depth": "core",
+        "kind": "warning",
+        "title": "LFS：inode 分散且从不覆盖",
+        "markdown": "LFS 把 inode 分散到整个磁盘上，而且从不覆盖旧块。每次写入都会产生新版本的 inode，最新版本的位置不断变化，旧版本则留在原处。此时既无法依赖固定数组，也无法用一个永远有效的地址规则定位最新 inode——困难同时来自空间上的分散和时间上的移动。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000606"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "问题：查找 inode"
+              ],
+              "lineStart": 11866,
+              "lineEnd": 11875,
+              "assetRefs": [],
+              "excerptSha256": "32ad7cae25fc19a20252b4d5ef0514666c6192e00f5fef41e2db497a0ec0d8bc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-diagnosis",
+        "moduleId": "lfs-scatter",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：两层困难分开看",
+        "markdown": "可以把问题拆成两层。第一层是空间：inode 不再集中，单靠 inode 号和某个起点算不出地址。第二层是时间：即使记录了某个地址，下一次写入后它可能已指向过期版本。只解决第一层仍会读到旧 inode，因此 LFS 需要一个随写入更新、能把 inode 号映射到最新位置的机制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-lfs-scatter"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：通往 inode 映射",
+        "markdown": "这正是下一节 inode 映射（imap）要承担的角色：以 inode 号为输入，给出其最新版本所在的磁盘地址，并在每次写入 inode 时更新。这样，文件系统无需知道 inode 的固定位置，只要先查映射，就能找到当前位置。代价是映射本身也必须持久化并维护。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-lfs-scatter"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "diagnose-inode-lookup-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-diagnosis",
+        "moduleId": "lfs-scatter",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-lfs-scatter"
+        ],
+        "learningPurpose": "检查学习者能否把 LFS 的 inode 查找困难归因于空间分散与时间移动两个层面。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-unix-array",
+            "textbook-lfs-scatter"
+          ]
+        },
+        "config": {
+          "prompt": "为什么 LFS 不能像老 UNIX 那样用 inode 号直接算出 inode 地址？",
+          "options": [
+            "因为 inode 号不再唯一",
+            "因为 inode 分散且最新版本位置随写入变化",
+            "因为磁盘容量更大",
+            "因为目录项不再记录文件名"
+          ],
+          "correctIndex": 1
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请用“空间分散”和“时间移动”两方面解释 LFS 为何无法直接计算 inode 地址。"
+        }
+      }
+    ]
+  },
+  "subtitle": "日志结构文件系统",
+  "clusterId": "chapter-43",
+  "clusterIds": [
+    "chapter-43"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000606"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "问题：查找 inode"
+      ],
+      "lineStart": 11866,
+      "lineEnd": 11875,
+      "assetRefs": [],
+      "excerptSha256": "32ad7cae25fc19a20252b4d5ef0514666c6192e00f5fef41e2db497a0ec0d8bc"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -569,
+    61
+  ],
+  "scale": 0.94
+}

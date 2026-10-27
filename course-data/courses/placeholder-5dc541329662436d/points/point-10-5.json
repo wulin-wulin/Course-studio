@@ -1,0 +1,563 @@
+{
+  "id": "point-10-5",
+  "title": "多队列调度",
+  "shortSummary": "介绍多队列调度如何按处理器分配任务队列，并处理负载不均与任务迁移。",
+  "keyTerms": [
+    "多队列调度",
+    "任务队列",
+    "负载不均",
+    "任务迁移"
+  ],
+  "animationType": "loadBalancing",
+  "animationSuggestion": "先播放 C 结束后的时间线，显示 CPU 0 上 A 独享两倍时间、以及 A 与 C 都结束后 CPU 0 完全空闲；随后触发迁移并允许调整检查间隔，让学习者观察迁移次数增加时均衡变快、跨队列开销也变大的对比。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-10-3",
+    "point-10-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 MQMS 结构、优势、负载不均与迁移的原始论述和数值示例，按比较维度重排讲解顺序，并补充诊断顺序、参数实验与检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-mqms",
+          "text": "说明 MQMS 为每个 CPU 维护独立队列的基本结构，以及工作入队的启发式规则。"
+        },
+        {
+          "id": "compare-sqms",
+          "text": "从可扩展性、缓存亲和度和负载均衡三个维度比较 MQMS 与单队列调度。"
+        },
+        {
+          "id": "diagnose-imbalance",
+          "text": "依据队列长度与 CPU 时间线判断负载不均，并说明为什么单次迁移可能不够。"
+        },
+        {
+          "id": "apply-work-stealing",
+          "text": "用工作窃取设计均衡方案，并解释检查频率带来的开销与不均之间的权衡。"
+        }
+      ],
+      "misconceptions": [
+        "把多队列调度理解为只是把单队列复制几份，忽略了队列彼此隔离后全局负载信息不再可得。",
+        "认为只要发生一次迁移就能解决所有负载不均，例如一个 CPU 空闲而另一个队列积压多个工作时。",
+        "认为工作窃取的检查越频繁越公平，忽略频繁跨队列查询的开销会反过来破坏 MQMS 的可扩展性。"
+      ],
+      "modules": [
+        {
+          "id": "why-multi-queue",
+          "title": "问题导入：为什么放弃单一队列",
+          "role": "motivation",
+          "description": "从单队列调度的同步开销引出 MQMS，并固定后续比较的三个维度。",
+          "outcomeRefs": [
+            "explain-mqms"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mqms-structure",
+          "title": "结构与入队规则",
+          "role": "mechanism",
+          "description": "说明每 CPU 一个队列的框架、入队启发式与队列内策略的独立执行。",
+          "outcomeRefs": [
+            "explain-mqms"
+          ],
+          "order": 1
+        },
+        {
+          "id": "advantages-vs-sqms",
+          "title": "统一维度下的优势对比",
+          "role": "comparison",
+          "description": "按可扩展性、缓存亲和度和负载均衡逐项比较 MQMS 与 SQMS。",
+          "outcomeRefs": [
+            "compare-sqms",
+            "explain-mqms"
+          ],
+          "order": 2
+        },
+        {
+          "id": "load-imbalance",
+          "title": "负载不均与诊断",
+          "role": "diagnosis",
+          "description": "用教材的示例识别负载不均，并给出从队列长度到跨队列操作的排查顺序。",
+          "outcomeRefs": [
+            "diagnose-imbalance"
+          ],
+          "order": 3
+        },
+        {
+          "id": "migration-and-work-stealing",
+          "title": "迁移与工作窃取",
+          "role": "solution-design",
+          "description": "说明迁移如何处理负载不均，以及工作窃取如何选择迁移对象和检查频率。",
+          "outcomeRefs": [
+            "apply-work-stealing",
+            "diagnose-imbalance"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-summary",
+          "title": "达成检查与下一点桥接",
+          "role": "check",
+          "description": "通过迁移判断与频率权衡的检查题确认学习成果，并桥接到 Linux 多处理器调度。",
+          "outcomeRefs": [
+            "compare-sqms",
+            "diagnose-imbalance",
+            "apply-work-stealing"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-mqms",
+          "compare-sqms",
+          "diagnose-imbalance",
+          "apply-work-stealing"
+        ],
+        "method": "完成三道检查题，并为一个具体队列状态给出是否迁移、迁移几个工作以及检查频率的判断。",
+        "successCriteria": [
+          "能指出 MQMS 优势与负载不均问题来自同一个队列隔离设计",
+          "能用队列长度和 CPU 时间线说明不均衡的具体表现",
+          "能说明迁移次数与检查频率各自带来的代价"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-10-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-motivation",
+        "moduleId": "why-multi-queue",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：多队列调度的由来",
+        "markdown": "单队列多处理器调度把所有可运行工作放在同一个队列里，多个 CPU 必须共享同一份队列结构。教材正是用这种共享带来的问题引出多队列方案：由于单队列调度程序的这些问题，一些系统改为每个 CPU 一个队列，称为多队列多处理器调度（Multi-Queue Multiprocessor Scheduling，MQMS）。\n\n因此，MQMS 的出发点不是把队列数量变多，而是用队列的分片消除多个 CPU 之间的共享与同步。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recall-sqms",
+        "moduleId": "why-multi-queue",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：先固定比较基线",
+        "markdown": "要把 MQMS 的设计看清，先固定三个比较维度：\n\n- 可扩展性：增加 CPU 时，调度器自身的锁与缓存争用是否随之恶化。\n- 缓存亲和度：工作是否倾向于留在同一个 CPU 上，以便复用缓存数据。\n- 负载均衡：各 CPU 分到的工作量是否接近。\n\n单队列调度的强项是全局只有一个队列、总工作量天然可见，弱项则集中在前两个维度。本点后面的对比都围绕这三条展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-motivation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mqms-frame",
+        "moduleId": "mqms-structure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：MQMS 的基本框架与入队规则",
+        "markdown": "在 MQMS 中，基本调度框架包含多个调度队列，每个队列可以使用不同的调度规则，比如轮转或其他任何可能的算法。当一个工作进入系统后，系统会依照一些启发性规则把它放入某个调度队列，例如随机选择，或者选择较空的队列。\n\n这样一来，每个 CPU 的调度相互独立，就避免了单队列方式中由于数据共享及同步带来的问题。例如系统中有两个 CPU（CPU 0 和 CPU 1），工作 A、B、C、D 进入后，可能被分成 Q0 存放 A 与 C、Q1 存放 B 与 D 两组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-enqueue-rule",
+        "moduleId": "mqms-structure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：入队决定了长期格局",
+        "markdown": "入队只发生一次，却决定了工作此后长期在哪个 CPU 上排队，因此它是 MQMS 中最容易被低估的一步。\n\n- 随机入队实现简单、协调开销低，但可能把多个工作堆进同一队列，长期积累成负载不均。\n- 选择较空的队列能在入队时压平队列长度，但需要读取其他队列的状态，带来额外开销。\n\n无论用哪种启发式，入队规则都不改变队列内部的策略；每个队列仍可以各自使用轮转、优先级或其他算法。这也是教材说每个队列可以使用不同调度规则的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mqms-frame"
+          ]
+        }
+      },
+      {
+        "id": "textbook-example",
+        "moduleId": "advantages-vs-sqms",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：两个 CPU 的轮转示例",
+        "markdown": "接上例，两个队列各自独立调度。若两个队列都使用轮转，调度结果可能如下：CPU 0 依次运行 A、A、C、C 并循环，CPU 1 依次运行 B、B、D、D 并循环。\n\n这个时间线只受本队列内的工作影响：CPU 0 不需要知道 CPU 1 上有谁在等待，也不必为队列操作去争用一把全局锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-advantages",
+        "moduleId": "advantages-vs-sqms",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材：MQMS 的两个固有优势",
+        "markdown": "MQMS 比单队列调度有明显的优势。\n\n第一，它天生更具有可扩展性：队列的数量会随着 CPU 的增加而增加，因此锁和缓存争用的开销不是大问题。\n\n第二，它天生具有良好的缓存亲和度：所有工作都保持在固定的 CPU 上，因而可以很好地利用缓存数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-table",
+        "moduleId": "advantages-vs-sqms",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：统一维度的对比表",
+        "markdown": "把教材的结构说明与优势论述放进同一张表，取舍发生在哪一维就一目了然：\n\n| 维度 | 单队列（SQMS） | 多队列（MQMS） |\n|---|---|---|\n| 可扩展性 | 共享队列的同步与缓存争用随 CPU 增多而恶化 | 每 CPU 独立队列，队列数随 CPU 增加 |\n| 缓存亲和度 | 工作可能被任意 CPU 取走 | 工作长期留在固定 CPU 上 |\n| 负载均衡 | 队列全局可见，较易均衡 | 队列彼此隔离，需要额外机制 |\n\n这张表也预告了下一节的矛盾：MQMS 的前两项优势几乎都来自队列彼此隔离，而正是这种隔离让全局负载信息不再天然可得。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mqms-frame",
+            "textbook-advantages"
+          ]
+        }
+      },
+      {
+        "id": "textbook-imbalance",
+        "moduleId": "load-imbalance",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：负载不均从哪里出现",
+        "markdown": "多队列方法有一个根本的新问题，即负载不均。仍假设 4 个工作、2 个 CPU，但此时工作 C 执行完毕，队列变成 Q0 只有 A、Q1 仍有 B 和 D。\n\n如果对每个队列都执行轮转，CPU 0 反复运行 A，CPU 1 在 B 和 D 之间轮转。从时间线上可以看出，A 获得了 B 和 D 两倍的 CPU 时间，这不是期望的结果。\n\n更糟的是，假设 A 和 C 都执行完毕，系统中只剩 B 和 D，它们却挤在 Q1 里：CPU 0 完全空闲，CPU 1 忙于运行 B 和 D。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-diagnosis",
+        "moduleId": "load-imbalance",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：负载不均的诊断顺序",
+        "markdown": "遇到多队列系统的异常，可以按下面的顺序排查，避免过早归因于队列内的调度算法：\n\n1. 先看各队列的工作数量与 CPU 占用。某 CPU 长期空闲、其他 CPU 的队列持续积压，才是负载不均的信号。\n2. 再确认队列内部策略是否还有发挥空间。若某队列只剩一个工作，轮转和时间片都无从发挥，问题不在队列内部。\n3. 最后判断是否需要跨队列操作。当空队列没有可迁移的工作时，解只能来自队列之间。\n\n由此可以得到一条判断规则：只要工作不能在队列之间移动，任何单队列内部的策略都无法修复队列之间的不平衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-imbalance"
+          ]
+        }
+      },
+      {
+        "id": "textbook-migration",
+        "moduleId": "migration-and-work-stealing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：迁移是均衡的手段",
+        "markdown": "多队列多处理器调度程序应该如何处理负载不均，从而更好地实现预期的调度目标？最明显的答案是让工作移动，这种技术称为迁移（migration）。通过工作的跨 CPU 迁移，可以真正实现负载均衡。\n\n第一种情形较容易：一个 CPU 空闲，另一个 CPU 上有一些工作。操作系统把 B 或 D 迁移到空闲的 CPU 0，负载均衡，皆大欢喜。\n\n第二种情形更棘手：A 独自留在 CPU 0 上，B 和 D 在 CPU 1 上交替运行。此时单次迁移并不能解决问题，答案是不断地迁移一个或多个工作。例如一段时间后让 B 迁移到 CPU 0 与 A 竞争，D 则独享 CPU 1 一段时间，反复进行后实现负载均衡。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-migration-cost",
+        "moduleId": "migration-and-work-stealing",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：迁移不是免费操作",
+        "markdown": "迁移把工作从原 CPU 移走，均衡收益来自重新分配，代价则来自工作执行位置的变化：工作在新 CPU 上无法直接沿用原 CPU 已经为它建立的缓存内容，而 MQMS 的缓存亲和度优势恰恰依赖于工作留在固定 CPU 上。\n\n所以均衡与亲和度在 MQMS 中是同一枚硬币的两面：完全不迁移会出现上面的极端情形，迁移过频或规模过大则会侵蚀本来的亲和度收益。教材中反复迁移的示例也应放在这个权衡下理解，而不是迁移越频繁越好。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-advantages",
+            "textbook-migration"
+          ]
+        }
+      },
+      {
+        "id": "textbook-work-stealing",
+        "moduleId": "migration-and-work-stealing",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：工作窃取与检查频率",
+        "markdown": "系统如何决定发起这样的迁移？一个基本的方法是采用一种名为工作窃取（work stealing）的技术。工作量较少的源队列不定期地偷看其他目标队列是不是比自己的工作多；如果目标队列比源队列显著更满，就从目标队列窃取一个或多个工作，实现负载均衡。\n\n这种方法也有让人抓狂的地方：如果太频繁地检查其他队列，就会带来较高的开销，可扩展性不好，而可扩展性正是多队列调度最初的全部目标；相反，如果检查间隔太长，又可能带来严重的负载不均。找到合适的阈值仍然是黑魔法，这在系统策略设计中很常见。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "多队列调度"
+              ],
+              "lineStart": 2840,
+              "lineEnd": 2905,
+              "assetRefs": [
+                "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+                "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+                "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+                "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+                "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+              ],
+              "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-work-stealing-experiment",
+        "moduleId": "migration-and-work-stealing",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "模型补充：把检查周期当作实验参数",
+        "markdown": "一种可运行的窃取循环可以写成：\n\n```text\n每个检查周期 tick：\n  若本队列长度 < 1 且存在更满的队列：\n    从最满队列取出一个工作放入本队列\n```\n\n把检查周期当作参数，可以观察到两种故障模式：\n\n- 周期过短，例如每个时间片都检查：队列很快变均衡，但每次都要跨队列查询；CPU 越多查询越密集，开销接近甚至超过收益。\n- 周期过长，例如数百个时间片才检查：查询开销可以忽略，但空队列可能长时间空转，负载不均持续存在。\n\n所以阈值不是精度问题，而是教材所说的开销与不均之间的折中；不存在与负载无关的最优值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-work-stealing"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：迁移与频率",
+        "markdown": "1. 系统有 2 个 CPU，Q0 中只有 A，Q1 中有 B、C、D，且不允许迁移。哪个 CPU 会空闲？A 与 Q1 中的工作相比，获得的 CPU 时间公平吗？\n2. 场景改为 A 在 CPU 0、B 和 C 在 CPU 1，且只允许迁移一次。这一次迁移能否让三个工作都均衡？请说明理由。\n3. 若把工作窃取的检查周期从 10 个时间片改为 1 个时间片，哪一项代价会上升？为什么这会削弱 MQMS 的可扩展性优势？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-advantages",
+            "textbook-imbalance",
+            "textbook-work-stealing"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-summary",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "MQMS 把可运行工作分到每 CPU 一个队列，换来良好的可扩展性和缓存亲和度，代价是全局负载信息被隔离，于是必须用迁移补上均衡能力：迁移不足会负载不均，迁移过频会侵蚀亲和度并增加开销，工作窃取则用检查阈值在两者之间折中。\n\n这也解释了为什么真实系统不会简单地在单队列与多队列之间二选一；下一点将看到 Linux 的多处理器调度器如何在这些约束下各自取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison-table",
+            "textbook-migration",
+            "textbook-work-stealing"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "load-balance-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-imbalance",
+          "apply-work-stealing"
+        ],
+        "learningPurpose": "检查学习者能否根据队列状态判断是否需要迁移、需要多少次迁移，并说明检查频率的代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-advantages",
+            "textbook-imbalance",
+            "textbook-work-stealing"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "mode": "short-answer",
+          "questionIds": [
+            "idle-queue-without-migration",
+            "single-migration-sufficiency",
+            "check-interval-tradeoff"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出三个判断：不放行迁移时哪个 CPU 会空闲；只迁移一次能否让 A、B、C 在 2 个 CPU 上均衡；检查周期缩短会增加哪类开销。"
+        }
+      }
+    ]
+  },
+  "subtitle": "多处理器调度(高级)",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000144"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "多队列调度"
+      ],
+      "lineStart": 2840,
+      "lineEnd": 2905,
+      "assetRefs": [
+        "parts/part-0001/images/59bdb6e1d55436159f571db4e117f030ed7b20dd30eb18b585d6b3b696a37847.jpg",
+        "parts/part-0001/images/ad131594a7b4eaf3f3a9d572b1553e330531839684379bc7fd05875e52ec8669.jpg",
+        "parts/part-0001/images/60d3a6646532c7ed1e90322d1bad42f261ab1b11c03010edc5b8db37b3dd3f95.jpg",
+        "parts/part-0001/images/a5447a06981afcf8472f7d9b0f5253828fcb9a83e7d2fd4fd3c4f8bb6c8cb5b1.jpg",
+        "parts/part-0001/images/2b62bf5cb902153d83397cc02c359cca616a4357d8ba3725f1012bd6da673af7.jpg"
+      ],
+      "excerptSha256": "6f9e69c76dce56e0741a4128611b00771037bde05a91e168a9fa2fea91145528"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2948,
+    3060
+  ],
+  "scale": 0.89
+}

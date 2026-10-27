@@ -1,0 +1,406 @@
+{
+  "id": "point-29-4",
+  "title": "并发散列表",
+  "shortSummary": "说明并发散列表如何用桶级锁提高并发度，并分析其扩展性与冲突代价。",
+  "keyTerms": [
+    "并发散列表",
+    "桶级锁",
+    "并发度",
+    "哈希"
+  ],
+  "animationType": "stripedLocks",
+  "animationSuggestion": "按键定位并高亮每个桶的锁归属，展示不同桶的操作并行推进、同桶操作排队等待，最后汇总等待次数与完成分布。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-29-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的结构、桶级锁机制与性能结论，围绕并发度和冲突代价补充执行步骤、判断清单与检查练习。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-hash-buckets",
+          "text": "解释并发散列表如何用桶数组和取模定位组织键。"
+        },
+        {
+          "id": "trace-hash-operations",
+          "text": "描述初始化、插入和查找在桶级锁下的执行步骤。"
+        },
+        {
+          "id": "explain-bucket-lock-concurrency",
+          "text": "说明桶级锁为什么能提高并发度，以及同桶操作为什么仍需串行。"
+        },
+        {
+          "id": "evaluate-scalability",
+          "text": "结合桶分布、冲突和锁数量分析并发散列表的扩展性边界。"
+        },
+        {
+          "id": "apply-optimization-discipline",
+          "text": "运用先正确后优化的原则判断何时值得从单锁改为桶级锁。"
+        }
+      ],
+      "misconceptions": [
+        "认为每个桶一把锁就能让所有操作完全并行，忽视同一桶内的串行化和哈希冲突。",
+        "认为散列表的桶数可以随意固定而不影响性能，忽视元素增长后桶内链表变长带来的退化。",
+        "认为锁拆得越细一定越快，忽视维护多把锁的成本以及优化前需要先确认瓶颈。"
+      ],
+      "modules": [
+        {
+          "id": "context-and-structure",
+          "title": "问题背景与桶数组结构",
+          "role": "concept-introduction",
+          "description": "从固定大小的散列表结构出发，建立桶与取模定位的基本模型。",
+          "outcomeRefs": [
+            "explain-hash-buckets"
+          ],
+          "order": 0
+        },
+        {
+          "id": "operations",
+          "title": "插入与查找的执行步骤",
+          "role": "procedure",
+          "description": "按定位、加锁、操作、释放的顺序拆解一次散列表访问。",
+          "outcomeRefs": [
+            "trace-hash-operations"
+          ],
+          "order": 1
+        },
+        {
+          "id": "locking-mechanism",
+          "title": "桶级锁与并发机制",
+          "role": "mechanism",
+          "description": "解释每桶一把锁如何允许不同桶并行、同桶排队。",
+          "outcomeRefs": [
+            "explain-bucket-lock-concurrency"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scalability-tradeoffs",
+          "title": "扩展性、冲突与代价",
+          "role": "analysis",
+          "description": "分析桶级锁的收益、冲突退化和固定桶数的边界。",
+          "outcomeRefs": [
+            "evaluate-scalability"
+          ],
+          "order": 3
+        },
+        {
+          "id": "engineering-judgment",
+          "title": "避免不成熟的优化",
+          "role": "decision-guidance",
+          "description": "把教材的性能建议转化为可执行的优化判断顺序。",
+          "outcomeRefs": [
+            "apply-optimization-discipline"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "用三个情境问题检查并发度、冲突代价和优化纪律。",
+          "outcomeRefs": [
+            "explain-bucket-lock-concurrency",
+            "evaluate-scalability",
+            "apply-optimization-discipline"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-hash-buckets",
+          "trace-hash-operations",
+          "explain-bucket-lock-concurrency",
+          "evaluate-scalability",
+          "apply-optimization-discipline"
+        ],
+        "method": "完成三道情境检查题，并说明并发收益来自哪里、冲突代价出现在哪里。",
+        "successCriteria": [
+          "能正确指出取模定位与桶级锁的关系",
+          "能区分不同桶并行与同桶串行两种情形",
+          "能说明冲突严重时扩展性为何下降",
+          "能按先测量后优化的顺序给出锁粒度建议"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "nextPointId": "point-29-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-intro-structure",
+        "moduleId": "context-and-structure",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：固定大小的桶数组",
+        "markdown": "教材讨论的是**不处理扩容**的简单散列表：`BUCKETS` 固定为 101，散列表本身就是一个包含 101 条链表的数组 `lists`。初始化时逐桶调用 `List_Init`；插入与查找都先用 `key % BUCKETS` 算出桶下标，再分别调用 `List_Insert` 或 `List_Lookup`。\n\n```c\n#define BUCKETS (101)\ntypedef struct __hash_t {\n    list_t lists[BUCKETS];\n} hash_t;\n```\n\n于是每次操作只进入一条桶链表，而不是扫描整个表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000387"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "并发散列表"
+              ],
+              "lineStart": 7469,
+              "lineEnd": 7498,
+              "assetRefs": [],
+              "excerptSha256": "6621077a748d84ade2c17e486df4a45da10a74ffe6f6586f1babbbf774d66b6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bucket-intuition",
+        "moduleId": "context-and-structure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "直觉：一排带锁的储物柜",
+        "markdown": "可以把散列表想成一排编号 0 到 100 的储物柜，每个柜子内部是一条链表。`key % 101` 决定键该去哪个柜子，查找时只需打开对应的一个柜子。需要注意的是，柜子内部仍然要顺序查找；发生冲突的键越多，这个柜子里的链表就越长。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro-structure"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bucket-locking",
+        "moduleId": "locking-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：每桶一把锁",
+        "markdown": "教材把每个桶都实现为此前的**并发链表**，因此每个桶拥有一把锁，而不是整个散列表共用一把大锁。不同线程只要落在不同桶，就能同时操作；同一桶内的操作仍由该桶的锁串行化。\n\n教材用 4 CPU、4 线程、每线程 1 万至 5 万次并发更新做比较：这种简单的并发散列表扩展性很好，而单锁链表的性能则随线程增加而受限。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000388"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "图29.9 并发散列表"
+              ],
+              "lineStart": 7499,
+              "lineEnd": 7507,
+              "assetRefs": [
+                "parts/part-0003/images/4ca3058efe45e76c6fe36612b1fdd0ebf241502901933e624be7da641e4e0d6d.jpg"
+              ],
+              "excerptSha256": "b84a7aa6780cc148a55cfbdf323dec87804d88536ba9f1e1448bb7cec15830af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-operation-trace",
+        "moduleId": "operations",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "一次插入或查找的四个步骤",
+        "markdown": "在桶级锁的保护下，一次操作可以拆成四步：\n\n1. 用 `key % 101` 算出目标桶。\n2. 获取该桶链表的锁；若锁已被其他线程持有，就等待。\n3. 在链表上执行操作：插入把新节点加入该桶，查找沿链表比较键。\n4. 释放该桶的锁，让等待同一桶的线程继续。\n\n第 2 步只锁一个桶，所以位于其他桶的线程不必等待。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro-structure",
+            "textbook-bucket-locking"
+          ]
+        }
+      },
+      {
+        "id": "model-concurrency-example",
+        "moduleId": "locking-mechanism",
+        "depth": "core",
+        "kind": "example",
+        "title": "两个线程落在不同桶与同一桶",
+        "markdown": "设想线程 A 要插入键 5，线程 B 要查找键 208。两者分别映射到桶 5 和桶 6，于是可以在各自的桶锁下并行完成；若线程 C 也要操作键 106（同样落在桶 5），它就必须等 A 释放桶 5 的锁。并发度因此取决于键在桶之间的分布，而不是线程总数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bucket-locking",
+            "model-operation-trace"
+          ]
+        }
+      },
+      {
+        "id": "model-scalability-analysis",
+        "moduleId": "scalability-tradeoffs",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "桶级锁的收益、代价与边界",
+        "markdown": "桶级锁的收益与代价可以分开看：\n\n- **收益**：锁的数量从 1 增加到 101，不同桶的更新可以重叠执行，因此 4 个线程在键分布均匀时很少争用同一把锁；教材的测量正是在这种设置下显示散列表远优于单锁链表。\n- **代价**：散列表需要为 101 个桶各维护一把锁和一条链表；同一桶内的操作仍然串行。若哈希不均或热点键集中，多个键会挤进同一个桶，桶内链表变长，查找从期望的 $O(1)$ 退化到接近 $O(n)$，锁竞争也会集中。\n- **边界**：教材明确只讨论**不调整大小**的简单散列表；固定桶数在元素数量增长后会加重冲突。支持扩容还要处理迁移期间并发访问的问题，教材把它留作练习。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro-structure",
+            "textbook-bucket-locking"
+          ]
+        }
+      },
+      {
+        "id": "textbook-premature-optimization",
+        "moduleId": "engineering-judgment",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材建议：避免不成熟的优化",
+        "markdown": "教材的建议是：实现并发数据结构时先从**一把大锁**开始，这通常最容易保证正确；只有在观察到真实性能问题后，才把锁拆细，并且优化到满足需要即可。教材引用了 Knuth 的说法——“不成熟的优化是所有坏事的根源”。\n\nLinux 早期的 BKL（大内核锁）就是这一策略的例子：它长期有效，直到多 CPU 普及后单线程活动成为瓶颈，才被拆分为多把锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000389"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "建议：避免不成熟的优化（Knuth 定律）"
+              ],
+              "lineStart": 7508,
+              "lineEnd": 7513,
+              "assetRefs": [],
+              "excerptSha256": "de6dcdcad6ee0229fe8d98ce7062f0ba026570c03c6ce2af031db6a5c7eecd52"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-design-checklist",
+        "moduleId": "engineering-judgment",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "判断是否改用桶级锁的清单",
+        "markdown": "把教材的建议转成可执行的判断顺序：\n\n1. 先用一把锁把功能做正确，并记录基线吞吐与延迟。\n2. 用真实负载确认瓶颈确实来自锁竞争，而不是其他部分。\n3. 若瓶颈在锁，再评估桶级锁是否合适：键分布是否足够均匀、桶数是否与并发度匹配、维护多把锁的成本是否可接受。\n4. 拆分后重新测量；若改善不明显，回退到更简单的方案。\n\n关键不是“锁越多越好”，而是让优化由证据驱动，并保留可回退的简单实现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-premature-optimization",
+            "model-scalability-analysis"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：并发度、冲突与优化时机",
+        "markdown": "请先独立思考，再对照参考要点：\n\n1. 某散列表有 101 个桶，4 个线程更新 4 万个键。若键在桶间均匀分布，为什么同一时刻大多数操作可以并行？\n2. 若所有键都映射到同一个桶，桶级锁相比单把大锁还有优势吗？瓶颈会转移到哪里？\n3. 团队发现某服务变慢，第一反应是把全局锁拆成 101 把桶锁。按照教材的建议，应先确认什么？\n\n参考要点：并行性来自不同桶使用不同锁；同桶操作仍串行，冲突严重时链表变长、锁竞争集中；优化前应先证明瓶颈来自锁竞争，并在拆分后重新测量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro-structure",
+            "textbook-bucket-locking",
+            "textbook-premature-optimization"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "bucket-lock-formative-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "title": "桶级锁情境判断",
+        "outcomeRefs": [
+          "explain-bucket-lock-concurrency",
+          "evaluate-scalability",
+          "apply-optimization-discipline"
+        ],
+        "learningPurpose": "检查学习者能否把桶级锁机制迁移到均匀分布、极端冲突和性能优化三个情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-bucket-locking",
+            "model-scalability-analysis",
+            "textbook-premature-optimization"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别回答：不同桶为什么能并行、所有键落入同一桶时瓶颈在哪里、拆分锁之前应先确认什么，并对照正文中的参考要点。"
+        }
+      }
+    ]
+  },
+  "subtitle": "基于锁的并发数据结构",
+  "clusterId": "chapter-29",
+  "clusterIds": [
+    "chapter-29"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000387"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "并发散列表"
+      ],
+      "lineStart": 7469,
+      "lineEnd": 7498,
+      "assetRefs": [],
+      "excerptSha256": "6621077a748d84ade2c17e486df4a45da10a74ffe6f6586f1babbbf774d66b6f"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000388"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "图29.9 并发散列表"
+      ],
+      "lineStart": 7499,
+      "lineEnd": 7507,
+      "assetRefs": [
+        "parts/part-0003/images/4ca3058efe45e76c6fe36612b1fdd0ebf241502901933e624be7da641e4e0d6d.jpg"
+      ],
+      "excerptSha256": "b84a7aa6780cc148a55cfbdf323dec87804d88536ba9f1e1448bb7cec15830af"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000389"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "建议：避免不成熟的优化（Knuth 定律）"
+      ],
+      "lineStart": 7508,
+      "lineEnd": 7513,
+      "assetRefs": [],
+      "excerptSha256": "de6dcdcad6ee0229fe8d98ce7062f0ba026570c03c6ce2af031db6a5c7eecd52"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    167,
+    1553
+  ],
+  "scale": 0.92
+}

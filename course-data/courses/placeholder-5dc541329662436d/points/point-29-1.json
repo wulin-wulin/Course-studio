@@ -1,0 +1,575 @@
+{
+  "id": "point-29-1",
+  "title": "并发计数器",
+  "shortSummary": "用锁保护计数器并分析其扩展性瓶颈，介绍近似计数器如何分摊竞争。",
+  "keyTerms": [
+    "并发计数器",
+    "锁",
+    "扩展性",
+    "近似计数器"
+  ],
+  "animationType": "approximateCounter",
+  "animationSuggestion": "按时间步展示局部计数器的累积，达到阈值时高亮一次全局转移并将局部值清零，同时标出全局读取值相对真实总量的滞后。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-28-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的计数器定义、代码与实验结果，围绕正确性和扩展性重组讲解，补充读表方法与阈值选择流程。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-counter-baseline",
+          "text": "说明无锁计数器的接口，以及它为何不能直接用于多线程。"
+        },
+        {
+          "id": "explain-locked-counter-correctness",
+          "text": "解释用互斥锁包裹计数器操作如何保证正确性。"
+        },
+        {
+          "id": "diagnose-scalability",
+          "text": "依据基准测试结果分析精确锁计数器的扩展性瓶颈。"
+        },
+        {
+          "id": "explain-sloppy-counter",
+          "text": "说明懒惰计数器的局部计数器、全局计数器与转移规则。"
+        },
+        {
+          "id": "evaluate-threshold-tradeoff",
+          "text": "能在准确性与扩展性之间选择阈值 S，并说明选择代价。"
+        }
+      ],
+      "misconceptions": [
+        "给计数器加一把锁就同时解决了正确性和性能问题。",
+        "懒惰计数器的 get 总能返回当前精确的计数总量。",
+        "阈值 S 越大越好，因为它总能提高系统吞吐。"
+      ],
+      "modules": [
+        {
+          "id": "chapter-orientation",
+          "title": "章节问题：如何给数据结构加锁",
+          "role": "orientation",
+          "description": "从正确性与性能两条轴建立本章的问题框架。",
+          "outcomeRefs": [
+            "diagnose-scalability"
+          ],
+          "order": 0
+        },
+        {
+          "id": "counter-baseline",
+          "title": "起点：无锁计数器",
+          "role": "concept",
+          "description": "认识计数器接口及其并发缺陷。",
+          "outcomeRefs": [
+            "explain-counter-baseline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "locked-counter",
+          "title": "简单方案：一把互斥锁",
+          "role": "mechanism",
+          "description": "理解加锁后计数器的互斥语义。",
+          "outcomeRefs": [
+            "explain-locked-counter-correctness"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scalability-bottleneck",
+          "title": "性能问题：精确计数器为何无法扩展",
+          "role": "analysis",
+          "description": "用基准测试定位串行化瓶颈。",
+          "outcomeRefs": [
+            "diagnose-scalability"
+          ],
+          "order": 3
+        },
+        {
+          "id": "sloppy-counter",
+          "title": "可扩展方案：懒惰计数器",
+          "role": "mechanism",
+          "description": "分析局部计数器、全局计数器与代码实现。",
+          "outcomeRefs": [
+            "explain-sloppy-counter"
+          ],
+          "order": 4
+        },
+        {
+          "id": "threshold-tradeoff",
+          "title": "阈值 S：准确性与性能的折中",
+          "role": "tradeoff",
+          "description": "读懂转移追踪表并形成阈值选择流程。",
+          "outcomeRefs": [
+            "evaluate-threshold-tradeoff"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-counter-baseline",
+          "explain-locked-counter-correctness",
+          "diagnose-scalability",
+          "explain-sloppy-counter",
+          "evaluate-threshold-tradeoff"
+        ],
+        "method": "完成阈值选择检查题，并用教材的准确性与性能折中解释选择依据。",
+        "successCriteria": [
+          "能说明精确计数器的扩展性瓶颈",
+          "能解释局部值转移到全局值的规则",
+          "能依据读取精度要求选择 S 并说明代价"
+        ],
+        "exerciseBlockId": "model-threshold-exercise",
+        "summaryBlockId": "model-threshold-decision",
+        "nextPointId": "point-29-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-chapter-question",
+        "moduleId": "chapter-orientation",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材提出的关键问题",
+        "markdown": "第 29 章要解决的问题是：**如何给数据结构加锁**。锁可以让数据结构变得线程安全，但具体怎样加锁，会同时决定它的**正确性**和**效率**。\n\n对同一个结构，我们既要保证功能正确，也要让多个线程能够并发访问而不过度串行化。这正是后续讨论计数器、链表、队列和散列表时的共同主线。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000378"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "基于锁的并发数据结构"
+              ],
+              "lineStart": 7114,
+              "lineEnd": 7123,
+              "assetRefs": [],
+              "excerptSha256": "ae9117a1d48ad6e1f83fdb8e98d64c09468f6cb37696fc67f5ee2846e1a376c5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-chapter-map",
+        "moduleId": "chapter-orientation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把问题拆成两条轴",
+        "markdown": "可以把本章的判断拆成两条相互独立的轴：\n\n1. **正确性**：所有可能被并发读写的状态是否都受到保护；\n2. **扩展性**：增加线程或 CPU 后，吞吐能否随之提高。\n\n一个结构先要正确，才值得讨论性能；但“正确”并不自动意味着“可扩展”。并发计数器就是展示这两条轴如何冲突的最小例子。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-chapter-question"
+          ]
+        }
+      },
+      {
+        "id": "textbook-counter-interface",
+        "moduleId": "counter-baseline",
+        "depth": "core",
+        "kind": "definition",
+        "title": "无锁计数器的接口",
+        "markdown": "计数器是接口最简单、使用又很广泛的数据结构。教材给出的非并发版本只保存一个整数值：\n\n```c\ntypedef struct counter_t {\n    int value;\n} counter_t;\n\nvoid init(counter_t *c) { c->value = 0; }\nvoid increment(counter_t *c) { c->value++; }\nvoid decrement(counter_t *c) { c->value--; }\nint get(counter_t *c) { return c->value; }\n```\n\n这四个操作分别完成初始化、加一、减一和读取当前值，代码里没有任何同步机制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000379"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "并发计数器"
+              ],
+              "lineStart": 7124,
+              "lineEnd": 7150,
+              "assetRefs": [],
+              "excerptSha256": "b8fb6ec60d3f2d8e3022c87a0bcec98e60f1df867a4bea98801c8ef375d5a637"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-counter-baseline",
+        "moduleId": "counter-baseline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么这个版本不能直接并发使用",
+        "markdown": "`c->value++` 在机器层面通常不是一条不可分割的指令，而是“读出旧值、加一、写回”的读—改—写序列。两个线程可能读到同一个旧值，再分别写回相同的新值，导致一次更新丢失。\n\n因此，教材把它称为非并发计数器：接口能表达计数语义，但没有保证共享状态在并发访问下的正确性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-counter-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-locked-counter",
+        "moduleId": "locked-counter",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "用互斥锁包裹每个操作",
+        "markdown": "让计数器线程安全的最直接做法，是给结构加一把互斥锁，并在每个操作进入和返回时成对加锁、解锁：\n\n```c\ntypedef struct counter_t {\n    int value;\n    pthread_mutex_t lock;\n} counter_t;\n\nvoid increment(counter_t *c) {\n    Pthread_mutex_lock(&c->lock);\n    c->value++;\n    Pthread_mutex_unlock(&c->lock);\n}\n```\n\n`decrement` 和 `get` 也采用同样的包裹方式。教材指出，这是并发数据结构中最简单、最基本的模式：调用操作时获取锁，返回时释放锁；它类似基于监视器（monitor）的自动加锁方式。这个计数器简单且正确。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000380"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单但无法扩展"
+              ],
+              "lineStart": 7151,
+              "lineEnd": 7199,
+              "assetRefs": [
+                "parts/part-0003/images/1854059f988061c204119fccab0f68c19d91612ffdd2dbbafaba63d7941841d6.jpg"
+              ],
+              "excerptSha256": "a451e693b3a5a68876460cf21e354b92b745884503fccb06a31b9cba3ae87d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lock-correctness",
+        "moduleId": "locked-counter",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "正确性来自互斥",
+        "markdown": "任一时刻只有一个线程能进入被锁保护的临界区，因此 `value++` 的读—改—写序列不会再与另一个更新交错，`get` 读到的也是一个稳定的值。\n\n要注意，这里的“正确”只是互斥语义上的保证。它没有承诺性能：所有操作都被同一把锁串行化，这个代价要到多线程基准测试中才会显现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-locked-counter"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scaling-benchmark",
+        "moduleId": "scalability-bottleneck",
+        "depth": "core",
+        "kind": "table",
+        "title": "扩展性基准测试",
+        "markdown": "简单加锁的代价需要基准测试来暴露。教材让每个线程更新同一个共享计数器 100 万次，再改变线程数，并在 4 核 2.7GHz i5 的 iMac 上测量总耗时：\n\n- 单个线程完成 100 万次更新约需 **0.03 秒**；\n- 两个线程各自更新 100 万次，总耗时反而超过 **5 秒**；\n- 线程更多时，性能继续变差。\n\n理想情况被称为**完美扩展**（perfect scaling）：总工作量增加，但并行执行后完成任务的时间并不增加。精确计数器显然没有达到这一点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000380"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "简单但无法扩展"
+              ],
+              "lineStart": 7151,
+              "lineEnd": 7199,
+              "assetRefs": [
+                "parts/part-0003/images/1854059f988061c204119fccab0f68c19d91612ffdd2dbbafaba63d7941841d6.jpg"
+              ],
+              "excerptSha256": "a451e693b3a5a68876460cf21e354b92b745884503fccb06a31b9cba3ae87d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-serialize",
+        "moduleId": "scalability-bottleneck",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "瓶颈不是核数，而是排队",
+        "markdown": "原因不是多核失效，而是所有更新都必须排队进入同一个临界区。线程越多，争用同一把锁的线程越多，真正完成更新的时间被锁的交接和缓存行争用吞掉。\n\n这也说明：**互斥正确性**与**扩展性**是两个目标。只要全局状态只有一份、并且每次更新都要独占它，增加 CPU 就不会带来成比例的好处。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-locked-counter",
+            "textbook-scaling-benchmark"
+          ]
+        }
+      },
+      {
+        "id": "textbook-sloppy-structure",
+        "moduleId": "sloppy-counter",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "懒惰计数器的结构",
+        "markdown": "为了扩展，教材介绍的方案是**懒惰计数器**（sloppy counter）。它用多个局部计数器加一个全局计数器来实现一个逻辑计数器：每个 CPU 核心有一个局部计数器，每个局部计数器有一把局部锁，全局计数器有一把全局锁。\n\n线程更新时先只访问自己 CPU 的局部计数器，通过对应的局部锁同步。由于不同 CPU 的线程操作不同的局部计数器，它们不会互相竞争，更新路径因此具有较好的扩展性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000381"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "可扩展的计数"
+              ],
+              "lineStart": 7200,
+              "lineEnd": 7279,
+              "assetRefs": [
+                "parts/part-0003/images/d56521db2b630d7dd06d0fe6be3eff31dfc6fed2a66858e891529f6795cb642c.jpg"
+              ],
+              "excerptSha256": "248c386baaeec8c7ef486f0dffe0923a5138daff766e5cf58c8c40cf8dbed62c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-local-to-global",
+        "moduleId": "sloppy-counter",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "局部值如何变成全局值",
+        "markdown": "局部值不能永远停在各核上，否则 `get` 看不到它们。局部计数器会定期在全局锁保护下把值转移给全局计数器，然后把自身清零。\n\n于是更新被分成两层：常见的快速路径只碰局部锁，偶尔的慢速路径才碰全局锁。扩展性来自前者，而全局可见性来自后者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-sloppy-structure"
+          ]
+        }
+      },
+      {
+        "id": "textbook-sloppy-code",
+        "moduleId": "sloppy-counter",
+        "depth": "core",
+        "kind": "code",
+        "title": "懒惰计数器的实现",
+        "markdown": "教材给出的实现把这一结构直接写进 `counter_t`：\n\n```c\ntypedef struct counter_t {\n    int global;\n    pthread_mutex_t glock;\n    int local[NUMCPUS];\n    pthread_mutex_t llock[NUMCPUS];\n    int threshold;\n} counter_t;\n\nvoid update(counter_t *c, int threadID, int amt) {\n    pthread_mutex_lock(&c->llock[threadID]);\n    c->local[threadID] += amt;\n    if (c->local[threadID] >= c->threshold) {\n        pthread_mutex_lock(&c->glock);\n        c->global += c->local[threadID];\n        pthread_mutex_unlock(&c->glock);\n        c->local[threadID] = 0;\n    }\n    pthread_mutex_unlock(&c->llock[threadID]);\n}\n```\n\n`get` 只读取全局计数器，因此返回的是**近似值**：还留在局部计数器里、尚未转移的更新暂时看不到。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000381"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "可扩展的计数"
+              ],
+              "lineStart": 7200,
+              "lineEnd": 7279,
+              "assetRefs": [
+                "parts/part-0003/images/d56521db2b630d7dd06d0fe6be3eff31dfc6fed2a66858e891529f6795cb642c.jpg"
+              ],
+              "excerptSha256": "248c386baaeec8c7ef486f0dffe0923a5138daff766e5cf58c8c40cf8dbed62c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-code-reading",
+        "moduleId": "sloppy-counter",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "读代码时抓住三个不变量",
+        "markdown": "读这段代码时可以抓住三个不变量：\n\n- 每个线程只修改 `local[threadID]`，所以局部更新之间没有共享写；\n- 只有局部值达到 `threshold` 时才获取 `glock`，把整个局部值加到全局并清零；\n- `get` 只拿 `glock` 读 `global`，因此它看到的是最近一次转移之后的全局快照。\n\n这也解释了为什么“更新很快，但读取可能滞后”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-sloppy-code",
+            "textbook-sloppy-structure"
+          ]
+        }
+      },
+      {
+        "id": "textbook-threshold-s",
+        "moduleId": "threshold-tradeoff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "阈值 S 与转移追踪",
+        "markdown": "局部转全局的频度由阈值 **S**（sloppiness）决定：S 越小，懒惰计数器越接近不可扩展的精确计数器；S 越大，扩展性越强，但全局计数器与实际计数之间的偏差越大。\n\n教材用 S=5、4 个 CPU 的例子追踪了转移过程。表中局部计数逐渐增加，达到阈值后整块转入全局并清零：\n\n| 时间 | L1 | L2 | L3 | L4 | G |\n|---|---|---|---|---|---|\n| 0 | 0 | 0 | 0 | 0 | 0 |\n| 5 | 4 | 1 | 3 | 3 | 0 |\n| 6 | 5→0 | 1 | 3 | 4 | 5（来自 L1）|\n| 7 | 0 | 2 | 4 | 5→0 | 10（来自 L4）|\n\n在性能实验中，S 取 1024 时，4 个处理器更新 400 万次的耗时几乎与 1 个处理器更新 100 万次相同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000381"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "可扩展的计数"
+              ],
+              "lineStart": 7200,
+              "lineEnd": 7279,
+              "assetRefs": [
+                "parts/part-0003/images/d56521db2b630d7dd06d0fe6be3eff31dfc6fed2a66858e891529f6795cb642c.jpg"
+              ],
+              "excerptSha256": "248c386baaeec8c7ef486f0dffe0923a5138daff766e5cf58c8c40cf8dbed62c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-threshold-reading",
+        "moduleId": "threshold-tradeoff",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "读表的关键是滞后",
+        "markdown": "读这张表的关键不是逐格核对数字，而是看**滞后**：第 5 个时间点之前，全局值 G 一直是 0，尽管各局部计数器已经累计了更新。只有当某个局部值达到 S，才发生一次批量转移。\n\n所以 S 同时控制两件事：转移的频率，以及 `get` 可能落后多少。教材把这一点概括为准确性与性能之间的折中——S 越小越准确但越慢，S 越大越快但越不准确。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-threshold-s"
+          ]
+        }
+      },
+      {
+        "id": "model-threshold-decision",
+        "moduleId": "threshold-tradeoff",
+        "depth": "support",
+        "kind": "summary",
+        "title": "选择阈值的三步判断",
+        "markdown": "可以把选择 S 变成一个简单的判断流程：\n\n1. 先确认读取方能否接受近似值；如果不能，就必须使用精确计数器，或按固定顺序抢占所有局部锁和全局锁来取得精确值，但后者没有扩展性。\n2. 若能接受近似值，就在“更新太快”与“读取太旧”之间选 S：写入密集、对滞后不敏感时用较大的 S；需要较快看到接近真实的值时用较小的 S。\n3. 用基准测试验证选定的 S 在目标核数下是否仍能扩展，而不是只凭经验设定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-threshold-s"
+          ]
+        }
+      },
+      {
+        "id": "model-threshold-exercise",
+        "moduleId": "threshold-tradeoff",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查题：为监控场景选 S",
+        "markdown": "一个 8 核服务用懒惰计数器统计请求数，每分钟读取一次总量用于监控，但要求误差不超过总量的约 1%。\n\n你会把 S 设得偏大还是偏小？请从“更新路径的竞争”“读取滞后”和“读取频率”三个方面说明理由，并指出如果监控必须精确到个位，这个方案是否还适用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-threshold-s",
+            "model-threshold-decision"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "counter-threshold-check",
+        "type": "formative-check",
+        "title": "阈值选择自检",
+        "anchorBlockId": "model-threshold-exercise",
+        "moduleId": "threshold-tradeoff",
+        "depth": "core",
+        "outcomeRefs": [
+          "evaluate-threshold-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否把阈值 S 的折中规则迁移到具体的监控场景。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-threshold-s",
+            "model-threshold-decision"
+          ]
+        },
+        "config": {
+          "attempts": 1
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别说明较大 S 与较小 S 对更新竞争和读取滞后的影响，再给出你的选择与依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "基于锁的并发数据结构",
+  "clusterId": "chapter-29",
+  "clusterIds": [
+    "chapter-29"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000378"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "基于锁的并发数据结构"
+      ],
+      "lineStart": 7114,
+      "lineEnd": 7123,
+      "assetRefs": [],
+      "excerptSha256": "ae9117a1d48ad6e1f83fdb8e98d64c09468f6cb37696fc67f5ee2846e1a376c5"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000379"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "并发计数器"
+      ],
+      "lineStart": 7124,
+      "lineEnd": 7150,
+      "assetRefs": [],
+      "excerptSha256": "b8fb6ec60d3f2d8e3022c87a0bcec98e60f1df867a4bea98801c8ef375d5a637"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000380"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "简单但无法扩展"
+      ],
+      "lineStart": 7151,
+      "lineEnd": 7199,
+      "assetRefs": [
+        "parts/part-0003/images/1854059f988061c204119fccab0f68c19d91612ffdd2dbbafaba63d7941841d6.jpg"
+      ],
+      "excerptSha256": "a451e693b3a5a68876460cf21e354b92b745884503fccb06a31b9cba3ae87d9e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000381"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "可扩展的计数"
+      ],
+      "lineStart": 7200,
+      "lineEnd": 7279,
+      "assetRefs": [
+        "parts/part-0003/images/d56521db2b630d7dd06d0fe6be3eff31dfc6fed2a66858e891529f6795cb642c.jpg"
+      ],
+      "excerptSha256": "248c386baaeec8c7ef486f0dffe0923a5138daff766e5cf58c8c40cf8dbed62c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -20,
+    1613
+  ],
+  "scale": 1.19
+}

@@ -1,0 +1,439 @@
+{
+  "id": "point-49-4",
+  "title": "AFS 版本 2",
+  "shortSummary": "介绍 AFSv2 的回调机制、文件标识和缓存验证方式及其协作关系。",
+  "keyTerms": [
+    "AFSv2",
+    "回调",
+    "文件标识",
+    "缓存验证"
+  ],
+  "animationType": "callbackInvalidation",
+  "animationSuggestion": "用客户端缓存与服务器两侧的状态图展示若干次访问：先本地命中，再发生服务器端修改并触发失效通知，随后展示重新 Fetch 与回调重建，允许重播同一轨迹。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-49-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-trace-and-boundary",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对回调、FID 和读文件示例的讲解，按“问题—机制—追踪—边界”重排，并补充回调与并发控制的区别。",
+      "estimatedMinutes": 13,
+      "outcomes": [
+        {
+          "id": "explain-callback",
+          "text": "解释回调如何把“每次访问都验证”变成“默认有效，直到被通知失效”。"
+        },
+        {
+          "id": "trace-lookup",
+          "text": "按 FID 逐级追踪一次路径解析，并说明每一级缓存与回调的作用。"
+        },
+        {
+          "id": "judge-consistency",
+          "text": "区分缓存一致性承诺与并发更新控制，判断具体场景还需要哪些机制。"
+        }
+      ],
+      "misconceptions": [
+        "认为建立回调后缓存就永远有效，客户端不再需要处理失效通知。",
+        "把缓存一致性当成多个客户端并发写入时的事务保证。",
+        "认为使用 FID 后客户端与服务器之间不再发生任何交互。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-callback",
+          "title": "问题与回调承诺",
+          "role": "concept-explanation",
+          "outcomeRefs": [
+            "explain-callback"
+          ],
+          "order": 0
+        },
+        {
+          "id": "fid-and-lookup",
+          "title": "FID 与逐级查找",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "trace-lookup"
+          ],
+          "order": 1
+        },
+        {
+          "id": "worked-example",
+          "title": "读取文件的完整交互",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-lookup"
+          ],
+          "order": 2
+        },
+        {
+          "id": "consistency-boundary",
+          "title": "缓存一致性的能力边界",
+          "role": "boundary-check",
+          "outcomeRefs": [
+            "judge-consistency"
+          ],
+          "order": 3
+        },
+        {
+          "id": "synthesis",
+          "title": "综合与检查",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "explain-callback",
+            "trace-lookup",
+            "judge-consistency"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-callback",
+          "trace-lookup",
+          "judge-consistency"
+        ],
+        "method": "完成一次缓存状态追踪，并判断回调在并发更新场景中的能力边界。",
+        "successCriteria": [
+          "能说明回调的触发条件与客户端的默认假设",
+          "能按顺序说出路径每一级的 Fetch 与回调建立",
+          "能指出缓存一致性之外仍需应用级同步"
+        ],
+        "exerciseBlockId": "consistency-scenario-check",
+        "summaryBlockId": "afsv2-synthesis",
+        "nextPointId": "point-49-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "callback-promise",
+        "moduleId": "problem-and-callback",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "回调：服务器对客户端的失效承诺",
+        "markdown": "AFSv2 的核心变化是让服务器记住“谁缓存了什么”。客户端缓存一个文件或目录时，服务器为它建立回调（callback）；这相当于服务器承诺：一旦该对象被修改，就主动通知持有回调的客户端。\n\n有了这个承诺，客户端不必在每次访问前向服务器确认缓存是否仍然有效。它默认副本有效，直到服务器发来失效通知为止。教材把这个区别类比为轮询与中断：轮询是客户端反复询问，中断是服务器在状态变化时主动打断客户端。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000674"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFS 版本 2"
+              ],
+              "lineStart": 13013,
+              "lineEnd": 13027,
+              "assetRefs": [],
+              "excerptSha256": "1b1738ef8e5238503139f9f6c9db79a36559ddab22c5c4e57496d69e38e2c20e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "polling-vs-interrupt",
+        "moduleId": "problem-and-callback",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么“默认有效”能省掉大量交互",
+        "markdown": "轮询模型下，验证成本随访问次数线性增长：即便文件从未改变，客户端也要一次次发送验证请求。回调把这项工作从“每次访问”移到“每次修改”：读取路径上不再出现验证消息，只有在文件真的被改写时才产生一次失效通知。\n\n因此回调不是让缓存变得永远正确，而是把一致性检查的触发点从客户端访问转移到服务器端的状态变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "callback-promise"
+          ]
+        }
+      },
+      {
+        "id": "file-identifier",
+        "moduleId": "fid-and-lookup",
+        "depth": "core",
+        "kind": "definition",
+        "title": "文件标识符（FID）",
+        "markdown": "AFSv2 用文件标识符（File Identifier，FID）替代路径名来指定客户端关心的文件，其作用类似于 NFS 文件句柄。AFS 的 FID 由三部分组成：卷标识符、文件标识符，以及一个“全局唯一标识符”。\n\n全局唯一标识符用于文件被删除后卷和文件 ID 可能被复用的场景，使旧引用不会误指向新文件。客户端不再把整条路径交给服务器解析，而是沿路径逐级查找，每次只向服务器请求下一级目录项，并把结果缓存在本地。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000674"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFS 版本 2"
+              ],
+              "lineStart": 13013,
+              "lineEnd": 13027,
+              "assetRefs": [],
+              "excerptSha256": "1b1738ef8e5238503139f9f6c9db79a36559ddab22c5c4e57496d69e38e2c20e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "fid-splits-lookup",
+        "moduleId": "fid-and-lookup",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "逐级查找如何摊薄服务器负载",
+        "markdown": "路径名交给服务器解析时，服务器必须沿着完整路径逐段查找，重复劳动集中在服务器一侧。改用 FID 后，路径解析被拆成若干次“在当前目录中查找下一项”的小请求，由客户端推进并缓存中间目录。\n\n代价是客户端要维护更多状态：它得记住每一级的 FID 和缓存位置；收益是后续访问可以直接复用本地缓存，不必再次让服务器走完整条路径。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "file-identifier"
+          ]
+        }
+      },
+      {
+        "id": "path-walk-example",
+        "moduleId": "worked-example",
+        "depth": "core",
+        "kind": "example",
+        "title": "实例：逐级获取并回调 /home/remzi/notes.txt",
+        "markdown": "假设 `/` 是本地根目录，而 `home` 及其子目录位于 AFS 中。客户端打开 `/home/remzi/notes.txt` 时，会按目录层次逐级推进：\n\n1. 获取 `home` 的目录内容，写入本地磁盘缓存，并在服务器上为 `home` 建立回调。\n2. 在 `home` 中查找 `remzi`，获取其内容并缓存，再为 `remzi` 建立回调。\n3. 在 `remzi` 中查找 `notes.txt`，缓存这个常规文件，为它建立回调，最后把文件描述符返回给应用程序。\n\n第一次访问产生多次客户端—服务器消息，但它同时为路径上的每个目录和文件建立了回调。此后再次访问同一文件时，客户端只需检查本地回调状态，读取操作完全在本地完成，速度接近本地磁盘文件系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000674"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFS 版本 2"
+              ],
+              "lineStart": 13013,
+              "lineEnd": 13027,
+              "assetRefs": [],
+              "excerptSha256": "1b1738ef8e5238503139f9f6c9db79a36559ddab22c5c4e57496d69e38e2c20e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "first-access-amortized",
+        "moduleId": "worked-example",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "首次访问的成本与后续访问的收益",
+        "markdown": "这个例子说明回调的收益是“先付后省”：首次按路径下降时，每一级都要获取内容并登记回调，消息数量并不少；但只要回调保持有效且没有写入，后续打开和读取都不需要服务器参与。\n\n判断是否划算的关键是访问重复度。若一个对象只被访问一次，回调带来的额外登记几乎没有回报；若同一路径被反复访问，首次的多轮交互会被大量本地命中摊薄。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "path-walk-example"
+          ]
+        }
+      },
+      {
+        "id": "read-operation-table",
+        "moduleId": "worked-example",
+        "depth": "core",
+        "kind": "table",
+        "title": "读取文件时的关键交互",
+        "markdown": "表 49.2 把一次 `open`、`read`、`close` 拆成客户端与服务器的协作：\n\n| 阶段 | 客户端动作 | 服务器动作 |\n|---|---|---|\n| 打开 home 一级 | 发送 Fetch(home FID, remzi) | 在 home 中查找 remzi，对 remzi 建立 callback(C1)，返回内容与 FID |\n| 缓存 remzi | 写入本地磁盘缓存，记录回调状态 | — |\n| 打开 notes.txt | 发送 Fetch(remzi FID, notes.txt) | 在 remzi 中查找 notes.txt，对 notes.txt 建立 callback(C1)，返回内容与 FID |\n| 缓存文件 | 写入本地磁盘缓存，记录回调状态，本地 open 并返回 fd | — |\n| 读取与关闭 | 执行本地 read/close；若文件已改变则刷新到服务器 | — |\n| 再次打开 | 逐级检查目录回调；有效则本地 lookup，失效才 Fetch | — |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000674"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFS 版本 2"
+              ],
+              "lineStart": 13013,
+              "lineEnd": 13027,
+              "assetRefs": [],
+              "excerptSha256": "1b1738ef8e5238503139f9f6c9db79a36559ddab22c5c4e57496d69e38e2c20e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "callback-is-per-object",
+        "moduleId": "worked-example",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "回调按缓存对象登记",
+        "markdown": "从表中可以看到，回调不是整个路径或整个文件系统共用一个标记，而是按每个被缓存的对象分别登记：`home`、`remzi` 和 `notes.txt` 各有自己的回调状态。\n\n这也解释了为什么再次打开时客户端要“逐级检查”：某一级目录的回调失效，意味着这一级之后的名字解析结果可能已经改变，客户端必须重新获取该级内容，再继续向下查找。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "read-operation-table"
+          ]
+        }
+      },
+      {
+        "id": "consistency-limits",
+        "moduleId": "consistency-boundary",
+        "depth": "core",
+        "kind": "warning",
+        "title": "补充：缓存一致性不解决所有问题",
+        "markdown": "教材特别提醒，回调与缓存一致性解决的是“客户端看到的是否为较新版本”，而不是“多个客户端同时修改时如何协调”。\n\n例如代码仓库场景中，多个客户端不断检入和检出代码，底层文件系统提供的基本一致性无法自动保证并发更新正确。真正关心并发更新的应用必须增加显式的文件级锁（file-level locking）等机制来处理冲突。教材把这类基本一致性定位为面向随意使用的合理版本可见性；对协议期望过多会带来挫败。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000675"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "补充：缓存一致性不能解决所有问题"
+              ],
+              "lineStart": 13028,
+              "lineEnd": 13031,
+              "assetRefs": [],
+              "excerptSha256": "60065b4700b7a7a534c42bb1e9ae1bc78ecf15e9a3a2810be39e05286f9a605e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "invalidation-vs-serialization",
+        "moduleId": "consistency-boundary",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "失效通知不等于并发控制",
+        "markdown": "失效通知保证的是缓存副本不会在服务器已更新后继续被当作最新版本；它不负责给两个客户端的写入排序，也不阻止它们同时修改同一文件。\n\n可以把两层责任分开：缓存协议让读者尽快看到更新，应用层锁或版本控制决定谁有权先写、冲突如何解决。把回调当成事务机制，会得到看似一致却仍可能丢失更新的结果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "consistency-limits"
+          ]
+        }
+      },
+      {
+        "id": "afsv2-synthesis",
+        "moduleId": "synthesis",
+        "depth": "core",
+        "kind": "summary",
+        "title": "两项机制如何配合",
+        "markdown": "AFSv2 用两个互补的机制解决 AFSv1 的扩展性瓶颈：回调减少“缓存是否仍然有效”的反复验证，FID 减少服务器对完整路径的重复解析。\n\n二者结合后，常见情形是首次访问付出多轮消息并建立回调，后续访问完全本地化；服务器只在文件被修改时发送失效通知。需要注意的是，这套机制提供的是缓存一致性，而不是并发更新的事务保证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000674"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "AFS 版本 2"
+              ],
+              "lineStart": 13013,
+              "lineEnd": 13027,
+              "assetRefs": [],
+              "excerptSha256": "1b1738ef8e5238503139f9f6c9db79a36559ddab22c5c4e57496d69e38e2c20e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "consistency-scenario-check",
+        "moduleId": "synthesis",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查：代码仓库需要什么",
+        "markdown": "某团队把代码仓库放在 AFS 上，多名开发者同时检出、修改并检入同一批文件。有人主张“AFS 有回调，缓存会自动保持一致，所以不需要额外同步”。\n\n请判断这个主张是否成立，并说明回调能保证什么、不能保证什么；再给出一个应用层应增加的机制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "afsv2-synthesis",
+            "consistency-limits"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "callback-boundary-check",
+        "type": "formative-check",
+        "anchorBlockId": "consistency-scenario-check",
+        "moduleId": "synthesis",
+        "depth": "core",
+        "outcomeRefs": [
+          "judge-consistency"
+        ],
+        "learningPurpose": "检查学习者能否区分缓存一致性与并发更新控制。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "consistency-limits",
+            "afsv2-synthesis"
+          ]
+        },
+        "config": {
+          "prompt": "代码仓库放在 AFS 上，多名开发者同时检入检出时，回调能保证并发更新正确吗？",
+          "expectedAnswer": "不能。回调只保证缓存副本在服务器更新后失效，不负责给并发写入排序或解决冲突；应用仍需显式文件级锁或版本控制。",
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "回调解决“缓存副本是否过期”，不解决“两个客户端同时修改谁赢”。并发更新的正确性需要应用层锁或版本控制等额外机制。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Andrew 文件系统(AFS)",
+  "clusterId": "chapter-49",
+  "clusterIds": [
+    "chapter-49"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000674"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "AFS 版本 2"
+      ],
+      "lineStart": 13013,
+      "lineEnd": 13027,
+      "assetRefs": [],
+      "excerptSha256": "1b1738ef8e5238503139f9f6c9db79a36559ddab22c5c4e57496d69e38e2c20e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000675"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "补充：缓存一致性不能解决所有问题"
+      ],
+      "lineStart": 13028,
+      "lineEnd": 13031,
+      "assetRefs": [],
+      "excerptSha256": "60065b4700b7a7a534c42bb1e9ae1bc78ecf15e9a3a2810be39e05286f9a605e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3482,
+    -729
+  ],
+  "scale": 0.92
+}

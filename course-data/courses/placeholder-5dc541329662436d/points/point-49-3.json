@@ -1,0 +1,386 @@
+{
+  "id": "point-49-3",
+  "title": "改进协议",
+  "shortSummary": "说明 AFS 如何通过回调承诺改进缓存一致性并减少验证开销。",
+  "keyTerms": [
+    "回调",
+    "缓存一致性",
+    "协议改进",
+    "AFS"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-49-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "problem-driven-design",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对两个瓶颈与关键问题的表述，补充分解成本、检验改动和衔接后文的模型内容，不把后文的回调机制写成教材原文。",
+      "estimatedMinutes": 9,
+      "outcomes": [
+        {
+          "id": "explain-bottlenecks",
+          "text": "说明 AFSv1 服务器 CPU 瓶颈的两个来源，以及它们为何随客户端规模放大。"
+        },
+        {
+          "id": "state-goals",
+          "text": "复述改进协议的关键问题，并把它拆成减少交互次数与降低单次交互成本两项要求。"
+        },
+        {
+          "id": "evaluate-changes",
+          "text": "用这两项要求评估一个具体协议改动能否真正提升 AFS 的可扩展性。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要提高单条消息的处理速度就能解决扩展性问题，而忽略交互条数仍随客户端数增长。",
+        "把问题归因于客户端缓存策略本身，而不是服务器为验证缓存和解析路径付出的 CPU 成本。"
+      ],
+      "modules": [
+        {
+          "id": "bottleneck-symptoms",
+          "title": "规模瓶颈的现场",
+          "role": "problem-frame",
+          "description": "先看清服务器 CPU 瓶颈与每台服务器约 20 个客户端的规模上限。",
+          "outcomeRefs": [
+            "explain-bottlenecks"
+          ],
+          "order": 0
+        },
+        {
+          "id": "cost-sources",
+          "title": "两类服务器 CPU 成本",
+          "role": "mechanism",
+          "description": "区分验证消息过多与路径查找过贵两类成本，并说明它们各自的改进着力点。",
+          "outcomeRefs": [
+            "explain-bottlenecks"
+          ],
+          "order": 1
+        },
+        {
+          "id": "design-goals",
+          "title": "改进协议要回答的问题",
+          "role": "goal-setting",
+          "description": "把教材的关键问题转成可检验的两项设计要求。",
+          "outcomeRefs": [
+            "state-goals"
+          ],
+          "order": 2
+        },
+        {
+          "id": "evaluate-changes",
+          "title": "用目标检验一次改动",
+          "role": "formative-check",
+          "description": "在具体改动方案上练习判断次数与单次成本两个维度。",
+          "outcomeRefs": [
+            "evaluate-changes"
+          ],
+          "order": 3
+        },
+        {
+          "id": "wrap-up",
+          "title": "结论与后文衔接",
+          "role": "summary",
+          "description": "回到教材结论，并说明后续协议机制要满足的条件。",
+          "outcomeRefs": [
+            "state-goals",
+            "evaluate-changes"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-bottlenecks",
+          "state-goals",
+          "evaluate-changes"
+        ],
+        "method": "先用自己的话复述两个瓶颈，再用次数与单次成本两个杠杆评估一个具体协议改动。",
+        "successCriteria": [
+          "能指出 TestAuth 条数与路径遍历两类服务器 CPU 成本",
+          "能说明为什么只加快单条消息不能解除瓶颈",
+          "能针对给定改动给出基于两项要求的判断"
+        ],
+        "exerciseBlockId": "model-evaluate",
+        "summaryBlockId": "model-next-bridge",
+        "nextPointId": "point-49-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-bottleneck-limit",
+        "moduleId": "bottleneck-symptoms",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：两个问题限制了可扩展性",
+        "markdown": "教材先描述了 AFSv1 的规模上限：上述两个问题限制了 AFS 的可扩展性，服务器 CPU 成为系统的瓶颈，每台服务器在不过载的情况下只能服务约 20 个客户端。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000673"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "改进协议"
+              ],
+              "lineStart": 13003,
+              "lineEnd": 13012,
+              "assetRefs": [],
+              "excerptSha256": "e05c8dd12fc51646da1a04edc843f00403a3d409c1c9a4538c861340044d2b60"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scale-amplifier",
+        "moduleId": "bottleneck-symptoms",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：这个瓶颈为何是结构性的",
+        "markdown": "这个瓶颈是结构性的，而不是某台机器不够快。\n\n每增加一个客户端，服务器就要多处理该客户端发起的一次验证询问和路径解析；客户端数量上升时，服务器 CPU 上的协议工作量近似线性增长，可用于真正读写文件的工作比例不断下降。因此，即使把单条消息的处理速度提高一倍，只要交互条数仍随客户端数增长，能服务的客户端数也只能提高有限的倍数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bottleneck-limit"
+          ]
+        }
+      },
+      {
+        "id": "tb-testauth-and-paths",
+        "moduleId": "cost-sources",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：服务器 CPU 被什么占满",
+        "markdown": "教材指出服务器 CPU 被两类协议工作占据。\n\n- **验证消息过多**：服务器收到太多的 TestAuth 消息，这类交互占用了大量服务器 CPU。\n- **路径查找过贵**：收到 Fetch 或 Store 消息时，服务器还要遍历目录层次结构来定位文件，同样消耗了大量 CPU 时间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000673"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "改进协议"
+              ],
+              "lineStart": 13003,
+              "lineEnd": 13012,
+              "assetRefs": [],
+              "excerptSha256": "e05c8dd12fc51646da1a04edc843f00403a3d409c1c9a4538c861340044d2b60"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-comparison",
+        "moduleId": "cost-sources",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：两类成本的区别",
+        "markdown": "两类成本需要分开看，因为它们对应不同的改进手段。\n\n| 成本 | 形态 | 改进的着力点 |\n| --- | --- | --- |\n| 验证消息过多 | 单条消息很小，但条数多 | 减少需要验证的次数 |\n| 路径查找过贵 | 单条 Fetch 或 Store 内部步骤多 | 缩短或省去逐级名字查找 |\n\n只加快单条消息的处理，压缩的是第二类成本里的常数；若不改变验证条数，第一类成本仍随客户端数增长。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bottleneck-limit",
+            "tb-testauth-and-paths"
+          ]
+        }
+      },
+      {
+        "id": "tb-key-question",
+        "moduleId": "design-goals",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：关键问题与两问",
+        "markdown": "教材把改进工作表述为一个关键问题，并把它拆成两问：\n\n> 关键问题：如何设计一个可扩展的文件协议\n\n1. 如何重新设计协议，让服务器交互最少，即如何减少 TestAuth 消息的数量？\n2. 如何设计协议，让这些保留下来的服务器交互本身高效？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000673"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "改进协议"
+              ],
+              "lineStart": 13003,
+              "lineEnd": 13012,
+              "assetRefs": [],
+              "excerptSha256": "e05c8dd12fc51646da1a04edc843f00403a3d409c1c9a4538c861340044d2b60"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-levers",
+        "moduleId": "design-goals",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：把目标拆成两个杠杆",
+        "markdown": "把这两个问题当作两个独立的检验杠杆：**次数**与**单次成本**。\n\n- 次数杠杆问的是：这次改动是否减少了客户端与服务器之间的往返条数，尤其是验证类消息？\n- 成本杠杆问的是：对于仍然必须发生的交互，服务器是否少做了路径遍历这类工作？\n\n两项要同时看。只降低成本而不减少次数，或只减少次数而单次成本仍然高昂，都不足以解除服务器 CPU 瓶颈。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-key-question"
+          ]
+        }
+      },
+      {
+        "id": "model-notification-direction",
+        "moduleId": "design-goals",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：目标指向的方向",
+        "markdown": "从让服务器交互最少这个目标出发，可以推出一个方向：验证类消息的目的是确认缓存副本是否还能继续使用，那么减少它们的关键不在于让验证更快，而在于改变由谁发起验证。\n\n如果客户端默认信任本地副本，只在服务器上的数据发生变化时才收到通知，验证就不再是每次访问的固定成本，而变成一次变化对应一次通知。这正是本节目标所指向的方向，也是紧接着的下一节用回调承诺要落实的机制。\n\n来源边界：本节教材只给出问题与目标，具体的回调协议属于后文。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-key-question"
+          ]
+        }
+      },
+      {
+        "id": "model-evaluate",
+        "moduleId": "evaluate-changes",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：这次改动够吗",
+        "markdown": "假设某次协议改动让服务器处理单条 Fetch 消息的速度提高了约 40%，但没有减少任何 TestAuth 消息，也没有改变路径遍历的步骤。\n\n它能解除本节描述的可扩展性瓶颈吗？请写出判断，并说明还需要追问哪一个问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-two-levers",
+            "model-notification-direction"
+          ]
+        }
+      },
+      {
+        "id": "model-evaluate-feedback",
+        "moduleId": "evaluate-changes",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "参考思路：先看次数，再看单次成本",
+        "markdown": "参考思路：不能。\n\n- 单条 Fetch 变快只压缩了单次成本这一杠杆，验证消息的条数仍随客户端数增长，服务器 CPU 依旧被大量 TestAuth 占用。\n- 还需要追问：这次改动是否减少了客户端与服务器之间的交互条数？如果 Fetch 变快反而促使客户端更频繁地重新取文件，交互条数上升，总收益可能被抵消。\n\n判断顺序建议：先看交互次数，再看单次交互成本，最后才看单条消息的常数优化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-evaluate"
+          ]
+        }
+      },
+      {
+        "id": "tb-scalable-goal",
+        "moduleId": "wrap-up",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材：改进的结果",
+        "markdown": "教材给出的结论是：通过解决这两个问题，新的协议将导致可扩展性更好的 AFS 版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000673"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "改进协议"
+              ],
+              "lineStart": 13003,
+              "lineEnd": 13012,
+              "assetRefs": [],
+              "excerptSha256": "e05c8dd12fc51646da1a04edc843f00403a3d409c1c9a4538c861340044d2b60"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-next-bridge",
+        "moduleId": "wrap-up",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：与下一节的衔接",
+        "markdown": "本节停在要什么，没有给出怎么做。下一节将引入回调承诺：服务器承诺在客户端缓存的文件被修改时通知客户端，从而把反复验证换成一次性的状态登记。\n\n阅读下一节时，用本节的两个杠杆核对：它减少了哪一类交互的次数，又让剩下的交互省掉了哪些服务器工作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scalable-goal"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "afs-protocol-goal-check",
+        "type": "formative-check",
+        "title": "用两个杠杆检验协议改动",
+        "anchorBlockId": "model-evaluate",
+        "moduleId": "evaluate-changes",
+        "depth": "core",
+        "outcomeRefs": [
+          "evaluate-changes"
+        ],
+        "learningPurpose": "让学习者在具体改动方案上同时判断交互次数与单次成本，而不是只看单条消息的处理速度。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-two-levers",
+            "model-evaluate"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "某改动让单条 Fetch 处理快 40%，但 TestAuth 条数和路径遍历步骤不变。它能否解决可扩展性问题？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出你的判断，并分别回答：交互条数是否减少？单次交互中服务器少做了哪些工作？"
+        }
+      }
+    ]
+  },
+  "subtitle": "Andrew 文件系统(AFS)",
+  "clusterId": "chapter-49",
+  "clusterIds": [
+    "chapter-49"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000673"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "改进协议"
+      ],
+      "lineStart": 13003,
+      "lineEnd": 13012,
+      "assetRefs": [],
+      "excerptSha256": "e05c8dd12fc51646da1a04edc843f00403a3d409c1c9a4538c861340044d2b60"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3542,
+    -665
+  ],
+  "scale": 0.88
+}

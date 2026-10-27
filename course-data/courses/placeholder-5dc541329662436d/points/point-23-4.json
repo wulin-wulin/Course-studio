@@ -1,0 +1,402 @@
+{
+  "id": "point-23-4",
+  "title": "页替换",
+  "shortSummary": "介绍 VAX/VMS 的页替换策略、页帧分配和换页行为，并说明其设计背景。",
+  "keyTerms": [
+    "页替换",
+    "页帧分配",
+    "换页",
+    "VAX/VMS"
+  ],
+  "animationType": "pageDaemonQueues",
+  "animationSuggestion": "分步播放一次 RSS 溢出：显示被移出的队首页按干净或脏分流到两个全局列表，再演示另一进程取用干净页、原进程页错误取回，以及脏页被聚集批量写盘后转入干净列表。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-22-3",
+    "point-22-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-design-and-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材对 VAX/VMS 替换机制与约束的原始描述，围绕机制因果重排讲解顺序，补充算例、状态推演与检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-pte-constraint",
+          "text": "解释 VAX 页表项缺少引用位给替换策略带来的约束，以及内存贪婪与全局 LRU 的公平性问题。"
+        },
+        {
+          "id": "explain-segmented-fifo",
+          "text": "说明分段 FIFO 如何用驻留集大小和两个二次机会列表限制每进程驻留页数并近似 LRU。"
+        },
+        {
+          "id": "explain-page-clustering",
+          "text": "解释页聚集为何把全局脏列表中的页批量写盘，以及它对交换 I/O 效率的影响。"
+        },
+        {
+          "id": "evaluate-refbit-emulation",
+          "text": "评估用保护位模拟引用位的机制及其在开销与信息新鲜度之间的权衡。"
+        }
+      ],
+      "misconceptions": [
+        "认为 VMS 可以直接依靠硬件引用位实现精确 LRU 替换。",
+        "把分段的 FIFO 等同于全局 LRU，忽略 RSS 对每个进程驻留页数的硬性限制。",
+        "认为页聚集会改变替换策略选中哪一页，而不只是改变脏页写盘的批量方式。"
+      ],
+      "modules": [
+        {
+          "id": "hardware-constraint",
+          "title": "硬件约束与替换问题",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "explain-pte-constraint"
+          ],
+          "order": 0
+        },
+        {
+          "id": "segmented-fifo",
+          "title": "分段 FIFO 与二次机会列表",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-segmented-fifo"
+          ],
+          "order": 1
+        },
+        {
+          "id": "clustering-swap",
+          "title": "页聚集与交换 I/O",
+          "role": "optimization",
+          "outcomeRefs": [
+            "explain-page-clustering"
+          ],
+          "order": 2
+        },
+        {
+          "id": "refbit-emulation",
+          "title": "用保护位模拟引用位",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "evaluate-refbit-emulation"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "综合检查与迁移",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-segmented-fifo",
+            "evaluate-refbit-emulation"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pte-constraint",
+          "explain-segmented-fifo",
+          "explain-page-clustering",
+          "evaluate-refbit-emulation"
+        ],
+        "method": "完成状态推演练习：按 RSS 与二次机会列表规则判断页的去向，并说明保护位模拟引用位的代价。",
+        "successCriteria": [
+          "能指出被驱逐页及其进入的列表",
+          "能区分替换选择与写盘批量两个层次",
+          "能说明保护位陷阱模拟引用位的开销取舍"
+        ],
+        "exerciseBlockId": "rss-fifo-boundary-exercise",
+        "nextPointId": "point-23-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "pte-missing-reference-bit",
+        "moduleId": "hardware-constraint",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "页表项里没有引用位",
+        "markdown": "VAX 的页表项（PTE）包含有效位、4 位保护字段、修改（脏）位、5 位保留给操作系统使用的字段，以及记录物理位置的页帧号（PFN）。值得注意的是，其中没有引用位（reference bit），因此 VMS 的替换算法必须在缺少硬件引用信息的情况下判断哪些页仍然活跃。\n\n教材同时指出两个现实压力：一是“自私贪婪的内存”，即个别程序大量占用内存使其他程序难以运行；二是 LRU 这类全局策略不会在进程之间公平分享内存。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000320"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "页替换"
+              ],
+              "lineStart": 5562,
+              "lineEnd": 5567,
+              "assetRefs": [],
+              "excerptSha256": "d3204e699d2262271519c92f2d39a5df4babf83b6a85c8da6fd54988f793eb3a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "no-refbit-consequences",
+        "moduleId": "hardware-constraint",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：缺少引用位意味着什么",
+        "markdown": "没有引用位带来的直接后果是：操作系统无法直接读取“这一页最近是否被访问”，只能依赖页错误、保护陷阱等间接信号或页表项的保留字段。\n\n另一个容易被忽略的约束是公平性：如果替换只看全局访问历史，一个占用内存很大的进程会把其他进程的工作集挤出去。VMS 的设计因此需要把“每个进程最多驻留多少页”变成显式可控的参数，而不是让全局 LRU 自行裁决。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pte-missing-reference-bit"
+          ]
+        }
+      },
+      {
+        "id": "segmented-fifo-second-chance",
+        "moduleId": "segmented-fifo",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "分段的 FIFO 与两个二次机会列表",
+        "markdown": "分段的 FIFO（segmented FIFO）为每个进程设定可常驻内存的最大页数，称为驻留集大小（RSS）。每个进程的页保存在自己的 FIFO 列表中；当进程超过其 RSS 时，队首页被驱逐。FIFO 不需要硬件支持，因此实现简单。\n\n为改善纯 FIFO 的性能，VMS 增加两个二次机会列表：全局的干净页空闲列表与脏页列表。进程 P 超过 RSS 时，从其每进程 FIFO 移除一页：干净页放到干净列表尾部，脏页放到脏页列表尾部。\n\n另一个进程 Q 需要空闲页时，从全局干净列表头部取用。如果 P 在这页被回收前又访问它并发生页错误，P 可以从空闲列表（或脏页列表）中把该页取回，从而避免昂贵的磁盘访问。这些全局二次机会列表越大，分段 FIFO 就越接近 LRU。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000321"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "分段的 FIFO"
+              ],
+              "lineStart": 5568,
+              "lineEnd": 5575,
+              "assetRefs": [],
+              "excerptSha256": "d3c2f419c0c0bc0703d788d349e76dedcedec850c28870838665172ae7f073e6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "rss-fifo-worked-example",
+        "moduleId": "segmented-fifo",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次 RSS 溢出与回收",
+        "markdown": "设进程 P 的 RSS 为 3，当前 FIFO 依次驻留页 A、B、C。P 访问新页 D 时超过 RSS，于是队首的 A 被移出：若 A 干净，就挂到全局干净列表尾部；若 A 脏，就挂到脏页列表尾部，要等聚集写盘后才算真正干净。\n\n此时若另一个进程 Q 需要空闲页，从全局干净列表头部取走了 A，而 P 紧接着又访问 A，就会触发页错误；只要 A 尚未被覆盖，P 可以直接把它从列表中取回，这次缺页不需要磁盘 I/O。这正是“二次机会”的代价模型：列表越长，取回机会越大，但可用于新分配的干净页也越少。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "segmented-fifo-second-chance"
+          ]
+        }
+      },
+      {
+        "id": "clustering-dirty-batches",
+        "moduleId": "clustering-swap",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "页聚集：把脏页成批写回",
+        "markdown": "对于 VMS 这样的小页面，交换过程中的磁盘 I/O 可能效率很低，因为磁盘在大批量传输时表现更好。VMS 为此做了若干优化，其中最重要的是聚集（clustering）：把全局脏列表中大批量的页分组到一起，一次性写入磁盘，使它们变干净。\n\n聚集在今天的大多数系统中仍在使用。由于页可以放在交换空间的任意位置，操作系统能够自由地对页分组，用更少但更大的写入完成换出，从而提高性能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000322"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "页聚集"
+              ],
+              "lineStart": 5576,
+              "lineEnd": 5579,
+              "assetRefs": [],
+              "excerptSha256": "8f55ab23e0e70875194553dac2948fc22b406ef7d9297c04b697fe29ba380e62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "clustering-cost-model",
+        "moduleId": "clustering-swap",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：聚集摊薄的是每次 I/O 的固定开销",
+        "markdown": "聚集解决的是每次 I/O 的固定开销问题。若每换出一页都单独发起一次写，寻道、旋转一类的固定成本会被反复支付；把陆续收集到的脏页合并成一次大传输，固定开销就被摊薄到更多页上。\n\n需要注意，聚集只改变写盘的批量，不改变替换策略选择哪一页：选择由 RSS 与 FIFO 顺序决定，聚集只负责把已经选出的脏页高效地写回去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "clustering-dirty-batches"
+          ]
+        }
+      },
+      {
+        "id": "emulated-reference-bit",
+        "moduleId": "refbit-emulation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "用保护位模拟引用位",
+        "markdown": "20 世纪 80 年代早期，Babaoglu 和 Joy 指出，VAX 的保护位可以用来模拟引用位。基本做法是：将所有页表项标记为不可访问，同时在页表项的保留操作系统字段中记录哪些页其实是进程真正可以访问的。\n\n当进程访问某页时，会在操作系统中产生陷阱；操作系统检查该页是否本当可访问，若是，则把该页恢复为正常保护（例如只读或读写）。到了替换时，仍然标记为不可访问的页，就是最近没有被使用过的页。\n\n这种模拟的关键是控制开销：标记页不可访问时不能太激进，否则陷阱开销过高；也不能太被动，否则所有页都会被引用，操作系统仍然不知道应该换出哪一页。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000323"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：模拟引用位"
+              ],
+              "lineStart": 5580,
+              "lineEnd": 5585,
+              "assetRefs": [],
+              "excerptSha256": "b1ebebee1393a2e1e6cf80450d437bf15e8b1d4d96eed555cf716a2654655bf2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "refbit-aggressiveness-tradeoff",
+        "moduleId": "refbit-emulation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把硬件记录换成软件按需检查",
+        "markdown": "这实际上是把“硬件自动记录访问”换成“软件按需检查”：每次首次访问付一次陷阱成本，换取一段可用的近期使用信息。\n\n可以把保护位看作状态位：被降级为不可访问表示“尚未确认活跃”，陷阱处理把它升级回正常保护表示“确认活跃”。替换时只需扫描仍处于降级状态的页。这与时钟算法先清除引用位再观察的思路相通，区别在于这里的引用信息由保护位陷阱伪造出来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "emulated-reference-bit"
+          ]
+        }
+      },
+      {
+        "id": "rss-fifo-boundary-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "综合检查：预测页的去向与再次访问",
+        "markdown": "情境：某进程的 RSS 设为 4，FIFO 中依次为 P1、P2、P3、P4，此时它访问新页 P5；系统中全局干净列表为空，脏页列表很长，且该进程的页全部被保护位标记为“不可访问”。\n\n请回答：\n1. 被移出的是哪一页？它会被挂到哪个列表？\n2. 如果紧接着同一进程再次访问该页，会发生什么？\n3. 为什么此时全局干净列表为空会让“二次机会”失效，而聚集写盘又能缓解这一问题？\n\n参考要点：被移出的是 P1；干净则进干净列表尾，脏则进脏页列表尾；再次访问会触发页错误，但可从列表中取回而不读盘；干净列表为空说明没有现成空闲页，聚集把脏页批量写盘后才产生新的干净页。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "segmented-fifo-second-chance",
+            "emulated-reference-bit",
+            "refbit-aggressiveness-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fifo-reclaim-check",
+        "type": "formative-check",
+        "anchorBlockId": "rss-fifo-boundary-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-segmented-fifo",
+          "evaluate-refbit-emulation"
+        ],
+        "learningPurpose": "检查学习者能否用 RSS、二次机会列表与保护位陷阱预测页面在列表之间的移动。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "segmented-fifo-second-chance",
+            "emulated-reference-bit"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "showAnswerAfterAttempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按 RSS 与二次机会列表规则，写出被驱逐页的去向，以及它被再次访问时的处理路径。"
+        }
+      }
+    ]
+  },
+  "subtitle": "VAX/VMS 虚拟内存系统",
+  "clusterId": "chapter-23",
+  "clusterIds": [
+    "chapter-23"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000320"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "页替换"
+      ],
+      "lineStart": 5562,
+      "lineEnd": 5567,
+      "assetRefs": [],
+      "excerptSha256": "d3204e699d2262271519c92f2d39a5df4babf83b6a85c8da6fd54988f793eb3a"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000321"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "分段的 FIFO"
+      ],
+      "lineStart": 5568,
+      "lineEnd": 5575,
+      "assetRefs": [],
+      "excerptSha256": "d3c2f419c0c0bc0703d788d349e76dedcedec850c28870838665172ae7f073e6"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000322"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "页聚集"
+      ],
+      "lineStart": 5576,
+      "lineEnd": 5579,
+      "assetRefs": [],
+      "excerptSha256": "8f55ab23e0e70875194553dac2948fc22b406ef7d9297c04b697fe29ba380e62"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000323"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "补充：模拟引用位"
+      ],
+      "lineStart": 5580,
+      "lineEnd": 5585,
+      "assetRefs": [],
+      "excerptSha256": "b1ebebee1393a2e1e6cf80450d437bf15e8b1d4d96eed555cf716a2654655bf2"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4220,
+    1670
+  ],
+  "scale": 0.9
+}

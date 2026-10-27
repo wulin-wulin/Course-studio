@@ -1,0 +1,373 @@
+{
+  "id": "point-26-3",
+  "title": "核心问题：不可控的调度",
+  "shortSummary": "说明线程调度不可控导致执行交错不确定，是并发问题的核心来源。",
+  "keyTerms": [
+    "不可控调度",
+    "执行交错",
+    "不确定性",
+    "线程"
+  ],
+  "animationType": "contextSwitchInterleave",
+  "animationSuggestion": "按指令步进展示两条线程的 PC、eax 与共享 counter，允许在指定指令之间插入或移除上下文切换，并同时显示本次交错得到的最终值；重播回到同一组切换点，重新生成则换一组切换点以比较不同交错的结果。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-26-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-walkthrough-with-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "沿用教材的计数器例与执行追踪，按“错误现象—指令序列—交错复现—概念命名—自检”重排讲解，只补充教材未展开的寄存器隔离与通用化追问。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-uncontrolled-scheduling",
+          "text": "解释线程调度不可控时，同一段更新代码为何会产生不同结果。"
+        },
+        {
+          "id": "trace-interleaving",
+          "text": "按线程、程序计数器、寄存器与内存变量的状态，逐步追踪一次上下文切换造成的错误交错。"
+        },
+        {
+          "id": "define-race-and-critical",
+          "text": "说明竞态条件、不确定性与临界区三者的关系，并指出互斥要保证什么。"
+        }
+      ],
+      "misconceptions": [
+        "把 `counter + 1` 当成一条不可分割的机器指令，忽略读取、加一和写回是三个可被打断的步骤。",
+        "认为只有多核处理器才会出现这类错误，忽略单核上的时钟中断和上下文切换同样能复现。",
+        "把“结果不确定”理解为无法推理，实际每次具体交错都能推出确定的中间值和终值。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-context",
+          "title": "问题导入：一次加法为何失效",
+          "role": "problem-introduction",
+          "outcomeRefs": [
+            "explain-uncontrolled-scheduling"
+          ],
+          "order": 0
+        },
+        {
+          "id": "assembly-trace",
+          "title": "核心机制：三条指令与执行交错",
+          "role": "mechanism-walkthrough",
+          "outcomeRefs": [
+            "explain-uncontrolled-scheduling",
+            "trace-interleaving"
+          ],
+          "order": 1
+        },
+        {
+          "id": "race-and-critical",
+          "title": "概念命名：竞态条件与临界区",
+          "role": "concept-definition",
+          "outcomeRefs": [
+            "define-race-and-critical",
+            "explain-uncontrolled-scheduling"
+          ],
+          "order": 2
+        },
+        {
+          "id": "misconception-and-check",
+          "title": "误区澄清与自检",
+          "role": "formative-check",
+          "outcomeRefs": [
+            "trace-interleaving",
+            "define-race-and-critical"
+          ],
+          "order": 3
+        },
+        {
+          "id": "wrap-up",
+          "title": "小结与下一点桥接",
+          "role": "summary",
+          "outcomeRefs": [
+            "explain-uncontrolled-scheduling",
+            "define-race-and-critical"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-uncontrolled-scheduling",
+          "trace-interleaving",
+          "define-race-and-critical"
+        ],
+        "method": "独立写出一次得到 counter = 51 的交错步骤，并说明删除写回步骤或调整切换点后结果如何变化。",
+        "successCriteria": [
+          "能列出三条指令各自读写的位置",
+          "能标出两次上下文切换发生的指令边界",
+          "能用竞态条件与临界区解释错误来源"
+        ],
+        "exerciseBlockId": "check-interleaving",
+        "summaryBlockId": "bridge-to-atomicity",
+        "nextPointId": "point-26-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-counter-example",
+        "moduleId": "problem-and-context",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材切入：一次自增背后的三条指令",
+        "markdown": "教材从一个具体的更新计数器场景切入：线程执行 `counter = counter + 1` 时，x86 上并不会出现一条“加法”指令，而是生成读取、加一、写回三条指令：\n\n```asm\nmov 0x8049a1c, %eax\nadd $0x1, %eax\nmov %eax, 0x8049a1c\n```\n\n教材假定 `counter` 位于地址 `0x8049a1c`：第一条指令把该地址的值取到寄存器 eax，第二条给 eax 加 1，第三条把 eax 写回同一地址。因此一次“自增”在机器层面是三个可被中断分开的步骤。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000334"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "核心问题：不可控的调度"
+              ],
+              "lineStart": 5946,
+              "lineEnd": 5988,
+              "assetRefs": [],
+              "excerptSha256": "b12a2f3818329e9ffdcd08d5b93443ba1982d64e9324105da5602ae8dc99c225"
+            }
+          ]
+        }
+      },
+      {
+        "id": "why-three-steps-matter",
+        "moduleId": "problem-and-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么“中间状态”会被看见",
+        "markdown": "把自增拆成读—改—写后，中间状态就落到了每个线程私有的寄存器里。上下文切换会保存并恢复寄存器，相当于把 eax 这类运行时状态虚拟化给每个线程；但 `counter` 所在的内存是共享的，不会随线程切换而复制。\n\n于是只要切换发生在“读完”和“写回”之间，另一个线程就可能读到尚未更新的旧值。错误并不来自某条指令执行错，而来自两次自增各自读到了同一个旧值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-counter-example"
+          ]
+        }
+      },
+      {
+        "id": "textbook-interleaved-trace",
+        "moduleId": "assembly-trace",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材追踪：两次自增只生效一次",
+        "markdown": "教材按时间顺序追踪了两个线程的交错。设 `counter` 初始为 50：线程 1 执行前两条指令后 eax = 51，此时时钟中断发生，操作系统把线程 1 的程序计数器与寄存器（含 eax）保存到它的 TCB。\n\n线程 2 被选中运行，进入同一段代码。它读到的 `counter` 仍是 50，于是自己的 eax 从 50 加到 51，并立刻写回，使 `counter` 变为 51。随后再次发生上下文切换，线程 1 恢复执行，它记得 eax = 51，于是执行最后一条写回指令，`counter` 又被写成 51。\n\n代码执行了两次自增，结果却是 51，而“正确”结果应当是 52。教材把表 26.4 作为这次追踪的逐步记录，并提醒读者自己核对每一行的 PC、eax 与 counter。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000334"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "核心问题：不可控的调度"
+              ],
+              "lineStart": 5946,
+              "lineEnd": 5988,
+              "assetRefs": [],
+              "excerptSha256": "b12a2f3818329e9ffdcd08d5b93443ba1982d64e9324105da5602ae8dc99c225"
+            }
+          ]
+        }
+      },
+      {
+        "id": "trace-state-table",
+        "moduleId": "assembly-trace",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型整理：把交错写成状态表",
+        "markdown": "把教材的叙述压缩成状态表，可以看出错误发生在哪一步：\n\n| 执行者 | 动作 | PC | eax | counter |\n|---|---|---|---|---|\n| 线程 1 | 进入临界区前 | 100 | 0 | 50 |\n| 线程 1 | `mov 0x8049a1c, %eax` | 105 | 50 | 50 |\n| 线程 1 | `add $0x1, %eax` | 108 | 51 | 50 |\n| OS | 中断并保存线程 1 状态 | — | — | 50 |\n| 线程 2 | `mov 0x8049a1c, %eax` | 105 | 50 | 50 |\n| 线程 2 | `add $0x1, %eax` | 108 | 51 | 50 |\n| 线程 2 | `mov %eax, 0x8049a1c` | 113 | 51 | 51 |\n| OS | 中断并恢复线程 1 状态 | 108 | 51 | 51 |\n| 线程 1 | `mov %eax, 0x8049a1c` | 113 | 51 | 51 |\n\n关键行是线程 2 的读取：它没有看到线程 1 已经加到 51 的寄存器值，因为那个值还只存在于线程 1 私有的 eax 中。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-interleaved-trace"
+          ]
+        }
+      },
+      {
+        "id": "textbook-race-and-critical",
+        "moduleId": "race-and-critical",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：竞态条件、不确定性与临界区",
+        "markdown": "教材把刚才的情况命名为竞态条件（race condition）：结果取决于代码的时间执行。由于执行过程中发生了上下文切换，程序得到错误结果，而且每次运行都可能不同。教材据此区分两个概念：结果是确定的（deterministic）计算，还是不确定的（indeterminate）计算——后者在不同运行中输出可能不同。\n\n教材进一步把这段访问共享变量的代码称为临界区（critical section）：临界区是访问共享变量或更一般地访问共享资源的代码片段，一定不能由多个线程同时执行。我们真正想要的性质是互斥（mutual exclusion）：一个线程在临界区内执行时，其他线程会被阻止进入临界区。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000334"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "核心问题：不可控的调度"
+              ],
+              "lineStart": 5946,
+              "lineEnd": 5988,
+              "assetRefs": [],
+              "excerptSha256": "b12a2f3818329e9ffdcd08d5b93443ba1982d64e9324105da5602ae8dc99c225"
+            }
+          ]
+        }
+      },
+      {
+        "id": "why-indeterminate-results",
+        "moduleId": "race-and-critical",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：不确定性来自调度点，而不是算术",
+        "markdown": "这台机器上的一次自增有多个可被打断的边界：两条指令之间、甚至一条指令前后。中断何时到来由定时器与调度器决定，程序员既无法预知，也无法从源码中直接读出。交错的数量随线程数和指令数增长，因此同一个程序可能给出 51，也可能给出 52，甚至在其他共享更新场景下给出更不合理的结果。\n\n需要注意，不确定性指的是“无法预知会落到哪种交错”，而不是“每一步没有规则”。只要固定了切换点，每一步的 PC、eax 与 counter 都是确定的，这正是可以用状态表复盘错误的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-race-and-critical",
+            "trace-state-table"
+          ]
+        }
+      },
+      {
+        "id": "misconception-single-core",
+        "moduleId": "misconception-and-check",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型澄清：三个常见误解",
+        "markdown": "第一，不要把 `counter + 1` 当成原子操作。C 语言里的一行表达式在机器层面可能是三条指令，而中断可以落在任意两条之间。\n\n第二，不要以为只有多核才会出问题。教材的例子在单核上就能复现：时钟中断打断线程 1，操作系统选择线程 2 运行，交错随即发生。\n\n第三，不要把“不确定”理解为“无法分析”。我们无法预知调度器会选哪种交错，但可以对给定交错逐步推出唯一结果；排查并发缺陷正是沿着这条思路复现某种交错。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-race-and-critical",
+            "textbook-interleaved-trace"
+          ]
+        }
+      },
+      {
+        "id": "check-interleaving",
+        "moduleId": "misconception-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：构造另一种交错",
+        "markdown": "仍设 `counter` 初始为 50，两个线程都执行同样的三条指令。\n\n1. 若线程 1 完整执行完三条指令后才发生第一次上下文切换，线程 2 再完整执行三条指令，最终 `counter` 是多少？\n2. 若线程 1 只执行了第一条指令就被切换，线程 2 完整执行三条指令后再切回线程 1，最终 `counter` 是多少？请写出切换时线程 1 的 eax。\n3. 用“竞态条件”和“临界区”各写一句话，解释为什么第二种交错是错误的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-race-and-critical"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mutual-exclusion-note",
+        "moduleId": "wrap-up",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材收束：互斥与术语来源",
+        "markdown": "教材把这一节的落点放在互斥上：只要一个线程在临界区内执行，其他线程就被阻止进入，那么共享更新就不会交错到彼此中间。教材还指出，竞态条件、临界区、互斥这些术语来自 Edsger Dijkstra，他 1968 年的文章《Cooperating Sequential Processes》对这个问题给出了清晰描述。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000334"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "核心问题：不可控的调度"
+              ],
+              "lineStart": 5946,
+              "lineEnd": 5988,
+              "assetRefs": [],
+              "excerptSha256": "b12a2f3818329e9ffdcd08d5b93443ba1982d64e9324105da5602ae8dc99c225"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bridge-to-atomicity",
+        "moduleId": "wrap-up",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型小结：从不可控调度到原子性愿望",
+        "markdown": "本节的因果链可以概括为：自增被编译成三条可打断的指令 → 调度器在指令边界切换线程 → 两个线程读到同一个旧值 → 结果取决于交错，因而不可预测 → 这段共享访问构成临界区，需要互斥。\n\n问题既然出在“可被打断”，一个自然的追问就是：如果硬件能提供一条不会被中断拆开的指令，是否就能绕开交错？这正是下一节“原子性愿望”的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mutual-exclusion-note",
+            "textbook-race-and-critical"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "interleaving-trace-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-interleaving",
+        "moduleId": "misconception-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-interleaving",
+          "define-race-and-critical"
+        ],
+        "learningPurpose": "检查学习者能否在给定切换点下独立追踪 PC、eax 与 counter，并用竞态条件解释错误结果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-interleaved-trace",
+            "textbook-race-and-critical"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "initialCounter": 50
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出一种使最终 `counter` 等于 51 的交错，并标出两次上下文切换分别发生在哪两条指令之间。"
+        }
+      }
+    ]
+  },
+  "subtitle": "并发:介绍",
+  "clusterId": "chapter-26",
+  "clusterIds": [
+    "chapter-26"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000334"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "核心问题：不可控的调度"
+      ],
+      "lineStart": 5946,
+      "lineEnd": 5988,
+      "assetRefs": [],
+      "excerptSha256": "b12a2f3818329e9ffdcd08d5b93443ba1982d64e9324105da5602ae8dc99c225"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2206,
+    1575
+  ],
+  "scale": 0.96
+}

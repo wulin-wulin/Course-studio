@@ -1,0 +1,402 @@
+{
+  "id": "point-44-6",
+  "title": "最后一个问题：丢失的写入",
+  "shortSummary": "说明丢失写入的成因，以及如何用校验和与版本信息检测并恢复受影响的数据块。",
+  "keyTerms": [
+    "丢失写入",
+    "校验和",
+    "检测",
+    "数据完整性"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-44-4",
+    "point-44-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对丢失写入的定义、失效原因和两类检测方案，按症状、证据、定位、修复组织的诊断顺序重排，并补充可操作的判断清单。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-lost-write-cause",
+          "text": "解释丢失写入为何发生，以及为什么它在返回成功后仍可能被长期忽略。"
+        },
+        {
+          "id": "explain-checksum-blind-spot",
+          "text": "说明普通校验和与物理标识符为什么检测不到丢失的写入。"
+        },
+        {
+          "id": "select-detection-strategy",
+          "text": "比较写入验证与异地校验和两类检测方案，并依据代价与故障假设选择合适策略。"
+        }
+      ],
+      "misconceptions": [
+        "认为设备报告写入完成就代表数据已经持久化。",
+        "认为已有的校验和与物理标识符能够检测所有写入类故障，包括丢失写入。",
+        "把写入验证当作没有代价的检测手段，忽略它使写入所需 I/O 数量翻倍。"
+      ],
+      "modules": [
+        {
+          "id": "symptom-and-cause",
+          "title": "症状与成因",
+          "role": "diagnosis-intake",
+          "description": "从丢失写入的表现入手，明确它与普通讹误和错误位置写入的区别。",
+          "outcomeRefs": [
+            "explain-lost-write-cause"
+          ],
+          "order": 0
+        },
+        {
+          "id": "why-detection-fails",
+          "title": "为什么常规检测失效",
+          "role": "hypothesis-testing",
+          "description": "逐项核对校验和与物理标识符，证明它们在丢失写入场景下都会给出错误的通过结论。",
+          "outcomeRefs": [
+            "explain-checksum-blind-spot"
+          ],
+          "order": 1
+        },
+        {
+          "id": "detection-strategies",
+          "title": "两类检测方案",
+          "role": "repair-options",
+          "description": "分析写入后读取与把校验和放到别处两种检测思路及其代价。",
+          "outcomeRefs": [
+            "select-detection-strategy"
+          ],
+          "order": 2
+        },
+        {
+          "id": "decision-and-check",
+          "title": "取舍与自检",
+          "role": "transfer-check",
+          "description": "在具体情境中比较方案，并用检查题验证能否完成诊断与选型。",
+          "outcomeRefs": [
+            "explain-lost-write-cause",
+            "explain-checksum-blind-spot",
+            "select-detection-strategy"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-lost-write-cause",
+          "explain-checksum-blind-spot",
+          "select-detection-strategy"
+        ],
+        "method": "完成一道故障诊断题，判断给定现象是否属于丢失写入并说明可用的检测方案与代价。",
+        "successCriteria": [
+          "能指出写入已返回成功但磁盘仍是旧内容这一核心特征",
+          "能说明旧内容为何仍与存储的校验和及物理标识符匹配",
+          "能依据性能与故障假设在两类检测方案间给出选择理由"
+        ],
+        "exerciseBlockId": "model-lost-write-check",
+        "summaryBlockId": "model-summary-and-bridge",
+        "nextPointId": "point-44-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "lost-write-definition",
+        "moduleId": "symptom-and-cause",
+        "depth": "core",
+        "kind": "definition",
+        "title": "什么是丢失的写入",
+        "markdown": "丢失的写入（lost write）是一类现代存储设备可能出现的故障：设备向上层报告写入已经完成，但数据实际上从未持久化。于是磁盘上留下的是该块的**旧内容**，而不是这次写入的新内容。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000628"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "最后一个问题：丢失的写入"
+              ],
+              "lineStart": 12215,
+              "lineEnd": 12228,
+              "assetRefs": [],
+              "excerptSha256": "31b9bb4e7ecaa54e29a3487d166b2eda9548fb85f1bc8a731c5e84ce48839778"
+            }
+          ]
+        }
+      },
+      {
+        "id": "lost-write-silence",
+        "moduleId": "symptom-and-cause",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "故障的安静之处",
+        "markdown": "这类故障的危险在于它的安静：应用收到成功返回，随后读到的是一个完整、可解析、看起来毫无异常的旧块。它既不像介质损坏那样产生无法读取的块，也不像错误位置写入那样把数据放到别处，而是让\"旧数据\"冒充\"新数据\"。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000628"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "最后一个问题：丢失的写入"
+              ],
+              "lineStart": 12215,
+              "lineEnd": 12228,
+              "assetRefs": [],
+              "excerptSha256": "31b9bb4e7ecaa54e29a3487d166b2eda9548fb85f1bc8a731c5e84ce48839778"
+            }
+          ]
+        }
+      },
+      {
+        "id": "existing-checksums-insufficient",
+        "moduleId": "why-detection-fails",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "常规校验和策略为何失效",
+        "markdown": "教材明确给出结论：前面讨论的基本校验和与物理 ID 策略**都无助于**检测丢失的写入。原因是旧块是一个曾经被正确写入的块，它很可能具有与之匹配的校验和；而物理标识符（磁盘号和块偏移）记录的也是正确的地址。两项检查都会通过，却无法发现数据根本没有更新。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000628"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "最后一个问题：丢失的写入"
+              ],
+              "lineStart": 12215,
+              "lineEnd": 12228,
+              "assetRefs": [],
+              "excerptSha256": "31b9bb4e7ecaa54e29a3487d166b2eda9548fb85f1bc8a731c5e84ce48839778"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-detection-evidence-chain",
+        "moduleId": "why-detection-fails",
+        "depth": "support",
+        "kind": "note",
+        "title": "诊断时的证据链",
+        "markdown": "把这一失效过程整理成证据链，可以帮助定位问题：\n\n1. **症状**：上层收到\"写入完成\"。\n2. **假设**：新数据应当已经落到某个块上。\n3. **证据**：读回的块内容自洽，校验和校验通过，地址标识也正确。\n4. **结论**：这些证据只能证明\"读回的内容是某个曾被正确写入的块\"，不能证明\"它是这次写入的块\"。\n\n因此，常规校验和擅长发现内容被意外改动，却无法区分\"新内容\"与\"旧内容\"。要发现丢失写入，检查必须引入与本次写入相关联的新信息，例如立即回读，或把校验和放到不会被同一次丢失写入影响的位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "existing-checksums-insufficient"
+          ]
+        }
+      },
+      {
+        "id": "write-verify-method",
+        "moduleId": "detection-strategies",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "方案一：写入验证",
+        "markdown": "一种经典方法是执行**写入验证（write verify）**，也叫**写入后读取（read-after-write）**：在写入之后立即把数据读回来，确认数据确实到达了磁盘表面。它的检测思路直接——既然怀疑写入没有真正落地，就在写入之后用一次读取来验证。\n\n代价同样明确：这种做法很慢，会使完成一次写入所需的 I/O 数量翻倍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000628"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "最后一个问题：丢失的写入"
+              ],
+              "lineStart": 12215,
+              "lineEnd": 12228,
+              "assetRefs": [],
+              "excerptSha256": "31b9bb4e7ecaa54e29a3487d166b2eda9548fb85f1bc8a731c5e84ce48839778"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-verify-tradeoff",
+        "moduleId": "detection-strategies",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "写入验证的适用情境",
+        "markdown": "写入验证把\"是否持久\"从推断变成了现场确认，因此特别适合写入不频繁、但对丢失极其敏感的场景，例如关键元数据更新。反过来，在持续高吞吐的写入路径上，每次写入都追加一次读取会直接压低可用带宽，并让延迟更不稳定。\n\n需要注意，它验证的是\"这次读回时数据存在\"，并不等于数据在更长时间尺度上不会丢失；它针对的是写入完成后立刻可观察的那类丢失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "write-verify-method"
+          ]
+        }
+      },
+      {
+        "id": "zfs-inode-checksums",
+        "moduleId": "detection-strategies",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "方案二：把校验和放到别处",
+        "markdown": "另一类方案在系统的其他位置添加校验和来检测丢失的写入。教材给出的例子是 Sun 的 Zettabyte 文件系统（ZFS）：它在文件系统的每个 inode 和间接块中，保存文件中每个块的校验和。\n\n这样一来，即使对数据块本身的写入丢失，inode 内的校验和也不会与磁盘上的旧数据匹配，从而暴露不一致。该方案只有在**同时**丢失对 inode 和数据的写入时才会失败，情况不太可能但并非不可能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000628"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "最后一个问题：丢失的写入"
+              ],
+              "lineStart": 12215,
+              "lineEnd": 12228,
+              "assetRefs": [],
+              "excerptSha256": "31b9bb4e7ecaa54e29a3487d166b2eda9548fb85f1bc8a731c5e84ce48839778"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-elsewhere-works",
+        "moduleId": "detection-strategies",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么异地校验和能暴露问题",
+        "markdown": "关键在于校验和与数据不共享同一次失败。丢失写入破坏的是\"这次数据写入有没有生效\"，而异地保存的校验和来自更新的元数据。当数据块仍是旧内容、元数据里的校验和却对应新内容时，两者对不上，系统就能判定该块没有按预期更新。\n\n把这一点与前面的证据链对照：常规方案的校验和与数据来自同一时刻，所以旧数据配旧校验和总是自洽；异地校验和则把\"期望值\"与\"实际值\"分开放置，制造出可比较的差异。方案失败的唯一情形，是两次相关写入恰好一起丢失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "zfs-inode-checksums",
+            "existing-checksums-insufficient"
+          ]
+        }
+      },
+      {
+        "id": "model-choose-strategy",
+        "moduleId": "decision-and-check",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "如何在两类方案间取舍",
+        "markdown": "两类方案针对同一症状，但付出的代价不同：\n\n- **写入验证**：不需要改变磁盘布局，检测直接；代价是写入 I/O 翻倍，适合低频但关键的写入。\n- **异地校验和**：不增加每次写入的即时读取，但要求文件系统维护额外的校验和结构，并且保护强度依赖于\"数据与元数据不会同时丢失\"这一假设。\n\n诊断时的判断可以归纳为三步：先确认\"写入返回成功但读回旧内容\"这一症状；再检查现有校验和是否与数据同源（同源则无法检测）；最后依据写入频率、可接受的 I/O 开销和故障假设选择方案，而不是默认堆叠所有检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "write-verify-method",
+            "zfs-inode-checksums",
+            "model-detection-evidence-chain"
+          ]
+        }
+      },
+      {
+        "id": "model-lost-write-check",
+        "moduleId": "decision-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：这是丢失写入吗",
+        "markdown": "某系统报告一次写入成功。随后读取该块，内容完整、校验和与存储值一致、磁盘号和块偏移也都正确，但内容仍是上一次写入的版本。请判断这属于哪类故障，并回答：仅增加物理标识符能否解决？如果不能，应优先考虑哪类检测方案，代价是什么？\n\n参考答案要点：这是丢失写入；物理标识符只解决错误位置写入，旧内容与旧校验和自洽，因此仍会漏检；可考虑写入后立即读回，或把校验和保存在不会被同一次丢失写入影响的元数据中，前者使写入 I/O 翻倍，后者依赖数据与元数据不同时丢失的假设。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "lost-write-definition",
+            "existing-checksums-insufficient",
+            "write-verify-method",
+            "zfs-inode-checksums"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-and-bridge",
+        "moduleId": "decision-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "丢失写入把问题从\"数据是否被改动\"推进到\"这次写入是否真的发生\"。基本校验和与物理 ID 只能证明读回的内容曾经被正确写入，无法证明它就是本次写入的结果；写入验证用立即回读换取确定性，异地校验和则用布局与假设换取较低的即时开销。\n\n无论采用哪种检测，检查本身也需要时机。下一步讨论的磁盘擦净，关注的正是那些长期无人访问、因而从未被校验的数据块。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "existing-checksums-insufficient",
+            "write-verify-method",
+            "zfs-inode-checksums"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "lost-write-diagnosis-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-lost-write-check",
+        "moduleId": "decision-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-lost-write-cause",
+          "explain-checksum-blind-spot",
+          "select-detection-strategy"
+        ],
+        "learningPurpose": "检查学习者能否依据证据链区分丢失写入与普通讹误，并为该情境选择合适的检测方案。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "lost-write-definition",
+            "existing-checksums-insufficient",
+            "write-verify-method",
+            "zfs-inode-checksums"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "revealAnswerAfterAttempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某系统报告写入成功，但读回的是旧内容，且校验和与物理标识符都正确。请判断故障类型，并说明现有校验和为何漏检、可以增加哪类检测及其代价。"
+        }
+      }
+    ]
+  },
+  "subtitle": "数据完整性和保护",
+  "clusterId": "chapter-44",
+  "clusterIds": [
+    "chapter-44"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000628"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "最后一个问题：丢失的写入"
+      ],
+      "lineStart": 12215,
+      "lineEnd": 12228,
+      "assetRefs": [],
+      "excerptSha256": "31b9bb4e7ecaa54e29a3487d166b2eda9548fb85f1bc8a731c5e84ce48839778"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    135,
+    -490
+  ],
+  "scale": 0.88
+}

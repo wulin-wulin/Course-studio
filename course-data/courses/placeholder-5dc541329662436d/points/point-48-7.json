@@ -1,0 +1,464 @@
+{
+  "id": "point-48-7",
+  "title": "利用幂等操作处理服务器故障",
+  "shortSummary": "解释幂等操作如何让客户端在服务器故障后安全地重试请求并避免重复副作用。",
+  "keyTerms": [
+    "幂等操作",
+    "重试",
+    "服务器故障",
+    "NFS"
+  ],
+  "animationType": "retryIdempotence",
+  "animationSuggestion": "提供请求丢失、服务器崩溃、回复丢失三种情形的切换视图，逐步显示请求、计时器、重发与服务器执行次数，并对比 WRITE 重试后文件内容仍只相当于写入一次。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-48-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "failure-mechanism-and-boundary",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的故障分类、幂等判据、WRITE 分析与 Voltaire 定律结论，围绕“能否安全重试”重排为故障现象、判据、统一机制、逐操作分析和边界取舍。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-failure-scenarios",
+          "text": "说明客户端收不到回复的可能原因，以及为什么需要一个统一的处理策略。"
+        },
+        {
+          "id": "define-idempotency",
+          "text": "用“执行多次与执行一次效果相同”的判据辨认一个操作是否幂等。"
+        },
+        {
+          "id": "apply-retry",
+          "text": "对给定的 NFS 操作判断能否安全重试，并说明服务器端的实际执行行为。"
+        },
+        {
+          "id": "evaluate-boundary",
+          "text": "识别非幂等操作造成的重试歧义，并解释 NFS 为何接受这一边界。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要客户端重试，任何请求最终都会得到正确结果；mkdir 在回复丢失后重试会返回失败，而第一次其实已经成功。",
+        "认为 WRITE 被重复执行会写乱文件；由于消息带有数据和确切偏移量，重复写入同一位置与写入一次结果相同。",
+        "把“没有收到回复”等同于“服务器没有执行”；回复可能在返回途中丢失，服务器早已完成操作。"
+      ],
+      "modules": [
+        {
+          "id": "failure-symptom",
+          "title": "故障现象：客户端为什么无从判断",
+          "role": "problem-introduction",
+          "outcomeRefs": [
+            "explain-failure-scenarios"
+          ],
+          "order": 0
+        },
+        {
+          "id": "idempotency-core",
+          "title": "核心判据：什么叫幂等",
+          "role": "concept-explanation",
+          "outcomeRefs": [
+            "define-idempotency"
+          ],
+          "order": 1
+        },
+        {
+          "id": "retry-protocol",
+          "title": "统一机制：定时重发",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-failure-scenarios",
+            "apply-retry"
+          ],
+          "order": 2
+        },
+        {
+          "id": "operation-analysis",
+          "title": "逐操作分析：LOOKUP、READ 与 WRITE",
+          "role": "worked-analysis",
+          "outcomeRefs": [
+            "apply-retry"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundary-engineering",
+          "title": "边界与取舍：mkdir 与 Voltaire 定律",
+          "role": "boundary-and-transfer",
+          "outcomeRefs": [
+            "evaluate-boundary",
+            "apply-retry"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-failure-scenarios",
+          "define-idempotency",
+          "apply-retry",
+          "evaluate-boundary"
+        ],
+        "method": "完成迁移检查：为一个新的文件操作判定幂等性，说明重试后的服务器行为，并给出处理歧义的方式。",
+        "successCriteria": [
+          "能用“多次执行与一次执行效果相同”解释判定结论",
+          "能指出哪种丢失情形会导致重复执行以及为何结果仍正确",
+          "能说出至少一个非幂等操作及其重试歧义"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-48-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-failure-scenarios",
+        "moduleId": "failure-symptom",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "收不到回复时，客户端面对什么",
+        "markdown": "客户端向文件服务器发出请求后，可能始终收不到回复。教材把原因归为两类：网络可能丢弃请求或回复；服务器也可能已经崩溃，稍后才重新启动，崩溃期间到达的请求全部丢失。\n\n对客户端来说，这些故障在现象上无法区分：它只知道自己发过请求，却没有等到响应。于是问题变成——在没有回复的情况下，客户端应该怎样继续，才能既不永久卡住，也不破坏文件系统状态？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000661"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "利用幂等操作处理服务器故障"
+              ],
+              "lineStart": 12830,
+              "lineEnd": 12851,
+              "assetRefs": [
+                "parts/part-0005/images/6851697fe87331a8d20060c75697a8879a0469a84fdbc5723e93a83ed05a5680.jpg",
+                "parts/part-0005/images/8c02572c9dc24eaab4664ca934cd61e3e99fae05b6e17f78de8e950e1c89caa2.jpg"
+              ],
+              "excerptSha256": "e8bc1ad85400f04f936752d8ae680638ee5a83963bf53555dfd03fc62439f88f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-taxonomy",
+        "moduleId": "failure-symptom",
+        "depth": "support",
+        "kind": "table",
+        "title": "三种丢失情形并列观察（模型整理）",
+        "markdown": "教材配图把故障拆成三种情形。并列起来看，就能明白客户端为什么需要一个与故障原因无关的策略：\n\n| 情形 | 丢失发生的位置 | 重试到达前服务器是否执行过 |\n|---|---|---|\n| 1 | 请求在发往服务器的途中丢失 | 没有 |\n| 2 | 服务器在收到请求前崩溃，之后重启 | 没有 |\n| 3 | 服务器执行完毕，回复在返回途中丢失 | 已经执行 |\n\n前两种情形里服务器本来什么都没做，重试就是第一次真正执行；第三种情形里服务器已经改过状态，重试会造成第二次执行。客户端无法从“没收到回复”推断自己处在哪一种情形，这正是后文需要幂等性的理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-failure-scenarios"
+          ]
+        }
+      },
+      {
+        "id": "tb-idempotency-definition",
+        "moduleId": "idempotency-core",
+        "depth": "core",
+        "kind": "definition",
+        "title": "幂等的判据",
+        "markdown": "教材给出的判据很短：如果一个操作执行多次的效果与执行一次相同，它就是幂等的（idempotent）。\n\n- 把某个值写入内存位置 3 次，与写入 1 次的结果相同，所以“存储一个值”是幂等操作。\n- 把计数器递增 3 次，数量与递增 1 次不同，所以“递增计数器”不是幂等操作。\n\n更一般地，任何只读取数据的操作显然都是幂等的；涉及更新的操作必须逐项分析，才能确定它是否幂等。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000661"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "利用幂等操作处理服务器故障"
+              ],
+              "lineStart": 12830,
+              "lineEnd": 12851,
+              "assetRefs": [
+                "parts/part-0005/images/6851697fe87331a8d20060c75697a8879a0469a84fdbc5723e93a83ed05a5680.jpg",
+                "parts/part-0005/images/8c02572c9dc24eaab4664ca934cd61e3e99fae05b6e17f78de8e950e1c89caa2.jpg"
+              ],
+              "excerptSha256": "e8bc1ad85400f04f936752d8ae680638ee5a83963bf53555dfd03fc62439f88f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-idempotency-test",
+        "moduleId": "idempotency-core",
+        "depth": "support",
+        "kind": "note",
+        "title": "判断幂等的三个提问（模型补充）",
+        "markdown": "拿到一个具体操作时，可以按顺序问三个问题：\n\n1. 重复执行时写入的是“绝对值”还是“相对变化”？写到固定位置、固定内容的操作通常可重复；加一、追加、计数这类相对变化通常不可重复。\n2. 第二次执行后，可观察到的状态是否与第一次执行后完全相同？如果相同，重试就是安全的。\n3. 结论是否依赖操作执行前的状态？“创建某个尚不存在的东西”在第二次执行时状态已经改变，需要单独处理。\n\n这组提问只把教材判据落到具体操作上，不改变判据本身。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-idempotency-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-retry",
+        "moduleId": "retry-protocol",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "NFSv2 的统一做法：定时重发",
+        "markdown": "在 NFSv2 中，客户端用同一种方式处理上述所有故障：重试请求。\n\n发送请求之后，客户端把计时器设置为在指定时间后关闭。如果在计时器关闭之前收到回复，就取消计时器，一切正常；如果在收到任何回复之前计时器已经关闭，客户端就假定请求尚未被处理，并重新发送这一请求。只要服务器最终回复，问题就解决了。\n\n这一做法的关键在于：客户端不必分清是请求丢了、服务器崩了还是回复丢了，它对所有超时都执行同一个动作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000661"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "利用幂等操作处理服务器故障"
+              ],
+              "lineStart": 12830,
+              "lineEnd": 12851,
+              "assetRefs": [
+                "parts/part-0005/images/6851697fe87331a8d20060c75697a8879a0469a84fdbc5723e93a83ed05a5680.jpg",
+                "parts/part-0005/images/8c02572c9dc24eaab4664ca934cd61e3e99fae05b6e17f78de8e950e1c89caa2.jpg"
+              ],
+              "excerptSha256": "e8bc1ad85400f04f936752d8ae680638ee5a83963bf53555dfd03fc62439f88f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-retry-steps",
+        "moduleId": "retry-protocol",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "重试流程的检查点（模型整理）",
+        "markdown": "把教材描述展开成可以照着执行的顺序：\n\n1. 构造请求：带上操作类型和文件句柄；写操作还要带上数据、长度和确切的偏移量。\n2. 发送请求，同时启动计时器。\n3. 收到回复：取消计时器，把结果交回调用者。\n4. 计时器到期：不要立刻向应用层报错，先重发同一条请求。\n5. 重复第 2 至第 4 步，直到收到回复或达到重试上限。\n\n第 4 步能成立，是因为重发的请求与原请求完全一致，服务器也就无法区分它是一次新操作还是一次重试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retry"
+          ]
+        }
+      },
+      {
+        "id": "tb-operations",
+        "moduleId": "operation-analysis",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么大多数 NFS 操作可以安全重试",
+        "markdown": "NFS 中崩溃恢复的核心，在于大多数常见操作具有幂等性。\n\n- LOOKUP 和 READ 只从文件服务器读取信息，不更新状态，因此是简单幂等的。\n- WRITE 同样幂等：WRITE 消息包含要写的数据、计数，以及最关键的写入偏移量。重复写入同一段数据到同一位置，结果与写一次相同。\n\n因此，如果 WRITE 失败，客户端可以简单地重试它，而不必担心文件内容被写乱。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000661"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "利用幂等操作处理服务器故障"
+              ],
+              "lineStart": 12830,
+              "lineEnd": 12851,
+              "assetRefs": [
+                "parts/part-0005/images/6851697fe87331a8d20060c75697a8879a0469a84fdbc5723e93a83ed05a5680.jpg",
+                "parts/part-0005/images/8c02572c9dc24eaab4664ca934cd61e3e99fae05b6e17f78de8e950e1c89caa2.jpg"
+              ],
+              "excerptSha256": "e8bc1ad85400f04f936752d8ae680638ee5a83963bf53555dfd03fc62439f88f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-walkthrough",
+        "moduleId": "operation-analysis",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "三种情形下的 WRITE 重试推演（模型补充）",
+        "markdown": "把 WRITE 放进三种丢失情形，逐一看服务器端的实际行为：\n\n| 情形 | 服务器第一次是否执行 | 重试到达时 | 最终结果 |\n|---|---|---|---|\n| 请求丢失 | 否 | 正常执行写入并回复 | 数据写入一次 |\n| 服务器崩溃后重启 | 否 | 重启完成后执行写入并回复 | 数据写入一次 |\n| 回复丢失 | 是 | 再次执行同样的写入并回复 | 仍与写入一次相同 |\n\n第三种情形最容易引起误解：服务器确实执行了两次写入，但两次的数据和偏移完全相同，文件内容与只写一次没有区别。让重试成立的是“写同样的数据到同样的位置”，而不是服务器记住了这是一次重试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-operations",
+            "tb-retry"
+          ]
+        }
+      },
+      {
+        "id": "tb-mkdir-boundary",
+        "moduleId": "boundary-engineering",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "并非所有操作都幂等：mkdir 的反例",
+        "markdown": "有些操作很难做成幂等的。教材给出的例子是创建目录：当目录已经存在时，mkdir 会失败。\n\n在 NFS 中，如果文件服务器收到 MKDIR 请求并成功执行，但回复在返回途中丢失，客户端就会重发请求。第二次请求到达时目录已经存在，服务器返回错误。于是客户端看到的是失败，而实际上第一次操作已经成功。\n\n这正是幂等性缺失造成的典型歧义：客户端无法仅凭错误信息判断操作究竟有没有生效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000661"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "利用幂等操作处理服务器故障"
+              ],
+              "lineStart": 12830,
+              "lineEnd": 12851,
+              "assetRefs": [
+                "parts/part-0005/images/6851697fe87331a8d20060c75697a8879a0469a84fdbc5723e93a83ed05a5680.jpg",
+                "parts/part-0005/images/8c02572c9dc24eaab4664ca934cd61e3e99fae05b6e17f78de8e950e1c89caa2.jpg"
+              ],
+              "excerptSha256": "e8bc1ad85400f04f936752d8ae680638ee5a83963bf53555dfd03fc62439f88f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mkdir-redesign",
+        "moduleId": "boundary-engineering",
+        "depth": "advanced",
+        "kind": "example",
+        "title": "把 mkdir 改成幂等的两种思路（模型补充）",
+        "markdown": "教材提示可以重新设计 mkdir 的语义，使它变成幂等的。常见思路有两种：\n\n- 把“目录已存在”视为成功：创建请求的目标状态是“该目录存在”，只要执行后该状态成立就返回成功，重复请求自然无害。\n- 让客户端先 LOOKUP 再决定：把检查与创建分开，虽然多一次往返，但可以区分“刚创建”和“早已存在”。\n\n两种做法都有代价：前者改变了错误的含义，调用者不能再从返回值区分“我创建的”和“别人创建的”；后者增加了网络交互，也仍存在检查与创建之间的竞态。是否值得，取决于该操作在系统中的重要程度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mkdir-boundary"
+          ]
+        }
+      },
+      {
+        "id": "tb-voltaire",
+        "moduleId": "boundary-engineering",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材的工程取舍：Voltaire 定律",
+        "markdown": "教材并不要求把所有操作都改造成幂等的。NFS 的设计理念是覆盖大多数重要情况，使系统在故障面前保持简洁；对 mkdir 这类少数例外，则接受“生活并不完美”的事实，仍然把系统构建出来。\n\n教材把这种智慧称为 Voltaire 定律：完美是好的敌人。与其为消除所有特殊情况而把协议复杂化，不如先让主流路径可靠、简单。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000662"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：完美是好的敌人（Voltaire定律）"
+              ],
+              "lineStart": 12852,
+              "lineEnd": 12855,
+              "assetRefs": [],
+              "excerptSha256": "d0c9df106fbf013d05348e4a55314ba66664dc0644003d347cc83e3d68cdd188"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "boundary-engineering",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "迁移检查：给你一个操作，能否安全重试",
+        "markdown": "用下面的清单判断一个新操作在故障重试下是否安全：\n\n1. 写出操作的目标状态，说明重复执行后该状态是否仍然成立。\n2. 判断写入的是绝对值还是相对变化：绝对写入通常幂等；计数、追加、“创建”类操作需要额外设计。\n3. 找出重试可能产生歧义的地方：是执行了两次，还是第二次才失败？\n4. 决定处理方式：改造操作语义、在客户端做显式检查，或像 NFS 对待 mkdir 那样接受这一边界并记录。\n\n示例：把“追加一行日志”改为“把第 n 行写成这条日志”，就从相对变化变成绝对写入，重试后不会产生重复行；代价是调用方必须自己保证行号分配的唯一性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-idempotency-definition",
+            "tb-mkdir-boundary",
+            "tb-voltaire"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "retry-decision-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "boundary-engineering",
+        "depth": "advanced",
+        "outcomeRefs": [
+          "apply-retry",
+          "evaluate-boundary"
+        ],
+        "learningPurpose": "检查学习者能否把幂等判据迁移到新的文件操作，并说明重试后的服务器行为。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-idempotency-definition",
+            "tb-operations",
+            "tb-mkdir-boundary"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "判断“把文件截断到 4096 字节”在回复丢失后能否安全重试，并写出执行两次与执行一次的结果是否相同。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Sun 的网络文件系统(NFS)",
+  "clusterId": "chapter-48",
+  "clusterIds": [
+    "chapter-48"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000661"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "利用幂等操作处理服务器故障"
+      ],
+      "lineStart": 12830,
+      "lineEnd": 12851,
+      "assetRefs": [
+        "parts/part-0005/images/6851697fe87331a8d20060c75697a8879a0469a84fdbc5723e93a83ed05a5680.jpg",
+        "parts/part-0005/images/8c02572c9dc24eaab4664ca934cd61e3e99fae05b6e17f78de8e950e1c89caa2.jpg"
+      ],
+      "excerptSha256": "e8bc1ad85400f04f936752d8ae680638ee5a83963bf53555dfd03fc62439f88f"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000662"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：完美是好的敌人（Voltaire定律）"
+      ],
+      "lineStart": 12852,
+      "lineEnd": 12855,
+      "assetRefs": [],
+      "excerptSha256": "d0c9df106fbf013d05348e4a55314ba66664dc0644003d347cc83e3d68cdd188"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2819,
+    -549
+  ],
+  "scale": 0.93
+}

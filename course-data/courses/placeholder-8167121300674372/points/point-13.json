@@ -1,0 +1,465 @@
+{
+  "id": "point-13",
+  "title": "系统调用",
+  "shortSummary": "说明用户程序如何通过系统调用进入内核，以及参数、编号与返回值的约定。",
+  "keyTerms": [
+    "系统调用",
+    "内核",
+    "参数",
+    "返回值"
+  ],
+  "animationType": "systemCallRoundtrip",
+  "animationSuggestion": "左侧画出用户态与内核态两栏，右侧显示寄存器面板。执行 svc 时高亮 x16 与 x0–x7，控制点沿“异常入口—判定入口值—查表分派—执行—返回”逐步移动，同时标出异常级别从 EL0 变为 EL1 再回到 EL0；重播回到同一初始寄存器值。",
+  "difficulty": "中等",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-4-2",
+    "point-12-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-plus-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于异常级别、svc 指令与 xnu 寄存器约定的原始结论，按“为什么需要—怎样陷入内核—如何传参—怎样落地”的顺序重排，并补充对照表、逐行解读与自查练习。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-why-kernel",
+          "text": "解释为什么读取输入、读写文件、网络请求等有状态行为必须借助内核，用户态程序不能直接用 bl 调用内核函数。"
+        },
+        {
+          "id": "explain-svc",
+          "text": "说明 svc 指令如何从 EL0 触发异常进入 EL1，以及指令后立即数在 macOS 中的角色。"
+        },
+        {
+          "id": "identify-convention",
+          "text": "说明 macOS 下系统调用号、参数寄存器与返回值所在的寄存器约定，并解释为什么该约定不具备可移植性。"
+        },
+        {
+          "id": "write-syscall",
+          "text": "读懂并写出最小的 write 系统调用汇编片段，并能说出改用 libc 封装的理由。"
+        }
+      ],
+      "misconceptions": [
+        "把 svc 后面的立即数 0x80 当成系统调用号，实际上它只是告诉内核本次异常用于发起系统调用。",
+        "认为可以用 bl 直接调用内核函数，用户态程序必须通过异常级别切换才能进入内核。",
+        "把系统调用的寄存器约定当作与 AAPCS 同等稳定的标准，实际上它只是一种当前采用、未作保证的 ABI。"
+      ],
+      "modules": [
+        {
+          "id": "motivation",
+          "title": "为什么需要系统调用",
+          "role": "problem-introduction",
+          "description": "从无状态程序出发，说明有状态行为必须由内核配合。",
+          "outcomeRefs": [
+            "explain-why-kernel"
+          ],
+          "order": 0
+        },
+        {
+          "id": "exception-levels",
+          "title": "异常级别与 svc 指令",
+          "role": "mechanism",
+          "description": "解释 EL0 与 EL1 的隔离，以及 svc 指令如何触发受控切换。",
+          "outcomeRefs": [
+            "explain-svc"
+          ],
+          "order": 1
+        },
+        {
+          "id": "syscall-registers",
+          "title": "系统调用号与寄存器约定",
+          "role": "convention-reference",
+          "description": "给出系统调用号、编号寄存器与参数寄存器的约定，并与普通函数调用对照。",
+          "outcomeRefs": [
+            "identify-convention"
+          ],
+          "order": 2
+        },
+        {
+          "id": "code-walkthrough",
+          "title": "逐行解读一个 write 调用",
+          "role": "worked-example",
+          "description": "以最小 Hello world 为例，把参数、编号与陷入指令对应起来。",
+          "outcomeRefs": [
+            "write-syscall"
+          ],
+          "order": 3
+        },
+        {
+          "id": "portability",
+          "title": "可移植性与 libc 封装",
+          "role": "boundary-and-check",
+          "description": "说明系统调用 ABI 不稳定带来的可移植性问题，以及改用 libc 的做法和自查练习。",
+          "outcomeRefs": [
+            "identify-convention",
+            "write-syscall"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why-kernel",
+          "explain-svc",
+          "identify-convention",
+          "write-syscall"
+        ],
+        "method": "完成自查练习：指出一段系统调用代码中编号、参数与陷入指令各自的位置，说明哪些有状态行为必须请求内核，并说明换成 libc 调用后的等价写法。",
+        "successCriteria": [
+          "能指出 svc 后立即数与系统调用号的区别",
+          "能说出编号寄存器与参数寄存器的分工",
+          "能解释为什么该写法不可移植"
+        ],
+        "exerciseBlockId": "model-check-and-bridge",
+        "nextPointId": "point-14-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-stateless-intro",
+        "moduleId": "motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：不调用外部函数的程序是无状态的",
+        "markdown": "教材先给出一个观察：如果我们不调用系统库的函数，写出来的绝大部分程序都是**无状态的**——无论调用多少次，结果都相同。\n\n想要程序变成有状态的，包括读取用户输入、读写文件、发送网络请求等等，都需要内核的配合。这正是系统调用存在的理由：程序要接触外部世界，就必须请求内核代为完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stateful-examples",
+        "moduleId": "motivation",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：哪些行为一定需要内核",
+        "markdown": "把教材的判断落到具体场景上，可以这样分类：\n\n- **需要内核**：读取终端输入、打开与写入文件、建立网络连接、分配新的内存页、创建进程。这些操作要么碰硬件，要么涉及其他进程或全局系统资源。\n- **不需要内核**：纯算术、数组遍历、字符串处理、排序。只操作自己栈帧和寄存器里的数据，因此重复运行结果相同。\n\n判断标准可以概括为一句话：只要操作对象超出本进程私有的寄存器和内存，就必须由内核代为执行并做权限检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-stateless-intro"
+          ]
+        }
+      },
+      {
+        "id": "textbook-no-bl-into-kernel",
+        "moduleId": "exception-levels",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：不能用 bl 直接调用内核函数",
+        "markdown": "教材指出，用户态的程序**不能直接通过 `bl` 来调用内核的函数**。原因在异常级别：AArch64 有不同的异常级别，一般来说用户态程序处于 EL0，内核处于 EL1，而低异常级别的程序不能调用高异常级别的函数。\n\n因此，进入内核必须走一条专门的、受控的通道，而不是普通的函数调用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-el0-el1-analogy",
+        "moduleId": "exception-levels",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充直觉：为什么必须有这道门槛",
+        "markdown": "可以用“柜台办事”来理解异常级别：用户态像是隔着窗口递材料，不能自己走进档案室翻文件。\n\n如果允许 EL0 直接跳到 EL1 的任意地址，那么内核的权限检查就形同虚设——任何程序都能读写别人的内存、绕过文件权限。所以硬件把“进入更高异常级别”设计成只能经由异常这种受控入口：入口地址由系统预先配置，进入后执行的是内核自己的代码，而不是调用者指定的地址。\n\n这也解释了为什么 `bl` 不行：`bl` 只是把返回地址写进 LR 并跳到目标标签，它不改变异常级别。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-no-bl-into-kernel"
+          ]
+        }
+      },
+      {
+        "id": "textbook-svc-instruction",
+        "moduleId": "exception-levels",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：svc 指令的用法",
+        "markdown": "教材给出的入口指令是 `svc`（Supervisor Call），用法形如：\n\n```armasm\nsvc    #0x80\n```\n\n这条命令会向 EL1 生成一个异常，系统根据后面跟着的数（这里是 `0x80`）来判断怎样处理这个异常。在 macOS 中，大部分的系统调用都可以通过 `0x80` 这个数来调用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-svc-immediate-meaning",
+        "moduleId": "exception-levels",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "澄清：0x80 不是系统调用号",
+        "markdown": "最容易出错的一点：`svc #0x80` 里的 `0x80` **不是**“要调用第 128 号系统调用”。\n\n- `0x80` 回答的是“这次异常属于哪一类”，即告诉内核“我发起的异常是为了调用系统调用”。在 macOS 上，大部分系统调用都共用这个入口值。\n- 具体调用哪一个系统调用，由**系统调用号**决定，而系统调用号放在另一个寄存器里（下一模块展开）。\n\n所以正确的读法是：`svc` 提供通道类型，寄存器提供具体请求。两者缺一不可，也不能互相替代。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-svc-instruction",
+            "textbook-no-bl-into-kernel"
+          ]
+        }
+      },
+      {
+        "id": "textbook-syscall-numbers",
+        "moduleId": "syscall-registers",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：系统调用号从 xnu 源码查得",
+        "markdown": "内核提供的系统调用非常多，例如 `read`、`write` 等。教材说明，系统调用号可以在 xnu 源码的 `bsd/kern/syscalls.master` 文件中查看，并给出片段：\n\n```c\n3\tAUE_NULL\tALL\t{ user_ssize_t read(int fd, user_addr_t cbuf, user_size_t nbyte); }\n4\tAUE_NULL\tALL\t{ user_ssize_t write(int fd, user_addr_t cbuf, user_size_t nbyte); }\n```\n\n这表示 `read` 的系统调用号是 3，`write` 是 4。也就是说，使用 `svc` 时，只要通过某种途径让内核知道系统调用号，就能执行相应调用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-xnu-register-convention",
+        "moduleId": "syscall-registers",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：编号进 x16，参数进 x0–x7",
+        "markdown": "教材强调，这套约定“其实也是一种 ABI，但这种 ABI 并没有稳定”——并没有官方文档规定它，只是目前采用，之后会不会变并没有保证。\n\n具体规定来自 macOS 的 xnu 内核：**系统调用号传入 `r16` 寄存器**（对应源码 `osfmk/arm64/proc_reg.h` 中的 `ARM64_SYSCALL_CODE_REG_NUM` 宏）；而**参数传递则和普通函数类似，传入对应的 `r0` 到 `r7` 寄存器**即可。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compare-function-abi",
+        "moduleId": "syscall-registers",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充对照：系统调用约定 vs 普通函数调用",
+        "markdown": "把教材给出的约定与前面学过的 AAPCS 并排放，差别就清楚了：\n\n| 维度 | 普通函数调用（AAPCS） | macOS 系统调用 |\n|---|---|---|\n| 进入方式 | `bl` 跳到符号地址 | `svc #0x80` 触发异常 |\n| 选择目标 | 符号名由链接器解析 | 系统调用号放在 `x16` |\n| 参数位置 | `x0`–`x7` | `x0`–`x7`（与普通函数类似） |\n| 稳定性 | 有文档化的 ABI | 无文档保证，可能变化 |\n\n需要注意，参数寄存器“类似”并不等于“相同契约”：普通函数的调用目标由链接器根据符号名决定，系统调用的目标由运行时放在 `x16` 中的编号值决定。换句话说，系统调用把“调用谁”从链接期推迟到了运行期，这也是它的编号可以随系统版本变化的原因。\n\n返回值方面同样延续普通函数的惯例，结果放在 `x0` 中供调用者读取；教材没有单独展开返回值寄存器，实际使用时仍以 xnu 当前实现为准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-xnu-register-convention",
+            "textbook-svc-instruction"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hello-world",
+        "moduleId": "code-walkthrough",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：用系统调用写 Hello world",
+        "markdown": "教材用一段最小程序把上述约定串起来：\n\n```armasm\n    .text\n    .globl  _main\n    .p2align    2\n_main:\n    sub    sp, sp, #16\n    stp    x29, x30, [sp]\n\n    mov    w0, #0                       ; fd: STDOUT_FILENO\n    adrp   x1, my_str@PAGE\n    add    x1, x1, my_str@PAGEOFF       ; cbuf: \"Hello world\"\n    mov    w2, #12                      ; nbyte: 12\n    mov    w16, #4                      ; Syscall number: write\n    svc    #0x80                        ; write(STDOUT_FILENO, \"Hello world\", 12);\n\n    ldp    x29, x30, [sp]\n    add    sp, sp, #16\n    ret\n\n    .data\nmy_str:\n    .asciz    \"Hello world\"\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hello-world-walkthrough",
+        "moduleId": "code-walkthrough",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：逐行对齐参数与编号",
+        "markdown": "对照 `write(int fd, user_addr_t cbuf, user_size_t nbyte)` 的签名，逐项核对上面的代码：\n\n1. `mov w0, #0`：第 1 个参数 `fd` 取 0，即标准输出。\n2. `adrp` + `add`：把 `my_str` 的页地址与页内偏移拼成完整地址，放进 `x1`，作为第 2 个参数 `cbuf`。\n3. `mov w2, #12`：第 3 个参数 `nbyte` 为 12，正好是 `\"Hello world\"` 的字符数（不含结尾的 `\\0`）。\n4. `mov w16, #4`：把系统调用号 4（`write`）放进编号寄存器。\n5. `svc #0x80`：陷入内核，执行写入，返回后继续执行下一条指令。\n\n两点值得注意：一是三个参数**全部**通过 `x0`–`x2` 传入，与普通函数调用的寄存器位置一致；二是编号既不放在 `x0` 也不放在栈上，而是单独占用 `x16`，这正是系统调用与普通函数调用在寄存器上的关键差异。另外，示例只把 `w0` 写成 0，若需要检查写入是否成功，应当在内核返回后读取 `x0` 中的结果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-hello-world"
+          ]
+        }
+      },
+      {
+        "id": "textbook-portability-libc",
+        "moduleId": "portability",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：这套写法不可移植，应改用 libc",
+        "markdown": "教材最后指出：系统调用的 ABI 并不稳定，系统调用号事实上也没有保证不变，因此像上面那样写出的代码**不具有可移植性**。\n\n实际上，libc 会对绝大多数常用的系统调用做一层封装，我们也可以直接调用 libc 对应的函数。也就是说，上面那两行 `mov w16, #4` 和 `svc #0x80`，可以换成 `bl _write`，其中 `_write` 是 libc 提供的函数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "系统调用"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2441,
+              "assetRefs": [],
+              "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check-and-bridge",
+        "moduleId": "portability",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自查：判断这段系统调用写了什么",
+        "markdown": "给定片段（`x0` 已放好文件描述符，`x1` 已放好缓冲区地址，`x2` 已放好字节数）：\n\n```armasm\n    mov    w16, #3\n    svc    #0x80\n```\n\n请回答：\n\n1. 它发起的是哪一个系统调用？依据是教材中的哪条记录？\n2. `0x80` 与 `w16` 各自承担什么职责？如果只改 `svc` 后面的立即数，能换成别的调用吗？\n3. 若目标是让代码在不同版本的系统上也能工作，应当把这四行改成什么？\n\n参考思路：由 `bsd/kern/syscalls.master` 的记录可知编号 3 对应 `read`；`0x80` 只表示“本次异常用于系统调用”，具体目标由 `x16` 中的编号决定，因此改立即数没有意义；可移植做法是改为对 libc 的 `_read` 的普通 `bl` 调用，由 libc 负责填充编号并执行陷入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-portability-libc",
+            "textbook-syscall-numbers",
+            "textbook-xnu-register-convention"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "syscall-register-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-and-bridge",
+        "moduleId": "portability",
+        "depth": "core",
+        "title": "系统调用编号与参数定位练习",
+        "outcomeRefs": [
+          "identify-convention",
+          "write-syscall"
+        ],
+        "learningPurpose": "检查学习者能否从一段 `svc` 代码中区分入口值、系统调用号与参数，并据此判断它调用的系统调用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-xnu-register-convention",
+            "textbook-syscall-numbers",
+            "textbook-hello-world"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "steps": [
+            "识别编号寄存器中的值",
+            "查表得到系统调用名",
+            "说明入口值的作用",
+            "给出 libc 等价写法"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "读一遍代码，写下三条结论：`x16` 中的值是系统调用号、`svc #0x80` 只表示发起系统调用、可移植写法是改为调用 libc 封装函数。",
+          "blockId": "model-check-and-bridge"
+        }
+      }
+    ]
+  },
+  "subtitle": "系统调用",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000114"
+      ],
+      "headingPath": [
+        "系统调用"
+      ],
+      "lineStart": 2381,
+      "lineEnd": 2441,
+      "assetRefs": [],
+      "excerptSha256": "83d7ce890ee78eb76ea332c7f960af7557006671bcabf1b713644167a48e5ea9"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3125,
+    404
+  ],
+  "scale": 1.22
+}

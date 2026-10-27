@@ -1,0 +1,493 @@
+{
+  "id": "point-18-5",
+  "title": "内存追踪",
+  "shortSummary": "通过内存访问追踪说明分页下的地址转换步骤和额外内存流量，并指出性能瓶颈。",
+  "keyTerms": [
+    "内存追踪",
+    "地址转换",
+    "内存流量",
+    "页表访问"
+  ],
+  "animationType": "pageTableWalkLoop",
+  "animationSuggestion": "逐步高亮每次迭代中的页表访问、取指和数组写，并在索引跨入新虚拟页时标出页表项与物理帧的变化。",
+  "difficulty": "中等",
+  "importance": 0.65,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的示例代码、汇编与页表假设，围绕每次迭代的访问账本重排讲解，补充地址推算、逐次拆解与瓶颈检查。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-translation-cost",
+          "text": "解释分页下一次内存引用为什么需要额外的内存访问。"
+        },
+        {
+          "id": "trace-loop-accesses",
+          "text": "结合汇编、页大小与页表假设，列出循环迭代产生的各次内存访问。"
+        },
+        {
+          "id": "locate-bottleneck",
+          "text": "从访问账本定位地址转换造成的开销，并说明削减它的方向。"
+        }
+      ],
+      "misconceptions": [
+        "把访问一次数组元素当成只产生一次内存访问，忽略为地址转换而读页表的那一次。",
+        "认为页表访问不消耗内存带宽，因为它读的只是元数据。",
+        "认为虚拟到物理的转换只改变地址数值，不改变访问次数。"
+      ],
+      "modules": [
+        {
+          "id": "frame-the-question",
+          "title": "从一行数组赋值说起",
+          "role": "problem-framing",
+          "description": "明确追踪对象，以及为什么需要逐次记账。",
+          "outcomeRefs": [
+            "explain-translation-cost",
+            "trace-loop-accesses"
+          ],
+          "order": 0
+        },
+        {
+          "id": "map-and-assume",
+          "title": "页表位置与追踪假设",
+          "role": "setup",
+          "description": "固定页表、地址空间与页面假设，使账目可算。",
+          "outcomeRefs": [
+            "explain-translation-cost",
+            "trace-loop-accesses"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decode-instructions",
+          "title": "拆解循环汇编",
+          "role": "worked-example",
+          "description": "把四条汇编指令翻译成地址计算与内存引用。",
+          "outcomeRefs": [
+            "trace-loop-accesses"
+          ],
+          "order": 2
+        },
+        {
+          "id": "count-the-accesses",
+          "title": "逐次访问账本",
+          "role": "worked-example",
+          "description": "按迭代列出取指、数据访问与页表访问。",
+          "outcomeRefs": [
+            "trace-loop-accesses",
+            "locate-bottleneck"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "瓶颈与迁移练习",
+          "role": "application-check",
+          "description": "解释额外流量的代价，并用新迭代条件检查账本方法。",
+          "outcomeRefs": [
+            "trace-loop-accesses",
+            "locate-bottleneck"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-translation-cost",
+          "trace-loop-accesses",
+          "locate-bottleneck"
+        ],
+        "method": "完成一次迭代的访问拆解，并回答跨页时账目哪一项发生变化。",
+        "successCriteria": [
+          "能说明每次指令取指与数据访问各需要一次页表访问",
+          "能把一次迭代的 10 次访问拆成 4 次取指、1 次数据写和 5 次页表访问",
+          "能指出额外流量来自地址转换而不是数组本身"
+        ],
+        "exerciseBlockId": "model-cross-page-question",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-18-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-array-loop",
+        "moduleId": "frame-the-question",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材示例：初始化一个数组",
+        "markdown": "教材用一个只有几行的 C 程序作为追踪对象：\n\n```c\nint array[1000];\n...\nfor (i = 0; i < 1000; i++)\n    array[i] = 0;\n```\n\n任务不是优化这段代码，而是把它在分页机制下产生的每一次内存访问都列出来，看清一次看似简单的数组初始化在硬件层到底做了什么。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000238"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存追踪"
+              ],
+              "lineStart": 4338,
+              "lineEnd": 4350,
+              "assetRefs": [],
+              "excerptSha256": "89ec499f49c76e8e5f4e3a43be3d6c9e26b9d87e818f4f1ab6f34a888b4f47e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-trace",
+        "moduleId": "frame-the-question",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么要逐次记账",
+        "markdown": "如果不记账，很容易把“访问一次 array[i]”当成一次内存访问。分页把一次逻辑访问拆成“先读页表、再读数据”两步，因此必须先知道指令从哪来、数组放在哪、页表放在哪，才能数清总量。追踪的目的就是把这层隐藏成本显式化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-array-loop"
+          ]
+        }
+      },
+      {
+        "id": "textbook-page-table-role",
+        "moduleId": "map-and-assume",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材补充：页表与地址转换",
+        "markdown": "页表保存虚拟地址到物理地址的转换，让系统知道地址空间的每一页实际驻留在物理内存中的哪个位置。每个地址空间都需要这种转换，因此一般来说每个进程各有一张页表。页表的确切结构可能由硬件固定，也可能由操作系统更灵活地管理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：数据结构——页表"
+              ],
+              "lineStart": 4351,
+              "lineEnd": 4382,
+              "assetRefs": [],
+              "excerptSha256": "d74f72f5db5e502e8d5f5e8b4d9b6dab2e6e9120ca3cf1c7b79f5b2e4c8955ee"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-translation-cost",
+        "moduleId": "map-and-assume",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：转换本身也要读内存",
+        "markdown": "页表本身也要占内存，所以要读页表项就先得访问一次内存。只要转换结果不在 CPU 内部缓存中，一次逻辑内存引用就会变成两次物理内存访问：先取转换，再用转换后的物理地址取数据。追踪时把这两步分别计数，才不会漏掉页表流量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-page-table-role"
+          ]
+        }
+      },
+      {
+        "id": "textbook-trace-assumptions",
+        "moduleId": "map-and-assume",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材设定：虚拟空间、页面与页表位置",
+        "markdown": "为了让账目可算，教材给出了一组简化设定：虚拟地址空间只有 64KB，页面大小为 1KB；页表是线性数组，位于物理地址 1024 处。代码位于虚拟地址 1024，属于 VPN 1，映射到物理帧 4。数组占 4000 字节，放在虚拟地址 40000 到 44000 之间，其虚拟页范围是 VPN 39 到 VPN 42。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：数据结构——页表"
+              ],
+              "lineStart": 4351,
+              "lineEnd": 4382,
+              "assetRefs": [],
+              "excerptSha256": "d74f72f5db5e502e8d5f5e8b4d9b6dab2e6e9120ca3cf1c7b79f5b2e4c8955ee"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-assumption-sensitivity",
+        "moduleId": "map-and-assume",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：简化假设不影响记账方法",
+        "markdown": "这些数字是为了让手算可行，不是真实系统参数。真实机器上页通常更大、页表可能是多级的，一次地址转换甚至可能触发多次内存访问。但记账方法不变：每多一层查表，就多一次内存访问，因此这些简化不会改变分页会放大内存流量这一结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-trace-assumptions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-assembly",
+        "moduleId": "decode-instructions",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材汇编：循环的四个步骤",
+        "markdown": "编译并反汇编后，循环体是四条指令：\n\n```asm\n0x1024 movl $0x0, (%edi,%eax,4)\n0x1028 incl %eax\n0x102c cmpl $0x03e8,%eax\n0x1030 jne 0x1024\n```\n\n第一条把 0 写入数组元素，地址由 %edi 保存的数组基址加上 %eax 乘以 4 得到；%eax 是循环索引，乘以 4 是因为每个整数占 4 字节。第二条递增索引，第三条与 1000 比较，第四条在不相等时跳回循环开头。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：数据结构——页表"
+              ],
+              "lineStart": 4351,
+              "lineEnd": 4382,
+              "assetRefs": [],
+              "excerptSha256": "d74f72f5db5e502e8d5f5e8b4d9b6dab2e6e9120ca3cf1c7b79f5b2e4c8955ee"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-address-arithmetic",
+        "moduleId": "decode-instructions",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：算出每次访问的虚拟页",
+        "markdown": "用教材假设计算数组元素地址：array[i] 的虚拟地址是 $40000 + 4i$。当 $i = 0$ 时地址为 40000，落在 VPN 39；当 $i = 999$ 时地址为 43996，仍在 VPN 42 内。因为 1KB 页对应 256 个 4 字节整数，索引每增加 256，元素就跨入下一个虚拟页，对应的页表项也随之改变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-assembly"
+          ]
+        }
+      },
+      {
+        "id": "textbook-access-accounting",
+        "moduleId": "count-the-accesses",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材账本：每次迭代的 10 次访问",
+        "markdown": "教材给出的映射是 VPN 39 到 PFN 7、VPN 40 到 PFN 8、VPN 41 到 PFN 9、VPN 42 到 PFN 10。追踪时，每条取指都产生两次内存引用：一次读页表找到指令所在的物理帧，一次取指令本身。mov 指令还额外有一次显式内存引用：先把数组的虚拟地址转换成物理地址，再访问数组。因此每个循环迭代共 10 次内存访问，包括 4 次取指、1 次显式更新，以及为这 4 次取指和 1 次更新服务的 5 次页表访问。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000240"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "(VPN 39 → PFN 7), (VPN 40 → PFN 8), (VPN 41 → PFN 9), (VPN 42 → PFN 10)"
+              ],
+              "lineStart": 4383,
+              "lineEnd": 4397,
+              "assetRefs": [
+                "parts/part-0002/images/c9b29f62970d797be61f8619584ea4a13973467fc7cbde96216258379156e449.jpg"
+              ],
+              "excerptSha256": "edcd720b1bc3976430561ba0a61f2bdc1e74b47c2b76e63e6f9a81882263adad"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-iteration-ledger",
+        "moduleId": "count-the-accesses",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：摊开一次迭代",
+        "markdown": "把一次迭代摊开看，顺序是：取指 0x1024（页表访问加取指）、取指 0x1028（页表访问加取指）、取指 0x102c（页表访问加取指）、取指 0x1030（页表访问加取指）、执行 mov（数组地址的页表访问加数组写）。五组“页表加实际访问”各占两次，合计 10 次。页表访问与实际访问是串行的：不知道物理帧号，就无法完成第二次访问。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-access-accounting"
+          ]
+        }
+      },
+      {
+        "id": "textbook-figure-pattern",
+        "moduleId": "count-the-accesses",
+        "depth": "support",
+        "kind": "figure",
+        "title": "教材图 18.7：虚拟与物理内存追踪",
+        "markdown": "教材图 18.7 用三层展示前 5 次循环迭代：最下层是指令的内存引用，左侧为虚拟地址、右侧为物理地址；中间层是数组访问；最上层只有物理地址的页表访问。每个迭代固定 10 次访问。图后留给学习者的问题是：循环继续到 5 次迭代之后会发生什么变化，哪些新的内存位置会被访问。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000240"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "(VPN 39 → PFN 7), (VPN 40 → PFN 8), (VPN 41 → PFN 9), (VPN 42 → PFN 10)"
+              ],
+              "lineStart": 4383,
+              "lineEnd": 4397,
+              "assetRefs": [
+                "parts/part-0002/images/c9b29f62970d797be61f8619584ea4a13973467fc7cbde96216258379156e449.jpg"
+              ],
+              "excerptSha256": "edcd720b1bc3976430561ba0a61f2bdc1e74b47c2b76e63e6f9a81882263adad"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bottleneck",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：额外流量从何而来",
+        "markdown": "从账本可以推出，1000 次迭代会产生 10000 次内存访问，其中 5000 次是页表访问；如果忽略转换，同样的循环只需 5000 次有效访问。多出来的那一半流量不产生任何有用数据，只是为了让地址可用。分页的性能瓶颈因此不在数组本身，而在每次访问都要先查转换这一结构。后续讨论的缓存转换结果、减少页表层级或增大页，都是在削减这笔开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-page-table-role",
+            "textbook-access-accounting",
+            "textbook-figure-pattern"
+          ]
+        }
+      },
+      {
+        "id": "model-cross-page-question",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "练习：跨页时账目如何变化",
+        "markdown": "循环推进到 $i = 256$ 时，array[i] 的虚拟地址首次落入 VPN 40。请回答：这一次迭代的总访问次数是否变化？变化的究竟是哪一项？提示：页表访问的次数取决于每条指令和每次数据访问各需要一次转换，而不是取决于映射到哪个物理帧。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-figure-pattern"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：内存追踪的三步方法",
+        "markdown": "内存追踪的通用方法是三步：先固定地址空间、页大小与页表位置等假设；再逐条拆解指令，算出每次访问的虚拟地址及其 VPN；最后为每次指令取指、数据读写各记一次页表访问，再把它们相加。这样得到的数字能直接比较不同页大小、页表结构或缓存方案带来的流量差异。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-access-accounting",
+            "model-bottleneck"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "loop-accounting-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-cross-page-question",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "outcomeRefs": [
+          "trace-loop-accesses",
+          "locate-bottleneck"
+        ],
+        "learningPurpose": "检查学习者能否把逐次记账方法迁移到跨页后的循环迭代。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-access-accounting",
+            "model-iteration-ledger"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出一次迭代中 5 次页表访问分别服务于哪次访问，并说明总访问次数为何是 10。"
+        }
+      }
+    ]
+  },
+  "subtitle": "分页:介绍",
+  "clusterId": "chapter-18",
+  "clusterIds": [
+    "chapter-18"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000238"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "内存追踪"
+      ],
+      "lineStart": 4338,
+      "lineEnd": 4350,
+      "assetRefs": [],
+      "excerptSha256": "89ec499f49c76e8e5f4e3a43be3d6c9e26b9d87e818f4f1ab6f34a888b4f47e8"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000239"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "补充：数据结构——页表"
+      ],
+      "lineStart": 4351,
+      "lineEnd": 4382,
+      "assetRefs": [],
+      "excerptSha256": "d74f72f5db5e502e8d5f5e8b4d9b6dab2e6e9120ca3cf1c7b79f5b2e4c8955ee"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000240"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "(VPN 39 → PFN 7), (VPN 40 → PFN 8), (VPN 41 → PFN 9), (VPN 42 → PFN 10)"
+      ],
+      "lineStart": 4383,
+      "lineEnd": 4397,
+      "assetRefs": [
+        "parts/part-0002/images/c9b29f62970d797be61f8619584ea4a13973467fc7cbde96216258379156e449.jpg"
+      ],
+      "excerptSha256": "edcd720b1bc3976430561ba0a61f2bdc1e74b47c2b76e63e6f9a81882263adad"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1047,
+    2480
+  ],
+  "scale": 0.88
+}

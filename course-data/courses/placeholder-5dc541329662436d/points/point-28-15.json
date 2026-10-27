@@ -1,0 +1,408 @@
+{
+  "id": "point-28-15",
+  "title": "不同操作系统，不同实现",
+  "shortSummary": "比较不同操作系统和硬件平台在锁实现上的差异，并说明可移植性考虑。",
+  "keyTerms": [
+    "操作系统差异",
+    "锁实现",
+    "硬件平台",
+    "移植"
+  ],
+  "animationType": "futexWord",
+  "animationSuggestion": "画面左侧显示锁字的二进制位，最高位与低位用不同形状标注；右侧显示内核等待队列。逐步演示两个线程竞争：失败者计数加一并进入队列，释放者翻转最高位后按计数决定是否唤醒，并允许单步重播同一轨迹。",
+  "difficulty": "中等",
+  "importance": 0.45,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-and-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于 futex 语义与 Linux 整数锁代码的事实和边界，补足比较维度、丢失唤醒直觉与迁移检查清单。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "compare-os-support",
+          "text": "比较不同操作系统为锁提供的睡眠/唤醒支持，指出共同思路与实现差异。"
+        },
+        {
+          "id": "explain-futex-semantics",
+          "text": "解释 futex 与内存位置的绑定关系，以及 futex_wait 的 expected 检查与 futex_wake 的语义。"
+        },
+        {
+          "id": "decode-linux-mutex",
+          "text": "解释 Linux futex 锁如何用一个整数同时编码持有状态与等待者数量，并识别无竞争快路径。"
+        },
+        {
+          "id": "apply-portability",
+          "text": "面对另一个操作系统的锁实现时，按绑定对象、内核职责与快路径代价提出可移植性问题。"
+        }
+      ],
+      "misconceptions": [
+        "把 futex 当成一把完整的锁；它只是内核提供的睡眠/唤醒原语，锁由用户态原子操作与它共同拼装。",
+        "认为 futex_wait 会无条件让线程睡眠；只有 address 处的值仍等于 expected 时才会睡眠。",
+        "认为各操作系统接口既然相似，实现细节就可以直接照搬。"
+      ],
+      "modules": [
+        {
+          "id": "os-support-landscape",
+          "title": "同类支持，不同细节",
+          "role": "context",
+          "description": "明确各操作系统都提供睡眠型锁支持，但接口与内核职责不同。",
+          "outcomeRefs": [
+            "compare-os-support"
+          ],
+          "order": 0
+        },
+        {
+          "id": "futex-object-and-calls",
+          "title": "futex 的身份与语义",
+          "role": "mechanism",
+          "description": "从内存位置、内核队列和 wait/wake 语义理解 futex 提供的原语。",
+          "outcomeRefs": [
+            "explain-futex-semantics"
+          ],
+          "order": 1
+        },
+        {
+          "id": "linux-integer-lock",
+          "title": "用一个整数实现互斥",
+          "role": "worked-example",
+          "description": "读教材中的 mutex_lock/mutex_unlock 代码，解释最高位与低位分别记录什么。",
+          "outcomeRefs": [
+            "decode-linux-mutex"
+          ],
+          "order": 2
+        },
+        {
+          "id": "fastpath-analysis",
+          "title": "无竞争时的代价",
+          "role": "analysis",
+          "description": "分析快路径为何只需原子位操作与原子加法，系统调用被推迟到竞争发生。",
+          "outcomeRefs": [
+            "decode-linux-mutex"
+          ],
+          "order": 3
+        },
+        {
+          "id": "transfer-check",
+          "title": "迁移到其他系统",
+          "role": "check",
+          "description": "用练习和检查清单把比较结果迁移到陌生的操作系统实现。",
+          "outcomeRefs": [
+            "compare-os-support",
+            "apply-portability"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "compare-os-support",
+          "explain-futex-semantics",
+          "decode-linux-mutex",
+          "apply-portability"
+        ],
+        "method": "完成整数状态变化的练习，并写出面对陌生系统时的三项可移植性检查。",
+        "successCriteria": [
+          "能说明 futex 与内存位置的绑定及 wait 的 expected 作用",
+          "能指出整数最高位与低位各自的含义",
+          "能区分快路径与竞争路径的代价"
+        ],
+        "exerciseBlockId": "reading-exercise",
+        "summaryBlockId": "portability-summary",
+        "nextPointId": "point-28-16"
+      }
+    },
+    "blocks": [
+      {
+        "id": "os-support-diff",
+        "moduleId": "os-support-landscape",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材视角：同类支持，不同细节",
+        "markdown": "为了构建更有效率的锁，操作系统普遍提供“在锁上睡眠与唤醒”的内核支持。教材指出，其他操作系统也提供了类似的支持，但细节不同：抽象意图一致，接口形式、内核参与程度和可用功能却各有取舍。\n\n因此讨论锁实现时不能只记住某一种 API，而要区分两件事：内核提供了哪些原语，以及库如何用这些原语拼装出一把锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000372"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "不同操作系统，不同实现"
+              ],
+              "lineStart": 6976,
+              "lineEnd": 7017,
+              "assetRefs": [],
+              "excerptSha256": "6532de15051aefd51b4bce0bffe8e805af31f21ccb1d6243cec0c3c950cc8925"
+            }
+          ]
+        }
+      },
+      {
+        "id": "linux-vs-solaris",
+        "moduleId": "os-support-landscape",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充比较：Linux futex 与 Solaris 接口",
+        "markdown": "教材以 Linux 的 futex 为例：它类似于 Solaris 的接口，但提供了更多内核功能。比较两个系统的锁支持时，对齐三个维度更容易看清差异：\n\n- 绑定对象：原语作用于哪个对象，是某个内存位置还是别的标识；\n- 内核职责：内核维护哪些结构，例如等待队列与调度；\n- 原语数量：用户态能直接调用多少种操作。\n\n“类似”描述的是思路相同，并不表示实现细节相同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "os-support-diff"
+          ]
+        }
+      },
+      {
+        "id": "futex-object",
+        "moduleId": "futex-object-and-calls",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "futex 绑定一个内存位置",
+        "markdown": "每个 futex 都关联一个特定的物理内存位置，并有一个事先建好的内核队列。睡眠与唤醒都以这个内存位置为身份：等待者挂到该位置对应的内核队列上，唤醒者针对同一位置发出唤醒。\n\n也就是说，futex 本身不保存“锁是否被持有”这一状态；状态仍在用户态的那块内存里，内核只负责队列与睡眠。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000372"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "不同操作系统，不同实现"
+              ],
+              "lineStart": 6976,
+              "lineEnd": 7017,
+              "assetRefs": [],
+              "excerptSha256": "6532de15051aefd51b4bce0bffe8e805af31f21ccb1d6243cec0c3c950cc8925"
+            }
+          ]
+        }
+      },
+      {
+        "id": "futex-intuition",
+        "moduleId": "futex-object-and-calls",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：分诊台与候诊队伍",
+        "markdown": "可以把一个 futex 想成分诊台：内存位置是科室编号，内核队列是候诊队伍。线程先在用户态判断该不该等，再按编号登记睡觉；释放锁的线程只要报出同一编号，就能叫醒队伍里的一位。换一家医院（另一个操作系统），挂号规则可能不同，但“按同一编号找到同一支队伍”的思路相通。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "futex-object"
+          ]
+        }
+      },
+      {
+        "id": "futex-calls",
+        "moduleId": "futex-object-and-calls",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "两个调用：futex_wait 与 futex_wake",
+        "markdown": "教材给出两个调用：\n\n- `futex_wait(address, expected)`：如果 `address` 处的值等于 `expected`，就让调用线程睡眠；否则调用立刻返回。\n- `futex_wake(address)`：唤醒该等待队列中的一个线程。\n\n`wait` 带有期望值参数，它把“检查条件”和“睡眠”合并进一次内核调用，而不是先在用户态检查、再无条件睡眠。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000372"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "不同操作系统，不同实现"
+              ],
+              "lineStart": 6976,
+              "lineEnd": 7017,
+              "assetRefs": [],
+              "excerptSha256": "6532de15051aefd51b4bce0bffe8e805af31f21ccb1d6243cec0c3c950cc8925"
+            }
+          ]
+        }
+      },
+      {
+        "id": "lost-wakeup",
+        "moduleId": "futex-object-and-calls",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "补充解释：expected 如何避免丢失唤醒",
+        "markdown": "`expected` 参数解决“丢失唤醒”竞态。用户态线程发现锁被持有后，可能在真正睡下之前，锁已被释放并发出唤醒；若无条件下睡，这次唤醒就被错过。\n\n把观察到的值作为 `expected` 传入后，内核只在值仍等于它时才让线程睡眠；值已变化则立即返回，线程重新检查。这是“用户态检查、内核复核”的经典模式：睡眠决定与状态的最后确认发生在同一次内核操作中。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "futex-calls"
+          ]
+        }
+      },
+      {
+        "id": "linux-lock-code",
+        "moduleId": "linux-integer-lock",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：基于 futex 的互斥锁",
+        "markdown": "教材给出 nptl 库 `lowlevellock.h` 中的实现（节选，保留关键分支）：\n\n```c\nvoid mutex_lock (int *mutex) {\n    if (atomic_bit_test_set (mutex, 31) == 0)\n        return;                 /* 快路径：最高位原为 0，拿到锁 */\n    atomic_increment (mutex);   /* 记录一位等待者 */\n    while (1) {\n        if (atomic_bit_test_set (mutex, 31) == 0) {\n            atomic_decrement (mutex);\n            return;\n        }\n        v = *mutex;\n        if (v >= 0)\n            continue;           /* 值已变化，重新检查 */\n        futex_wait (mutex, v);  /* 确认仍为负值才睡眠 */\n    }\n}\n\nvoid mutex_unlock (int *mutex) {\n    if (atomic_add_zero (mutex, 0x80000000))\n        return;                 /* 翻转后为零：没有等待者 */\n    futex_wake (mutex);         /* 有等待者，唤醒一个 */\n}\n```\n\n获取锁、登记等待者、复核之后再睡眠、释放时按需唤醒，构成完整的竞争路径。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000372"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "不同操作系统，不同实现"
+              ],
+              "lineStart": 6976,
+              "lineEnd": 7017,
+              "assetRefs": [],
+              "excerptSha256": "6532de15051aefd51b4bce0bffe8e805af31f21ccb1d6243cec0c3c950cc8925"
+            }
+          ]
+        }
+      },
+      {
+        "id": "single-integer-encoding",
+        "moduleId": "linux-integer-lock",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "一个整数记录锁与等待者",
+        "markdown": "这段代码只用一个整数同时记录两件事：最高位表示锁是否被持有，其余所有位记录等待者的个数。最高位被设置时整数为负，因此“锁是负的”就等价于“锁已被持有”。\n\n这也解释了 `unlock` 中的 `0x80000000`：它正好翻转最高位，把锁标记为释放。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000372"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "不同操作系统，不同实现"
+              ],
+              "lineStart": 6976,
+              "lineEnd": 7017,
+              "assetRefs": [],
+              "excerptSha256": "6532de15051aefd51b4bce0bffe8e805af31f21ccb1d6243cec0c3c950cc8925"
+            }
+          ]
+        }
+      },
+      {
+        "id": "fastpath-optimization",
+        "moduleId": "fastpath-analysis",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "快路径把系统调用推迟到竞争发生",
+        "markdown": "教材强调这个实现优化了最常见的无竞争情况：只有一个线程获取和释放时，所做的工作很少，获取时一次原子的位测试并设置，释放时一次原子加法。\n\n释放时的原子加法翻转最高位；如果结果为零，说明没有其他位，即没有等待者，函数直接返回，完全不必进入内核。只有确实发生竞争，才付出 `futex_wait` 或 `futex_wake` 的代价。分层策略让锁在常见情况下保持廉价，这一点比具体 API 形式更值得迁移时关注。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "linux-lock-code",
+            "single-integer-encoding"
+          ]
+        }
+      },
+      {
+        "id": "reading-exercise",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：跟踪整数的取值变化",
+        "markdown": "设整数初值为 0，线程 A、B 争用同一把锁。\n\n1. A 执行 `atomic_bit_test_set(mutex, 31)` 得到什么结果，接下来会怎样？\n2. B 失败后执行 `atomic_increment(mutex)`，此时整数的符号与低位分别说明什么？\n3. A 调用 `mutex_unlock` 时，为什么需要走唤醒路径而不是直接返回？\n\n参考思路：A 得到 0，因为最高位原为 0，A 直接返回；B 让整数变负且低位为 1，表示锁被持有且有一位等待者；A 释放时原子加法结果不为零，说明仍有等待者，于是 `futex_wake` 唤醒 B，B 重新执行位测试并进入临界区。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "linux-lock-code",
+            "single-integer-encoding",
+            "fastpath-optimization"
+          ]
+        }
+      },
+      {
+        "id": "portability-summary",
+        "moduleId": "transfer-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "迁移检查清单",
+        "markdown": "遇到另一个操作系统的锁实现时，问三个问题：\n\n1. 它提供的睡眠/唤醒原语以什么为身份，例如某个内存地址？\n2. 内核替用户态维护了什么，等待队列、调度还是更多功能？\n3. 库能否只用原子操作加这些原语，实现不竞争时的快路径？\n\n接口通常相似，细节和可用功能不同；把“相似”当成“相同”，会把可移植性判断建立在错误假设上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "os-support-diff",
+            "futex-object",
+            "fastpath-optimization"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "futex-state-check",
+        "type": "formative-check",
+        "anchorBlockId": "reading-exercise",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "decode-linux-mutex",
+          "apply-portability"
+        ],
+        "learningPurpose": "检查学习者能否根据单个整数的位编码推断锁状态与等待者数量，并把同一分析迁移到陌生实现。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "linux-lock-code",
+            "single-integer-encoding"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "写出整数从 0 到被持有、再到被释放的取值变化，并说明最高位与低位各自的含义。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出整数从 0 到被持有、再到被释放的取值变化，并说明最高位与低位各自的含义。"
+        }
+      }
+    ]
+  },
+  "subtitle": "锁",
+  "clusterId": "chapter-28",
+  "clusterIds": [
+    "chapter-28"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000372"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "不同操作系统，不同实现"
+      ],
+      "lineStart": 6976,
+      "lineEnd": 7017,
+      "assetRefs": [],
+      "excerptSha256": "6532de15051aefd51b4bce0bffe8e805af31f21ccb1d6243cec0c3c950cc8925"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    958,
+    1847
+  ],
+  "scale": 0.89
+}

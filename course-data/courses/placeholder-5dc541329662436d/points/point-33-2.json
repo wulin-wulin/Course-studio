@@ -1,0 +1,476 @@
+{
+  "id": "point-33-2",
+  "title": "重要 API：select()（或 poll()）",
+  "shortSummary": "介绍 select/poll 如何等待多个文件描述符上的事件。",
+  "keyTerms": [
+    "select",
+    "poll",
+    "文件描述符",
+    "事件等待"
+  ],
+  "animationType": "selectDescriptors",
+  "animationSuggestion": "按时间轴展示三个描述符从“未就绪”到“数据包到达”的变化：select 调用期间停留在等待状态，返回时关注的集合收窄为就绪子集并给出返回值计数，处理后回到等待；可切换 timeout 为 NULL、零或有限值，观察无限等待、立即返回与定时醒来的差别。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-33-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-api-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材给出的 select 原型、就绪子集语义与超时用法，围绕“事件循环如何获知事件”重排讲解顺序，补充就绪示例、超时取舍对照和一轮循环的检查练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-select-purpose",
+          "text": "解释 select()/poll() 在事件循环中承担什么职责。"
+        },
+        {
+          "id": "read-select-args",
+          "text": "读懂 select() 的 nfds、三个描述符集合、timeout 参数与返回值的语义。"
+        },
+        {
+          "id": "choose-timeout",
+          "text": "根据服务器还需要做什么，为 timeout 选择合适的取值方式。"
+        },
+        {
+          "id": "justify-nonblocking",
+          "text": "说明为什么基于事件的并发必须避免阻塞调用。"
+        }
+      ],
+      "misconceptions": [
+        "以为 select() 返回的是调用前传入的完整描述符集合，忽略了返回时会用就绪子集替换原集合。",
+        "以为 select() 会替程序读出数据；实际上它只报告哪些描述符已就绪，读取仍要由后续的 I/O 调用完成。",
+        "以为单线程服务器里某个处理程序阻塞只影响它自己，忽略了阻塞调用会阻止整个循环的进展。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-role",
+          "title": "事件循环从哪里获得事件",
+          "role": "motivation",
+          "description": "先明确 select()/poll() 要解决的问题，再给出它们的基本定位。",
+          "outcomeRefs": [
+            "explain-select-purpose"
+          ],
+          "order": 0
+        },
+        {
+          "id": "api-anatomy",
+          "title": "原型、集合与返回值",
+          "role": "concept-model",
+          "description": "拆解 select() 的参数与“就绪子集替换”的返回语义，并用例子走一遍。",
+          "outcomeRefs": [
+            "read-select-args"
+          ],
+          "order": 1
+        },
+        {
+          "id": "blocking-model",
+          "title": "阻塞与非阻塞接口",
+          "role": "concept-contrast",
+          "description": "对比两类接口语义，说明阻塞调用为何会让事件循环失去意义。",
+          "outcomeRefs": [
+            "justify-nonblocking"
+          ],
+          "order": 2
+        },
+        {
+          "id": "timeout-policy",
+          "title": "就绪检查与超时策略",
+          "role": "decision",
+          "description": "说明可读可写检查的用途，并比较超时参数的不同取值。",
+          "outcomeRefs": [
+            "choose-timeout",
+            "read-select-args"
+          ],
+          "order": 3
+        },
+        {
+          "id": "transfer-and-check",
+          "title": "拼成非阻塞事件循环并自查",
+          "role": "practice-summary",
+          "description": "把原语组合成服务流程，用一轮循环的检查题检验理解，并桥接下一节。",
+          "outcomeRefs": [
+            "explain-select-purpose",
+            "read-select-args",
+            "choose-timeout",
+            "justify-nonblocking"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-select-purpose",
+          "read-select-args",
+          "choose-timeout",
+          "justify-nonblocking"
+        ],
+        "method": "独立写出单线程服务器一轮事件循环的步骤，说明三个集合、超时取值与非阻塞读取各自的作用。",
+        "successCriteria": [
+          "能按“重装集合→select→只处理就绪描述符→回到循环”的顺序描述一轮",
+          "能说明返回时集合被替换为就绪子集，且返回值是就绪描述符总数",
+          "能为需要定期处理其他工作的服务器选择有限超时并给出理由"
+        ],
+        "exerciseBlockId": "event-service-checklist",
+        "summaryBlockId": "bridge-next",
+        "nextPointId": "point-33-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "select-role",
+        "moduleId": "problem-and-role",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材定位：等待事件的基本 API",
+        "markdown": "事件循环伪代码里的 `getEvents()` 负责取回已经发生的事件，但系统究竟靠什么知道“有事件发生”？教材在事件循环之后紧接着回答这个问题：大多数系统提供的基本 API，就是 `select()` 或 `poll()` 系统调用。\n\n它们对程序的支持很简单——检查是否有任何应该关注的进入 I/O。例如一个网络应用（如 Web 服务器）想检查是否有网络数据包已经到达，以便为它们提供服务，这两个系统调用就让你做到这一点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000448"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "重要 API：select()（或 poll()）"
+              ],
+              "lineStart": 9054,
+              "lineEnd": 9071,
+              "assetRefs": [],
+              "excerptSha256": "78a63d4a6d14634b76e3cad48340f7d9b3975e1c8093d0034d5176821d66cf5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "loop-to-select",
+        "moduleId": "problem-and-role",
+        "depth": "core",
+        "kind": "note",
+        "title": "模型补充：select() 就是 getEvents() 的一种实现",
+        "markdown": "把两段内容接起来看：事件循环每轮先调用 `getEvents()`，而 `select()` 正是这个位置可以使用的具体手段之一。一次 `select()` 调用就是一轮“事件到访检查”——它不处理事件，只回答这一轮哪些描述符值得处理。因此事件循环的调度权仍然留在程序手里：检查完再决定依次处理哪些就绪描述符。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "select-role"
+          ]
+        }
+      },
+      {
+        "id": "select-signature",
+        "moduleId": "api-anatomy",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材原型：select() 的参数",
+        "markdown": "教材以 macOS X 上的手册页为例，给出 `select()` 的原型：\n\n```c\nint select(int nfds,\n    fd_set *restrict readfds,\n    fd_set *restrict writefds,\n    fd_set *restrict errorfds,\n    struct timeval *restrict timeout);\n```\n\n三个 `fd_set` 指针分别指向要检查读、写和异常的描述符集合，`timeout` 控制等待时间。`nfds` 决定每个集合中检查多少个描述符：检查集合中从 0 到 `nfds-1` 的描述符，也就是前 `nfds` 个。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000448"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "重要 API：select()（或 poll()）"
+              ],
+              "lineStart": 9054,
+              "lineEnd": 9071,
+              "assetRefs": [],
+              "excerptSha256": "78a63d4a6d14634b76e3cad48340f7d9b3975e1c8093d0034d5176821d66cf5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "select-return",
+        "moduleId": "api-anatomy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材语义：用就绪子集替换原集合",
+        "markdown": "`select()` 检查三个集合中的描述符，分别看它们是否已准备好读取、是否准备好写入，或者是否有异常情况待处理。\n\n关键在返回值：返回时，`select()` 用由“给定请求操作已准备好”的描述符组成的子集，替换调用者传入的集合；同时返回所有集合中就绪描述符的总数。也就是说，调用者拿回的不再是原来的关注清单，而是这一轮真正可以动的描述符。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000448"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "重要 API：select()（或 poll()）"
+              ],
+              "lineStart": 9054,
+              "lineEnd": 9071,
+              "assetRefs": [],
+              "excerptSha256": "78a63d4a6d14634b76e3cad48340f7d9b3975e1c8093d0034d5176821d66cf5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "ready-subset-example",
+        "moduleId": "api-anatomy",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：三个描述符走一遍",
+        "markdown": "设服务器只关注描述符 3、4、5 的可读事件，调用前把这三个位都装进 `readfds`，并取 `nfds = 6`。\n\n- 若此刻只有描述符 4 有新数据包到达，`select()` 返回 1，`readfds` 里只剩描述符 4 的位；\n- 随后事件循环只对描述符 4 执行读取，不会去碰 3 和 5；\n- 因为原集合已经被就绪子集替换，下一轮必须重新装填关注的描述符，再调用 `select()`。\n\n这个例子也解释了常见误解：如果把 `select()` 当成“返回全部关注描述符”，就会把未就绪的描述符当作可以读取，进而在后续 I/O 上白等。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "select-signature",
+            "select-return"
+          ]
+        }
+      },
+      {
+        "id": "blocking-vs-nonblocking",
+        "moduleId": "blocking-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材补充：阻塞与非阻塞接口",
+        "markdown": "教材专门补充了两类接口语义：阻塞（或同步，synchronous）接口在返回给调用者之前完成所有工作；非阻塞（或异步，asynchronous）接口开始一些工作，但立即返回，从而让所有需要完成的工作都在后台完成。\n\n通常造成阻塞的是某种 I/O：如果一个调用必须从磁盘读取才能完成，它可能阻塞，等待发送到磁盘的 I/O 请求返回。非阻塞接口可以用于任何类型的编程（例如使用线程），但在基于事件的方法中非常重要，因为阻塞的调用会阻止所有进展。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000449"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：阻塞与非阻塞接口"
+              ],
+              "lineStart": 9072,
+              "lineEnd": 9087,
+              "assetRefs": [],
+              "excerptSha256": "727c8d41841a66adec87cff0b750285c57d4255ff21df97dadec2c2ca82446df"
+            }
+          ]
+        }
+      },
+      {
+        "id": "blocking-stalls-loop",
+        "moduleId": "blocking-model",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "模型补充：一次阻塞会拖住整轮循环",
+        "markdown": "常见误解是“某个处理程序阻塞只影响它自己”。教材的结论更严格：阻塞的调用会阻止所有进展。事件循环停在这次调用上，期间即使其他描述符已经就绪，也得不到处理。\n\n所以基于事件的写法把“等待”集中到 `select()`/`poll()` 上，等它报告就绪之后，处理程序只做少量不会长期等待的工作；真正可能阻塞的 I/O 则改用非阻塞接口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "blocking-vs-nonblocking"
+          ]
+        }
+      },
+      {
+        "id": "readiness-and-timeout",
+        "moduleId": "timeout-policy",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材要点：可读可写检查与超时参数",
+        "markdown": "关于 `select()` 有几点要注意。首先，它可以让你检查描述符是否可以读取和写入：前者让服务器确定新数据包已到达并且需要处理，后者让服务器知道何时可以回复，即出站队列未满。\n\n其次要留意超时参数。一种常见用法是把超时设置为 `NULL`，这会导致 `select()` 无限期地阻塞，直到某个描述符准备就绪；但更健壮的服务器通常会指定某种超时，一种常见技术是把超时设置为零，让 `select()` 立即返回。\n\n`poll()` 系统调用与 `select()` 非常相似，详细信息应查阅其手册页或 Stevens 和 Rago 的书。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000449"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：阻塞与非阻塞接口"
+              ],
+              "lineStart": 9072,
+              "lineEnd": 9087,
+              "assetRefs": [],
+              "excerptSha256": "727c8d41841a66adec87cff0b750285c57d4255ff21df97dadec2c2ca82446df"
+            }
+          ]
+        }
+      },
+      {
+        "id": "timeout-policy-comparison",
+        "moduleId": "timeout-policy",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：三种超时取值的取舍",
+        "markdown": "教材给出 `NULL` 与零两种常见设置，这里按同一组维度把它们和有限超时放在一起比较：\n\n| 超时设置 | select() 的行为 | 适用情境 | 需要留意的代价 |\n|---|---|---|---|\n| `NULL` | 无限期阻塞，直到某个描述符就绪 | 循环暂时没有别的事要做，可以安心等待 | 等待期间整个循环无法推进其他工作 |\n| 零 | 立即返回，哪怕没有描述符就绪 | 需要在同一轮里顺带检查其他任务 | 若每轮都只给零超时，循环会不断空转；教材因此只说这是“一种常见技术”，并称指定某种超时更健壮 |\n| 有限值 | 最多等待给定时间，超时后返回 | 既要及时响应 I/O，又要定期回来处理其他工作 | 太短会频繁空转，太长会推迟其他工作 |\n\n选择规则可以概括为：先问“循环在等待期间还有没有别的事要做”；有，就不要用 `NULL`，并给一个与那些工作节奏匹配的有限超时。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "readiness-and-timeout"
+          ]
+        }
+      },
+      {
+        "id": "poll-relation",
+        "moduleId": "api-anatomy",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：select() 与 poll() 的关系",
+        "markdown": "`select()` 和 `poll()` 解决的是同一个问题：告诉事件循环哪些描述符已经就绪。教材只指出两者非常相似，并把 `poll()` 的接口细节交给手册页与 Stevens 和 Rago 的书；因此本知识点用 `select()` 建立的结构性理解——传入关注的集合、拿回就绪子集、据此处理少量工作——可以迁移到 `poll()`，具体参数差异应以手册页为准，不要凭记忆补全。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "readiness-and-timeout"
+          ]
+        }
+      },
+      {
+        "id": "nonblocking-loop-service",
+        "moduleId": "transfer-and-check",
+        "depth": "core",
+        "kind": "application",
+        "title": "教材收束：拼成非阻塞事件循环",
+        "markdown": "无论用 `select()` 还是 `poll()`，这些基本原语都为我们提供了一种构建非阻塞事件循环的方法：它可以简单地检查传入的数据包，从带有消息的套接字中读取数据，并根据需要进行回复。\n\n注意这里的顺序——先检查就绪，再有针对性地读写。事件循环不靠某个调用长期阻塞来等事件，而是由 `select()`/`poll()` 显式报告“哪些描述符现在可以动”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000449"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：阻塞与非阻塞接口"
+              ],
+              "lineStart": 9072,
+              "lineEnd": 9087,
+              "assetRefs": [],
+              "excerptSha256": "727c8d41841a66adec87cff0b750285c57d4255ff21df97dadec2c2ca82446df"
+            }
+          ]
+        }
+      },
+      {
+        "id": "event-service-checklist",
+        "moduleId": "transfer-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：写出一轮循环并自查",
+        "markdown": "情境：一个单线程服务器同时关注 200 个连接，另外还要每隔一段时间把日志刷到磁盘。请按顺序写出每一轮事件循环要做的事，并说明 `readfds`、`writefds` 与 `timeout` 应如何设置。\n\n自查要点：\n\n1. 每轮先用新集合装填关注的描述符——上一轮的集合已被替换为就绪子集，不能直接复用；\n2. 调用 `select()`，用可读集合判断新请求或新数据，用可写集合判断能否回复；\n3. 只对就绪的描述符执行读取或写入，并保证这些 I/O 不会长期阻塞；\n4. 因为有刷日志等其他工作，`timeout` 应取有限值而不是 `NULL`，让循环定期回来处理日志；\n5. 若把超时写成零，且循环没有别的工作，就会退化成不停空转的轮询。\n\n如果第 1 步写成“复用上一轮集合”，说明还没有掌握“就绪子集替换原集合”这一语义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "nonblocking-loop-service",
+            "readiness-and-timeout"
+          ]
+        }
+      },
+      {
+        "id": "bridge-next",
+        "moduleId": "transfer-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一节",
+        "markdown": "一句话总结：`select()`（或 `poll()`）把“等待”变成一次显式的就绪查询——它报告哪些描述符可读、可写或有异常，事件循环据此让处理程序用非阻塞 I/O 完成少量工作，然后回到循环再次查询。\n\n下一节“使用 select()”会把这套结构落成完整代码，展示怎样在每轮循环中准备集合、调用 `select()` 并逐个处理就绪描述符。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "select-role",
+            "select-signature",
+            "select-return",
+            "blocking-vs-nonblocking",
+            "readiness-and-timeout",
+            "nonblocking-loop-service"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "event-service-check",
+        "type": "formative-check",
+        "title": "一轮事件循环自查",
+        "anchorBlockId": "event-service-checklist",
+        "moduleId": "transfer-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "read-select-args",
+          "choose-timeout",
+          "justify-nonblocking"
+        ],
+        "learningPurpose": "检查学习者能否把就绪子集、超时取值与非阻塞约束同时应用到一轮真实的服务器循环中。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "event-service-checklist"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "checkpoints": [
+            "每轮重新装填描述符集合",
+            "只处理就绪描述符",
+            "为有其他工作的循环选择有限超时"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出单线程服务器一轮事件循环的五个步骤，并说明超时为什么不能设为 `NULL`。"
+        }
+      }
+    ]
+  },
+  "subtitle": "基于事件的并发(进阶)",
+  "clusterId": "chapter-33",
+  "clusterIds": [
+    "chapter-33"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000448"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "重要 API：select()（或 poll()）"
+      ],
+      "lineStart": 9054,
+      "lineEnd": 9071,
+      "assetRefs": [],
+      "excerptSha256": "78a63d4a6d14634b76e3cad48340f7d9b3975e1c8093d0034d5176821d66cf5d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000449"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "补充：阻塞与非阻塞接口"
+      ],
+      "lineStart": 9072,
+      "lineEnd": 9087,
+      "assetRefs": [],
+      "excerptSha256": "727c8d41841a66adec87cff0b750285c57d4255ff21df97dadec2c2ca82446df"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2166,
+    704
+  ],
+  "scale": 0.89
+}

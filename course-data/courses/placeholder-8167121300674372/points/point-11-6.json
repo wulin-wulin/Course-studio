@@ -1,0 +1,576 @@
+{
+  "id": "point-11-6",
+  "title": "分支预测",
+  "shortSummary": "解释运行时与编译期分支预测的区别，说明分支模式如何影响程序执行性能。",
+  "keyTerms": [
+    "分支预测",
+    "运行时",
+    "编译期",
+    "性能"
+  ],
+  "animationType": "branchPredictorFeedback",
+  "animationSuggestion": "逐步展示取指路径、预测方向、实际结果与预测失败时的流水线清空，并用累计命中/失败计数显示预测器如何随执行逐渐收敛。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-11-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对运行时与编译期两类分支预测的划分，以及 Rust filter 和 Clang likely 两处实例；按“为什么需要—运行时预测—无分支改写—编译期布局—比较检查”重排，并补充流水线代价、宏语义和迁移边界。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-branch-need",
+          "text": "解释条件跳转为什么会让 CPU 难以提前确定后续指令，从而影响执行效率。"
+        },
+        {
+          "id": "explain-runtime-predictor",
+          "text": "说明运行时分支预测器如何通过大量执行训练预测模型，以及命中、失败和预测开销各自意味着什么。"
+        },
+        {
+          "id": "apply-branchless-count",
+          "text": "把含条件计数的循环改写成无分支形式，并说明这种改写的前提与收益边界。"
+        },
+        {
+          "id": "explain-compile-time-prediction",
+          "text": "说明 likely/unlikely（__builtin_expect）如何影响编译器的分支权重与基本块布局。"
+        },
+        {
+          "id": "compare-two-levels",
+          "text": "按作用层次、信息来源、生效时机和代价比较运行时与编译期分支预测，并为新场景选择合适手段。"
+        }
+      ],
+      "misconceptions": [
+        "以为分支预测只是 CPU 硬件的事，编译器生成的代码无法影响分支的执行代价。",
+        "以为加上 likely/unlikely 就一定更快；它们只提供权重提示，效果取决于编译器决策与运行时实际走向。",
+        "以为无分支写法在任何情况下都更快；它用固定算术换掉难以预测的跳转，分支极少失败时反而可能略慢。"
+      ],
+      "modules": [
+        {
+          "id": "why-branch-prediction",
+          "title": "问题导入：为什么要预测分支",
+          "role": "motivation",
+          "description": "从顺序执行与条件跳转的差别出发，说明提前知道后续指令为何是流水线填满的前提。",
+          "outcomeRefs": [
+            "explain-branch-need"
+          ],
+          "order": 0
+        },
+        {
+          "id": "runtime-prediction",
+          "title": "运行时分支预测与无分支改写",
+          "role": "mechanism",
+          "description": "先看硬件预测器如何训练、命中与失败，再看教材用 Rust filter 案例演示的源码级无分支改写。",
+          "outcomeRefs": [
+            "explain-runtime-predictor",
+            "apply-branchless-count"
+          ],
+          "order": 1
+        },
+        {
+          "id": "compile-time-layout",
+          "title": "编译期分支预测：权重与基本块布局",
+          "role": "worked-example",
+          "description": "对照 if-else 的两种汇编布局，追踪 likely/unlikely 如何改变 LLVM 的分支权重和实际生成的汇编。",
+          "outcomeRefs": [
+            "explain-compile-time-prediction"
+          ],
+          "order": 2
+        },
+        {
+          "id": "compare-and-check",
+          "title": "比较与检查",
+          "role": "synthesis",
+          "description": "用统一维度对照两类预测，并通过场景判断和边界说明检验迁移能力。",
+          "outcomeRefs": [
+            "compare-two-levels"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-branch-need",
+          "explain-runtime-predictor",
+          "apply-branchless-count",
+          "explain-compile-time-prediction",
+          "compare-two-levels"
+        ],
+        "method": "先说明条件跳转为何妨碍提前取指、预测器如何训练与失败、无分支改写和 likely/unlikely 各自作用在哪一层，再完成三个场景的手段选择并在比较表中说明依据与代价。",
+        "successCriteria": [
+          "能指出每个场景缺少的是运行时信息还是编译期信息",
+          "能说明所选手段的代价与失效条件",
+          "不把 likely/unlikely 或去分支写法的收益当作无条件保证"
+        ],
+        "exerciseBlockId": "model-scenario-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-11-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-frame",
+        "moduleId": "why-branch-prediction",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材中的分支预测一节",
+        "markdown": "教材在“跳转”之下单独设立“分支预测”一节，把讨论从“如何写出跳转”转到“跳转如何影响执行效率”。这一节分两层展开：运行时的分支预测，以及编译期的分支预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测"
+              ],
+              "lineStart": 1698,
+              "lineEnd": 1699,
+              "assetRefs": [],
+              "excerptSha256": "f067897e5031729a8ec5e40f2e44f91afa35f7f4cc90c2133603f2b379fe5334"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-sequential-vs-branch",
+        "moduleId": "why-branch-prediction",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：CPU 需要提前知道后续指令",
+        "markdown": "教材指出，现代 CPU 的多数性能提升手段都要求预先知道后续要执行的指令：例如 `mov w0, #0` 后面跟着 `mov w1, #0` 时，两条指令没有数据依赖，CPU 可以调换顺序或并行执行。顺序执行时预测后续指令很容易；但遇到条件跳转，只有真正运行到那条指令，CPU 才知道下一步走哪里，执行效率因此受到很大影响。也正因如此，现在大部分 CPU 都配备了分支预测器。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000089"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测",
+                "运行时分支预测"
+              ],
+              "lineStart": 1700,
+              "lineEnd": 1762,
+              "assetRefs": [],
+              "excerptSha256": "86fc67c64451688e2522d2efea450c6c03f339c9d7f596314835c4f55f764cde"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-why",
+        "moduleId": "why-branch-prediction",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：被浪费的是重叠执行的机会",
+        "markdown": "把教材的结论展开一层：现代处理器让取指、译码、执行等阶段重叠推进，多条指令同时在流水线中移动。要维持这种重叠，取指阶段必须持续拿到“下一条指令”。条件跳转让后续地址取决于尚未算出的条件，取指只能等待，前面阶段的并行能力随之闲置。因此“提前知道后续指令”不是锦上添花，而是流水线能否填满的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-section-frame",
+            "textbook-sequential-vs-branch"
+          ]
+        }
+      },
+      {
+        "id": "textbook-branch-predictor",
+        "moduleId": "runtime-prediction",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：预测器靠大量执行训练模型",
+        "markdown": "教材说明，分支预测器的工作方式是：通过大量执行，训练出一个能够预测某条分支指令执行结果的模型。预测对了，CPU 就能按猜测的路径提前取指和执行；预测错了，则要丢弃按错误路径做的准备。教材同时提醒，这种预测本身也耗时，有时反而会拖慢执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000089"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测",
+                "运行时分支预测"
+              ],
+              "lineStart": 1700,
+              "lineEnd": 1762,
+              "assetRefs": [],
+              "excerptSha256": "86fc67c64451688e2522d2efea450c6c03f339c9d7f596314835c4f55f764cde"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-predictor-loop",
+        "moduleId": "runtime-prediction",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：一次预测—执行的反馈循环",
+        "markdown": "把一次分支拆开看：预测器维护“这条分支下次会怎么走”的状态，处理器据此继续取指；等条件真正算出，实际结果被送回预测器更新状态。命中时流水线不中断；失败时要清空错误路径上已取入的指令，再从正确目标重新开始。状态随执行历史改变，这正是它被称为“运行时”预测的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-branch-predictor",
+            "model-pipeline-why"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rust-branchless",
+        "moduleId": "runtime-prediction",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材案例：Rust `filter().count()` 的无分支写法",
+        "markdown": "教材引用 Rust 标准库 `library/core/src/iter/adapters/filter.rs` 中的 `count` 特化作例。带分支的写法是：\n\n```rust, ignore\nlet mut count = 0;\nfor element in collection {\n    if some_condition(element) {\n        count += 1;\n    }\n}\n```\n\n无分支写法把布尔结果直接当作整数累加：\n\n```rust, ignore\nlet mut count = 0;\nfor element in collection {\n    count += some_condition(element) as usize\n}\n```\n\n布尔值在底层必然是整数 0 或 1，累加同样完成计数，却去掉了 `if` 对应的条件跳转，于是不必依赖分支预测器。教材还保留了源码注释的判断：除开完美预测这种一般不可达的情形，无分支版本在超过 90% 的场景（几乎覆盖所有真实工作负载）明显更快，其余场景只是略慢。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000089"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测",
+                "运行时分支预测"
+              ],
+              "lineStart": 1700,
+              "lineEnd": 1762,
+              "assetRefs": [],
+              "excerptSha256": "86fc67c64451688e2522d2efea450c6c03f339c9d7f596314835c4f55f764cde"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-branchless-tradeoff",
+        "moduleId": "runtime-prediction",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：无分支写法的收益条件",
+        "markdown": "改写不是免费的：它把“可能失败的跳转”换成“总要执行的算术与类型转换”。收益取决于两件事——分支结果是否难以预测，以及每次迭代里条件求值有多贵。当分支几乎总是同一方向时，预测器本来就很少失败，多出来的算术反而可能略慢，这正对应教材注释里“其余场景只是略慢”。在汇编层面，这种写法通常变成一次比较、一次把条件结果写成 0/1，再加一次无条件累加。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rust-branchless",
+            "textbook-branch-predictor"
+          ]
+        }
+      },
+      {
+        "id": "model-branchless-misconception",
+        "moduleId": "runtime-prediction",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "纠正：无分支不等于无条件更快",
+        "markdown": "常见误解是“把所有条件都改成无分支写法就能提速”。教材的例子恰恰给出了边界：无分支版本只是去掉了对预测器的依赖，多做的算术仍在；当分支可预测、或条件求值本身很贵时，收益会缩小甚至变成轻微损失。判断依据应落在实测的分支行为上，而不是写法本身。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rust-branchless",
+            "model-branchless-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "textbook-if-else-layouts",
+        "moduleId": "compile-time-layout",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：`if`-`else` 的两种汇编布局",
+        "markdown": "教材从下面这段 C 代码出发：\n\n```c\n// int a, b;\nif (a > b) {\n    // do A\n} else {\n    // do B\n}\n// do C\n```\n\n第一种汇编先判断 `b.le do_b`，让 `do A` 位于不跳转路径上：\n\n```armasm\ncmp    w0, w1\nb.le   do_b\n; do A\nb      do_c\ndo_b:\n; do B\ndo_c:\n; do C\n```\n\n第二种汇编用 `b.gt do_a`，改让 `do B` 位于不跳转路径上：\n\n```armasm\ncmp    w0, w1\nb.gt   do_a\n; do B\nb      do_c\ndo_a:\n; do A\ndo_c:\n; do C\n```\n\n两种写法只是对调了 `if` 与 `else` 的基本块。教材指出：执行跳转对刷新 CPU 流水线有负面效果，因此如果不进行跳转就能到达更有可能被执行的基本块，总体对 CPU 执行有利。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000090"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测",
+                "编译期分支预测"
+              ],
+              "lineStart": 1763,
+              "lineEnd": 1898,
+              "assetRefs": [],
+              "excerptSha256": "354d04418394dc440686ea9141939806681e590c0a6ab35bdef5d7de37a64c33"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fallthrough-rule",
+        "moduleId": "compile-time-layout",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：把“常走的路”放在直行位置",
+        "markdown": "两种布局的差别可以用一条规则概括：让最常被执行的基本块位于“不跳转直行”的位置，把较少执行的分支放到需要跳转处。这样绝大多数执行都不触发跳转，流水线不必反复丢弃已取入的指令。注意这只改变代码布局，条件的真假与程序结果完全不变，属于纯粹的性能取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-if-else-layouts"
+          ]
+        }
+      },
+      {
+        "id": "textbook-likely-macro",
+        "moduleId": "compile-time-layout",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：`__builtin_expect` 与 `likely`/`unlikely`",
+        "markdown": "编译器无法知道运行时会怎么走，但程序员可以提供提示。教材给出大型 C 项目（如 Linux 内核）里常见的定义：\n\n```c\n#define likely(x)       __builtin_expect(!!(x), 1)\n#define unlikely(x)     __builtin_expect(!!(x), 0)\n```\n\n使用时写成 `if (likely(a > b))`。`__builtin_expect` 是非标准扩展，GCC 和 Clang 都支持；C++20 则提供了标准的 `likely` 与 `unlikely` 属性。以 LLVM 为例，编译分支语句时会为 `true` 分支和 `false` 分支各记录一个分支权重（Branch Weight），这些宏能一定程度影响权重，最终影响基本块的布局。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000090"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测",
+                "编译期分支预测"
+              ],
+              "lineStart": 1763,
+              "lineEnd": 1898,
+              "assetRefs": [],
+              "excerptSha256": "354d04418394dc440686ea9141939806681e590c0a6ab35bdef5d7de37a64c33"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-expect-semantics",
+        "moduleId": "compile-time-layout",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：宏只是提示，不改变求值结果",
+        "markdown": "`!!(x)` 把任意真值规范成 `0` 或 `1`，再交给 `__builtin_expect`；后者返回的仍是表达式本身的值，只是额外携带“这个值很可能等于 1/0”的元数据。因此 `likely(a > b)` 与直接写 `a > b` 在语义上等价，改变的是编译器生成代码时的布局决策，而不是运行时的判断逻辑。这也解释了教材为什么强调它只能“一定程度影响”权重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-likely-macro"
+          ]
+        }
+      },
+      {
+        "id": "textbook-clang-layout",
+        "moduleId": "compile-time-layout",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材实例：`likely_pattern` 与 `unlikely_pattern`",
+        "markdown": "教材用 `clang 11-likely.c -O1 -S` 编译两个只在 `likely`/`unlikely` 上不同的函数，得到以下关键汇编（已省略无关代码）：\n\n```armasm\n_likely_pattern:\n    ; ...\n    cmp    w0, #1\n    b.lt   LBB0_2\n    bl     _foo\n    ; ...\n    ret\nLBB0_2:\n    bl     _bar\n    ; ...\n    ret\n\n_unlikely_pattern:\n    ; ...\n    cmp    w0, #1\n    b.ge   LBB1_2\n    bl     _bar\n    ; ...\n    ret\nLBB1_2:\n    bl     _foo\n    ; ...\n    ret\n```\n\n`bl _foo` 与 `bl _bar` 分别对应 C 语言中对 `foo()` 与 `bar()` 的调用。教材的结论是：使用 `likely` 与 `unlikely` 后，两个函数内部条件跳转的基本块布局发生了变化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000090"
+              ],
+              "headingPath": [
+                "跳转",
+                "分支预测",
+                "编译期分支预测"
+              ],
+              "lineStart": 1763,
+              "lineEnd": 1898,
+              "assetRefs": [],
+              "excerptSha256": "354d04418394dc440686ea9141939806681e590c0a6ab35bdef5d7de37a64c33"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-the-assembly",
+        "moduleId": "compile-time-layout",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：逐条读出布局差异",
+        "markdown": "对照两段汇编可以逐条读出差异。`_likely_pattern` 中 `cmp w0, #1` 之后是 `b.lt LBB0_2`：只要 `a > 0` 成立就不跳转，直行执行 `bl _foo`，与“很可能走 true 分支”的标注一致。`_unlikely_pattern` 中同样的判断写成 `b.ge LBB1_2`：条件成立时得先跳过 `bl _bar`，跳到 `LBB1_2` 才执行 `bl _foo`，也就是把“不常走的路”放到了直行位置。两者语义完全相同，差别只在哪个基本块位于不跳转路径上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-clang-layout",
+            "model-fallthrough-rule"
+          ]
+        }
+      },
+      {
+        "id": "model-compile-time-boundary",
+        "moduleId": "compile-time-layout",
+        "depth": "support",
+        "kind": "warning",
+        "title": "边界：提示不是性能保证",
+        "markdown": "需要划清边界：`likely`/`unlikely` 提供的是权重提示，教材反复强调它们只能“一定程度影响”布局；编译器仍可能依据其他信息调整，运行时实际走向更不受其约束。此外 `__builtin_expect` 是非标准扩展，只有 C++20 才提供标准的 `likely`/`unlikely` 属性。因此不能把宏当成性能保证，也不能据此推断程序一定按提示执行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-likely-macro",
+            "textbook-clang-layout"
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-dimensions",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "统一维度比较两类分支预测",
+        "markdown": "运行时与编译期的分支预测作用在不同层次，可以用同一组维度对照：\n\n| 维度 | 运行时分支预测 | 编译期分支预测 |\n|---|---|---|\n| 作用层次 | CPU 硬件中的预测器 | 编译器生成代码时的布局决策 |\n| 信息来源 | 分支指令的执行历史 | 程序员提示（`likely`/`unlikely`）与静态启发 |\n| 生效时机 | 每次运行、每条分支动态进行 | 编译一次，固化进生成的汇编 |\n| 典型手段 | 动态预测，失败后清空流水线 | 调整分支权重、对调基本块、无分支改写 |\n| 主要代价 | 预测本身耗时，失败时丢弃工作 | 提示可能失准，改写引入额外算术 |\n| 稳定程度 | 随输入分布变化 | 对同一份代码固定不变 |\n\n教材中的 Rust 无分支改写属于在源码层绕开运行时预测，`likely`/`unlikely` 属于给编译器补充编译期信息，两者并不互斥。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-branch-predictor",
+            "textbook-if-else-layouts",
+            "textbook-likely-macro",
+            "textbook-clang-layout"
+          ]
+        }
+      },
+      {
+        "id": "model-scenario-check",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：三个场景该用哪类手段",
+        "markdown": "判断下列场景更该依靠哪一类手段，并说明依据：\n\n1. 一个热循环里的分支结果近乎随机，预测器频繁失败。\n2. 一段错误处理路径在正常运行时几乎不执行，但代码被放在直行位置。\n3. 同一分支的走向在多数输入上稳定，只有特定数据集才反转。\n\n参考思路：场景 1 优先考虑无分支改写，减少对预测的依赖；场景 2 用 `likely`/`unlikely` 把不常走的基本块移出直行路径；场景 3 说明提示只对特定负载有效，应在目标数据上实测，不能把编译期提示当作通用保证。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison-dimensions",
+            "textbook-likely-macro"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：两层预测各自的边界",
+        "markdown": "本点把分支预测拆成两层：运行时预测器靠执行历史训练模型，命中则维持流水线，失败则清空重来，而且预测本身有开销；编译期预测靠程序员提示影响分支权重与基本块布局，把常走的路放在不跳转位置。两者都只降低跳转代价，不改变程序的判断结果。下一步讨论目标地址存放在寄存器里的间接跳转，它会让“下一条指令在哪里”更难预先确定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison-dimensions",
+            "model-scenario-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "branch-prediction-scenario-check",
+        "type": "formative-check",
+        "title": "三类场景的手段选择",
+        "anchorBlockId": "model-scenario-check",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-two-levels",
+          "apply-branchless-count"
+        ],
+        "learningPurpose": "检查学习者能否把运行时与编译期两类手段对应到具体场景，并说明各自的代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-comparison-dimensions",
+            "textbook-likely-macro"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "写出你为三个场景选择的手段和理由：分支结果近乎随机的热循环、几乎不执行的错误处理路径、只在特定数据集反转的分支。"
+        }
+      }
+    ]
+  },
+  "subtitle": "跳转",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-11-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000088"
+      ],
+      "headingPath": [
+        "跳转",
+        "分支预测"
+      ],
+      "lineStart": 1698,
+      "lineEnd": 1699,
+      "assetRefs": [],
+      "excerptSha256": "f067897e5031729a8ec5e40f2e44f91afa35f7f4cc90c2133603f2b379fe5334"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000089"
+      ],
+      "headingPath": [
+        "跳转",
+        "分支预测",
+        "运行时分支预测"
+      ],
+      "lineStart": 1700,
+      "lineEnd": 1762,
+      "assetRefs": [],
+      "excerptSha256": "86fc67c64451688e2522d2efea450c6c03f339c9d7f596314835c4f55f764cde"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000090"
+      ],
+      "headingPath": [
+        "跳转",
+        "分支预测",
+        "编译期分支预测"
+      ],
+      "lineStart": 1763,
+      "lineEnd": 1898,
+      "assetRefs": [],
+      "excerptSha256": "354d04418394dc440686ea9141939806681e590c0a6ab35bdef5d7de37a64c33"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2236,
+    1276
+  ],
+  "scale": 0.61
+}

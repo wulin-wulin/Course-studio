@@ -1,0 +1,574 @@
+{
+  "id": "point-30-2",
+  "title": "生产者/消费者（有界缓冲区）问题",
+  "shortSummary": "解释有界缓冲区问题及条件变量如何协调生产者和消费者的等待与唤醒。",
+  "keyTerms": [
+    "生产者消费者",
+    "有界缓冲区",
+    "条件变量",
+    "等待"
+  ],
+  "animationType": "producerConsumer",
+  "animationSuggestion": "用环形槽位显示 fill、use 与 count 的变化，并画出等待 empty 与等待 fill 两条队列；逐步演示生产者写入、唤醒消费者、消费者取走并唤醒生产者的过程，支持重播。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "progressive-debugging",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材从失败方案到最终方案的迭代顺序与代码结构，补充时序还原、唤醒方向解释和实现检查清单，帮助学习者诊断而不是背诵结论。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-producer-consumer-setup",
+          "text": "说明生产者/消费者问题中有界缓冲区的共享状态与同步需求。"
+        },
+        {
+          "id": "diagnose-if-failure",
+          "text": "解释单个条件变量配合 if 的等待为何在多线程下失效。"
+        },
+        {
+          "id": "apply-two-condvars",
+          "text": "用两个条件变量和 while 写出单槽与多槽有界缓冲区的等待和唤醒逻辑。"
+        },
+        {
+          "id": "evaluate-generalized",
+          "text": "说明多槽环形缓冲区如何提高并发并保持正确性。"
+        }
+      ],
+      "misconceptions": [
+        "只要给共享缓冲区加锁就不需要条件变量；锁只能互斥，不能表达“现在还不能做”。",
+        "条件变量发出信号后，被唤醒线程运行时条件一定仍然成立。",
+        "等待条件用 if 检查一次就够了，只要信号发得正确。",
+        "一个条件变量可以同时表示空和满，唤醒哪一类线程无所谓。"
+      ],
+      "modules": [
+        {
+          "id": "problem-model",
+          "title": "问题与共享缓冲区",
+          "role": "concept",
+          "description": "明确生产者、消费者、有界缓冲区与访问条件。",
+          "outcomeRefs": [
+            "explain-producer-consumer-setup"
+          ],
+          "order": 0
+        },
+        {
+          "id": "flawed-signal",
+          "title": "失败方案：if 与单一条件变量",
+          "role": "diagnosis",
+          "description": "还原错误唤醒的时序并定位状态过期问题。",
+          "outcomeRefs": [
+            "diagnose-if-failure"
+          ],
+          "order": 1
+        },
+        {
+          "id": "while-guard",
+          "title": "用 while 重新检查条件",
+          "role": "repair",
+          "description": "把一次检查改为循环检查。",
+          "outcomeRefs": [
+            "diagnose-if-failure"
+          ],
+          "order": 2
+        },
+        {
+          "id": "two-condition-vars",
+          "title": "两个条件变量与定向唤醒",
+          "role": "repair",
+          "description": "用 empty 与 fill 区分两类等待。",
+          "outcomeRefs": [
+            "apply-two-condvars"
+          ],
+          "order": 3
+        },
+        {
+          "id": "bounded-ring-buffer",
+          "title": "多槽有界缓冲区",
+          "role": "application",
+          "description": "用环形数组实现最终方案并分析吞吐。",
+          "outcomeRefs": [
+            "apply-two-condvars",
+            "evaluate-generalized"
+          ],
+          "order": 4
+        },
+        {
+          "id": "completion-check",
+          "title": "提示、清单与检查",
+          "role": "assessment",
+          "description": "固化对条件变量总是使用 while 的规则并做迁移检查。",
+          "outcomeRefs": [
+            "explain-producer-consumer-setup",
+            "diagnose-if-failure",
+            "apply-two-condvars",
+            "evaluate-generalized"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-producer-consumer-setup",
+          "diagnose-if-failure",
+          "apply-two-condvars",
+          "evaluate-generalized"
+        ],
+        "method": "实现有界缓冲区，并用多生产者、多消费者的调度交错验证等待与唤醒。",
+        "successCriteria": [
+          "两个等待点都使用 while 重新检查条件",
+          "生产者与消费者分别等待 empty 与 fill",
+          "能解释 if 版本在两个消费者下失败的具体时序"
+        ],
+        "summaryBlockId": "model-checklist",
+        "nextPointId": "point-30-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-problem-and-buffer",
+        "moduleId": "problem-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "生产者/消费者与有界缓冲区",
+        "markdown": "生产者/消费者（producer/consumer）问题也叫有界缓冲区（bounded buffer）问题：一个或多个生产者线程把生成的数据项放入共享缓冲区，一个或多个消费者线程从缓冲区取走并消费。多线程网络服务器的工作队列、用管道连接 `grep foo file.txt | wc -l` 的两个进程，都是这一结构的实例。\n\n有界缓冲区是共享资源，访问它必须用同步机制避免竞态。教材先用单个整数模拟缓冲区：\n\n```c\nint buffer;\nint count = 0; // initially, empty\nvoid put(int value) {\n    assert(count == 0);\n    count = 1;\n    buffer = value;\n}\nint get() {\n    assert(count == 1);\n    count = 0;\n    return buffer;\n}\n```\n\n访问条件很明确：只有 `count == 0`（缓冲区为空）时生产者才能放入数据，只有 `count == 1`（缓冲区已满）时消费者才能取走数据。生产者线程循环调用 `put()`，消费者线程循环调用 `get()` 并打印取到的值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000396"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "生产者/消费者（有界缓冲区）问题"
+              ],
+              "lineStart": 7717,
+              "lineEnd": 7775,
+              "assetRefs": [],
+              "excerptSha256": "b7f05ea962fa5bd9c55ccbc0624b13aa50373ea8b63896409396d4d6b725e656"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-sync-needed",
+        "moduleId": "problem-model",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：为什么只加锁不够",
+        "markdown": "互斥锁只能保证同一时刻只有一个线程进入缓冲区，却不能表达“现在还不能做”。缓冲区已满时，生产者需要的不是进入临界区，而是先睡到“缓冲区变空”这一条件成立；缓冲区为空时消费者同理。\n\n因此教材在锁之外引入条件变量：锁保护共享状态，条件变量让线程在条件不满足时等待，并在状态改变时被唤醒。若只加锁而不等待，生产者在缓冲区已满时仍会调用 `put()`，直接触发断言。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-problem-and-buffer"
+          ]
+        }
+      },
+      {
+        "id": "textbook-flawed-if",
+        "moduleId": "flawed-signal",
+        "depth": "core",
+        "kind": "code",
+        "title": "第 1 版：一个条件变量与 if",
+        "markdown": "第 1 版方案用一把锁 `mutex` 和一个条件变量 `cond`：\n\n```c\nvoid *producer(void *arg) {\n    for (i = 0; i < loops; i++) {\n        Pthread_mutex_lock(&mutex);          // p1\n        if (count == 1)                      // p2\n            Pthread_cond_wait(&cond, &mutex); // p3\n        put(i);                              // p4\n        Pthread_cond_signal(&cond);          // p5\n        Pthread_mutex_unlock(&mutex);        // p6\n    }\n}\n```\n\n消费者使用对称逻辑：`if (count == 0)` 时在同一个 `cond` 上等待，取走数据后再对 `cond` 发信号。单个生产者和单个消费者时它能工作，但有多个线程时就会出现严重问题。\n\n以两个消费者 `T_c1`、`T_c2` 和一个生产者 `T_p` 为例：`T_c1` 在空缓冲区上等待；生产者放入数据并发出信号，使 `T_c1` 进入就绪队列但尚未运行；随后生产者因缓冲区满而睡眠；此时 `T_c2` 抢先运行，看到缓冲区已满，跳过等待并取走了数据；等 `T_c1` 真正从等待返回并调用 `get()` 时，缓冲区已经空了，断言失败。\n\n根因是信号的语义：发信号只表示状态曾经改变，并不保证被唤醒线程运行时状态仍然满足。教材把这种语义称为 Mesa 语义，几乎所有系统都采用它；Hoare 语义会保证被唤醒线程立刻执行，但实现困难。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000397"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "有问题的方案"
+              ],
+              "lineStart": 7776,
+              "lineEnd": 7832,
+              "assetRefs": [],
+              "excerptSha256": "cfc6a5d8a09de373fac2c992bbcc58a8b4f16dcb96621c7ad1f8974f2c47b190"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mesa-timeline",
+        "moduleId": "flawed-signal",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：还原一次错误唤醒的时序",
+        "markdown": "把上面的失败拆成可检查的时序，更容易看出问题出在“检查”和“使用”之间：\n\n1. `T_c1` 加锁并检查 `count == 0`，进入等待；等待时释放锁。\n2. `T_p` 加锁，写入数据使 `count = 1`，对 `cond` 发信号，然后解锁并再次加锁去检查；发现满，于是自己也等待。\n3. `T_c2` 加锁，看到 `count == 1`，不进入等待，直接取走数据使 `count = 0`，发信号后解锁。\n4. `T_c1` 此时才从等待返回；它拿着锁继续执行 `get()`，但缓冲区已空。\n\n这条时序说明：被唤醒只意味着“曾经有人改变了状态”，并不等于“现在条件成立”。`if` 只检查一次，无法覆盖第 4 步的状态变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-flawed-if"
+          ]
+        }
+      },
+      {
+        "id": "textbook-while-guard",
+        "moduleId": "while-guard",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "第 2 版：把 if 改为 while",
+        "markdown": "修复方式是把 `if` 换成 `while`：线程从等待返回后立刻重新检查共享变量，如果条件仍不满足就继续等待。\n\n```c\nwhile (count == 1)                      // p2\n    Pthread_cond_wait(&cond, &mutex);   // p3\n```\n\n消费者的 `while (count == 0)` 同理。这样即使 `T_c1` 被唤醒后发现缓冲区已被别的消费者清空，它也会回到睡眠，而不会错误地调用 `get()`。教材由此给出规则：由于 Mesa 语义，对条件变量总是使用 `while` 循环。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000398"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "较好但仍有问题的方案：使用While 语句替代If"
+              ],
+              "lineStart": 7833,
+              "lineEnd": 7886,
+              "assetRefs": [],
+              "excerptSha256": "e939ae35ee2d2442791f25d35fe21b87efa8bdd6402b36f298939382949b3c67"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-while-rule",
+        "moduleId": "while-guard",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：while 是重新检查，不是多等一次",
+        "markdown": "`while` 的作用不是“多等一次”，而是把“检查条件—等待—再检查”组织成一个循环：每次从等待返回都重新读取共享状态，只有条件真正成立才离开循环。这样代码的正确性不依赖“被唤醒时条件必然成立”这一假设，也就不依赖调度顺序。\n\n等待必须与同一把锁配合：检查条件、进入等待和修改状态都在临界区内完成，否则重新检查本身也会产生竞态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-while-guard"
+          ]
+        }
+      },
+      {
+        "id": "textbook-two-condition-vars",
+        "moduleId": "two-condition-vars",
+        "depth": "core",
+        "kind": "code",
+        "title": "第 3 版：两个条件变量与定向唤醒",
+        "markdown": "第 2 版仍然只用一个条件变量，还有第二个问题：唤醒的线程类别可能不对。设想两个消费者都已在 `cond` 上等待，生产者放入一个值并唤醒其中一个消费者；该消费者取走值后对同一个 `cond` 发信号。缓冲区此时为空，按理应唤醒生产者，但信号可能唤醒另一个消费者；后者发现缓冲区为空又回去睡眠，而生产者也在睡眠，三个线程全部睡死。\n\n解决方案是使用两个条件变量：\n\n```c\ncond_t empty, fill;\nmutex_t mutex;\n```\n\n生产者加锁后 `while (count == 1)` 时等待 `empty`，放入数据后对 `fill` 发信号。消费者加锁后 `while (count == 0)` 时等待 `fill`，取走数据后对 `empty` 发信号。这样从设计上避免了第二个问题：消费者再也不会唤醒消费者，生产者也不会唤醒生产者。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000399"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "单值缓冲区的生产者/消费者方案"
+              ],
+              "lineStart": 7887,
+              "lineEnd": 7923,
+              "assetRefs": [],
+              "excerptSha256": "e82ee969e8f7e88d6e15fb714f54be417b1513a88bc519d27e107b75962fd67f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-wakeup-targeting",
+        "moduleId": "two-condition-vars",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：两个机制分别解决什么",
+        "markdown": "区分两个条件变量之后，唤醒就带上了方向：`fill` 只表示“缓冲区里有数据可取”，`empty` 只表示“缓冲区里有空位可写”。因此对 `fill` 发信号时候选者是消费者，对 `empty` 发信号时候选者是生产者，等待队列与状态含义一一对应。\n\n这并不能替代 `while`：唤醒仍可能因调度或实现细节而“醒来时条件已变”，所以两个等待点仍要重新检查。两个条件变量解决“该叫醒哪一类线程”，`while` 解决“醒来后条件是否仍成立”，两者缺一不可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-while-guard",
+            "textbook-two-condition-vars"
+          ]
+        }
+      },
+      {
+        "id": "textbook-general-buffer",
+        "moduleId": "bounded-ring-buffer",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "第 4 版：从单槽到多槽缓冲区",
+        "markdown": "单槽方案虽然正确，但不够通用，也限制了并发：生产者必须等到消费者取走唯一的值才能再写。最终方案把缓冲区扩展为多个槽位，使生产者在睡眠前可以连续生产多个值，消费者在睡眠前也可以连续消费多个值。\n\n改动有两处：一是缓冲区结构与 `put()`、`get()`；二是等待条件，生产者只在缓冲区满时睡眠，消费者只在队列为空时睡眠。单个生产者/消费者时这会因上下文切换减少而提高效率；存在多个生产者与消费者时，它还支持并发生产和并发消费。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000400"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "最终的生产者/消费者方案"
+              ],
+              "lineStart": 7924,
+              "lineEnd": 7949,
+              "assetRefs": [],
+              "excerptSha256": "647ae6c5400e82059b73dda564818ef56b506230d759c581c17ef666cea4b8f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-final-put-get",
+        "moduleId": "bounded-ring-buffer",
+        "depth": "core",
+        "kind": "code",
+        "title": "图 30.9 与图 30.10：最终的 put()、get() 与等待逻辑",
+        "markdown": "缓冲区用环形数组与三个量维护：\n\n```c\nint buffer[MAX];\nint fill = 0;   // 下一个写入位置\nint use = 0;    // 下一个读取位置\nint count = 0;  // 当前数据项数\n\nvoid put(int value) {\n    buffer[fill] = value;\n    fill = (fill + 1) % MAX;\n    count++;\n}\n\nint get() {\n    int tmp = buffer[use];\n    use = (use + 1) % MAX;\n    count--;\n    return tmp;\n}\n```\n\n最终的等待与信号逻辑：\n\n```c\n// 生产者\nPthread_mutex_lock(&mutex);            // p1\nwhile (count == MAX)                   // p2\n    Pthread_cond_wait(&empty, &mutex); // p3\nput(i);                                // p4\nPthread_cond_signal(&fill);            // p5\nPthread_mutex_unlock(&mutex);          // p6\n\n// 消费者\nPthread_mutex_lock(&mutex);            // c1\nwhile (count == 0)                     // c2\n    Pthread_cond_wait(&fill, &mutex);  // c3\nint tmp = get();                       // c4\nPthread_cond_signal(&empty);           // c5\nPthread_mutex_unlock(&mutex);          // c6\n```\n\n`fill` 与 `use` 各自前进并在 `MAX` 处回绕，`count` 记录当前数据项数，因此判断满/空不再依赖单一标志位。至此生产者/消费者问题得到解决。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000400"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "最终的生产者/消费者方案"
+              ],
+              "lineStart": 7924,
+              "lineEnd": 7949,
+              "assetRefs": [],
+              "excerptSha256": "647ae6c5400e82059b73dda564818ef56b506230d759c581c17ef666cea4b8f6"
+            },
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000401"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "图 30.9 最终的 put()和 get()方法"
+              ],
+              "lineStart": 7950,
+              "lineEnd": 7985,
+              "assetRefs": [],
+              "excerptSha256": "069dc0159aa2bed800c68ee429627d00e46eb5aded6b4592b6f0b02a9ebb91ff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-buffer-size-tradeoff",
+        "moduleId": "bounded-ring-buffer",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：槽位数与吞吐、延迟的权衡",
+        "markdown": "在最终方案里，`MAX` 是教学之外仍值得讨论的工程参数：槽位越多，生产者在睡眠前能吸收的突发越多，生产者与消费者之间的等待和上下文切换越少；代价是占用更多内存，并且数据从生产到被消费之间可能停留更久。槽位越少，则更早触发等待，节奏更紧但切换更频繁。选择时应同时考虑生产/消费速率的波动幅度与可接受的数据延迟，而不是只看吞吐。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-general-buffer",
+            "textbook-final-put-get"
+          ]
+        }
+      },
+      {
+        "id": "textbook-always-while",
+        "moduleId": "completion-check",
+        "depth": "core",
+        "kind": "warning",
+        "title": "提示：对条件变量总是使用 while",
+        "markdown": "教材最后的提示是：多线程程序检查条件变量时，使用 `while` 循环总是对的。`if` 语句可能正确，也可能不正确，取决于发信号的语义；统一写成 `while` 就能符合预期。\n\n`while` 还额外处理了假唤醒（spurious wakeup）：某些线程库的实现细节可能让一个信号唤醒两个线程，醒来后重新检查等待条件即可避免由此产生的错误。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000402"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：对条件变量使用while（不是if）"
+              ],
+              "lineStart": 7986,
+              "lineEnd": 7991,
+              "assetRefs": [],
+              "excerptSha256": "8e586eca2c0cf83f3c7f637dc173bb026643b5641fdca823900555357936b068"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "completion-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：实现有界缓冲区的检查清单",
+        "markdown": "把整个案例压缩成一份实现检查清单：\n\n1. 列出所有共享状态（本例是 `buffer`、`fill`、`use`、`count`），并用同一把锁保护每次读写。\n2. 为每一类等待原因建立独立条件变量（空/满），不要用一个条件变量表示两种相反状态。\n3. 每个等待点都用 `while` 重新检查谓词，醒来不等于条件成立。\n4. 每次状态改变后，只对可能因此被满足的那一类线程发信号。\n5. 用多生产者、多消费者的调度交错测试，而不只测试单生产/单消费者。\n\n若把第 2 条的两个条件变量合并，就会回到第 2 版的错误唤醒；若把第 3 条的 `while` 改回 `if`，就会回到第 1 版的状态过期问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-problem-and-buffer",
+            "textbook-two-condition-vars",
+            "textbook-final-put-get",
+            "textbook-always-while"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "bounded-buffer-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-checklist",
+        "moduleId": "completion-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-two-condvars"
+        ],
+        "learningPurpose": "检查学习者能否把两个条件变量与 while 重新检查的规则迁移到多消费者场景。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-two-condition-vars",
+            "textbook-final-put-get"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "两个消费者同时等待在 fill 上，生产者放入一个值后只发出一个信号。请说明被唤醒的消费者如何重新检查条件，以及它取走数据后应唤醒哪一类线程。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出该场景下消费者等待与发信号的代码骨架，并说明为什么两个等待点都必须使用 `while`。"
+        }
+      }
+    ]
+  },
+  "subtitle": "条件变量",
+  "clusterId": "chapter-30",
+  "clusterIds": [
+    "chapter-30"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000396"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "生产者/消费者（有界缓冲区）问题"
+      ],
+      "lineStart": 7717,
+      "lineEnd": 7775,
+      "assetRefs": [],
+      "excerptSha256": "b7f05ea962fa5bd9c55ccbc0624b13aa50373ea8b63896409396d4d6b725e656"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000397"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "有问题的方案"
+      ],
+      "lineStart": 7776,
+      "lineEnd": 7832,
+      "assetRefs": [],
+      "excerptSha256": "cfc6a5d8a09de373fac2c992bbcc58a8b4f16dcb96621c7ad1f8974f2c47b190"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000398"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "较好但仍有问题的方案：使用While 语句替代If"
+      ],
+      "lineStart": 7833,
+      "lineEnd": 7886,
+      "assetRefs": [],
+      "excerptSha256": "e939ae35ee2d2442791f25d35fe21b87efa8bdd6402b36f298939382949b3c67"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000399"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "单值缓冲区的生产者/消费者方案"
+      ],
+      "lineStart": 7887,
+      "lineEnd": 7923,
+      "assetRefs": [],
+      "excerptSha256": "e82ee969e8f7e88d6e15fb714f54be417b1513a88bc519d27e107b75962fd67f"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000400"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "最终的生产者/消费者方案"
+      ],
+      "lineStart": 7924,
+      "lineEnd": 7949,
+      "assetRefs": [],
+      "excerptSha256": "647ae6c5400e82059b73dda564818ef56b506230d759c581c17ef666cea4b8f6"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000401"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "图 30.9 最终的 put()和 get()方法"
+      ],
+      "lineStart": 7950,
+      "lineEnd": 7985,
+      "assetRefs": [],
+      "excerptSha256": "069dc0159aa2bed800c68ee429627d00e46eb5aded6b4592b6f0b02a9ebb91ff"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000402"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：对条件变量使用while（不是if）"
+      ],
+      "lineStart": 7986,
+      "lineEnd": 7991,
+      "assetRefs": [],
+      "excerptSha256": "8e586eca2c0cf83f3c7f637dc173bb026643b5641fdca823900555357936b068"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -57,
+    735
+  ],
+  "scale": 0.97
+}

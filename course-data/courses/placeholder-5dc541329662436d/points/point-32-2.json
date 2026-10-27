@@ -1,0 +1,396 @@
+{
+  "id": "point-32-2",
+  "title": "非死锁缺陷",
+  "shortSummary": "介绍原子性违反和顺序违反等非死锁缺陷及其检测思路与修复方法。",
+  "keyTerms": [
+    "原子性违反",
+    "顺序违反",
+    "非死锁缺陷",
+    "检测"
+  ],
+  "animationType": "atomicityGap",
+  "animationSuggestion": "分栏显示两个线程的指令执行，按调度逐步推进程序计数器和共享变量；先演示检查与使用之间被插入置空导致的崩溃，再演示加锁后该窗口消失，并对照演示线程创建与读取的先后顺序。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "fault-diagnosis-repair",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对两类非死锁缺陷的定义与修复方案，围绕“症状—假设—证据—修复”的次序补充诊断线索和对比表。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-nondeadlock",
+          "text": "说明非死锁缺陷为何常见，并区分违反原子性与违反顺序两类模式。"
+        },
+        {
+          "id": "diagnose-atomicity",
+          "text": "在并发代码中识别“本应原子却被交错”的访问序列，并给出加锁修复。"
+        },
+        {
+          "id": "diagnose-order",
+          "text": "在并发代码中识别被打破的预期执行顺序，并用条件变量强制顺序。"
+        },
+        {
+          "id": "compare-repairs",
+          "text": "根据缺陷类型选择互斥锁或条件变量，并说明修复范围的依据。"
+        }
+      ],
+      "misconceptions": [
+        "把非死锁缺陷等同于死锁，认为只有循环等待才需要处理。",
+        "认为只要给每一条单独的内存访问加锁，就能修复违反原子性缺陷。"
+      ],
+      "modules": [
+        {
+          "id": "problem-scope",
+          "title": "问题定位与两类模式",
+          "role": "introduction",
+          "description": "先用研究数据说明非死锁缺陷的分量，再引出两类主要模式。",
+          "outcomeRefs": [
+            "explain-nondeadlock"
+          ],
+          "order": 0
+        },
+        {
+          "id": "atomicity-violation",
+          "title": "违反原子性：检查与使用之间的窗口",
+          "role": "diagnosis",
+          "description": "从教材的 MySQL 例子出发，定位可交错窗口并讨论锁的范围。",
+          "outcomeRefs": [
+            "diagnose-atomicity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "order-violation",
+          "title": "违反顺序：等待谓词成立",
+          "role": "diagnosis",
+          "description": "从教材的线程创建例子出发，分析顺序假设与条件变量修复。",
+          "outcomeRefs": [
+            "diagnose-order"
+          ],
+          "order": 2
+        },
+        {
+          "id": "diagnosis-and-repair",
+          "title": "对比与修复决策",
+          "role": "synthesis",
+          "description": "用统一维度比较两类缺陷，并给出可复用的诊断检查表。",
+          "outcomeRefs": [
+            "compare-repairs"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-nondeadlock",
+          "diagnose-atomicity",
+          "diagnose-order",
+          "compare-repairs"
+        ],
+        "method": "给出一个并发片段，判断它属于哪类非死锁缺陷，并说明应使用锁还是条件变量以及需要覆盖的代码范围。",
+        "successCriteria": [
+          "能指出被打破的原子性假设或执行顺序",
+          "所选同步原语与缺陷类型匹配",
+          "修复范围覆盖了本应不可分割或必须先后发生的全部访问"
+        ],
+        "exerciseBlockId": "model-diagnosis-checklist",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-32-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-overview",
+        "moduleId": "problem-scope",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：非死锁缺陷的两种主要模式",
+        "markdown": "Lu 等人对真实并发缺陷的研究显示，非死锁问题占了并发问题的大多数。教材把其中最主要的两类模式称为**违反原子性**（atomicity violation）和**违反顺序**（order violation）；理解这两种模式是定位和修复非死锁缺陷的起点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000428"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "非死锁缺陷"
+              ],
+              "lineStart": 8624,
+              "lineEnd": 8627,
+              "assetRefs": [],
+              "excerptSha256": "9147895729db76e41a9f22913269eeeca42ff57f78ce24465bbbc4b525fc7368"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-atomicity-violation",
+        "moduleId": "atomicity-violation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：违反原子性的 MySQL 例子与定义",
+        "markdown": "教材用一个 MySQL 片段说明违反原子性：线程 1 先检查 `thd->proc_info` 非空，再调用 `fputs()` 打印它；线程 2 把 `thd->proc_info` 置为 `NULL`。如果线程 1 在检查之后、调用 `fputs()` 之前被中断，线程 2 完成赋值，那么线程 1 恢复后就会解引用空指针并导致程序崩溃。\n\n教材给出的正式定义是：违反了多次内存访问中预期的可串行性，也就是这段代码本意是原子的，但执行时并没有强制实现原子性。常见的修复方式是给共享变量的访问加锁，并要求访问该结构的所有代码都遵守同一把锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000429"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "违反原子性缺陷"
+              ],
+              "lineStart": 8628,
+              "lineEnd": 8670,
+              "assetRefs": [],
+              "excerptSha256": "add3dc18d695eb9dc9495f1253af6f3b636b740b362ab77fb2dd657f3e6380b7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-atomicity-window",
+        "moduleId": "atomicity-violation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：缺陷来自可被插入的时间窗口",
+        "markdown": "这段代码的每条语句都没有错，问题在于“检查—使用”之间存在一个可被其他线程插入的时间窗口。`proc_info` 的检查与 `fputs(proc_info)` 必须作为一个不可分割的临界区，其他线程才无法在中间把指针改成 `NULL`。诊断时可以先问：**哪些操作必须一起完成，才能维持代码本意中的原子性？**",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-atomicity-violation"
+          ]
+        }
+      },
+      {
+        "id": "model-atomicity-lock-scope",
+        "moduleId": "atomicity-violation",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：锁的范围要与本意原子段一致",
+        "markdown": "修复时锁的范围不能缩得太小：只锁住读取 `proc_info` 的一条语句并不够，必须把非空检查与随后的使用一起放进同一临界区。教材示例用 `proc_info_lock` 同时包裹线程 1 的检查与打印、线程 2 的置空操作，从而消除两边交错的可能。反过来，如果还有别的代码不持锁就访问该结构，缺陷仍会以新的交错形式出现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-atomicity-violation",
+            "model-atomicity-window"
+          ]
+        }
+      },
+      {
+        "id": "textbook-order-violation",
+        "moduleId": "order-violation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：违反顺序的线程创建例子与定义",
+        "markdown": "教材用线程创建说明违反顺序：线程 1 的 `init()` 通过 `PR_CreateThread` 给 `mThread` 赋值；线程 2 的 `mMain()` 随后读取 `mThread->State`。如果线程 2 先运行，`mThread` 仍然为空，就会解引用空指针；若其初值不是空，还可能读到任意内存位置。\n\n教材给出的正式定义是：两个内存访问的预期顺序被打破了，即 A 本应在 B 之前执行，但实际运行时却不是这个顺序。修复方式是强制顺序，条件变量是一种简单可靠的实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000430"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "违反顺序缺陷"
+              ],
+              "lineStart": 8671,
+              "lineEnd": 8730,
+              "assetRefs": [],
+              "excerptSha256": "4a3ddd9583486e44e58a86895122691d09bff94c70ba61bfb12730da4d75ef87"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-order-wait",
+        "moduleId": "order-violation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：用谓词与条件变量强制先后",
+        "markdown": "在修正版本中，`mtInit` 充当“线程已经创建”的谓词，`mtCond` 负责通知。线程 1 完成创建后持锁把 `mtInit` 置为 1，并发出信号；线程 2 持锁在 `while (mtInit == 0)` 中等待，直到谓词为真才读取 `mThread->State`。等待期间锁被释放，唤醒后重新获取并再次检查谓词，因此既不会忙等，也不会在未初始化时继续执行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-order-violation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "diagnosis-and-repair",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：非死锁缺陷小结",
+        "markdown": "教材小结指出，在 Lu 等人的研究中，约 97% 的非死锁问题属于违反原子性和违反顺序这两类。因此，程序员仔细研究这些错误模式有助于更好地避免它们，自动化代码检查工具也应重点关注这两类。教材同时提醒，并非所有缺陷都像示例一样容易修复，有些需要更深入地理解应用，并大幅调整代码和数据结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000431"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "非死锁缺陷：小结"
+              ],
+              "lineStart": 8731,
+              "lineEnd": 8736,
+              "assetRefs": [],
+              "excerptSha256": "160f9624a1c7583c608b4fb13cef94f7edaea6c509427e18531f464a6769c66d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compare",
+        "moduleId": "diagnosis-and-repair",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：两类缺陷的统一比较",
+        "markdown": "| 比较维度 | 违反原子性 | 违反顺序 |\n|---|---|---|\n| 本质 | 本应原子的多步内存访问被其他线程交错 | 两个内存访问的预期先后顺序被打破 |\n| 典型症状 | 检查共享指针后、使用前被改为空 | 读取尚未创建或尚未初始化的对象 |\n| 修复原语 | 互斥锁保护整个本意原子段 | 条件变量或信号量等待谓词成立 |\n| 诊断问题 | 哪些操作必须不可分割地完成？ | 哪一次访问必须发生在另一次之前？ |\n\n两类缺陷都源于代码对执行时序的隐含假设：前者假设一组访问不会被拆开，后者假设一次访问一定先于另一次。修复的关键不是笼统地“多加锁”，而是让同步原语对应到被打破的那个假设。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview",
+            "textbook-atomicity-violation",
+            "textbook-order-violation",
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-diagnosis-checklist",
+        "moduleId": "diagnosis-and-repair",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "补充：诊断检查表",
+        "markdown": "面对一个可疑的并发片段，可以按以下顺序排查：\n\n1. **列出共享状态**：哪些变量被多个线程读写，例如 `proc_info`、`mThread`。\n2. **标出隐含假设**：哪组访问本意原子，或哪两次访问本应有先后顺序。\n3. **寻找交错点**：假设在任意两条语句之间发生线程切换，检查是否会出现空指针、旧值或部分更新。\n4. **选择原语**：若问题是“不能被打断”，用互斥锁包住整个临界区；若问题是“必须等前者完成”，用条件变量配合谓词等待。\n5. **检查覆盖**：确认所有访问共享状态的代码路径都遵守同一同步约定。\n\n请对一个包含“检查后使用”的片段完成上述五步，并说明只给单条读操作加锁为什么不够。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-compare",
+            "textbook-atomicity-violation",
+            "textbook-order-violation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "nondeadlock-classification-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-compare",
+        "moduleId": "diagnosis-and-repair",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-atomicity",
+          "diagnose-order",
+          "compare-repairs"
+        ],
+        "learningPurpose": "检查学习者能否把两类缺陷的判据与对应的修复原语对应起来。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-compare"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给出一个并发片段，判断它属于违反原子性还是违反顺序，并说明应使用互斥锁还是条件变量，以及同步范围应覆盖哪些访问。"
+        }
+      }
+    ]
+  },
+  "subtitle": "常见并发问题",
+  "clusterId": "chapter-32",
+  "clusterIds": [
+    "chapter-32"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000428"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "非死锁缺陷"
+      ],
+      "lineStart": 8624,
+      "lineEnd": 8627,
+      "assetRefs": [],
+      "excerptSha256": "9147895729db76e41a9f22913269eeeca42ff57f78ce24465bbbc4b525fc7368"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000429"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "违反原子性缺陷"
+      ],
+      "lineStart": 8628,
+      "lineEnd": 8670,
+      "assetRefs": [],
+      "excerptSha256": "add3dc18d695eb9dc9495f1253af6f3b636b740b362ab77fb2dd657f3e6380b7"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000430"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "违反顺序缺陷"
+      ],
+      "lineStart": 8671,
+      "lineEnd": 8730,
+      "assetRefs": [],
+      "excerptSha256": "4a3ddd9583486e44e58a86895122691d09bff94c70ba61bfb12730da4d75ef87"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000431"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "非死锁缺陷：小结"
+      ],
+      "lineStart": 8731,
+      "lineEnd": 8736,
+      "assetRefs": [],
+      "excerptSha256": "160f9624a1c7583c608b4fb13cef94f7edaea6c509427e18531f464a6769c66d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1488,
+    756
+  ],
+  "scale": 0.94
+}

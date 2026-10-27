@@ -1,0 +1,865 @@
+{
+  "id": "point-32-3",
+  "title": "死锁缺陷",
+  "shortSummary": "分析死锁的四个必要条件、常见成因和预防或恢复策略，并给出工程建议。",
+  "keyTerms": [
+    "死锁",
+    "必要条件",
+    "预防",
+    "恢复"
+  ],
+  "animationType": "deadlockCycle",
+  "animationSuggestion": "分步展示两个线程按相反顺序加锁的过程，高亮当前持锁与等待关系，并在闭环时画出等待环；同时提供一次不会死锁的安全交错作为对照，支持重播。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-28-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "diagnosis-prevention-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材关于死锁成因、四个条件与各类策略的定义和判断，按识别等待环、破坏条件、权衡代价的诊断顺序重排，并补充排查清单与工程取舍。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-deadlock-formation",
+          "text": "用加锁顺序和等待图解释死锁如何形成，以及为什么它依赖线程交错。"
+        },
+        {
+          "id": "analyze-four-conditions",
+          "text": "针对具体场景判断互斥、持有并等待、非抢占与循环等待中哪一项被满足或被破坏。"
+        },
+        {
+          "id": "apply-prevention-strategy",
+          "text": "为给定代码选择锁顺序、一次性抢锁、trylock、无锁结构、调度避免或检测恢复等应对方案。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "比较各策略在并发度、实现复杂度、活锁风险和恢复代价上的取舍并说明理由。"
+        }
+      ],
+      "misconceptions": [
+        "认为多线程使用多把锁就必然死锁，忽略交错与时序条件。",
+        "把四个必要条件当成四个独立触发条件，看到互斥就判定已经死锁。",
+        "认为用 trylock 重试就彻底安全，忽略活锁以及回退时的资源清理问题。",
+        "认为检测到死锁后总能无损恢复，忽略回滚和重启的实际代价。"
+      ],
+      "modules": [
+        {
+          "id": "what-is-deadlock",
+          "title": "从等待环识别死锁",
+          "role": "concept-diagnosis",
+          "outcomeRefs": [
+            "explain-deadlock-formation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "four-conditions",
+          "title": "四个必要条件",
+          "role": "condition-checklist",
+          "outcomeRefs": [
+            "explain-deadlock-formation",
+            "analyze-four-conditions"
+          ],
+          "order": 1
+        },
+        {
+          "id": "prevention-strategies",
+          "title": "逐条破坏条件的预防策略",
+          "role": "mechanism-comparison",
+          "outcomeRefs": [
+            "analyze-four-conditions",
+            "apply-prevention-strategy"
+          ],
+          "order": 2
+        },
+        {
+          "id": "avoidance-and-recovery",
+          "title": "调度避免与检测恢复",
+          "role": "alternative-strategies",
+          "outcomeRefs": [
+            "apply-prevention-strategy",
+            "evaluate-tradeoffs"
+          ],
+          "order": 3
+        },
+        {
+          "id": "engineering-judgment",
+          "title": "按故障代价做工程判断",
+          "role": "decision-guidance",
+          "outcomeRefs": [
+            "evaluate-tradeoffs",
+            "apply-prevention-strategy"
+          ],
+          "order": 4
+        },
+        {
+          "id": "integration",
+          "title": "整合与自测",
+          "role": "summary-and-check",
+          "outcomeRefs": [
+            "explain-deadlock-formation",
+            "analyze-four-conditions",
+            "apply-prevention-strategy",
+            "evaluate-tradeoffs"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-deadlock-formation",
+          "analyze-four-conditions",
+          "apply-prevention-strategy",
+          "evaluate-tradeoffs"
+        ],
+        "method": "完成本点的场景分析题，说明等待环如何形成、破坏了哪个条件，并给出策略与代价。",
+        "successCriteria": [
+          "能指出形成环的线程与锁，而不是只凭用了多把锁下结论",
+          "能把所选策略对应到被破坏的必要条件",
+          "能说明该策略的代价或适用边界"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-32-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-deadlock-definition",
+        "moduleId": "what-is-deadlock",
+        "depth": "core",
+        "kind": "definition",
+        "title": "死锁与等待环",
+        "markdown": "死锁（deadlock）发生在多个线程互相持有对方所需资源并同时等待时。教材给出的典型情形是：线程 1 持有锁 L1 后请求 L2，线程 2 持有锁 L2 后请求 L1，两者的等待关系首尾相接，在依赖图中形成环。\n\n把线程和锁画成有向图，边表示正在等待，环就是死锁的直接证据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000432"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "死锁缺陷"
+              ],
+              "lineStart": 8737,
+              "lineEnd": 8757,
+              "assetRefs": [
+                "parts/part-0003/images/dc25204246c2f6b9fca3b854d25f0fef721588c1db6ce8a9479db56540615f87.jpg"
+              ],
+              "excerptSha256": "f5276dc87c60110b0a7c73005886d7955984db94856ecb8ead972ebea397ebfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-interleaving",
+        "moduleId": "what-is-deadlock",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么不是每次运行都死锁",
+        "markdown": "教材特别强调，这段代码并不是一运行就必然死锁。若线程 1 先完整拿到 L1、L2 再释放，或线程 2 先完整执行，程序都能正常结束。只有交错恰好让两个线程各持一把锁、再互相请求时，环才闭合。\n\n因此死锁是代码允许、调度触发的缺陷：它依赖时序，而不是每次都能复现，这也是它难以测试的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-deadlock-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-why-deadlock",
+        "moduleId": "what-is-deadlock",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么大型系统仍然会死锁",
+        "markdown": "既然交换加锁顺序就能修好，为什么大型系统仍然会死锁？教材给出两个原因。\n\n- **复杂依赖**：组件之间可能互相调用。例如虚拟内存为了从磁盘读页要访问文件系统，文件系统又要向虚拟内存申请内存页，锁的依赖因此成环。\n- **封装**：模块隐藏内部实现，接口看起来无关，内部却要同时持有多个锁；调用方无法看到这种隐藏的加锁顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000433"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "为什么发生死锁"
+              ],
+              "lineStart": 8758,
+              "lineEnd": 8772,
+              "assetRefs": [],
+              "excerptSha256": "6da7ca82ba0dfc53b1a66c9439424333d479219dfafa25f0b693cdd8dc54b2c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vector-example",
+        "moduleId": "what-is-deadlock",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：封装造成的隐藏锁序",
+        "markdown": "教材用 Java 的 Vector.AddAll 说明封装的危险：v1.AddAll(v2) 内部既要锁 v1 也要锁 v2。若一个线程执行 v1.AddAll(v2)，另一个几乎同时执行 v2.AddAll(v1)，两次调用各自先锁自己的接收者，就可能互相等待。\n\n这里的教训是：判断死锁风险时，不能只看自己代码里显式出现的加锁顺序，还要看被调用接口内部实际获取了哪些锁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-deadlock"
+          ]
+        }
+      },
+      {
+        "id": "tb-four-conditions",
+        "moduleId": "four-conditions",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "死锁的四个必要条件",
+        "markdown": "教材列出死锁产生的四个条件：\n\n1. **互斥**：资源被一个线程独占访问，例如一把锁。\n2. **持有并等待**：线程已经持有资源，同时还在等待其他资源。\n3. **非抢占**：已获得的资源不能在未释放时被强行夺走。\n4. **循环等待**：存在一个等待环，环上每个线程持有的资源正是下一个线程要申请的。\n\n四个条件同时成立才可能死锁；破坏其中任何一个，死锁都无法形成。这正是预防策略的出发点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000434"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "产生死锁的条件"
+              ],
+              "lineStart": 8773,
+              "lineEnd": 8786,
+              "assetRefs": [],
+              "excerptSha256": "b1cc5110103924634453564ff35f8ea8a4c0d32ccadbc437cda4c1b2bc9c3202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-conditions-nuance",
+        "moduleId": "four-conditions",
+        "depth": "core",
+        "kind": "note",
+        "title": "模型补充：把四个条件当作排查清单",
+        "markdown": "把四个条件当作排查清单时要注意两点。\n\n- 它们需要同时满足，不能理解成看到互斥就等于会死锁。只有多把锁、跨线程等待、且时序不利时，环才会真正闭合。\n- 分析具体缺陷时，先找出等待环，再逐项判断哪个条件最难被破坏。通常互斥最难消除，循环等待最容易通过加锁顺序控制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-four-conditions"
+          ]
+        }
+      },
+      {
+        "id": "tb-prevention-root",
+        "moduleId": "prevention-strategies",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "预防的总思路",
+        "markdown": "死锁预防（prevention）的思路是：在设计阶段就让四个条件中的某一个不可能成立。教材依次讨论了破坏循环等待、持有并等待、非抢占和互斥四类做法，并说明每种做法的代价。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000435"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "预防"
+              ],
+              "lineStart": 8787,
+              "lineEnd": 8788,
+              "assetRefs": [],
+              "excerptSha256": "b4fb63670279408842760938ca357aaac14b91145d478f04c760499e6fc05ad6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-cycle-wait",
+        "moduleId": "prevention-strategies",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "破坏循环等待：全序与偏序",
+        "markdown": "破坏循环等待最实用的办法是给锁规定全局顺序：所有线程都按同一顺序申请锁，就不会出现你等我、我等你的环。\n\n两个锁时可以用全序（total ordering），例如永远先申请 L1 再申请 L2。锁很多时，全序难以设计，可以退而使用偏序（partial ordering）：只规定必要的先后关系。教材提到 Linux 内存映射代码在开头用注释列出十组加锁顺序。\n\n代价是：顺序只是约定，粗心的程序员容易违反；有序加锁还要求开发者理解函数调用关系，一处错误就可能再次死锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000436"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "循环等待"
+              ],
+              "lineStart": 8789,
+              "lineEnd": 8796,
+              "assetRefs": [],
+              "excerptSha256": "0ee0483f7a1701d48dd0633124af371bc9d47f8f7832c9bfc94a2a72b6eecdd9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-lock-address",
+        "moduleId": "prevention-strategies",
+        "depth": "support",
+        "kind": "code",
+        "title": "用锁的地址强制加锁顺序",
+        "markdown": "当函数需要锁多把锁时，可以按锁的地址决定顺序。教材给出的做法是比较两个锁指针，再按地址从高到低统一加锁：\n\n```c\nif (m1 > m2) {\n    pthread_mutex_lock(m1);\n    pthread_mutex_lock(m2);\n} else {\n    pthread_mutex_lock(m2);\n    pthread_mutex_lock(m1);\n}\n```\n\n这样无论调用者以什么顺序传入参数，函数内部的加锁顺序都是固定的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000437"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：通过锁的地址来强制锁的顺序"
+              ],
+              "lineStart": 8797,
+              "lineEnd": 8815,
+              "assetRefs": [],
+              "excerptSha256": "eef624f203bdeef96e9c1cd32802537d5ca2858f7d63bbd9d8ee75679fdd4eda"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ordering-tradeoff",
+        "moduleId": "prevention-strategies",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：顺序技巧的适用边界",
+        "markdown": "按地址排序只在同一个函数同时拿到两个锁时有效，它不能自动修复跨模块的加锁顺序，也不适用于动态数量或层层封装的锁。工程上常见的补充手段是把全局锁顺序写进文档、在代码评审中检查，以及用死锁检测工具在测试阶段发现环。\n\n另外，这个技巧假设 m1 与 m2 不是同一把锁；如果相等，就不会进入任何分支，锁也没有被获取。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cycle-wait",
+            "tb-lock-address"
+          ]
+        }
+      },
+      {
+        "id": "tb-hold-wait",
+        "moduleId": "prevention-strategies",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "破坏持有并等待：一次性原子抢锁",
+        "markdown": "破坏持有并等待的一种做法是用一把全局的 prevention 锁把整个抢锁过程包起来：先锁 prevention，再依次锁 L1、L2，最后释放 prevention。由于抢锁期间不会被不合时宜地切换，线程不会在持有一把锁时再去等其他锁。\n\n代价很直接：所有线程都必须先拿全局锁，多个线程不能真正同时进入各自的临界区，并发度下降；而且这要求开发者准确知道要申请哪些锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000438"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "持有并等待"
+              ],
+              "lineStart": 8816,
+              "lineEnd": 8831,
+              "assetRefs": [],
+              "excerptSha256": "ca89299a6917bc078d4e17987ccc56285f0754224a62ec1a59bc3618f6c38337"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-prevention-lock-cost",
+        "moduleId": "prevention-strategies",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：用并发度换正确性",
+        "markdown": "这类方案属于用正确性换并发的取舍。若临界区很短、锁竞争不激烈，全局预防锁的开销可以接受；若系统吞吐依赖多核并行，全局串行化往往得不偿失。\n\n提前一次性申请所有锁还可能引入新的问题：需要事先知道资源集合，且申请顺序仍要统一，否则只是把死锁换成了别的等待。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hold-wait"
+          ]
+        }
+      },
+      {
+        "id": "tb-non-preemptive",
+        "moduleId": "prevention-strategies",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "破坏非抢占：trylock 与活锁",
+        "markdown": "破坏非抢占可以借助 trylock()：它尝试获取锁，失败时返回 -1 而不是阻塞。教材给出的模式是：先锁 L1，若 trylock(L2) 失败就释放 L1 并回到开头重试。\n\n这把等待变成了放弃并重来，因此不会形成互相等待的环。但它带来活锁（livelock）：两个线程可能永远重复拿到一把、放弃、再重来的序列，系统在运行却没有进展。常见缓解是失败后随机等待一小段时间再重试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000439"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "非抢占"
+              ],
+              "lineStart": 8832,
+              "lineEnd": 8850,
+              "assetRefs": [],
+              "excerptSha256": "9ae2eefe6f9e84bb0137584efb9e29e8d9e502eccace33f80c83a79877f39d91"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-livelock-vs-deadlock",
+        "moduleId": "prevention-strategies",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：活锁与死锁的区别",
+        "markdown": "死锁与活锁的区别在于线程是否还在推进：死锁的线程永久阻塞，活锁的线程不断执行却无法完成。两者都会让任务失败，但诊断信号不同，死锁表现为等待图上的环，活锁表现为持续的失败重试。\n\n使用 trylock 还有封装和资源清理问题：如果中途已分配内存或持有其他资源，回退到开头前必须正确释放；当锁封装在函数内部时，外部调用者甚至无法实现这种跳回重试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-non-preemptive"
+          ]
+        }
+      },
+      {
+        "id": "tb-mutual-exclusion",
+        "moduleId": "prevention-strategies",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "破坏互斥：无等待结构与比较并交换",
+        "markdown": "最后一种预防是消除互斥本身：设计不需要锁的数据结构，即无等待（wait-free）结构。教材以硬件原子指令比较并交换（compare-and-swap）为例：\n\n```c\nint CompareAndSwap(int *address, int expected, int new) {\n    if (*address == expected) {\n        *address = new;\n        return 1;\n    }\n    return 0;\n}\n```\n\n基于它可以实现原子自增：循环读取旧值，尝试用 CAS 写入新值，失败则重试。链表头插入也可以改成先把新节点的 next 指向当前 head，再用 CAS 把 head 换成新节点。\n\n这种方式没有锁，因此不会死锁，但可能出现活锁；要支持删除、查找等完整操作，设计难度更高。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000440"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "互斥"
+              ],
+              "lineStart": 8851,
+              "lineEnd": 8926,
+              "assetRefs": [],
+              "excerptSha256": "620a2045fb4c214c29c1137be5388d41795f825c419e57f77201fbab155ed766"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-wait-free-note",
+        "moduleId": "prevention-strategies",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "模型补充：无锁与无等待",
+        "markdown": "阅读这段内容时不要把无锁与无等待混为一谈：基于 CAS 的循环重试通常只能称为无锁（lock-free），它保证系统整体有进展，但不保证每个线程都在有限步内完成；无等待则要求每个线程都能在有限步内完成。教材也指出，无等待结构设计极其复杂，适用面有限。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mutual-exclusion"
+          ]
+        }
+      },
+      {
+        "id": "tb-scheduling-avoidance",
+        "moduleId": "avoidance-and-recovery",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "通过调度避免死锁",
+        "markdown": "死锁避免（avoidance）不改变代码结构，而是利用全局信息安排线程的运行时机，使危险组合不同时发生。\n\n教材的例子是在两个处理器上调度四个线程，并已知各线程对 L1、L2 的需求：T1、T2 都需要两把锁，T3 只需要 L2，T4 不需要锁。只要让 T1 和 T2 不同时运行，就不会形成环；把 T3 与 T1 或 T2 重叠则是安全的，因为 T3 只持有一把锁。\n\n当 T1、T2、T3 都需要两把锁时，保守的做法是把它们放在同一个处理器上串行执行。这样显然增加了总完成时间，是用性能换正确性。Dijkstra 的银行家算法属于同一类思路，但适用场景很局限，例如任务和锁需求都已知的嵌入式系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000441"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "通过调度避免死锁"
+              ],
+              "lineStart": 8927,
+              "lineEnd": 8961,
+              "assetRefs": [
+                "parts/part-0004/images/1c0a79bd796e6998fc6adcaa35c64d81cf721057109cd8ef2e9f891059ff2692.jpg"
+              ],
+              "excerptSha256": "4577777d4388991dbf133185dd70a55150475c5e4adb99f5bbda69d3e326cfd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-avoidance-info",
+        "moduleId": "avoidance-and-recovery",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：避免策略的信息前提",
+        "markdown": "避免策略成立的前提是事先知道每个线程将要申请哪些锁。通用服务器上的线程行为、动态创建的锁和第三方库都会破坏这个前提，因此这类方法没有被广泛采用。\n\n在需要严格保证的实时或嵌入式系统中，可以把锁需求写进静态配置，再在调度器里强制互斥执行；通用系统更多采用预防或检测恢复。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scheduling-avoidance"
+          ]
+        }
+      },
+      {
+        "id": "tb-detect-recover",
+        "moduleId": "avoidance-and-recovery",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "检查和恢复",
+        "markdown": "最后一种策略是允许死锁偶尔发生，检测到再恢复。教材的判断很务实：如果死锁很少见，重启一次的代价可能低于长期维护复杂预防机制的成本。\n\n很多数据库系统采用这种思路：死锁检测器定期运行，构建资源等待图并检查环；发现环后回滚或重启相关事务；如果涉及复杂的数据结构修复，还需要人工介入。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000442"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "检查和恢复"
+              ],
+              "lineStart": 8962,
+              "lineEnd": 8965,
+              "assetRefs": [],
+              "excerptSha256": "c494ec47c0f206168d71cd39b24e61273ca4853e34d916bfd7fe3ea9c031c3fa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-detection-practice",
+        "moduleId": "avoidance-and-recovery",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：检测频率与恢复代价",
+        "markdown": "检测与恢复的关键成本有两项：检测频率和恢复代价。检测太频繁会占用 CPU，太稀疏则死锁持续时间变长；恢复方式从终止一个线程、回滚事务到重启系统，代价逐级上升，需要按业务可接受的中断时间选择。\n\n检测依赖等待图这类运行时信息，因此只能发现已经发生的死锁，不能预防它；它适合与加锁顺序约定配合使用，而不是替代后者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-detect-recover"
+          ]
+        }
+      },
+      {
+        "id": "tb-tom-west",
+        "moduleId": "engineering-judgment",
+        "depth": "core",
+        "kind": "note",
+        "title": "不要总是完美：按故障代价决定投入",
+        "markdown": "教材用 Tom West 的工程格言收束这一节：不是所有值得做的事情都值得做好。如果故障很少发生且影响很小，就不值得投入大量精力去彻底预防。\n\n判断标准取决于后果：普通桌面系统的偶发死锁重启即可，而航天飞机等场景必须把故障当作不可接受的风险，此时预防和验证的投入就是必要的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000443"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：不要总是完美（TOM WEST 定律）"
+              ],
+              "lineStart": 8966,
+              "lineEnd": 8973,
+              "assetRefs": [],
+              "excerptSha256": "f1dbe44bd8bbb126597bef1436a5c1af58e39d5f3d6cad836ea99e3cb9b8bf08"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-engineering-decision",
+        "moduleId": "engineering-judgment",
+        "depth": "core",
+        "kind": "table",
+        "title": "模型补充：策略选择速查表",
+        "markdown": "把教材的策略整理成一张决策表：\n\n| 策略 | 做法 | 主要代价 | 适用场景 |\n|---|---|---|---|\n| 预防：锁顺序 | 全序或偏序加锁，或按锁地址排序 | 需要设计约定并遵守 | 代码可控、锁集合稳定 |\n| 预防：一次性抢锁 | 用全局锁包住抢锁过程 | 并发度下降 | 临界区短、锁需求明确 |\n| 预防：trylock | 失败后释放并重试 | 活锁、清理复杂 | 可重试且易回滚的操作 |\n| 预防：无锁结构 | CAS 等原子指令 | 设计与正确性验证困难 | 热点数据结构、库实现 |\n| 避免 | 调度时错开危险线程 | 需要全局信息、限制并发 | 嵌入式、实时系统 |\n| 检测恢复 | 定期查环并回滚或重启 | 检测开销、恢复中断 | 数据库等可回滚系统 |\n\n实际系统往往组合使用：用锁顺序降低发生概率，用检测器兜底，并为恢复设计好回滚路径。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cycle-wait",
+            "tb-non-preemptive",
+            "tb-scheduling-avoidance",
+            "tb-detect-recover",
+            "tb-tom-west"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "integration",
+        "depth": "support",
+        "kind": "summary",
+        "title": "本点小结",
+        "markdown": "本点的主线可以概括为：死锁是等待环，环由互斥、持有并等待、非抢占、循环等待四项条件共同支撑；破坏任一条件即可预防，代价分别是设计约定、并发度、活锁风险和实现复杂度；当预防不划算时，可以用调度避免或检测恢复来兜底。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-deadlock-definition",
+            "tb-four-conditions",
+            "model-engineering-decision"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "integration",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "场景练习：找出环并选择策略",
+        "markdown": "分析下面的代码：线程 A 先锁 M1 再锁 M2，线程 B 先锁 M2 再锁 M1，线程 C 只锁 M2。\n\n1. 哪个线程组合、在什么交错下会形成等待环？\n2. 如果要求不改动 A、B 的代码，只增加约束，最直接的预防手段是什么？\n3. 如果系统允许回滚，检测恢复方案需要记录哪些信息？\n\n参考答案要点：A 与 B 各持一把锁后互相请求时成环，C 只持一把锁不参与环；可以按锁地址统一 A、B 的加锁顺序；检测恢复需要等待图或资源分配图，以及可回滚的事务边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "deadlock-condition-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise",
+        "moduleId": "integration",
+        "depth": "core",
+        "outcomeRefs": [
+          "analyze-four-conditions",
+          "apply-prevention-strategy"
+        ],
+        "learningPurpose": "检查学习者能否从具体场景中定位等待环、识别被破坏的条件并选择匹配的预防策略。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-four-conditions",
+            "model-engineering-decision"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "两个线程以相反顺序申请 M1 和 M2，第三个线程只申请 M2"
+        },
+        "fallback": {
+          "type": "text",
+          "markdown": "请写出形成等待环的线程与锁、该场景破坏或满足了四个条件中的哪些，并说明你会选择哪种预防策略及原因。"
+        }
+      }
+    ]
+  },
+  "subtitle": "常见并发问题",
+  "clusterId": "chapter-32",
+  "clusterIds": [
+    "chapter-32"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000432"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "死锁缺陷"
+      ],
+      "lineStart": 8737,
+      "lineEnd": 8757,
+      "assetRefs": [
+        "parts/part-0003/images/dc25204246c2f6b9fca3b854d25f0fef721588c1db6ce8a9479db56540615f87.jpg"
+      ],
+      "excerptSha256": "f5276dc87c60110b0a7c73005886d7955984db94856ecb8ead972ebea397ebfb"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000433"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "为什么发生死锁"
+      ],
+      "lineStart": 8758,
+      "lineEnd": 8772,
+      "assetRefs": [],
+      "excerptSha256": "6da7ca82ba0dfc53b1a66c9439424333d479219dfafa25f0b693cdd8dc54b2c6"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000434"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "产生死锁的条件"
+      ],
+      "lineStart": 8773,
+      "lineEnd": 8786,
+      "assetRefs": [],
+      "excerptSha256": "b1cc5110103924634453564ff35f8ea8a4c0d32ccadbc437cda4c1b2bc9c3202"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000435"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "预防"
+      ],
+      "lineStart": 8787,
+      "lineEnd": 8788,
+      "assetRefs": [],
+      "excerptSha256": "b4fb63670279408842760938ca357aaac14b91145d478f04c760499e6fc05ad6"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000436"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "循环等待"
+      ],
+      "lineStart": 8789,
+      "lineEnd": 8796,
+      "assetRefs": [],
+      "excerptSha256": "0ee0483f7a1701d48dd0633124af371bc9d47f8f7832c9bfc94a2a72b6eecdd9"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000437"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：通过锁的地址来强制锁的顺序"
+      ],
+      "lineStart": 8797,
+      "lineEnd": 8815,
+      "assetRefs": [],
+      "excerptSha256": "eef624f203bdeef96e9c1cd32802537d5ca2858f7d63bbd9d8ee75679fdd4eda"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000438"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "持有并等待"
+      ],
+      "lineStart": 8816,
+      "lineEnd": 8831,
+      "assetRefs": [],
+      "excerptSha256": "ca89299a6917bc078d4e17987ccc56285f0754224a62ec1a59bc3618f6c38337"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000439"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "非抢占"
+      ],
+      "lineStart": 8832,
+      "lineEnd": 8850,
+      "assetRefs": [],
+      "excerptSha256": "9ae2eefe6f9e84bb0137584efb9e29e8d9e502eccace33f80c83a79877f39d91"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000440"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "互斥"
+      ],
+      "lineStart": 8851,
+      "lineEnd": 8926,
+      "assetRefs": [],
+      "excerptSha256": "620a2045fb4c214c29c1137be5388d41795f825c419e57f77201fbab155ed766"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000441"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "通过调度避免死锁"
+      ],
+      "lineStart": 8927,
+      "lineEnd": 8961,
+      "assetRefs": [
+        "parts/part-0004/images/1c0a79bd796e6998fc6adcaa35c64d81cf721057109cd8ef2e9f891059ff2692.jpg"
+      ],
+      "excerptSha256": "4577777d4388991dbf133185dd70a55150475c5e4adb99f5bbda69d3e326cfd5"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000442"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "检查和恢复"
+      ],
+      "lineStart": 8962,
+      "lineEnd": 8965,
+      "assetRefs": [],
+      "excerptSha256": "c494ec47c0f206168d71cd39b24e61273ca4853e34d916bfd7fe3ea9c031c3fa"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000443"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：不要总是完美（TOM WEST 定律）"
+      ],
+      "lineStart": 8966,
+      "lineEnd": 8973,
+      "assetRefs": [],
+      "excerptSha256": "f1dbe44bd8bbb126597bef1436a5c1af58e39d5f3d6cad836ea99e3cb9b8bf08"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1420,
+    691
+  ],
+  "scale": 0.98
+}

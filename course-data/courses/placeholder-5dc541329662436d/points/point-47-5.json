@@ -1,0 +1,679 @@
+{
+  "id": "point-47-5",
+  "title": "远程过程调用（RPC）",
+  "shortSummary": "解释 RPC 如何把远程调用伪装成本地调用，并处理序列化、失败和幂等性。",
+  "keyTerms": [
+    "RPC",
+    "序列化",
+    "失败处理",
+    "幂等性"
+  ],
+  "animationType": "rpcCall",
+  "animationSuggestion": "按时间轴展示一次 RPC 调用：高亮客户端存根打包、网络传输、服务器解包与执行、客户端解包结果；在超时分支演示重发与序号去重，帮助学习者看清哪些步骤被隐藏、哪些失败仍会暴露。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-47-3",
+    "point-47-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-boundary-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 RPC 组成、存根流程与运行时议题，围绕 RPC 能隐藏什么、不能隐藏什么重组讲解，并补充幂等与端到端校验的迁移练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-rpc-goal",
+          "text": "说明 RPC 的目标以及存根生成器与运行时库的分工。"
+        },
+        {
+          "id": "trace-rpc-call",
+          "text": "按顺序追踪一次 RPC 调用中客户端存根、服务器与运行时库完成的步骤。"
+        },
+        {
+          "id": "choose-transport",
+          "text": "根据可靠性与性能要求，判断 RPC 应建立在 TCP 还是 UDP 之上。"
+        },
+        {
+          "id": "reason-about-failure",
+          "text": "用超时重试、序号与端到端论点解释远程调用的重复执行风险和校验责任。"
+        }
+      ],
+      "misconceptions": [
+        "认为 RPC 让远程调用与本地调用语义完全相同，忽略了延迟、失败和重复执行。",
+        "认为底层使用 TCP 就等于整个调用可靠，忽略了应用层仍需端到端校验。",
+        "认为超时后重发总是安全的，忽略了同一个请求可能被执行多次。"
+      ],
+      "modules": [
+        {
+          "id": "rpc-idea",
+          "title": "问题导入：把远程调用做成函数调用",
+          "role": "motivation",
+          "description": "先建立 RPC 的目标与两部分组成，再说明这种抽象能隐藏什么。",
+          "outcomeRefs": [
+            "explain-rpc-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "stub-machinery",
+          "title": "存根生成器：序列化与调用流程",
+          "role": "mechanism",
+          "description": "追踪客户端与服务器存根的打包、发送、解包和返回步骤，并处理复杂参数与并发。",
+          "outcomeRefs": [
+            "trace-rpc-call"
+          ],
+          "order": 1
+        },
+        {
+          "id": "runtime-layer",
+          "title": "运行时库：命名、传输与可靠性",
+          "role": "mechanism",
+          "description": "理解运行时如何找到服务器、选择传输层并自行实现确认、超时重试和序号。",
+          "outcomeRefs": [
+            "trace-rpc-call",
+            "choose-transport"
+          ],
+          "order": 2
+        },
+        {
+          "id": "failure-boundaries",
+          "title": "失败语义与边界",
+          "role": "boundary-analysis",
+          "description": "分析长调用、大参数、字节序、异步调用与端到端校验，划清 RPC 的能力边界。",
+          "outcomeRefs": [
+            "choose-transport",
+            "reason-about-failure"
+          ],
+          "order": 3
+        },
+        {
+          "id": "rpc-transfer",
+          "title": "达成检查与迁移",
+          "role": "summary-check",
+          "description": "用一次完整调用回顾机制，并把可靠性责任迁移到新情境中判断。",
+          "outcomeRefs": [
+            "explain-rpc-goal",
+            "reason-about-failure"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-rpc-goal",
+          "trace-rpc-call",
+          "choose-transport",
+          "reason-about-failure"
+        ],
+        "method": "完成传输方案选择练习，并说明重试可能带来的重复执行以及需要哪一层校验。",
+        "successCriteria": [
+          "能说清客户端存根与服务器各自完成哪些步骤",
+          "能比较 TCP 与 UDP 方案下可靠性由谁负责",
+          "能指出端到端校验不能由底层可靠传输代替"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-47-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "rpc-goal",
+        "moduleId": "rpc-idea",
+        "depth": "core",
+        "kind": "definition",
+        "title": "RPC 的目标与组成",
+        "markdown": "远程过程调用（Remote Procedure Call，RPC）的目标，是让在远程机器上执行代码这件事，用起来像调用本地函数一样直接：客户端发起一次过程调用，经过一段时间后拿到结果；服务器只需要定义希望导出的例程，其余工作交给 RPC 系统。\n\nRPC 系统通常由两部分组成：存根生成器（stub generator，也称协议编译器）负责自动生成打包与解包的代码，运行时库负责通信、命名、超时与可靠性等细节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000645"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "远程过程调用（RPC）"
+              ],
+              "lineStart": 12554,
+              "lineEnd": 12559,
+              "assetRefs": [],
+              "excerptSha256": "3a8606d181b1ad9a835dfb93b09f644320757a18f7aa5cd592a460634720f714"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pl-abstraction",
+        "moduleId": "rpc-idea",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么采用函数调用形状的抽象",
+        "markdown": "把通信包装成函数调用，最大的收益是调用者可以继续使用熟悉的控制流：传参、等待、取返回值，而不必在业务代码里手写消息格式和套接字收发。\n\n但“像本地调用”只是接口形状，不等于语义相同。本地调用几乎不会超时或丢失，远程调用则会遇到延迟、重复与失败；RPC 的价值在于把打包与传输自动化，而不是消除这些分布式问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rpc-goal"
+          ]
+        }
+      },
+      {
+        "id": "stub-flow",
+        "moduleId": "stub-machinery",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "存根生成器与调用流程",
+        "markdown": "存根生成器接受服务器希望导出的接口（例如一组函数签名），为客户端生成客户端存根，为服务器生成服务端代码。\n\n客户端存根内部依次完成：创建消息缓冲区；把函数标识符和参数打包进连续字节数组，这一步称为封送处理（marshaling）或序列化（serialization）；把消息发送给服务器；同步等待回复；解封送处理（unmarshaling）返回码与结果；返回调用者。因此对客户端程序来说，代码仍然只是一次普通函数调用。\n\n服务器侧则相反：解包消息并取出函数标识符与参数；调用实际函数；打包结果；把回复发回客户端。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000646"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "存根生成器"
+              ],
+              "lineStart": 12560,
+              "lineEnd": 12602,
+              "assetRefs": [],
+              "excerptSha256": "5936b127bb8815ef063d8c5d981b0bc3b292352be4057405144ac7f3cd432025"
+            }
+          ]
+        }
+      },
+      {
+        "id": "stub-complex-args",
+        "moduleId": "stub-machinery",
+        "depth": "support",
+        "kind": "note",
+        "title": "复杂参数如何序列化",
+        "markdown": "复杂参数是存根生成器必须处理的第一个难点。一次调用可能传入指向缓冲区的指针和长度，RPC 包必须弄清如何解释这个指针，才能把真正需要发送的字节序列化。常见做法是使用协议已知的类型（例如带长度的数据块缓冲区），或给数据结构加注释，让编译器知道哪些字节需要发送。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000646"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "存根生成器"
+              ],
+              "lineStart": 12560,
+              "lineEnd": 12602,
+              "assetRefs": [],
+              "excerptSha256": "5936b127bb8815ef063d8c5d981b0bc3b292352be4057405144ac7f3cd432025"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-example",
+        "moduleId": "stub-machinery",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "一次写调用的打包与还原",
+        "markdown": "以一次 `write(fd, buf, size)` 风格的远程调用为例：客户端写下的调用只有三个参数，但存根必须把“调用哪个函数”、文件描述符、缓冲区内容和长度一起编码进消息。服务器解包后按约定顺序还原参数，再调用真实的写函数。\n\n这说明序列化不能简单地把内存原样拷贝：指针、长度与实际数据之间的关系必须由协议明确规定，接收方才能重建出同样的参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "stub-flow",
+            "stub-complex-args"
+          ]
+        }
+      },
+      {
+        "id": "stub-concurrency",
+        "moduleId": "stub-machinery",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "服务器如何组织并发",
+        "markdown": "服务器如何组织并发同样影响 RPC 实现。最简单的服务器在循环中一次处理一个请求；如果某个调用因 I/O 阻塞，服务器资源就被浪费。多数服务器改用线程池：启动时创建固定数量的工作线程，请求到达后分派给空闲线程处理，主线程继续接收新请求，从而提高服务器利用率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000646"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "存根生成器"
+              ],
+              "lineStart": 12560,
+              "lineEnd": 12602,
+              "assetRefs": [],
+              "excerptSha256": "5936b127bb8815ef063d8c5d981b0bc3b292352be4057405144ac7f3cd432025"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-concurrency-cost",
+        "moduleId": "stub-machinery",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "线程池把并发引入调用实现",
+        "markdown": "线程池提高了服务器利用率，但把并发引入了 RPC 调用本身：多个调用可能同时访问共享状态，需要锁和其他同步原语来保证正确性。也就是说，RPC 在服务器端并没有消除并发问题，只是把它转移给了运行时和实现者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "stub-concurrency"
+          ]
+        }
+      },
+      {
+        "id": "runtime-naming",
+        "moduleId": "runtime-layer",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "运行时库与命名问题",
+        "markdown": "运行时库承担 RPC 的大部分繁重工作，也集中处理性能与可靠性问题。第一项挑战是命名：客户端必须能找到提供远程服务的机器。最简单的方式建立在现有命名系统上，例如用主机名和端口号标识服务器，再由网络层把数据包路由到该地址。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000647"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "运行时库"
+              ],
+              "lineStart": 12603,
+              "lineEnd": 12616,
+              "assetRefs": [],
+              "excerptSha256": "f2cba9ffdf9271ad952bb6d744c76b7fb72ac8a8fb73e8300136fb497a3c2c50"
+            }
+          ]
+        }
+      },
+      {
+        "id": "runtime-transport",
+        "moduleId": "runtime-layer",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "可靠传输层带来的额外确认",
+        "markdown": "找到服务器后，要决定 RPC 建立在哪种传输层协议之上。可靠传输协议（如 TCP/IP）会确认每个请求和回复，并在超时后重传。如果 RPC 本身也是请求/回复模式，那么在可靠层之上再实现一遍，就要额外发送两个确认消息，带来性能上的低效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000647"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "运行时库"
+              ],
+              "lineStart": 12603,
+              "lineEnd": 12616,
+              "assetRefs": [],
+              "excerptSha256": "f2cba9ffdf9271ad952bb6d744c76b7fb72ac8a8fb73e8300136fb497a3c2c50"
+            }
+          ]
+        }
+      },
+      {
+        "id": "runtime-reliability",
+        "moduleId": "runtime-layer",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "在不可靠层上自建可靠性",
+        "markdown": "因此许多 RPC 包选择建立在不可靠通信层（如 UDP/IP）之上，由 RPC 层自己提供可靠性：使用超时/重试和确认，并配合某种序列编号。有了序号，通信层可以保证每个 RPC 在没有故障时只发生一次，或在发生故障时至多发生一次，而不是让重试悄悄变成重复执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000647"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "运行时库"
+              ],
+              "lineStart": 12603,
+              "lineEnd": 12616,
+              "assetRefs": [],
+              "excerptSha256": "f2cba9ffdf9271ad952bb6d744c76b7fb72ac8a8fb73e8300136fb497a3c2c50"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-transport-tradeoff",
+        "moduleId": "runtime-layer",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "TCP 还是 UDP：可靠性由谁负责",
+        "markdown": "两种选择的差别在于可靠性由谁负责。直接用 TCP，可靠性交给传输层，代价是多出确认消息；用 UDP 加自建机制，消息更少、控制更灵活，但 RPC 运行时必须自己实现确认、超时、重试和序号，并处理重复请求。\n\n选择时应看调用语义与部署环境：实现简单、流量不大的内部服务用 TCP 往往更省事；对延迟敏感、需要精细控制的系统，才值得在 UDP 上自行实现可靠性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "runtime-transport",
+            "runtime-reliability"
+          ]
+        }
+      },
+      {
+        "id": "model-duplicate-calls",
+        "moduleId": "runtime-layer",
+        "depth": "core",
+        "kind": "note",
+        "title": "重试为什么会带来重复执行",
+        "markdown": "重试意味着同一个请求可能被执行多次，因此“至多一次”的保证需要运行时用序号去重。若应用层没有去重，客户端超时后重发，服务器可能已经完成过一次调用。\n\n这也是幂等性重要的原因：只读查询通常可以安全重试，而转账、追加写这类操作若重复执行会改变结果，必须由协议序号或应用逻辑识别重复请求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "runtime-reliability"
+          ]
+        }
+      },
+      {
+        "id": "other-issues",
+        "moduleId": "failure-boundaries",
+        "depth": "support",
+        "kind": "note",
+        "title": "长调用、大参数与字节序",
+        "markdown": "运行时还要处理其他边界情况。远程调用耗时较长时，可能超过客户端超时阈值而被误判为故障并触发重试；一种做法是服务器先发显式确认表示已收到请求，之后客户端定期询问是否仍在处理。参数大于单个数据包时，需要底层的分片与重组，或在 RPC 层自行实现。不同机器还可能使用大端序或小端序，需要统一消息中的字节顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000648"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "其他问题"
+              ],
+              "lineStart": 12617,
+              "lineEnd": 12624,
+              "assetRefs": [],
+              "excerptSha256": "69b5030365b63455169e8ad5ba716b0ee3367e69e19a9966fc9de027aa05fb9a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-long-call",
+        "moduleId": "failure-boundaries",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "显式确认与轮询的代价",
+        "markdown": "显式确认加轮询解决的是“还在做”与“已经失败”难以区分的问题：客户端先确认服务器收到了请求，再用后续询问判断任务是否推进，而不是一超时就重发。代价是额外的消息和状态维护，因此只对确实可能长时间运行的调用才值得启用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "other-issues"
+          ]
+        }
+      },
+      {
+        "id": "byte-order",
+        "moduleId": "failure-boundaries",
+        "depth": "support",
+        "kind": "note",
+        "title": "用统一表示解决字节序差异",
+        "markdown": "字节序问题通常由 RPC 包的消息格式解决：协议规定统一的字节序，例如 Sun RPC 使用 XDR（外部数据表示）层。若双方机器字节序与协议一致，可以直接收发；否则必须逐项转换消息中的每个值，这会带来一定的性能开销。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000649"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "补充：端到端的论点"
+              ],
+              "lineStart": 12625,
+              "lineEnd": 12636,
+              "assetRefs": [],
+              "excerptSha256": "aa810e4fced72355bbeac21add2d23be11c513d7555663045053bde10e180a53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "async-rpc",
+        "moduleId": "failure-boundaries",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "同步调用与异步调用",
+        "markdown": "典型的 RPC 是同步的：发出调用后必须等待返回才能继续。由于等待可能很长，而客户端也许还有别的工作可做，一些 RPC 包允许异步调用：发送请求后立即返回，客户端可以继续执行其他计算或发起其他 RPC；等到需要结果时，再调用 RPC 层等待未完成的调用完成并取回返回值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000649"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "补充：端到端的论点"
+              ],
+              "lineStart": 12625,
+              "lineEnd": 12636,
+              "assetRefs": [],
+              "excerptSha256": "aa810e4fced72355bbeac21add2d23be11c513d7555663045053bde10e180a53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-async",
+        "moduleId": "failure-boundaries",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "异步调用把等待交给调用方安排",
+        "markdown": "异步 RPC 把“发起”和“取结果”拆成两步，适合客户端有并行工作可做的场景。但调用方必须自己保存未完成调用的句柄、安排何时等待，并处理结果到达前程序状态已经变化的情况；这让控制流比一次同步调用复杂。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "async-rpc"
+          ]
+        }
+      },
+      {
+        "id": "end-to-end",
+        "moduleId": "failure-boundaries",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "端到端的论点",
+        "markdown": "端到端的论点指出：分层系统中，只有最上层（通常是应用程序）才能真正实现某些功能。以两台机器之间可靠地传输文件为例，即使网络层保证每个字节按序送达，发送方内存中的字节也可能在发送前已损坏，或接收方写磁盘时出错；要保证最终文件一致，必须在整个传输结束后做端到端检查，例如比较两端文件的校验和。因此，下层提供可靠性可以提升性能或优化系统，但不能替代应用层自己的验证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000649"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "补充：端到端的论点"
+              ],
+              "lineStart": 12625,
+              "lineEnd": 12636,
+              "assetRefs": [],
+              "excerptSha256": "aa810e4fced72355bbeac21add2d23be11c513d7555663045053bde10e180a53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-end-to-end-apply",
+        "moduleId": "failure-boundaries",
+        "depth": "core",
+        "kind": "application",
+        "title": "把端到端论点用到 RPC 上",
+        "markdown": "TCP 的可靠传输只保证消息按序到达，并不保证服务器执行了正确的业务逻辑，也不保证结果符合应用的不变式。调用方仍需按业务需要校验返回值、处理部分成功，并在关键场景做幂等或对账。RPC 提供的是通信抽象，不是端到端的正确性保证。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "end-to-end"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "rpc-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "RPC 隐藏了什么，又暴露了什么",
+        "markdown": "RPC 用函数调用的形状封装远程通信：存根生成器自动完成参数与结果的序列化，运行时库负责命名、传输选择、超时重试与去重。理解 RPC 的关键不是背下调用步骤，而是分清哪些复杂性被隐藏、哪些仍会暴露给调用者——失败、重复执行与端到端校验都必须由协议或应用显式处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rpc-goal",
+            "stub-flow",
+            "runtime-reliability",
+            "end-to-end"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "rpc-transport-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-end-to-end-apply",
+        "moduleId": "failure-boundaries",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-transport",
+          "reason-about-failure"
+        ],
+        "learningPurpose": "检查学习者能否根据失败语义为一次 RPC 选择传输方案，并说明重试与端到端校验的责任。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "runtime-transport",
+            "runtime-reliability",
+            "end-to-end"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "某 RPC 服务需要频繁调用且能容忍偶发重复；请选择 TCP 或 UDP 方案，并说明重复请求由谁识别、端到端正确性由谁保证。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请选择 TCP 或 UDP 作为该服务的传输层，分别写出可靠性由谁负责、重试重复如何识别，以及应用层还需做哪项端到端检查。"
+        }
+      }
+    ]
+  },
+  "subtitle": "分布式系统",
+  "clusterId": "chapter-47",
+  "clusterIds": [
+    "chapter-47"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000645"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "远程过程调用（RPC）"
+      ],
+      "lineStart": 12554,
+      "lineEnd": 12559,
+      "assetRefs": [],
+      "excerptSha256": "3a8606d181b1ad9a835dfb93b09f644320757a18f7aa5cd592a460634720f714"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000646"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "存根生成器"
+      ],
+      "lineStart": 12560,
+      "lineEnd": 12602,
+      "assetRefs": [],
+      "excerptSha256": "5936b127bb8815ef063d8c5d981b0bc3b292352be4057405144ac7f3cd432025"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000647"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "运行时库"
+      ],
+      "lineStart": 12603,
+      "lineEnd": 12616,
+      "assetRefs": [],
+      "excerptSha256": "f2cba9ffdf9271ad952bb6d744c76b7fb72ac8a8fb73e8300136fb497a3c2c50"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000648"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "其他问题"
+      ],
+      "lineStart": 12617,
+      "lineEnd": 12624,
+      "assetRefs": [],
+      "excerptSha256": "69b5030365b63455169e8ad5ba716b0ee3367e69e19a9966fc9de027aa05fb9a"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000649"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "补充：端到端的论点"
+      ],
+      "lineStart": 12625,
+      "lineEnd": 12636,
+      "assetRefs": [],
+      "excerptSha256": "aa810e4fced72355bbeac21add2d23be11c513d7555663045053bde10e180a53"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1981,
+    -631
+  ],
+  "scale": 0.97
+}

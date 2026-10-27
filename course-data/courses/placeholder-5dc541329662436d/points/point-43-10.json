@@ -1,0 +1,366 @@
+{
+  "id": "point-43-10",
+  "title": "确定块的死活",
+  "shortSummary": "介绍如何用段摘要中的 inode 号和偏移判断块是否仍被引用。",
+  "keyTerms": [
+    "块存活",
+    "段摘要",
+    "引用",
+    "垃圾收集"
+  ],
+  "animationType": "segmentSummaryCheck",
+  "animationSuggestion": "依次高亮段摘要、imap、inode 和最终地址比较，展示“仍被引用”与“已被取代”两条分支，并在版本号捷径处显示跳过 inode 读取的路径，支持重播。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-43-2",
+    "point-43-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于段摘要、imap 查询和版本号捷径的定义与判定顺序，补充逐步追踪、正反例和边界说明。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-segment-summary",
+          "text": "说明段摘要为每个数据块记录了哪些信息，以及它为什么足以支持存活判定。"
+        },
+        {
+          "id": "trace-liveness-check",
+          "text": "按段摘要、imap、inode、地址比较的顺序判断给定磁盘块是否存活。"
+        },
+        {
+          "id": "evaluate-version-shortcut",
+          "text": "解释版本号捷径为何能跳过 inode 读取，以及它的适用边界。"
+        }
+      ],
+      "misconceptions": [
+        "把段摘要当成“块存活标志表”，以为它直接记录活或死。",
+        "只看段摘要里的 inode 号和偏移就下结论，没有回到当前 inode 核对块地址。",
+        "把版本号捷径当成独立判据，忽略它仍然依赖 imap 中记录的当前版本号。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-evidence",
+          "title": "问题与证据：段摘要记录了什么",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "explain-segment-summary"
+          ],
+          "order": 0
+        },
+        {
+          "id": "liveness-check-procedure",
+          "title": "存活判定流程",
+          "role": "procedure",
+          "outcomeRefs": [
+            "trace-liveness-check"
+          ],
+          "order": 1
+        },
+        {
+          "id": "worked-trace",
+          "title": "正反例追踪",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-liveness-check"
+          ],
+          "order": 2
+        },
+        {
+          "id": "shortcut-and-boundary",
+          "title": "版本号捷径与边界",
+          "role": "optimization",
+          "outcomeRefs": [
+            "evaluate-version-shortcut"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "检查与迁移",
+          "role": "formative-check",
+          "outcomeRefs": [
+            "explain-segment-summary",
+            "trace-liveness-check",
+            "evaluate-version-shortcut"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-segment-summary",
+          "trace-liveness-check",
+          "evaluate-version-shortcut"
+        ],
+        "method": "独立完成一个块的存活判定，并说明每一步为何必要。",
+        "successCriteria": [
+          "能写出段摘要给出的 (inode 号, 偏移量) 两项信息",
+          "能按 imap、inode、地址比较的顺序得出存活或垃圾结论",
+          "能说明版本号捷径成立的条件"
+        ],
+        "exerciseBlockId": "model-check-scenario",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-43-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-segment-summary-entry",
+        "moduleId": "problem-and-evidence",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材依据：段摘要为每个数据块登记归属",
+        "markdown": "LFS 在每个段的段头维护一个**段摘要块（segment summary block）**。对于段内的每个数据块 $D$，它记录两项信息：该块所属文件的 inode 号 $N$，以及该块在文件中的偏移量 $T$。\n\n这两项信息回答的是“这个物理块是谁的第几块”，而不是直接给出一个“活”或“死”的标记。是否存活，还要回到文件当前的组织结构中去核对。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000613"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "确定块的死活"
+              ],
+              "lineStart": 11950,
+              "lineEnd": 11970,
+              "assetRefs": [
+                "parts/part-0005/images/61c90ed1256817e856c533cc7656393487faacdf6333d3c76e5e42de0d6c340d.jpg"
+              ],
+              "excerptSha256": "75dfda466c8873a80925b304f0e455f01ebe78823a7f7a1ab2da617c924fbc45"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-check-current-inode",
+        "moduleId": "problem-and-evidence",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么必须回到当前 inode",
+        "markdown": "段摘要记录的是写入当时的归属关系，文件后来可能被覆盖、截断或删除，因此这条记录只能作为线索，不能直接当作结论。\n\n一个数据块的存活条件是：沿着当前文件系统结构，从该文件的 inode 出发，第 $T$ 个逻辑块仍然指向磁盘地址 $A$。满足这个条件，说明文件此刻还在引用它；不满足，说明它已经是旧版本留下的垃圾。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-segment-summary-entry"
+          ]
+        }
+      },
+      {
+        "id": "textbook-liveness-procedure",
+        "moduleId": "liveness-check-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：完整的存活判定步骤",
+        "markdown": "对位于磁盘地址 $A$ 的数据块 $D$，LFS 依次执行以下检查：\n\n1. 查段摘要块，读出该块登记的一对信息 $(N, T)$，其中 $N$ 是 inode 号，$T$ 是文件内偏移量。\n2. 用 inode 号 $N$ 查询 **imap**，得到 inode 在磁盘上的位置。\n3. 从磁盘读取该 inode（若已在内存中则直接使用）。\n4. 借助偏移量 $T$ 查看 inode（必要时查看间接块），确认文件认为自己的第 $T$ 个块位于哪个磁盘地址。\n5. 比较这个地址与 $A$：相等则 $D$ 存活；指向别处则 $D$ 已是垃圾。\n\n教材用下面的伪代码概括这一过程：\n\n```txt\n(N, T) = SegmentSummary[A];\ninode = Read(imap[N]);\nif (inode[T] == A)\n    // block D is alive\nelse\n    // block D is garbage\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000613"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "确定块的死活"
+              ],
+              "lineStart": 11950,
+              "lineEnd": 11970,
+              "assetRefs": [
+                "parts/part-0005/images/61c90ed1256817e856c533cc7656393487faacdf6333d3c76e5e42de0d6c340d.jpg"
+              ],
+              "excerptSha256": "75dfda466c8873a80925b304f0e455f01ebe78823a7f7a1ab2da617c924fbc45"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-the-procedure",
+        "moduleId": "liveness-check-procedure",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充理解：把伪代码读成一次“追地址”",
+        "markdown": "这段伪代码的核心是一次地址追踪：段摘要提供起点信息 $(N, T)$，imap 把 inode 号翻译成物理位置，inode 再给出该文件第 $T$ 块当前的物理地址，最后与待判定地址 $A$ 比较。\n\n注意比较方向：不是问“段摘要里有没有这个块”，而是问“文件现在还指不指向这个块”。同一个数据块可能出现在多个历史段中，但只有当前 inode 指向的那一份才是活的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-liveness-procedure"
+          ]
+        }
+      },
+      {
+        "id": "model-trace-a0-alive",
+        "moduleId": "worked-trace",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充示例：地址 A0 被判为存活",
+        "markdown": "教材配图给出的场景可以逐步走一遍：段摘要记录地址 $A_0$ 处的数据块是文件 $k$ 在偏移 $0$ 处的部分。\n\n1. 由 `SegmentSummary[A0]` 得到 $(N, T) = (k, 0)$。\n2. 查 `imap[k]`，找到文件 $k$ 的 inode 位置并读取 inode。\n3. 查看 `inode[0]`，发现它指向 $A_0$。\n4. 因为 `inode[0] == A0`，判定 $A_0$ 处的块存活。\n\n若此后文件 $k$ 的第 $0$ 块被重新写入并落到新地址 $A_1$，那么再检查 $A_0$ 时，`inode[0]` 已指向 $A_1$，地址不相等，$A_0$ 处的旧块就被判定为垃圾。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-liveness-procedure"
+          ]
+        }
+      },
+      {
+        "id": "model-alive-dead-contrast",
+        "moduleId": "worked-trace",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充对比：存活与垃圾只差一次地址相等",
+        "markdown": "| 情况 | `inode[T]` 的指向 | 判定 | 清理动作 |\n|---|---|---|---|\n| 仍被当前文件引用 | 正好是 $A$ | 块 $D$ 存活 | 打包进新段，不能丢弃 |\n| 被新写入取代 | 指向其他地址 | 块 $D$ 是垃圾 | 可释放，腾出空间 |\n| 文件被截断或删除 | 不再包含第 $T$ 块 | 块 $D$ 是垃圾 | 可释放，腾出空间 |\n\n三行的共同点是：判定依据始终是“当前文件结构是否还指向 $A$”，而不是这个块历史上属于谁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-liveness-procedure",
+            "model-trace-a0-alive"
+          ]
+        }
+      },
+      {
+        "id": "textbook-version-shortcut",
+        "moduleId": "shortcut-and-boundary",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材依据：版本号捷径",
+        "markdown": "LFS 还采用了一些捷径来更快地判断死活。例如，当文件被截断或删除时，LFS 会增加其**版本号（version number）**，并把新版本号记录在 imap 中。\n\n如果段内也记录了写入时的版本号，那么 LFS 可以先把磁盘段中的版本号与 imap 中的当前版本号比较：版本不一致就说明该块来自旧版本，可以直接判为垃圾，从而跳过前面那串读取 inode 的检查，避免额外的磁盘读取。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000613"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "确定块的死活"
+              ],
+              "lineStart": 11950,
+              "lineEnd": 11970,
+              "assetRefs": [
+                "parts/part-0005/images/61c90ed1256817e856c533cc7656393487faacdf6333d3c76e5e42de0d6c340d.jpg"
+              ],
+              "excerptSha256": "75dfda466c8873a80925b304f0e455f01ebe78823a7f7a1ab2da617c924fbc45"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shortcut-boundary",
+        "moduleId": "shortcut-and-boundary",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "补充边界：捷径是优化，不是新的判据",
+        "markdown": "版本号捷径之所以成立，是因为它用一次便宜的元数据比较，提前排除了“版本已经变化、不可能还存活”的情况。它没有改变存活定义，只是跳过了不必要的 inode 读取。\n\n因此需要注意边界：\n\n- 版本号一致并不自动证明块存活，仍要回到 inode 比较地址；\n- 版本号比较依赖 imap 中始终维护当前版本号，版本号记录缺失或不一致时不能安全使用；\n- 捷径节省的是读取开销，清理程序仍需保证最终判定与完整检查一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-version-shortcut"
+          ]
+        }
+      },
+      {
+        "id": "model-check-scenario",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "补充练习：判断这个块该不该保留",
+        "markdown": "假设段摘要对地址 $A_7$ 记录的是 $(N = 12, T = 3)$。查询 `imap[12]` 得到 inode，发现 `inode[3]` 当前指向 $A_9$。请回答：\n\n1. 地址 $A_7$ 处的块是存活还是垃圾？依据是哪一步比较？\n2. 如果 `inode[3]` 指向的仍是 $A_7$，但 imap 中的版本号比段内记录的版本号更新，能否直接用版本号捷径判死？为什么？\n3. 清理程序把存活块搬到新段后，为什么还要释放旧段？\n\n参考思路：第 1 题比较 `inode[3]` 与 $A_7$，不相等即为垃圾；第 2 题版本不一致只能说明该块来自旧版本，但仍需按定义确认当前文件是否还引用它，不能把“版本不同”误当成唯一判据；第 3 题是为了把分散的存活块重新集中，恢复大块连续空闲空间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-liveness-procedure",
+            "textbook-version-shortcut"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充小结与下一点",
+        "markdown": "判断块的死活可以压缩成三句话：段摘要告诉你“这个块自称是谁的第几块”，imap 和 inode 告诉你“文件现在真正指向哪里”，两者地址一致才保留。版本号捷径只是在这个流程前面加了一道便宜的预检。\n\n知道了如何识别垃圾块，下一个问题就变成策略：清理程序应该多久运行一次、优先清理哪些段，才能在回收空间的同时不拖垮写入性能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-segment-summary-entry",
+            "textbook-liveness-procedure",
+            "textbook-version-shortcut"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "liveness-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-scenario",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-liveness-check",
+          "evaluate-version-shortcut"
+        ],
+        "learningPurpose": "检查学习者能否独立完成地址比较，并区分完整检查与版本号捷径的适用条件。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-liveness-procedure",
+            "textbook-version-shortcut"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定段摘要 $(N, T)$ 与 inode 当前指向，写出判断块存活或垃圾的比较步骤，并说明版本号捷径何时可以安全使用。"
+        }
+      }
+    ]
+  },
+  "subtitle": "日志结构文件系统",
+  "clusterId": "chapter-43",
+  "clusterIds": [
+    "chapter-43"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000613"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "确定块的死活"
+      ],
+      "lineStart": 11950,
+      "lineEnd": 11970,
+      "assetRefs": [
+        "parts/part-0005/images/61c90ed1256817e856c533cc7656393487faacdf6333d3c76e5e42de0d6c340d.jpg"
+      ],
+      "excerptSha256": "75dfda466c8873a80925b304f0e455f01ebe78823a7f7a1ab2da617c924fbc45"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -340,
+    332
+  ],
+  "scale": 0.91
+}

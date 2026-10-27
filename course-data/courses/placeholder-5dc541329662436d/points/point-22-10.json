@@ -1,0 +1,403 @@
+{
+  "id": "point-22-10",
+  "title": "其他虚拟内存策略",
+  "shortSummary": "比较按需分页、预取与聚集写入等页选择与写回策略，说明各自的适用条件与性能代价。",
+  "keyTerms": [
+    "页选择",
+    "按需分页",
+    "预取",
+    "聚集写入",
+    "虚拟内存策略"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.55,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "strategy-comparison-and-transfer",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对页选择、预取和聚集写入的定义与因果关系，围绕访问模式与写回代价补充判断标准和情境练习。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-page-selection-scope",
+          "text": "说明页选择策略解决什么问题，并把它与页面替换、写回策略区分开。"
+        },
+        {
+          "id": "distinguish-demand-prefetch",
+          "text": "区分按需分页与预取，判断预取在何种访问模式下更可能成功。"
+        },
+        {
+          "id": "explain-clustering-write",
+          "text": "解释聚集写入如何利用磁盘特性把多次小写合并为更高效的写操作。"
+        },
+        {
+          "id": "apply-strategy-tradeoffs",
+          "text": "针对给定工作负载选择合适策略，并说明其预期收益与代价。"
+        }
+      ],
+      "misconceptions": [
+        "把预取当成总是划算的优化；预取失败会浪费内存和 I/O 带宽，只有在访问可预测时才更可能获益。",
+        "认为聚集写入会改变数据最终应写入的内容；它改变的是写回的批处理方式，而不是写入目标。"
+      ],
+      "modules": [
+        {
+          "id": "strategy-scope",
+          "title": "策略边界与问题框架",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "explain-page-selection-scope"
+          ],
+          "order": 0
+        },
+        {
+          "id": "load-policy",
+          "title": "何时载入：按需分页与预取",
+          "role": "concept-comparison",
+          "outcomeRefs": [
+            "distinguish-demand-prefetch"
+          ],
+          "order": 1
+        },
+        {
+          "id": "write-policy",
+          "title": "如何写出：聚集写入",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-clustering-write"
+          ],
+          "order": 2
+        },
+        {
+          "id": "tradeoff-synthesis",
+          "title": "统一维度比较与组合取舍",
+          "role": "comparison",
+          "outcomeRefs": [
+            "explain-page-selection-scope",
+            "apply-strategy-tradeoffs"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "情境判断与小结",
+          "role": "practice",
+          "outcomeRefs": [
+            "distinguish-demand-prefetch",
+            "explain-clustering-write",
+            "apply-strategy-tradeoffs"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-page-selection-scope",
+          "distinguish-demand-prefetch",
+          "explain-clustering-write",
+          "apply-strategy-tradeoffs"
+        ],
+        "method": "完成三类情境判断，并说明每项选择所依据的访问特征、预期收益和主要代价。",
+        "successCriteria": [
+          "能区分页选择、页面替换和写回策略",
+          "能为顺序访问与随机访问分别判断预取是否合适",
+          "能说明聚集写入的收益来源与持久化代价"
+        ],
+        "exerciseBlockId": "strategy-exercise",
+        "summaryBlockId": "strategy-summary",
+        "nextPointId": "point-22-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-strategy-scope",
+        "moduleId": "strategy-scope",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：页面替换之外的策略",
+        "markdown": "页面替换并不是虚拟内存子系统唯一需要选择的策略，尽管它可能是最重要的一个。操作系统还必须决定页面在什么时候被载入内存，这类决策称为**页选择**（page selection）策略。它回答的是“何时把页取进来”，而页面替换回答的是“内存没有空位时换出哪一页”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "其他虚拟内存策略"
+              ],
+              "lineStart": 5408,
+              "lineEnd": 5419,
+              "assetRefs": [],
+              "excerptSha256": "443c4cf07461cdb7e2421f2e8746e355886e2eaa7ebeab797ca2a8e04125a202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-strategy-map",
+        "moduleId": "strategy-scope",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三个连续决策",
+        "markdown": "可以把虚拟内存策略看成三个连续问题：第一，页不在内存时，何时把它载入，这属于页选择；第二，内存没有空位时，换出哪一页，这属于页面替换；第三，页面被修改后，何时以及以什么粒度写回磁盘，这属于写出策略。本节讨论的按需分页、预取和聚集写入分别落在第一个和第三个问题上，因此它们与上一节的替换算法是配合关系，而不是替代关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-strategy-scope"
+          ]
+        }
+      },
+      {
+        "id": "textbook-demand-paging",
+        "moduleId": "load-policy",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：按需分页",
+        "markdown": "对大多数页而言，操作系统采用**按需分页**（demand paging）：只有当页被实际访问时才把它载入内存。“按需”意味着载入由访问触发，而不是由操作系统提前猜测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "其他虚拟内存策略"
+              ],
+              "lineStart": 5408,
+              "lineEnd": 5419,
+              "assetRefs": [],
+              "excerptSha256": "443c4cf07461cdb7e2421f2e8746e355886e2eaa7ebeab797ca2a8e04125a202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-demand-cost",
+        "moduleId": "load-policy",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：按需分页的收益与代价",
+        "markdown": "按需分页避免为暂时不用的页占用内存，但每次首次访问都要等待磁盘。若访问具有局部性，等待只集中在少量页上；若活跃工作集远大于可用内存，缺页就会频繁发生，单次访问的有效延迟会被显著放大。因此，按需分页把“是否值得提前载入”这个问题留给了工作负载特征来判断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-demand-paging"
+          ]
+        }
+      },
+      {
+        "id": "textbook-prefetch",
+        "moduleId": "load-policy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：预取及其依据",
+        "markdown": "操作系统也可能猜测某个页面即将被使用，从而提前把它载入，这种行为称为**预取**（prefetching）。预取只有在有合理成功机会时才应该做。例如，一些系统假设：如果代码页 `P` 已经被载入，那么代码页 `P + 1` 很可能很快也会被访问，因此可以提前载入 `P + 1`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "其他虚拟内存策略"
+              ],
+              "lineStart": 5408,
+              "lineEnd": 5419,
+              "assetRefs": [],
+              "excerptSha256": "443c4cf07461cdb7e2421f2e8746e355886e2eaa7ebeab797ca2a8e04125a202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-prefetch-economics",
+        "moduleId": "load-policy",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：预取何时划算",
+        "markdown": "预取的收益来自把未来可能发生的缺页等待提前到当前，代价则是可能载入永远不会使用的页，并占用内存与 I/O 带宽。判断是否划算可以用一个简单标准：预取命中时节省的缺页代价，是否大于预取落空时浪费的传输与空间。顺序访问和固定步长访问通常更可预测；随机访问下，除非有额外的历史信息，否则预取的命中率难以保证。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-prefetch"
+          ]
+        }
+      },
+      {
+        "id": "textbook-clustering-write",
+        "moduleId": "write-policy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：聚集写入",
+        "markdown": "页面写回也可以有不同的粒度。操作系统可以一次写出一页，也可以先在内存中收集一些待完成的写入，再把它们以更高效的方式写入磁盘。这种批量方式通常称为**聚集写入**（clustering），或者分组写入（grouping）。它之所以有效，是因为磁盘驱动器的性质：执行一次大的写操作，通常比执行许多次小的写操作更高效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "其他虚拟内存策略"
+              ],
+              "lineStart": 5408,
+              "lineEnd": 5419,
+              "assetRefs": [],
+              "excerptSha256": "443c4cf07461cdb7e2421f2e8746e355886e2eaa7ebeab797ca2a8e04125a202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-clustering-benefits",
+        "moduleId": "write-policy",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：聚集写入的收益与边界",
+        "markdown": "聚集写入把多个分散的小写合并成较少的较大写请求，减少每次请求都要支付的寻道、旋转和命令处理开销。它不改变“哪些数据最终应当被写入”的目标，改变的是写回的批处理方式。代价是写入被暂存在内存中，数据真正到达磁盘的时间被推迟；如果系统要求某次写入立刻持久化，就需要额外的刷新或同步机制来建立边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-clustering-write"
+          ]
+        }
+      },
+      {
+        "id": "strategy-comparison",
+        "moduleId": "tradeoff-synthesis",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：统一维度比较",
+        "markdown": "下面用统一维度比较本节涉及的策略。\n\n| 策略 | 触发时机 | 主要收益 | 主要代价 | 更适合的情境 |\n| --- | --- | --- | --- | --- |\n| 按需分页 | 访问未驻留页时 | 不把内存浪费在未使用的页上 | 首次访问要等待 I/O | 稀疏、难以预测的访问 |\n| 预取 | 访问发生前进行预测 | 隐藏未来可能发生的缺页延迟 | 预测失败会浪费带宽和内存 | 顺序或固定步长访问 |\n| 聚集写入 | 多个写回请求积累后 | 用较少的大写摊薄磁盘开销 | 推迟持久化，需要缓存管理 | 大量小写且可容忍短暂延迟 |\n| 页面替换（对照） | 内存没有空闲帧时 | 决定保留哪些热页 | 选错会引发更多缺页 | 与上述策略配合使用 |\n\n比较时应先问“当前问题是载入、换出还是写出”，再问“工作负载是否可预测、能否容忍延迟”，而不是只记住某个策略的名字。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-strategy-scope",
+            "textbook-demand-paging",
+            "textbook-prefetch",
+            "textbook-clustering-write"
+          ]
+        }
+      },
+      {
+        "id": "strategy-combination",
+        "moduleId": "tradeoff-synthesis",
+        "depth": "advanced",
+        "kind": "application",
+        "title": "模型补充：策略组合与取舍",
+        "markdown": "这些策略不是互斥选项。例如，顺序读取一个大文件时，系统可以按需载入首页，再对后续页进行预取；日志或元数据产生大量小写时，可以用聚集写入减少磁盘请求。相反，随机访问且内存紧张时，激进的预取可能挤掉真正活跃的热页，使缺页率上升。选择策略时应先识别访问模式和持久化要求，再评估收益与代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "strategy-comparison"
+          ]
+        }
+      },
+      {
+        "id": "strategy-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "模型补充：情境判断练习",
+        "markdown": "情境判断：\n\n1. 顺序播放本地视频文件，页访问基本连续。应该优先考虑按需分页还是预取？\n2. 数据库随机读取大量索引页，内存只够容纳工作集的一小部分。此时大范围预取的主要风险是什么？\n3. 应用频繁产生很小的日志写，且可以容忍短暂延迟。哪种写回策略更合适？\n\n参考思路：1 可以在按需分页的基础上预取后续页；2 预取可能载入不会被使用的页并挤占内存，反而增加缺页；3 聚集写入可以把多个小写合并为较大的写请求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "strategy-comparison",
+            "strategy-combination"
+          ]
+        }
+      },
+      {
+        "id": "strategy-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：小结与下一点桥接",
+        "markdown": "本节把虚拟内存策略从“替换哪一页”扩展到“何时载入”和“如何写出”。按需分页以访问触发载入，预取用可预测性换取延迟隐藏，聚集写入用批处理换取磁盘效率。三者都需要在内存占用、I/O 带宽和持久化时机之间权衡。下一节讨论当内存被超额请求时，系统为何会陷入抖动，以及工作集和准入控制等应对思路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "strategy-comparison",
+            "strategy-exercise"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "strategy-scenario-check",
+        "type": "formative-check",
+        "anchorBlockId": "strategy-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "advanced",
+        "outcomeRefs": [
+          "apply-strategy-tradeoffs"
+        ],
+        "learningPurpose": "检查学习者能否把访问模式与页选择、预取或聚集写入策略对应起来，并说明依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "strategy-comparison",
+            "strategy-combination"
+          ]
+        },
+        "config": {
+          "scenarios": 3,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别判断顺序读文件、随机读索引页和频繁小写日志三种情境更适合哪种策略，并写出访问模式、收益和代价三项依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "超越物理内存:策略",
+  "clusterId": "chapter-22",
+  "clusterIds": [
+    "chapter-22"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000309"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "其他虚拟内存策略"
+      ],
+      "lineStart": 5408,
+      "lineEnd": 5419,
+      "assetRefs": [],
+      "excerptSha256": "443c4cf07461cdb7e2421f2e8746e355886e2eaa7ebeab797ca2a8e04125a202"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3880,
+    2430
+  ],
+  "scale": 0.88
+}

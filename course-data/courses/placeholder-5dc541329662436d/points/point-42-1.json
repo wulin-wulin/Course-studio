@@ -1,0 +1,475 @@
+{
+  "id": "point-42-1",
+  "title": "一个详细的例子",
+  "shortSummary": "通过追加写入的例子展示崩溃可能导致的 inode 和数据不一致。",
+  "keyTerms": [
+    "崩溃一致性",
+    "追加写入",
+    "inode",
+    "数据不一致"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的追加写工作负载、三处磁盘更新和六种崩溃场景，围绕一致性判定补充状态对照表和检查练习，不改变任何结构字段与位图取值。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-crash-problem",
+          "text": "解释为什么更新多个持久结构时崩溃会产生文件系统不一致。"
+        },
+        {
+          "id": "trace-append-updates",
+          "text": "追踪一次追加写在 inode、数据位图和数据块三处需要完成的更新。"
+        },
+        {
+          "id": "analyze-crash-states",
+          "text": "根据哪些写入已完成，判断磁盘映像可能出现的不一致、垃圾数据或空间泄露。"
+        },
+        {
+          "id": "evaluate-consistency",
+          "text": "区分元数据一致与文件内容正确，并说明原子更新的真正目标。"
+        }
+      ],
+      "misconceptions": [
+        "认为只写入数据块也会造成崩溃不一致；实际上没有 inode 和位图指向它时，效果等同于写入从未发生。",
+        "认为 inode 与位图彼此一致就说明文件内容正确；若新数据块尚未写入，指针仍会读到盘上的旧垃圾。",
+        "认为崩溃一致性问题只关乎数据，而实际上 inode、位图等元数据之间的不同意见同样是必须解决的问题。"
+      ],
+      "modules": [
+        {
+          "id": "problem-context",
+          "title": "问题导入：持久结构为什么怕崩溃",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "explain-crash-problem"
+          ],
+          "order": 0
+        },
+        {
+          "id": "example-setup",
+          "title": "案例情境：追加写要改哪三处",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-append-updates"
+          ],
+          "order": 1
+        },
+        {
+          "id": "crash-scenarios",
+          "title": "证据分析：逐个检查崩溃结果",
+          "role": "case-evidence",
+          "outcomeRefs": [
+            "analyze-crash-states",
+            "evaluate-consistency"
+          ],
+          "order": 2
+        },
+        {
+          "id": "atomicity-bridge",
+          "title": "结论与迁移：从场景到一致性问题",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "explain-crash-problem",
+            "evaluate-consistency"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-crash-problem",
+          "trace-append-updates",
+          "analyze-crash-states",
+          "evaluate-consistency"
+        ],
+        "method": "先列出三处待写结构，再针对每次崩溃选择已完成的写入组合，判断得到的磁盘状态是否可用。",
+        "successCriteria": [
+          "能完整列出 inode、数据位图与数据块三处更新",
+          "能判断六种部分写入组合各自的后果",
+          "能说明元数据一致为何仍可能返回垃圾数据"
+        ],
+        "exerciseBlockId": "model-crash-check",
+        "nextPointId": "point-42-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-persistent-structures",
+        "moduleId": "problem-context",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：必须持久的数据结构",
+        "markdown": "文件系统用一组数据结构来实现文件、目录以及所有其他元数据的抽象。与运行时进程在内存中的数据结构不同，这些结构必须**持久**（persist）：即使断电，它们也要长期保存在硬盘或闪存 SSD 这类设备上。\n\n正因如此，文件系统面临一个主要挑战：如何在断电或系统崩溃的情况下更新持久数据结构。如果更新进行到一半时有人绊到电源线，或者操作系统自身崩溃，磁盘上的结构就会停在一个尴尬的中间状态。这类问题被称为**崩溃一致性问题**（crash-consistency problem）。\n\n问题之所以出现，是因为完成一个操作往往要更新磁盘上的多个结构。磁盘一次只服务一个请求，如果第一个写入完成后系统崩溃，磁盘上的结构就处于**不一致**（inconsistent）状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000581"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃一致性：FSCK和日志"
+              ],
+              "lineStart": 11412,
+              "lineEnd": 11419,
+              "assetRefs": [],
+              "excerptSha256": "8b47e862e88ecdd0096b0bb0e8793938a9e068261a4d8011ef6082605f00e7d5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-atomicity-gap",
+        "moduleId": "problem-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：多结构更新没有自带原子性",
+        "markdown": "可以把一次逻辑操作想成一句需要同时生效的“承诺”，但磁盘只提供逐次写入，并不提供“要么全做、要么全不做”的保证。\n\n因此，判断崩溃后果时不能只看单个结构是否写成功，而要看**所有相关结构合起来**是否还能被文件系统解释。只要某个结构已经更新、另一个还没更新，就存在出现不一致的窗口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-persistent-structures"
+          ]
+        }
+      },
+      {
+        "id": "textbook-key-question",
+        "moduleId": "problem-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：关键问题",
+        "markdown": "系统可能在任意两次写入之间崩溃或断电，因此磁盘状态可能只完成了一部分更新。崩溃之后系统重新启动，并希望再次挂载文件系统以访问文件。\n\n于是关键问题变成：**既然崩溃可能发生在任意时间点，如何确保文件系统把磁盘上的映像保持在合理状态？**\n\n教材随后会先考察较老的方法——文件系统检查程序 fsck，再转向日志记录（journaling，也称预写日志 write-ahead logging）。日志为每次写入增加一点开销，但可以从崩溃或断电中更快恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000582"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "关键问题：考虑到崩溃，如何更新磁盘"
+              ],
+              "lineStart": 11420,
+              "lineEnd": 11425,
+              "assetRefs": [],
+              "excerptSha256": "6ae863238ade8f74163117a1b7626fabf11fc62b92c5daa3bd97029bb4d7d735"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-crash-window",
+        "moduleId": "problem-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把“任意时刻崩溃”读成状态空间",
+        "markdown": "既然崩溃可能落在任意两次写入之间，分析时就不必猜测崩溃的确切时刻，只需枚举**哪些写入已经到达磁盘**。每个组合都是一种可能的磁盘映像，我们逐一检查它能否被正常使用。这一思路将在本点的追加写案例中直接展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-persistent-structures",
+            "textbook-key-question"
+          ]
+        }
+      },
+      {
+        "id": "textbook-initial-image",
+        "moduleId": "example-setup",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：初始磁盘映像与追加写负载",
+        "markdown": "教材用一个简单工作负载开始调查：**把单个数据块附加到原有文件**。程序打开文件，用 `lseek()` 把文件偏移移到末尾，然后在关闭文件前发出一次 4KB 写入。\n\n磁盘上使用标准而简单的文件系统结构：一个 inode 位图（8 位，每个 inode 一位）、一个数据位图（也 8 位，每个数据块一位）、8 个 inode（编号 0 到 7，分布在 4 个块上）以及 8 个数据块（编号 0 到 7）。\n\n初始时 inode 2 已被分配并在 inode 位图中标记，数据块 4 也已分配并在数据位图中标记。该 inode 记为 I[v1]，其简化内容为：\n\n```txt\nowner : remzi\npermissions : read-write\nsize : 1\npointer : 4\npointer : null\npointer : null\npointer : null\n```\n\n也就是说文件大小为 1，第一个直接指针指向块 4（文件的数据块 Da），其余三个直接指针为 null。真实 inode 还有更多字段，这里只保留理解例子所需的字段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000583"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "一个详细的例子"
+              ],
+              "lineStart": 11426,
+              "lineEnd": 11471,
+              "assetRefs": [],
+              "excerptSha256": "d4ab09217251ba6c518cce82b23ff4dd4a1db6f074878846a8f4d9c3ea1c7160"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-three-updates",
+        "moduleId": "example-setup",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：追加写需要完成的三次磁盘写入",
+        "markdown": "向文件追加内容意味着添加一个新数据块，因此必须更新磁盘上的三个结构：**inode**（指向新块，并因追加而增大 size）、**新数据块 Db**，以及**新版本的数据位图 B[v2]**（表示新块已分配）。\n\n更新后的 inode 版本 2，即 I[v2]，变成 size 为 2，两个数据指针分别指向块 4 和块 5，其余指针为 null；B[v2] 的内容是 `00001100`；Db 则是用户写入文件的内容。\n\n这些写入通常不会在 `write()` 调用时立即发生：脏 inode、位图和新数据先停留在页缓存（page cache）或缓冲区缓存（buffer cache）中，可能 5 秒或 30 秒后文件系统才把它们发往磁盘。崩溃恰恰可能在这些更新之间发生。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000583"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "一个详细的例子"
+              ],
+              "lineStart": 11426,
+              "lineEnd": 11471,
+              "assetRefs": [],
+              "excerptSha256": "d4ab09217251ba6c518cce82b23ff4dd4a1db6f074878846a8f4d9c3ea1c7160"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-table",
+        "moduleId": "example-setup",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：本次操作的三处待写状态",
+        "markdown": "把上面的情境整理成一张对照表，便于后续逐项判断崩溃后果：\n\n| 结构 | 更新前 | 更新后 | 作用 |\n|---|---|---|---|\n| inode | I[v1]：size 1，指针只到块 4 | I[v2]：size 2，指针到块 4、5 | 描述文件大小与数据位置 |\n| 数据位图 | 只标记块 4 已用 | B[v2] = `00001100` | 记录块 5 已分配 |\n| 数据块 | 块 5 仍是旧内容 | Db：用户追加的内容 | 保存真正的文件数据 |\n\n三处缺一不可：inode 说明文件“用了哪些块”，位图说明“这些块已被占用”，数据块则提供“块里到底是什么”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-initial-image",
+            "textbook-three-updates"
+          ]
+        }
+      },
+      {
+        "id": "textbook-crash-scenarios",
+        "moduleId": "crash-scenarios",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：六种部分写入的崩溃结果",
+        "markdown": "先假设只有**一次**写入成功，有三种可能：\n\n1. **只写入 Db**：数据在磁盘上，但没有 inode 指向它，也没有位图表示它已分配。效果等同于写入从未发生，从崩溃一致性的角度看根本不是问题。\n2. **只写入 I[v2]**：inode 指向地址 5，但 Db 尚未写入，信任这个指针就会读到块 5 的旧垃圾数据。同时磁盘位图说块 5 未分配、inode 却说已分配，出现**文件系统不一致**。\n3. **只写入 B[v2]**：位图指示块 5 已分配，却没有 inode 指向它，文件系统再次不一致；若不解决就会造成**空间泄露**，因为文件系统永远不会再使用块 5。\n\n再假设**两次**写入成功：\n\n4. **写入 I[v2] 和 B[v2]，但没有 Db**：元数据完全一致——inode 指向块 5，位图也说 5 在使用——然而块 5 里仍是垃圾数据。\n5. **写入 I[v2] 和 Db，但没有 B[v2]**：inode 指向了正确数据，但 inode 与旧版位图之间不一致，使用前仍需解决。\n6. **写入 B[v2] 和 Db，但没有 I[v2]**：inode 与数据位图之间不一致；即使数据块已写、位图已标记，也没有 inode 说明它属于哪个文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000584"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃场景"
+              ],
+              "lineStart": 11472,
+              "lineEnd": 11491,
+              "assetRefs": [],
+              "excerptSha256": "fc12d26a08d82985e5115534002dab92a46391c3636b614f932d026486f997ac"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-crash-matrix",
+        "moduleId": "crash-scenarios",
+        "depth": "core",
+        "kind": "table",
+        "title": "模型补充：按已完成写入归纳后果",
+        "markdown": "把六种情况按“已完成的写入”排列，可以清楚看到后果分三类：\n\n| 已完成的写入 | 元数据是否一致 | 主要后果 |\n|---|---|---|\n| 仅 Db | 一致 | 无影响，等同于未追加 |\n| 仅 I[v2] | 不一致 | 可能读到旧垃圾数据 |\n| 仅 B[v2] | 不一致 | 空间泄露 |\n| I[v2] + B[v2] | 一致 | 元数据正常，但数据是垃圾 |\n| I[v2] + Db | 不一致 | 位图与 inode 说法冲突 |\n| B[v2] + Db | 不一致 | 块不属于任何文件 |\n\n可见“元数据一致”并不等于“文件正确”：`I[v2] + B[v2]` 一行在元数据上自洽，但用户读到的仍是错误内容；而“仅 Db”虽然同样一致，效果却等同于这次追加从未发生。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-crash-scenarios"
+          ]
+        }
+      },
+      {
+        "id": "textbook-crash-consistency",
+        "moduleId": "atomicity-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：崩溃一致性问题的正式表述",
+        "markdown": "这些崩溃场景说明了磁盘文件系统映像可能出现的许多问题：文件系统数据结构之间可能存在不一致，可能发生空间泄露，也可能把垃圾数据返回给用户。\n\n理想的做法是把文件系统从**一个一致状态**（追加之前）**原子地**（atomically）移动到**另一个一致状态**（inode、位图和新数据块都已写入磁盘之后）。难点在于磁盘一次只提交一次写入，而崩溃或断电可能发生在这些更新之间。\n\n教材把这一普遍问题称为**崩溃一致性问题**，也称为**一致性更新问题**（consistent-update problem）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000585"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "崩溃一致性问题"
+              ],
+              "lineStart": 11492,
+              "lineEnd": 11495,
+              "assetRefs": [],
+              "excerptSha256": "654c688dfcbdf4c77025a288056e857e18dd669232890b3d534eb77758a8eb04"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-journal-preview",
+        "moduleId": "atomicity-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：为什么这一结论指向后续方案",
+        "markdown": "既然理想目标是原子地完成“旧一致状态 → 新一致状态”的转换，后续方案就要回答同一个问题：**如何在写入被中断时，让恢复过程知道该补完还是该撤销？**\n\n本点只负责把一个逻辑操作拆成三处写入并暴露崩溃窗口；下一知识点将考察 fsck 这种“先放任不一致、挂载前再修复”的事后方案。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-crash-consistency"
+          ]
+        }
+      },
+      {
+        "id": "model-crash-check",
+        "moduleId": "atomicity-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：达成检查",
+        "markdown": "假设一次追加写需要更新 inode、数据位图和新数据块，崩溃后磁盘上只有新的 inode 和新数据块，位图仍是旧版本。\n\n请回答：\n\n1. 此时 inode 与位图是否一致？\n2. 用户读取文件时会拿到正确数据吗？\n3. 文件系统还需要担心什么后果？\n\n参考思路：inode 指向的数据已正确写入，但 inode 说块已分配、位图说未分配，元数据并不一致；因此在使用文件系统之前仍需修复位图，否则该块可能被重复分配。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-crash-scenarios",
+            "textbook-crash-consistency"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "crash-matrix-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-crash-matrix",
+        "moduleId": "crash-scenarios",
+        "depth": "core",
+        "outcomeRefs": [
+          "analyze-crash-states",
+          "evaluate-consistency"
+        ],
+        "learningPurpose": "检查学习者能否根据已完成的写入组合判断磁盘状态的一致性、垃圾数据与空间泄露后果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-crash-scenarios",
+            "model-crash-matrix"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenarioCount": 6
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "任选一种部分写入组合（例如只写入 inode），写出三处结构中哪些已完成、哪些未完成，并判断磁盘状态是否一致以及用户会看到什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "崩溃一致性:FSCK和日志",
+  "clusterId": "chapter-42",
+  "clusterIds": [
+    "chapter-42"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000581"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "崩溃一致性：FSCK和日志"
+      ],
+      "lineStart": 11412,
+      "lineEnd": 11419,
+      "assetRefs": [],
+      "excerptSha256": "8b47e862e88ecdd0096b0bb0e8793938a9e068261a4d8011ef6082605f00e7d5"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000582"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "关键问题：考虑到崩溃，如何更新磁盘"
+      ],
+      "lineStart": 11420,
+      "lineEnd": 11425,
+      "assetRefs": [],
+      "excerptSha256": "6ae863238ade8f74163117a1b7626fabf11fc62b92c5daa3bd97029bb4d7d735"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000583"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "一个详细的例子"
+      ],
+      "lineStart": 11426,
+      "lineEnd": 11471,
+      "assetRefs": [],
+      "excerptSha256": "d4ab09217251ba6c518cce82b23ff4dd4a1db6f074878846a8f4d9c3ea1c7160"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000584"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "崩溃场景"
+      ],
+      "lineStart": 11472,
+      "lineEnd": 11491,
+      "assetRefs": [],
+      "excerptSha256": "fc12d26a08d82985e5115534002dab92a46391c3636b614f932d026486f997ac"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000585"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "崩溃一致性问题"
+      ],
+      "lineStart": 11492,
+      "lineEnd": 11495,
+      "assetRefs": [],
+      "excerptSha256": "654c688dfcbdf4c77025a288056e857e18dd669232890b3d534eb77758a8eb04"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    490,
+    122
+  ],
+  "scale": 1.22
+}

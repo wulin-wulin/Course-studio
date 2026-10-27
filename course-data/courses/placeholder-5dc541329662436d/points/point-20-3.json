@@ -1,0 +1,501 @@
+{
+  "id": "point-20-3",
+  "title": "多级页表",
+  "shortSummary": "解释多级页表如何按需分配页表页，从而降低页表内存占用并支持稀疏地址空间。",
+  "keyTerms": [
+    "多级页表",
+    "页表页",
+    "按需分配",
+    "地址转换"
+  ],
+  "animationType": "multiLevelPageWalk",
+  "animationSuggestion": "分步高亮 VPN 的位段拆分，依次展示页目录项、页表页、PTE 的读取与指针跳转，最后拼接出物理地址，并允许重播同一地址。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-18-1",
+    "point-19-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-with-worked-example",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的定义、位段划分、算例数值与异常路径，围绕位拆分和查找成本补充推导、练习与桥接。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-multilevel-idea",
+          "text": "说明多级页表把线性页表改造成树形结构、用页目录按需分配页表页的机制。"
+        },
+        {
+          "id": "apply-bit-splitting",
+          "text": "根据地址位数、页大小和 PTE 大小拆分 VPN，写出 PDE/PTE 地址公式并完成一次地址转换。"
+        },
+        {
+          "id": "judge-levels-and-cost",
+          "text": "判断何时需要增加层级，并权衡多级页表的空间收益与 TLB 未命中代价。"
+        }
+      ],
+      "misconceptions": [
+        "认为多级页表仍然要保留线性页表的全部页表项，只是换了一种索引写法。",
+        "把页目录项有效误解为它指向的页表页中每个 PTE 都有效。",
+        "认为多级页表会让每次地址转换都变慢，忽略 TLB 命中时页表根本不会被访问。",
+        "把层级越多当成越好，忽略“每一部分都要放进一页”才是增加层级的依据。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-idea",
+          "title": "问题导入：为什么要多级页表",
+          "role": "concept-introduction",
+          "description": "从无效页表区域的内存浪费出发，引入页目录与页表页的分层思想。",
+          "outcomeRefs": [
+            "explain-multilevel-idea"
+          ],
+          "order": 0
+        },
+        {
+          "id": "tradeoff-and-cost",
+          "title": "时空折中与开销核算",
+          "role": "analysis",
+          "description": "分析空间收益、连续内存问题以及 TLB 未命中带来的额外访问。",
+          "outcomeRefs": [
+            "explain-multilevel-idea",
+            "judge-levels-and-cost"
+          ],
+          "order": 1
+        },
+        {
+          "id": "worked-example-two-level",
+          "title": "两级页表完整算例",
+          "role": "worked-example",
+          "description": "用 16KB 地址空间例子完成位拆分、页表页估算和一次地址转换。",
+          "outcomeRefs": [
+            "explain-multilevel-idea",
+            "apply-bit-splitting"
+          ],
+          "order": 2
+        },
+        {
+          "id": "deeper-hierarchy",
+          "title": "何时需要超过两级",
+          "role": "extension",
+          "description": "从 30 位地址空间与 512 字节页推导三级结构，并阅读多级查找控制流。",
+          "outcomeRefs": [
+            "apply-bit-splitting",
+            "judge-levels-and-cost"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用练习检查位拆分与查找流程，并桥接反向页表。",
+          "outcomeRefs": [
+            "explain-multilevel-idea",
+            "apply-bit-splitting",
+            "judge-levels-and-cost"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-multilevel-idea",
+          "apply-bit-splitting",
+          "judge-levels-and-cost"
+        ],
+        "method": "独立完成一道两级页表转换练习，并说明何时需要增加层级。",
+        "successCriteria": [
+          "能写出 VPN 位拆分与 PDE/PTE 地址公式",
+          "能判断页目录项或页表项无效时的异常路径",
+          "能说明多级页表的空间收益与 TLB 未命中代价"
+        ],
+        "exerciseBlockId": "check-two-level-walk",
+        "summaryBlockId": "summary-and-bridge",
+        "nextPointId": "point-20-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-multilevel-idea",
+        "moduleId": "problem-and-idea",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：多级页表与页目录",
+        "markdown": "多级页表（multi-level page table）把线性页表改造成类似树的结构。它的目标不是改变映射结果，而是不再把页表中大片无效区域保留在内存里。\n\n做法分两步：\n\n1. 把页表切成页大小的单元，每个单元称为一个页表页。\n2. 如果某个页表页中的全部页表项（PTE）都无效，就完全不分配这个页表页。\n\n为了追踪页表页是否有效以及有效页在内存中的位置，系统引入页目录（page directory）。页目录项（PDE）至少包含有效位和页帧号（PFN）。PDE 的有效位含义与 PTE 不同：PDE 有效只表示它指向的页表页中至少有一个 PTE 有效；PDE 无效时其余位没有定义。\n\n图 20.2 的对比说明了效果：左侧线性页表即使中间大片区域无效，也必须保留对应的页表页；右侧多级页表只让页目录指向真正有映射的页表页，相当于让线性页表的一部分消失，把释放出的帧用于其他用途。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000269"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "多级页表"
+              ],
+              "lineStart": 4857,
+              "lineEnd": 4873,
+              "assetRefs": [
+                "parts/part-0002/images/c1ed86c26eaad42f894335d18b8ea90950c1e52b6425566e0c78674b9efed50c.jpg"
+              ],
+              "excerptSha256": "929892a36194beb5d13446284cf5ff3ff0654959374fd73ed4a0078b2e982683"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compare-linear",
+        "moduleId": "problem-and-idea",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型对比：线性页表与多级页表",
+        "markdown": "多级页表和线性页表最终给出相同的 VPN 到 PFN 映射，区别在索引结构与存储代价。\n\n| 维度 | 线性页表 | 多级页表 |\n|---|---|---|\n| 索引方式 | VPN 直接索引连续的 PTE 数组 | VPN 分段，先索引页目录，再索引页表页 |\n| 无效区域 | 仍占用页表空间 | 整页无效时不分配该页表页 |\n| 物理布局 | 整个页表必须连续 | 各页表页可分散在任意物理页 |\n| 查找成本 | TLB 未命中时访问一次页表 | 每多一级多一次内存访问 |\n\n因此，“多级”不是让页表项变少，而是让无效区域对应的页表项不必真实存在。有效位的作用也随之分层：PDE 只保证“这一页里至少有一个有效 PTE”，具体到某个 VPN 是否可访问，仍要看最终的 PTE。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-multilevel-idea"
+          ]
+        }
+      },
+      {
+        "id": "textbook-time-space-tradeoff",
+        "moduleId": "tradeoff-and-cost",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：时空折中与额外开销",
+        "markdown": "多级页表有两个直接收益。\n\n第一，如果仔细构建，页表的每个部分都能整齐放进一页，操作系统在需要分配或增长页表时，只需取下一个空闲页。线性页表是按 VPN 索引的 PTE 数组，整个数组必须连续驻留在物理内存；面对 4MB 这样大的页表，找到大块连续空闲内存可能相当困难。多级结构增加了一层间接：页目录指向页表的各个部分，于是页表页可以放在物理内存的任何地方。\n\n第二，这种紧凑是按需换来的。分配的页表空间与正在使用的地址空间数量成比例，通常很紧凑，并能支持稀疏地址空间。\n\n代价同样明确。TLB 未命中时，两级页表需要两次内存加载才能取得转换信息：一次读取页目录项，一次读取 PTE；线性页表只需要一次。因此多级页表是时间与空间折中的一个小例子：表更小了，但慢路径更贵。其次，无论是硬件还是操作系统处理页表查找，多级结构都让查找逻辑比线性页表更复杂。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000270"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：理解时空折中"
+              ],
+              "lineStart": 4874,
+              "lineEnd": 4881,
+              "assetRefs": [],
+              "excerptSha256": "111f19304978ef531eda663bd2618f09ae1ccfec533e3b25972389cb0f121907"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-accounting",
+        "moduleId": "tradeoff-and-cost",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "模型：把开销拆成命中与未命中两条路径",
+        "markdown": "把访问路径拆开看，代价只落在慢路径上：\n\n- TLB 命中：直接用 TLB 项中的 PFN 与偏移形成物理地址，页目录和页表页都不访问，表现与线性页表相同。\n- TLB 未命中：两级页表先读页目录，再读页表页，最后才拿到 PFN；线性页表只需一次页表读取。多出来的一次内存访问就是空间节省的价格。\n- 层级越深，慢路径访问次数越多；但命中率足够高时，平均开销仍可接受。\n\n因此“多级页表是否划算”不能只看页表占用的字节数，还要看工作负载的 TLB 命中率与未命中代价。空间收益来自未被使用的地址区域，时间代价只由真正发生的未命中触发。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-time-space-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "textbook-example-setup",
+        "moduleId": "worked-example-two-level",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：16KB 地址空间的两级页表设置",
+        "markdown": "教材用一个小地址空间展示两级页表的构造。\n\n- 地址空间大小为 16KB，页大小为 64 字节，因此虚拟地址共 14 位。\n- 页内偏移占 6 位，虚拟页号（VPN）占 8 位。\n- 若使用线性页表，就需要 $2^{8}=256$ 个页表项；即使只使用少量页面，也要为全部 256 项保留空间。\n- 假设每个 PTE 为 4 字节，整个线性页表为 $256 \\times 4 = 1\\text{KB}$。\n- 1KB 的页表按 64 字节一页切分，得到 16 个页表页，每个页表页正好容纳 16 个 PTE。\n- 页目录要为页表的每个页提供一个目录项，所以页目录有 16 项，需要 4 位 VPN 来索引。\n\n该例中虚拟页 0 和 1 用于代码，虚拟页 4 和 5 用于堆，虚拟页 254 和 255 用于栈，其余页未使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000271"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "详细的多级示例"
+              ],
+              "lineStart": 4882,
+              "lineEnd": 4885,
+              "assetRefs": [],
+              "excerptSha256": "f25ed271659ab2b5ca4de6b146bcc5dd950b0b41193f172a6c066031e3d3796e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bit-splitting",
+        "moduleId": "worked-example-two-level",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型：VPN 位拆分与地址公式",
+        "markdown": "先确定两级索引各需要多少位：\n\n- 页目录项数等于页表页数：16，所以页目录索引需要 $\\log_2 16 = 4$ 位。\n- 每个页表页容纳的 PTE 数也是 16，所以页表索引需要 $\\log_2 16 = 4$ 位。\n- 8 位 VPN 正好拆成“前 4 位页目录索引 + 后 4 位页表索引”，偏移量保持 6 位不变。\n\n对应的地址公式为：\n\n$$\\text{PDEAddr} = \\text{PageDirBase} + \\text{PDIndex} \\times \\text{sizeof(PDE)}$$\n\n$$\\text{PTEAddr} = (\\text{PDE.PFN} \\ll \\text{SHIFT}) + \\text{PTIndex} \\times \\text{sizeof(PTE)}$$\n\n其中 $\\text{SHIFT} = \\log_2(\\text{页大小}) = 6$。从 PDE 取得的页帧号必须先左移 SHIFT 位恢复成物理地址，再叠加页表内偏移，才能形成 PTE 的地址。反过来说，若不知道一页能放多少 PTE，就无法确定 VPN 应该在第几位切开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-example-setup"
+          ]
+        }
+      },
+      {
+        "id": "textbook-detailed-example",
+        "moduleId": "worked-example-two-level",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：页目录、页表页与一次完整转换",
+        "markdown": "在这个例子中，页目录只有第 0 项和第 15 项有效，分别指向物理页帧 100 和 101。\n\n- 页帧 100 中的页表页记录地址空间前 16 个 VPN，其中 VPN 0、1（代码）和 4、5（堆）有效。\n- 页帧 101 中的页表页记录最后 16 个 VPN，其中 VPN 254、255（栈）有效。\n- 其余页目录项无效，对应的页表页根本没有分配。\n\n于是，为这个地址空间只需要 3 个页：1 个页目录页加 2 个页表页，而不是线性页表所需的 16 个页表页。地址空间越大、使用越稀疏，节省越明显。\n\n教材用地址 $0x3F80$（二进制 $11\\ 1111\\ 1000\\ 0000$）演示转换。按 4+4+6 拆分后，页目录索引为 $1111$（15），页表索引为 $1110$（14），偏移为 $000000$。页目录第 15 项指向页帧 101；在该页表页中索引第 14 项，得到映射到的物理页帧 55。拼接后物理地址为：\n\n$$\\text{PhysAddr} = (55 \\ll 6) + 0 = 0x0DC0$$\n\n教材在此处还插入一条设计提醒：系统设计者应谨慎对待复杂性，目标是实现完成任务所需的最小复杂度。多级页表愿意增加查找复杂度，是为了换取宝贵的内存空间；若空间并不紧张，就不应无条件增加层级。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000272"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "提示：对复杂性表示怀疑"
+              ],
+              "lineStart": 4886,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/9777569c17c788f54a2f90a7062cdb54cc1dadfe1b748d47ef4989634e84775f.jpg"
+              ],
+              "excerptSha256": "c8b5271baab3bf75412af2ae3168ebd11cb0d853cf3f6d61f20c5f5be39fc36a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-level-translation",
+        "moduleId": "worked-example-two-level",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型：完整走一遍 0x3F80 的转换",
+        "markdown": "按 4+4+6 的位段走一遍 $0x3F80$：\n\n| 步骤 | 计算 | 结果 |\n|---|---|---|\n| 拆位 | VPN $= 1111\\ 1110$，偏移 $= 000000$ | PDIndex $= 1111_2 = 15$，PTIndex $= 1110_2 = 14$ |\n| 查页目录 | 页目录基址加 $15 \\times \\text{sizeof(PDE)}$ | PDE 有效，PFN $= 101$ |\n| 查页表 | 在页帧 101 的页表页中取第 14 项 | PTE 有效，PFN $= 55$ |\n| 拼物理地址 | $(55 \\ll 6) + 0$ | $0x0DC0$ |\n\n这条路径只在 TLB 未命中时发生。若 PDE 无效，立即产生段错误；若 PTE 无效，同样失败；若保护位不允许本次访问，则产生保护错误。命中时硬件直接用 TLB 中的 PFN 拼接偏移，不再读页目录和页表页。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-example-setup",
+            "textbook-detailed-example"
+          ]
+        }
+      },
+      {
+        "id": "textbook-deeper-levels",
+        "moduleId": "deeper-hierarchy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：超过两级与多级查找控制流",
+        "markdown": "两级并非上限。教材给出一个需要三级的例子：\n\n- 虚拟地址空间 30 位，页大小 512 字节。\n- 虚拟页号为 21 位，页内偏移为 9 位。\n- 每个 PTE 为 4 字节时，一页可容纳 $512 / 4 = 128$ 个 PTE，因此页表索引需要 $\\log_2 128 = 7$ 位。\n- VPN 剩下的高 14 位若全部作为页目录索引，页目录就有 $2^{14}$ 项；按每页 128 项计算，需要 128 个页，无法放进一页。\n\n为了让页表的每一部分都能放进一页，我们把页目录本身再拆成多页，并在其上加一层页目录：最高位作为第一级页目录索引，接下来的位作为第二级页目录索引，最低 7 位作为页表索引。查找时先由顶级 PDE 找到下一级页目录页，再由该页的 PDE 找到页表页，最后由 PTE 得到物理页帧。\n\n完整的地址转换控制流仍然先查 TLB：命中时直接形成物理地址，不访问页表页；未命中时才执行多级查找。若 PDE 无效或 PTE 无效，就分别抛出异常；通过保护位检查后，把转换装入 TLB 并重试指令。两级页表在这条慢路径上比线性页表多一次内存访问，三级则更多。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000273"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "超过两级"
+              ],
+              "lineStart": 4947,
+              "lineEnd": 5004,
+              "assetRefs": [
+                "parts/part-0002/images/f58532c5a47dcaf0561055e044d2bdd5d0267b83f229c7f75aa0440d1271f1c8.jpg",
+                "parts/part-0002/images/21d315ce6878291fd8fd5de54887d5d83209efd643b54c247e83f7d1dc67e174.jpg"
+              ],
+              "excerptSha256": "8fe16bb7f87cc6bc12b1484263d6afe199531d52d0139ec0d309a595be997224"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-levels-derivation",
+        "moduleId": "deeper-hierarchy",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "模型：用“每部分一页”反推层级数",
+        "markdown": "可以用一条通用规则反推层级数：先算一页能放多少 PTE，再把 VPN 位宽按这个大小切段。\n\n$$N_{\\text{PTE}} = \\frac{\\text{页大小}}{\\text{sizeof(PTE)}}, \\qquad b = \\log_2 N_{\\text{PTE}}$$\n\n$$\\text{层级数} = \\left\\lceil \\frac{\\text{VPN 位数}}{b} \\right\\rceil$$\n\n用教材例子核对：\n\n- 16KB 空间、64 字节页：VPN 8 位，每页 16 个 PTE，$b=4$，得到 $8/4=2$ 级。\n- 30 位空间、512 字节页：VPN 21 位，每页 128 个 PTE，$b=7$，得到 $\\lceil 21/7 \\rceil=3$ 级。\n\n这条公式只给出“每部分不超过一页”所需的上界；实际系统可能存在页表页未装满、各级宽度不对称等情况，因此判断时仍要回到“页目录与每个页表页是否都能放进一页”这个原始标准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-deeper-levels"
+          ]
+        }
+      },
+      {
+        "id": "check-two-level-walk",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型练习：自己拆一次位并走一遍查找",
+        "markdown": "下面的练习不提供完整答案，请先自己写出关键步骤，再对照前文算例检查。\n\n1. 若把例子中的页大小从 64 字节改为 128 字节，地址空间仍为 16KB、PTE 仍为 4 字节，VPN 和偏移各占多少位？页表页有多少个、每页能放多少 PTE？页目录索引和页表索引各占多少位？\n2. 页目录项的“有效”与页表项的“有效”含义有什么不同？为什么 PDE 有效不能推出它指向的页表页里每个 PTE 都有效？\n3. 一次两级查找在 TLB 未命中时会发生几次页表相关内存访问？如果增加到三级，慢路径会怎样变化？\n\n提示：第 1 题先算页数与每页 PTE 数，再取以 2 为底的对数；第 3 题只统计查找页目录和页表页的访问，不把最终访问数据本身算进去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-example-setup",
+            "textbook-detailed-example",
+            "textbook-deeper-levels"
+          ]
+        }
+      },
+      {
+        "id": "summary-and-bridge",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型小结与下一点桥接",
+        "markdown": "本点的三条主线可以压缩为：\n\n1. 结构：多级页表把线性页表切成页表页，用页目录记录哪些页表页存在，从而不为整页无效的区域分配空间。\n2. 算例：把 VPN 按“页目录索引 + 页表索引（+ 更多级）”切分，用 PDE/PTE 地址公式逐级查找；教材的 16KB 例子只用了 3 个页就覆盖了稀疏地址空间。\n3. 取舍：空间节省换来 TLB 未命中路径上的额外内存访问和更高的实现复杂度；层级数由“每一部分都要放进一页”决定。\n\n多级页表仍然要为每个进程维护一棵页表树。下一点“反向页表”换一个方向：不再为每个进程建立按虚拟页组织的页表，而是用一张按物理页帧组织的表记录映射，用查找代价换取空间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-multilevel-idea",
+            "textbook-time-space-tradeoff",
+            "textbook-detailed-example",
+            "textbook-deeper-levels"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "two-level-walk-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-two-level-walk",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-bit-splitting",
+          "judge-levels-and-cost"
+        ],
+        "learningPurpose": "检查学习者能否独立完成 VPN 位拆分、页表页数量估算和一次多级查找，并解释无效项的处理。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-example-setup",
+            "textbook-detailed-example",
+            "textbook-deeper-levels"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            "页大小改为 128 字节后，VPN、偏移、页目录索引和页表索引各占多少位？",
+            "PDE 有效与 PTE 有效的含义有何不同？",
+            "两级与三级查找在 TLB 未命中时各需要几次页表内存访问？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考核对：页大小 128 字节时，16KB 空间共有 128 页，偏移 7 位、VPN 7 位；页表共 512 字节，即 4 个页表页、每页 32 个 PTE，因此页目录索引 2 位、页表索引 5 位。PDE 有效只说明对应页表页中至少有一个有效 PTE；两级未命中需读页目录和页表页两次，三级需三次。"
+        }
+      }
+    ]
+  },
+  "subtitle": "分页:较小的表",
+  "clusterId": "chapter-20",
+  "clusterIds": [
+    "chapter-20"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000269"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "多级页表"
+      ],
+      "lineStart": 4857,
+      "lineEnd": 4873,
+      "assetRefs": [
+        "parts/part-0002/images/c1ed86c26eaad42f894335d18b8ea90950c1e52b6425566e0c78674b9efed50c.jpg"
+      ],
+      "excerptSha256": "929892a36194beb5d13446284cf5ff3ff0654959374fd73ed4a0078b2e982683"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000270"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：理解时空折中"
+      ],
+      "lineStart": 4874,
+      "lineEnd": 4881,
+      "assetRefs": [],
+      "excerptSha256": "111f19304978ef531eda663bd2618f09ae1ccfec533e3b25972389cb0f121907"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000271"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "详细的多级示例"
+      ],
+      "lineStart": 4882,
+      "lineEnd": 4885,
+      "assetRefs": [],
+      "excerptSha256": "f25ed271659ab2b5ca4de6b146bcc5dd950b0b41193f172a6c066031e3d3796e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000272"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "提示：对复杂性表示怀疑"
+      ],
+      "lineStart": 4886,
+      "lineEnd": 4946,
+      "assetRefs": [
+        "parts/part-0002/images/9777569c17c788f54a2f90a7062cdb54cc1dadfe1b748d47ef4989634e84775f.jpg"
+      ],
+      "excerptSha256": "c8b5271baab3bf75412af2ae3168ebd11cb0d853cf3f6d61f20c5f5be39fc36a"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000273"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "超过两级"
+      ],
+      "lineStart": 4947,
+      "lineEnd": 5004,
+      "assetRefs": [
+        "parts/part-0002/images/f58532c5a47dcaf0561055e044d2bdd5d0267b83f229c7f75aa0440d1271f1c8.jpg",
+        "parts/part-0002/images/21d315ce6878291fd8fd5de54887d5d83209efd643b54c247e83f7d1dc67e174.jpg"
+      ],
+      "excerptSha256": "8fe16bb7f87cc6bc12b1484263d6afe199531d52d0139ec0d309a595be997224"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2467,
+    2226
+  ],
+  "scale": 0.91
+}

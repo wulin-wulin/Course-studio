@@ -1,0 +1,912 @@
+{
+  "id": "point-12-3",
+  "title": "函数的栈",
+  "shortSummary": "讲解栈帧的建立、局部变量分配、帧指针与 Prologue/Epilogue 的配合。",
+  "keyTerms": [
+    "栈帧",
+    "FP",
+    "Prologue",
+    "Epilogue",
+    "局部变量"
+  ],
+  "animationType": "stackFramePrologueEpilogue",
+  "animationSuggestion": "用纵向栈图逐步演示：先标出调用者的 sp 与已用区域，Prologue 每一步移动 sp 并把 LR/旧 FP 填入对应槽位、再点亮 FP 锚点；随后展示函数体内以 fp 为基址访问局部变量，最后按 Epilogue 逆序清空并复原 sp、FP，ret 时高亮取回的返回地址。可增加一个“越界写入覆盖 LR 槽”的分支，显示 ret 目标随之改变，帮助理解栈溢出。",
+  "difficulty": "中等",
+  "importance": 0.95,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-with-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的栈布局、对齐规则、寄存器职责与完整代码结论，围绕“算帧、用帧、写帧、查帧”重排讲解顺序，并补充算例、对照表与检查活动。",
+      "estimatedMinutes": 26,
+      "outcomes": [
+        {
+          "id": "explain-stack-role",
+          "text": "解释局部变量为什么放在栈区，以及 sp 的线性使用如何避免函数之间互相覆盖。"
+        },
+        {
+          "id": "compute-frame-size",
+          "text": "依据 16 字节对齐、数据对齐与 LR/FP 预留规则，算出函数所需的栈空间和局部变量偏移。"
+        },
+        {
+          "id": "access-locals-via-fp",
+          "text": "说明 FP 为什么能在 sp 变化时稳定访问局部变量，并写出对应的寻址指令。"
+        },
+        {
+          "id": "walk-call-chain",
+          "text": "利用栈上保存的 FP 链与返回地址，说明如何回溯函数调用栈。"
+        },
+        {
+          "id": "write-prologue-epilogue",
+          "text": "写出符合调用约定的 Prologue 与 Epilogue，并保证 sp、LR、FP 成对恢复。"
+        },
+        {
+          "id": "explain-overflow",
+          "text": "解释栈上保存的返回地址为什么构成栈溢出攻击面，以及地址随机化如何使其失效。"
+        }
+      ],
+      "misconceptions": [
+        "把 FP 当作栈顶，以为它和 sp 在函数体内同步变化。",
+        "以为局部变量一共多大，sp 就减少多少，忽略 16 字节对齐与 LR/FP 预留。",
+        "以为函数返回靠的是某种隐式机制，而不是 Epilogue 从栈上恢复的 LR。"
+      ],
+      "modules": [
+        {
+          "id": "why-stack",
+          "title": "问题导入：数据空间里的函数",
+          "role": "motivation",
+          "description": "从指令空间转向数据空间，说明栈区与 sp 的线性使用规则。",
+          "outcomeRefs": [
+            "explain-stack-role"
+          ],
+          "order": 0
+        },
+        {
+          "id": "frame-layout",
+          "title": "算帧：对齐规则与帧大小",
+          "role": "quantitative-derivation",
+          "description": "用三条规则推导 32 字节栈帧、偏移以及通用算式。",
+          "outcomeRefs": [
+            "compute-frame-size"
+          ],
+          "order": 1
+        },
+        {
+          "id": "frame-pointer",
+          "title": "用帧：FP 的访问与回溯",
+          "role": "mechanism",
+          "description": "说明 FP 的固定锚点作用、与 sp 寻址的差别以及调用栈回溯。",
+          "outcomeRefs": [
+            "access-locals-via-fp",
+            "walk-call-chain"
+          ],
+          "order": 2
+        },
+        {
+          "id": "prologue-epilogue",
+          "title": "写帧：Prologue 与 Epilogue",
+          "role": "procedure",
+          "description": "用 stp/ldp 与完整代码给出可复用的成对模板。",
+          "outcomeRefs": [
+            "write-prologue-epilogue"
+          ],
+          "order": 3
+        },
+        {
+          "id": "security-boundary",
+          "title": "查帧：栈溢出与控制流",
+          "role": "case-analysis",
+          "description": "从保存的返回地址出发理解栈溢出攻击及防护思路。",
+          "outcomeRefs": [
+            "explain-overflow"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-stack-role",
+          "compute-frame-size",
+          "access-locals-via-fp",
+          "walk-call-chain",
+          "write-prologue-epilogue",
+          "explain-overflow"
+        ],
+        "method": "先为一个新函数算出帧大小与局部变量偏移，再写出成对的 Prologue/Epilogue，并说明若漏掉某一步会在返回或回溯时出现什么现象。",
+        "successCriteria": [
+          "帧大小是 16 的倍数，且包含 LR/FP 的 16 字节预留",
+          "Prologue 与 Epilogue 的 sp 调整、寄存器保存与恢复一一对应",
+          "能指出栈溢出的目标是栈上保存的返回地址"
+        ],
+        "summaryBlockId": "model-overflow-defense",
+        "nextPointId": "point-12-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-stack-as-data-space",
+        "moduleId": "why-stack",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "从指令空间转到数据空间",
+        "markdown": "前面关注的是指令空间：`bl` 把返回地址写进 LR，`ret` 让 PC 回到那里。本节转向数据空间——函数执行过程中，局部变量、保存的 LR 和 FP 都放在栈上。教材把这一段数据空间的变化称为**函数的栈**。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈"
+              ],
+              "lineStart": 2075,
+              "lineEnd": 2078,
+              "assetRefs": [],
+              "excerptSha256": "4e9d36a7c72aeabc6942e18f72bd2be256951b8d99cff848c9c6ff4caa08f1a5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-route-map",
+        "moduleId": "why-stack",
+        "depth": "support",
+        "kind": "note",
+        "title": "本点的推进路线",
+        "markdown": "接下来按四步展开：先用 `sp` 划出可用的栈区间，再按对齐与 LR/FP 预留算出帧大小，然后用 FP 稳定地访问局部变量并回溯调用链，接着把固定动作写成 Prologue/Epilogue，最后看这条规则留下的安全边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stack-as-data-space"
+          ]
+        }
+      },
+      {
+        "id": "tb-stack-usage",
+        "moduleId": "why-stack",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：栈的使用与 sp 的分界作用",
+        "markdown": "局部变量通常存放在进程的栈区。操作系统载入程序时，会分配一整块连续的**有效内存**作为栈区，栈区内的地址都是可用的。问题在于：如果每个函数都随意在栈区里找地址，就无法保证不覆盖别的函数已经用过的位置。\n\n教材采用的解决办法是线性使用：每个函数开始时默认 `sp` 指向的位置**往上**是别的函数已经用过的地址，**往下**是自己可以用的地址。调用下一个函数之前先减小 `sp`，给自己留出栈空间，防止子函数覆盖；函数返回之前再把 `sp` 恢复成刚进入函数时的值。\n\n从整体看，操作系统分配完栈空间后把 `sp` 置为栈区顶端的地址（最大地址）。`sp` 减小代表进入新函数，`sp` 增加代表函数返回、回到上一层。教材用下面的 C 函数作为贯穿本节的例子：\n\n```c\nvoid foo() {\n    int a;\n    char b;\n    long c;\n    a = 1;\n    bar();\n}\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000098"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "栈的使用"
+              ],
+              "lineStart": 2079,
+              "lineEnd": 2100,
+              "assetRefs": [],
+              "excerptSha256": "41907d31be5d2ea9c15630c64a5c16e00e647db530724e690528b136cb380d66"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sp-boundary",
+        "moduleId": "why-stack",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "直觉：只向低地址铺开的草稿纸",
+        "markdown": "可以把 `sp` 想成一张只向低地址方向铺开的草稿纸的边界：写新内容之前先把边界往下拉，离开时再拉回原处，于是“我的空间”和“上一位调用者的空间”永远不会重叠。\n\n常见的误解是“栈会自动为局部变量找位置”。实际上硬件和操作系统只保证栈区地址有效；划出具体范围、以及在返回前复原，都是编译器生成的代码在做，也就是后面的 Prologue 与 Epilogue。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stack-usage"
+          ]
+        }
+      },
+      {
+        "id": "tb-frame-layout",
+        "moduleId": "frame-layout",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：栈空间分配的三条规则与 32 字节布局",
+        "markdown": "`foo` 里有一个 4 字节的 `int a`、1 字节的 `char b`、8 字节的 `long c`。要预留多大空间，取决于三条规则：\n\n* **栈按 16 字节对齐**：AArch64 架构规范从硬件上要求每个函数开始时 `sp` 的值是 16 的倍数，因此 `sp` 减小的值也必须是 16 的倍数。\n* **数据对齐访问性能最好**：4 字节的 `a` 按 4 字节对齐，1 字节的 `b` 按 1 字节对齐，8 字节的 `c` 按 8 字节对齐。\n* **栈中有 16 字节的预留位置**：除了局部变量，还要留出 8 字节存进入函数时的 LR、8 字节存旧 FP。\n\n为什么必须保存 LR？因为 `bl` 把返回地址写进 LR，`ret` 靠 LR 决定返回到哪里；函数内部再调用 `bar` 时 LR 会被覆盖，不先存下来写回去，`foo` 就无法返回。\n\n由此得到的布局是：\n\n```plaintext\n ----------------------   <-- Previous sp, 16 byte aligned\n|  LR register value   |  8 bytes\n ----------------------\n| old FP register value|  8 bytes\n ----------------------   <-- Current FP\n|        int a         |  4 bytes\n ----------------------   <-- Address of a, 4 byte aligned\n|        char b        |  1 byte\n ----------------------   <-- Address of b, 1 byte aligned\n|       Padding        |  3 bytes\n ----------------------\n|        long c        |  8 bytes\n ----------------------   <-- Address of c, 8 byte aligned, Current sp\n```\n\n也就是说栈空间为 32 字节，函数开头把 `sp` 减小 32，于是 `a` 的地址为 `sp + 12`、`b` 的地址为 `sp + 11`、`c` 的地址为 `sp`。教材特别指出：LR 与 FP 组成的预留位置，AArch64 ABI 并没有明确规定其在函数栈空间中的位置；在 Apple Silicon 上它位于栈的底部，也就是高地址区域。\n\n`sp` 可以像通用寄存器一样参与 `add`、`sub`。函数开头减小 `sp`：\n\n```armasm\nfoo:\n    sub    sp, sp, #32\n```\n\n函数返回之前再把 `sp` 复原：\n\n```armasm\nadd    sp, sp, #32\nret\n```\n\n访问栈上的局部变量沿用“基寄存器 + 常数偏移”的寻址方式，`a = 1` 可以翻译为：\n\n```armasm\nmov    w8, #1\nstr    w8, [sp, #12]\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000099"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "栈空间分配"
+              ],
+              "lineStart": 2101,
+              "lineEnd": 2163,
+              "assetRefs": [],
+              "excerptSha256": "f6ee5e1e474a7b1dd247c392d9ac30eec52592ff826726a3c8ff8caea17fcde7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-frame-size-worked-example",
+        "moduleId": "frame-layout",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充算例：给另一个函数算帧",
+        "markdown": "用同样的规则给另一个函数算一次账。设 `void g() { int i; int j; bar(); }`：\n\n1. 局部变量占 4 + 4 = 8 字节；\n2. 加上 LR/FP 预留的 16 字节，合计 24 字节；\n3. 24 不是 16 的倍数，向上取整到 32，因此写 `sub sp, sp, #32`。\n\n按 Apple Silicon 的布局，FP 仍指向 `sp + 16`，于是 `i` 在 `fp - 4`、`j` 在 `fp - 8`。结论不是“局部变量 8 字节就减 8”：对齐填充与 LR/FP 预留都会让实际帧变大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-layout"
+          ]
+        }
+      },
+      {
+        "id": "model-frame-size-formula",
+        "moduleId": "frame-layout",
+        "depth": "support",
+        "kind": "formula",
+        "title": "帧大小的通用算式",
+        "markdown": "把上面的过程写成式子，其中 $\\text{alignedSize}(v_i)$ 是变量按其宽度对齐后的占用：\n\n$$\\text{frameSize} = \\mathrm{align16}\\left(16 + \\sum_i \\text{alignedSize}(v_i)\\right)$$\n\n`align16` 表示向上取到最近的 16 的倍数。填充只用来满足对齐，不承载数据；LR/FP 的 16 字节预留无论如何都要计入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-layout",
+            "model-frame-size-worked-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-fp-register",
+        "moduleId": "frame-pointer",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：帧指针 FP 寄存器",
+        "markdown": "AArch64 调用约定规定，函数栈上除了 LR 之外还要存储 FP 寄存器。FP 实际上就是 `r29` 寄存器（写作 `x29`）。教材先讲用法，再由用法说明它的作用：\n\n* 函数开始时，像 LR 一样把当前 FP 的值存到栈上；随后把当前栈顶指针 `sp` 的值赋给 FP，此时 FP 指向的正是“之前 FP 寄存器值存储在栈上的地址”。\n* 函数返回时，把栈上保存的 FP 值再写回 FP 寄存器。\n\n于是 FP 在函数体执行期间是一个指向本帧固定位置的锚点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "帧指针FP寄存器"
+              ],
+              "lineStart": 2164,
+              "lineEnd": 2172,
+              "assetRefs": [],
+              "excerptSha256": "df15fbcab6fff92e0ced1f76afba5d20f102aef5539a109511013c5023165069"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fp-misconception",
+        "moduleId": "frame-pointer",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清：FP 不是“栈顶”",
+        "markdown": "**误解**：FP 就是栈顶，所以它和 `sp` 是一回事。\n\n**纠正**：`sp` 描述“当前栈到哪里”，函数体里的压栈和子函数调用都可能改变它；FP 在本帧内保持不变，指向保存旧 FP 的那个位置。正因为分工不同，才需要 `add x29, sp, #16` 这样的指令先把锚点定下来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-fp-register"
+          ]
+        }
+      },
+      {
+        "id": "tb-access-local-via-fp",
+        "moduleId": "frame-pointer",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：用 FP 访问栈上变量",
+        "markdown": "FP 的第一个用处是访问栈上变量。通过 `sp` + 偏移也能访问局部变量，但函数内部 `sp` 的值可能不断变化，每次重新计算偏移是给编译器增加负担；而 FP 指向的值固定，因此可以拿 FP 作基寄存器访问局部变量。\n\n在上面的例子中，`a` 的地址既可以通过 `sp + 12` 得到，也可以通过 `fp - 4` 得到：\n\n```armasm\nmov    w8, #1\nstr    w8, [x29, #-4]\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "帧指针FP寄存器",
+                "访问栈上变量"
+              ],
+              "lineStart": 2173,
+              "lineEnd": 2183,
+              "assetRefs": [],
+              "excerptSha256": "1f79833ba9fa751f5ed5cff469936a9dfd87e26672a92c410552f7f70fbd5556"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sp-vs-fp",
+        "moduleId": "frame-pointer",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "对照：以 sp 还是以 FP 为基址",
+        "markdown": "| 维度 | 以 `sp` 为基址 | 以 FP（`x29`）为基址 |\n|---|---|---|\n| 基准是否变化 | 函数体内可能变化 | 进入函数后固定 |\n| 偏移计算 | 需随 `sp` 调整重新计算 | 一次算好，长期可用 |\n| 典型用途 | 刚分配完栈空间时的临时访问 | 整个函数体的局部变量访问 |\n\n教材的例子两种写法都成立；选固定基址的代价是要多维护一个寄存器，这也是 FP 值得占用 8 字节栈空间的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-fp-register",
+            "tb-access-local-via-fp"
+          ]
+        }
+      },
+      {
+        "id": "tb-backtrace",
+        "moduleId": "frame-pointer",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：用 FP 回溯函数调用栈",
+        "markdown": "FP 的第二个用处是回溯函数调用栈。教材用一个 C 语言结构体粗略地描述通过 FP 看到的栈帧：\n\n```c\nstruct StackFrame {\n    unsigned long ret_addr;\n    struct StackFrame *previous_stack_frame;\n    char remain[];\n};\n```\n\n存储在栈上的 FP 的值可以看作指向前一个函数栈帧的指针，于是函数的栈帧串成一条链表，可以沿着这条链表回溯函数的调用栈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "帧指针FP寄存器",
+                "回溯函数调用栈"
+              ],
+              "lineStart": 2184,
+              "lineEnd": 2197,
+              "assetRefs": [],
+              "excerptSha256": "251f9a4177ab125908c6556d0551056fdce452a053554828b07de6dc91833542"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-backtrace-walk",
+        "moduleId": "frame-pointer",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：沿 FP 链回溯的具体步骤",
+        "markdown": "结合前面确认的布局，FP 指向保存旧 FP 的 8 字节，保存的 LR（返回地址）就在它的高地址一侧 `fp + 8`。因此调试器沿链回溯时每一步做两件事：\n\n1. 在 `[fp + 8]` 读到本层的返回地址；\n2. 在 `[fp]` 读到上一层帧的 FP，把它当作新的 `fp` 继续走。\n\n遇到 FP 为 0、或不再落在有效栈区时停止。这条链只在每一层都遵守同一套 Prologue/Epilogue 约定时成立；手写汇编漏存 FP，会让调试器里的调用栈直接断掉。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-layout",
+            "tb-fp-register",
+            "tb-backtrace"
+          ]
+        }
+      },
+      {
+        "id": "tb-prologue-epilogue-def",
+        "moduleId": "prologue-epilogue",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：Prologue 与 Epilogue",
+        "markdown": "在函数调用过程中，总会涉及把 LR、FP 寄存器存到栈上等固定操作。这些操作是固定的：在函数开头执行的操作称为 **Prologue**（序言），在函数返回前执行的操作称为 **Epilogue**（尾声）。二者描述的是同一段栈状态的进入与退出，必须成对出现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000103"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "Prologue与Epilogue"
+              ],
+              "lineStart": 2198,
+              "lineEnd": 2201,
+              "assetRefs": [],
+              "excerptSha256": "0bf7f7ef947659de974516bb046f35b922e0beeb50ffd9d6512e0428eace608f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-symmetry-checklist",
+        "moduleId": "prologue-epilogue",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：成对检查清单",
+        "markdown": "写函数时按下面的顺序检查，Prologue 与 Epilogue 一一对应：\n\n1. 减小 `sp`，留出对齐后的整帧；\n2. 保存 LR 与 FP；\n3. 设定新的 FP；\n4. 函数体（可以再调用其他函数）；\n5. 从栈上恢复 FP 与 LR；\n6. 把 `sp` 加回原值；\n7. `ret`。\n\n任何一步在 Epilogue 中找不到对应动作，都会变成隐藏的崩溃源：少恢复 LR 会返回错误地址，少恢复 `sp` 会让调用者的栈错位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-prologue-epilogue-def"
+          ]
+        }
+      },
+      {
+        "id": "tb-stp-ldp",
+        "moduleId": "prologue-epilogue",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：stp 与 ldp 的成对读写",
+        "markdown": "Prologue 中需要把 LR、FP 寄存器存入栈上，Epilogue 中需要把栈上数据读入 LR 和 FP。对这种成对的数据内存读写，AArch64 提供了 `stp` 和 `ldp` 指令：\n\n```armasm\nstp    x29, x30, [sp]\n```\n\n表示把 `x29` 存储到 `sp`、`x30` 存储到 `sp + 8`；\n\n```armasm\nldp    x29, x30, [sp]\n```\n\n表示从 `sp` 读取 8 字节至 `x29`、从 `sp + 8` 读取 8 字节至 `x30`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000104"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "Prologue与Epilogue",
+                "LR、FP寄存器与栈交互"
+              ],
+              "lineStart": 2202,
+              "lineEnd": 2219,
+              "assetRefs": [],
+              "excerptSha256": "229b2520fec9f5b8a421766e0090c1fc44fa508b2f1b3c622e2326410472dce2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stp-ldp-offset",
+        "moduleId": "prologue-epilogue",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：偏移与寄存器顺序",
+        "markdown": "`stp`/`ldp` 的第三个操作数是基址加偏移：写 `[sp]` 时两个寄存器依次落在基址和基址 + 8；完整代码写 `[sp, #16]`，这对寄存器就落在 `sp + 16` 与 `sp + 24`，正好是布局图中高地址一端那 16 字节。\n\n读回时寄存器顺序必须与存入时一致：`stp x29, x30` 要配 `ldp x29, x30`。写反会把返回地址装进 FP，而 `ret` 用到的 LR 反而变成旧 FP 的值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-layout",
+            "tb-stp-ldp"
+          ]
+        }
+      },
+      {
+        "id": "tb-full-code-intro",
+        "moduleId": "prologue-epilogue",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：完整代码的引言",
+        "markdown": "了解了 `stp` 和 `ldp` 之后，就可以给出函数 Prologue 与 Epilogue 的完整代码。教材仍以上面的 C 程序 `void foo` 为例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000105"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "Prologue与Epilogue",
+                "完整代码"
+              ],
+              "lineStart": 2220,
+              "lineEnd": 2223,
+              "assetRefs": [],
+              "excerptSha256": "9b5b5de19078a02c59d1aa6353caeab478a5b1a37f9b575b0893cc1a8afd9b5e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-prologue-code",
+        "moduleId": "prologue-epilogue",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：Prologue 完整代码",
+        "markdown": "```armasm\n_foo:\n    sub    sp, sp, #32\n    stp    x29, x30, [sp, #16]\n    add    x29, sp, #16\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000106"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "Prologue与Epilogue",
+                "完整代码",
+                "Prologue"
+              ],
+              "lineStart": 2224,
+              "lineEnd": 2232,
+              "assetRefs": [],
+              "excerptSha256": "64e3af4918ff5b4ea368b0d91cb422cf059cde3174a2dfc137554549099e6997"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-epilogue-code",
+        "moduleId": "prologue-epilogue",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：Epilogue 完整代码",
+        "markdown": "```armasm\nldp    x29, x30, [sp, #16]\nadd    sp, sp, #32\nret\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000107"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "Prologue与Epilogue",
+                "完整代码",
+                "Epilogue"
+              ],
+              "lineStart": 2233,
+              "lineEnd": 2240,
+              "assetRefs": [],
+              "excerptSha256": "83d61d9ffc733beb0b7dadb47f438495d3a1a13df014ec17a999c77f6ee736d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-pairing",
+        "moduleId": "prologue-epilogue",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：逐行对上 Prologue 与 Epilogue",
+        "markdown": "把两段代码按执行顺序对齐，可以看到三条对称关系：\n\n| Prologue | Epilogue | 作用 |\n|---|---|---|\n| `sub sp, sp, #32` | `add sp, sp, #32` | 分配与归还整帧 |\n| `stp x29, x30, [sp, #16]` | `ldp x29, x30, [sp, #16]` | 保存与恢复旧 FP、返回地址 |\n| `add x29, sp, #16` | 隐含在 `ldp x29, ...` 中 | 建立本帧锚点，返回时由恢复的旧值替回 |\n\n一个容易忽略的细节是：`add x29, sp, #16` 让 FP 指向 `sp + 16`，正好是保存旧 FP 的位置，因此局部变量 `a` 位于 `fp - 4`；这与前面 `fp - 4` 访问 `a` 的写法自洽。若把这一步写成 `mov x29, sp`，同样的 `fp - 4` 就会读到别的字节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-layout",
+            "tb-full-code-intro",
+            "tb-prologue-code",
+            "tb-epilogue-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-stack-overflow",
+        "moduleId": "security-boundary",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：栈溢出攻击",
+        "markdown": "回顾 LR 的三步用法：在函数开头把 LR 存到栈上；在函数返回前从栈上读回 LR；函数返回时根据 LR 的值决定执行哪条指令。那么，如果在函数执行过程中修改了栈上的数据，就能影响程序的控制流。\n\n教材给出的最简单程序是：\n\n```c\nint main() {\n    char buf[16];\n    scanf(\"%s\", buf);\n    return 0;\n}\n```\n\n`scanf` 过程中没有对输入长度做判断。不停地输入字符，`buf` 的地址在 LR 所在位置之下，填充最终会覆盖栈上 LR 的位置，于是函数返回时 `ret` 的目标变成输入的值；若是无效地址，程序就崩溃。\n\n真正的攻击会在执行时算好地址，从而劫持控制流。之前介绍的 ASLR、PIC 等方案通过随机化地址，让攻击者难以算出真正的地址，于是通常只能导致程序崩溃，而不是执行攻击者想要的指令。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "函数",
+                "函数的栈",
+                "栈溢出攻击"
+              ],
+              "lineStart": 2241,
+              "lineEnd": 2266,
+              "assetRefs": [
+                "./assets/12-stackoverflow.png"
+              ],
+              "excerptSha256": "d1f84637c43b5dc5d68969701670bd991358577316bef4870d82917bf53bd7ea"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-overflow-defense",
+        "moduleId": "security-boundary",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：从帧布局看安全边界",
+        "markdown": "栈溢出的根因不在 `scanf` 本身，而在帧布局：返回地址和局部变量处在同一块可写内存里，且局部变量位于更低地址。把本点的规则串起来：\n\n1. `sp` 只向低地址划出本帧，返回地址和旧 FP 存在本帧的高地址一端；\n2. 越界写入从低地址向高地址推进，依次覆盖局部变量、填充、保存的 FP 和返回地址；\n3. `ret` 读取被改写的 LR，控制流随之改变。\n\n因此“成对且完整”的 Prologue/Epilogue 是正确性要求，而地址随机化只能让攻击者算不准目标地址，并不能消除越界写本身的可能。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-frame-layout",
+            "tb-epilogue-code",
+            "tb-stack-overflow"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "frame-size-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-frame-size-worked-example",
+        "moduleId": "frame-layout",
+        "depth": "core",
+        "title": "算一算帧大小",
+        "outcomeRefs": [
+          "compute-frame-size"
+        ],
+        "learningPurpose": "检查学习者能否把三条对齐与预留规则迁移到新的局部变量组合，而不是机械地按变量字节数求和。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-frame-layout",
+            "model-frame-size-worked-example"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某函数有两个 `int` 局部变量，并会调用另一个函数。请写出 `sp` 应减小的字节数、FP 相对 `sp` 的位置，以及两个变量相对 FP 的偏移，并说明每一步依据的规则。"
+        }
+      },
+      {
+        "id": "prologue-pair-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-trace-pairing",
+        "moduleId": "prologue-epilogue",
+        "depth": "support",
+        "title": "配对检查",
+        "outcomeRefs": [
+          "write-prologue-epilogue"
+        ],
+        "learningPurpose": "检查学习者能否发现 Prologue 与 Epilogue 不成对时会产生哪一类运行时错误。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-prologue-code",
+            "tb-epilogue-code",
+            "model-trace-pairing"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若某函数的 Epilogue 写成了 `add sp, sp, #32` 后直接 `ret`，漏掉了 `ldp x29, x30, [sp, #16]`，请说明：返回地址会变成什么，调用者的 FP 会怎样，以及调试器回溯调用栈时会出现什么现象。"
+        }
+      }
+    ]
+  },
+  "subtitle": "函数",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [
+    "point-12-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000097"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈"
+      ],
+      "lineStart": 2075,
+      "lineEnd": 2078,
+      "assetRefs": [],
+      "excerptSha256": "4e9d36a7c72aeabc6942e18f72bd2be256951b8d99cff848c9c6ff4caa08f1a5"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000098"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "栈的使用"
+      ],
+      "lineStart": 2079,
+      "lineEnd": 2100,
+      "assetRefs": [],
+      "excerptSha256": "41907d31be5d2ea9c15630c64a5c16e00e647db530724e690528b136cb380d66"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000099"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "栈空间分配"
+      ],
+      "lineStart": 2101,
+      "lineEnd": 2163,
+      "assetRefs": [],
+      "excerptSha256": "f6ee5e1e474a7b1dd247c392d9ac30eec52592ff826726a3c8ff8caea17fcde7"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000100"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "帧指针FP寄存器"
+      ],
+      "lineStart": 2164,
+      "lineEnd": 2172,
+      "assetRefs": [],
+      "excerptSha256": "df15fbcab6fff92e0ced1f76afba5d20f102aef5539a109511013c5023165069"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000101"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "帧指针FP寄存器",
+        "访问栈上变量"
+      ],
+      "lineStart": 2173,
+      "lineEnd": 2183,
+      "assetRefs": [],
+      "excerptSha256": "1f79833ba9fa751f5ed5cff469936a9dfd87e26672a92c410552f7f70fbd5556"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000102"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "帧指针FP寄存器",
+        "回溯函数调用栈"
+      ],
+      "lineStart": 2184,
+      "lineEnd": 2197,
+      "assetRefs": [],
+      "excerptSha256": "251f9a4177ab125908c6556d0551056fdce452a053554828b07de6dc91833542"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000103"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "Prologue与Epilogue"
+      ],
+      "lineStart": 2198,
+      "lineEnd": 2201,
+      "assetRefs": [],
+      "excerptSha256": "0bf7f7ef947659de974516bb046f35b922e0beeb50ffd9d6512e0428eace608f"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000104"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "Prologue与Epilogue",
+        "LR、FP寄存器与栈交互"
+      ],
+      "lineStart": 2202,
+      "lineEnd": 2219,
+      "assetRefs": [],
+      "excerptSha256": "229b2520fec9f5b8a421766e0090c1fc44fa508b2f1b3c622e2326410472dce2"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000105"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "Prologue与Epilogue",
+        "完整代码"
+      ],
+      "lineStart": 2220,
+      "lineEnd": 2223,
+      "assetRefs": [],
+      "excerptSha256": "9b5b5de19078a02c59d1aa6353caeab478a5b1a37f9b575b0893cc1a8afd9b5e"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000106"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "Prologue与Epilogue",
+        "完整代码",
+        "Prologue"
+      ],
+      "lineStart": 2224,
+      "lineEnd": 2232,
+      "assetRefs": [],
+      "excerptSha256": "64e3af4918ff5b4ea368b0d91cb422cf059cde3174a2dfc137554549099e6997"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000107"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "Prologue与Epilogue",
+        "完整代码",
+        "Epilogue"
+      ],
+      "lineStart": 2233,
+      "lineEnd": 2240,
+      "assetRefs": [],
+      "excerptSha256": "83d61d9ffc733beb0b7dadb47f438495d3a1a13df014ec17a999c77f6ee736d9"
+    },
+    {
+      "materialId": "doc-cf3aa79f1cccb75df1c64c0a",
+      "blockIds": [
+        "block-000108"
+      ],
+      "headingPath": [
+        "函数",
+        "函数的栈",
+        "栈溢出攻击"
+      ],
+      "lineStart": 2241,
+      "lineEnd": 2266,
+      "assetRefs": [
+        "./assets/12-stackoverflow.png"
+      ],
+      "excerptSha256": "d1f84637c43b5dc5d68969701670bd991358577316bef4870d82917bf53bd7ea"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3061,
+    1343
+  ],
+  "scale": 0.96
+}

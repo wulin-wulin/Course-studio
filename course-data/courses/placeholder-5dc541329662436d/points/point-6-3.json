@@ -1,0 +1,551 @@
+{
+  "id": "point-6-3",
+  "title": "问题 2：在进程之间切换",
+  "shortSummary": "说明时钟中断、上下文切换和调度决策如何在进程之间安全地切换 CPU 控制权。",
+  "keyTerms": [
+    "时钟中断",
+    "上下文切换",
+    "调度决策",
+    "CPU 切换"
+  ],
+  "animationType": "contextSwitch",
+  "animationSuggestion": "按时间线分步显示 A 运行、时钟中断、进入内核、调度决策、保存 A 的上下文、恢复 B 的上下文并切换内核栈、返回 B，并用不同标记区分硬件隐式保存与软件显式保存的寄存器。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-6-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-contrast-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于两种控制权回收方式和上下文切换的定义与顺序，补充因果解释、两类寄存器保存的对比和检查题，不改变教材结论。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-control-problem",
+          "text": "解释为什么用户进程运行时操作系统无法直接行动，以及由此产生的控制权问题。"
+        },
+        {
+          "id": "trace-cooperative",
+          "text": "说明协作方式下进程如何通过系统调用或异常把控制权交回操作系统，并指出它的失效条件。"
+        },
+        {
+          "id": "explain-timer",
+          "text": "解释时钟中断如何让操作系统在进程不协作时重新获得 CPU 控制权。"
+        },
+        {
+          "id": "describe-context-switch",
+          "text": "描述调度决策之后保存与恢复上下文的过程，并区分两类寄存器保存。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "比较协作方式与时钟中断方式在可靠性边界上的差异。"
+        }
+      ],
+      "misconceptions": [
+        "认为操作系统可以在用户进程运行时随时执行自己的代码，不需要先重新进入内核。",
+        "把调度决策当成上下文切换本身，忽略真正保存和恢复寄存器、切换内核栈的底层过程。",
+        "认为协作方式下进程一旦不主动让出 CPU，操作系统仍能靠软件强行打断它。"
+      ],
+      "modules": [
+        {
+          "id": "control-problem",
+          "title": "切换为何困难：控制权问题",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "explain-control-problem"
+          ],
+          "order": 0
+        },
+        {
+          "id": "cooperative-control",
+          "title": "协作方式及其局限",
+          "role": "mechanism-contrast",
+          "outcomeRefs": [
+            "trace-cooperative"
+          ],
+          "order": 1
+        },
+        {
+          "id": "timer-control",
+          "title": "非协作方式：时钟中断",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-timer"
+          ],
+          "order": 2
+        },
+        {
+          "id": "switch-and-restore",
+          "title": "调度决策与上下文切换",
+          "role": "worked-timeline",
+          "outcomeRefs": [
+            "describe-context-switch"
+          ],
+          "order": 3
+        },
+        {
+          "id": "compare-and-check",
+          "title": "总结、对比与检查",
+          "role": "summary-check",
+          "outcomeRefs": [
+            "evaluate-tradeoffs"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-control-problem",
+          "trace-cooperative",
+          "explain-timer",
+          "describe-context-switch",
+          "evaluate-tradeoffs"
+        ],
+        "method": "完成对比判断题，并用时间线说明一次时钟中断驱动的进程切换。",
+        "successCriteria": [
+          "能指出操作系统必须先获得 CPU 才能执行切换",
+          "能说明协作方式在无限循环下的失效条件",
+          "能区分硬件隐式保存与软件显式保存的寄存器",
+          "能按顺序复述中断、决策、切换上下文和返回目标进程"
+        ],
+        "exerciseBlockId": "check-cooperative-timer",
+        "summaryBlockId": "switch-summary",
+        "nextPointId": "point-6-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "problem-frame",
+        "moduleId": "control-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "切换并不只是停止一个进程",
+        "markdown": "在进程之间切换看起来只是“停止一个进程并开始另一个进程”，但真正困难的地方在于：当用户进程正在 CPU 上运行时，操作系统自身并没有在运行。如果操作系统没有在 CPU 上运行，它就无法直接采取行动去停止当前进程。\n\n因此本节把问题归结为一个关键问题：操作系统如何重新获得 CPU 的控制权，从而能够在进程之间切换？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "问题 2：在进程之间切换"
+              ],
+              "lineStart": 1870,
+              "lineEnd": 1879,
+              "assetRefs": [],
+              "excerptSha256": "ac62942f1a7e5642054b5fac2496a1eb635859e3ea71f39e108994b7a9b90867"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-os-cant",
+        "moduleId": "control-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：控制权到底指什么",
+        "markdown": "这里的“控制权”指 CPU 当前正在执行谁的指令。只要处理器停留在用户程序的指令流中，操作系统代码就没有执行机会；操作系统和普通进程一样，必须先被放上 CPU 才能运行。所以实现切换的前提不是“想切换”，而是先让处理器进入内核并开始执行操作系统代码。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "problem-frame"
+          ]
+        }
+      },
+      {
+        "id": "cooperative-yield",
+        "moduleId": "cooperative-control",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "协作方式：等待系统调用",
+        "markdown": "协作方式假定进程会合理运行：运行时间过长的进程会定期主动放弃 CPU，让操作系统有机会决定运行其他任务。\n\n大多数进程通过系统调用把 CPU 的控制权交给操作系统，例如打开或读取文件、向另一台机器发送消息或创建新进程。这类系统通常还提供 yield 系统调用，它本身不完成实际工作，只是把控制权交还操作系统，使系统可以运行其他进程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "协作方式：等待系统调用"
+              ],
+              "lineStart": 1880,
+              "lineEnd": 1885,
+              "assetRefs": [],
+              "excerptSha256": "a084f1948ccd6f53308a2198fbe11ba4b87a6f98fd3997720cbd1d67efe630e0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "misbehavior-trap",
+        "moduleId": "cooperative-control",
+        "depth": "support",
+        "kind": "note",
+        "title": "非法操作也会把控制权交回内核",
+        "markdown": "应用程序的不当行为同样会把控制权转移给操作系统。如果进程以 0 为除数，或尝试访问无权访问的内存，就会陷入（trap）操作系统。操作系统借此重新控制 CPU，并可能终止违规进程。\n\n因此在协作调度系统中，操作系统依靠等待系统调用或某种非法操作发生来重新获得 CPU；如果进程进入无限循环且从不进行系统调用，操作系统就无能为力，只能重启计算机。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "提示：处理应用程序的不当行为"
+              ],
+              "lineStart": 1886,
+              "lineEnd": 1893,
+              "assetRefs": [],
+              "excerptSha256": "874d39909364d2f152cd676e08bffaab7c97e67b86f4f08cfa44d3a9fe9afc08"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cooperative-limit",
+        "moduleId": "cooperative-control",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：协作方式的可靠性边界",
+        "markdown": "协作方式把切换时机交给进程自觉，因此它是被动且不可靠的：正常程序可以通过系统调用配合，恶意或有缺陷的程序却可以一直占用 CPU 而不触发任何陷阱。得到控制权不等于重新获得控制权的能力，可靠的控制权回收不能依赖被管理者的配合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "cooperative-yield",
+            "misbehavior-trap"
+          ]
+        }
+      },
+      {
+        "id": "noncooperative-deadend",
+        "moduleId": "timer-control",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "非协作方式需要硬件介入",
+        "markdown": "如果进程拒绝进行系统调用也不出错，仅仅依靠软件，操作系统无法把控制权收回来。协作方式面对无限循环时，唯一的办法是重启计算机。因此，要在非协作的情况下获得控制权，必须引入硬件的额外帮助。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000076"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "非协作方式：操作系统进行控制"
+              ],
+              "lineStart": 1894,
+              "lineEnd": 1897,
+              "assetRefs": [],
+              "excerptSha256": "9d1308fe6f74cd9a465a4868af16ee24dcf6055729f949032c08014f667d737e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "timer-answer",
+        "moduleId": "timer-control",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "关键答案：时钟中断",
+        "markdown": "时钟设备可以被编程为每隔几毫秒产生一次中断。中断发生时，当前正在运行的进程停止，操作系统中预先配置的中断处理程序开始运行。此时操作系统重新获得 CPU 的控制权，于是可以停止当前进程并启动另一个进程。\n\n正因如此，即使进程以非协作方式运行，时钟中断也能让操作系统重新在 CPU 上运行，这个硬件功能对操作系统维持机器控制权至关重要。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000077"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "关键问题：如何在没有协作的情况下获得控制权"
+              ],
+              "lineStart": 1898,
+              "lineEnd": 1903,
+              "assetRefs": [],
+              "excerptSha256": "2a3dc70bb4d4322e6184cd922cc8fb80651b16591d6c18bcbe60c76ad53a4946"
+            }
+          ]
+        }
+      },
+      {
+        "id": "timer-setup",
+        "moduleId": "timer-control",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "启用时钟中断前的准备",
+        "markdown": "操作系统在启动时必须通知硬件：发生时钟中断时应该运行哪段代码，这通过初始化陷阱表完成。启动过程中，操作系统还必须以特权操作启动时钟。时钟一旦运行，操作系统就知道控制权最终会归还给它，因此可以放心运行用户程序；时钟也可以作为特权操作被关闭。\n\n中断发生时，硬件还要为正在运行的程序保存足够的状态（例如把寄存器保存到内核栈），以便随后的从陷阱返回指令能够正确恢复程序。这与显式系统调用陷入内核时保存寄存器的行为非常相似。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000078"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "提示：利用时钟中断重新获得控制权"
+              ],
+              "lineStart": 1904,
+              "lineEnd": 1911,
+              "assetRefs": [],
+              "excerptSha256": "214363f21d851da6bb2c5bdf271119031ebc0cd4220db4deef8b24ffb8c06a2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-timer-flow",
+        "moduleId": "timer-control",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：把时钟中断看作周期检查点",
+        "markdown": "可以把时钟中断理解为一个周期性的强制检查点：硬件按时把 CPU 从用户模式拉入内核模式并保存现场；内核的中断处理程序获得执行机会；处理程序结束后，内核既可以选择返回原进程，也可以选择切换到另一个进程。周期性中断把“何时可能发生切换”从进程的自愿选择变成了由时间驱动的系统事件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "timer-answer",
+            "timer-setup"
+          ]
+        }
+      },
+      {
+        "id": "context-switch-core",
+        "moduleId": "switch-and-restore",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "调度决策与上下文切换",
+        "markdown": "重新获得控制权后，操作系统必须决定：继续运行当前进程，还是切换到另一个进程。这个决定由调度程序（scheduler）做出。\n\n如果决定切换，操作系统执行上下文切换（context switch）：为当前进程保存一些寄存器的值，并从即将运行的进程恢复这些寄存器的值。这样，最后执行从陷阱返回指令时，内核不会返回到之前运行的进程，而是继续执行另一个进程。\n\n具体实现上，内核用底层汇编保存通用寄存器、程序计数器以及当前进程的内核栈指针，然后恢复目标进程的寄存器、程序计数器和内核栈。切换栈是关键一步：进入切换代码时内核处于被中断进程的上下文，返回时已经处于另一个进程的上下文；最终执行从陷阱返回时，目标进程成为当前运行的进程。\n\n以进程 A 被时钟中断打断、切换到进程 B 为例：硬件先把 A 的寄存器隐式保存到 A 的内核栈；中断处理程序中操作系统决定切换，调用 switch() 例程把 A 的寄存器保存到 A 的进程结构，再把 B 的进程结构恢复到寄存器，并切换内核栈；最后从陷阱返回，恢复 B 的寄存器并开始运行 B。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "操作系统导论",
+                "保存和恢复上下文"
+              ],
+              "lineStart": 1912,
+              "lineEnd": 1965,
+              "assetRefs": [],
+              "excerptSha256": "0dc77b09772e95745e1febef22184898c66611e63daecdfdc59083c311f5e31c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-save-types",
+        "moduleId": "switch-and-restore",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：两类寄存器保存不能混淆",
+        "markdown": "时间线上有两类保存与恢复。第一类发生在时钟中断进入内核时：由硬件隐式把用户寄存器保存到当前进程的内核栈，从陷阱返回时再恢复。第二类发生在操作系统决定从 A 切换到 B 时：由软件显式把内核寄存器保存到进程结构中，并从另一个进程结构恢复。前者让内核记住 A 是如何被打断的，后者让内核从“刚刚由 A 陷入内核”变成“刚刚由 B 陷入内核”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "context-switch-core"
+          ]
+        }
+      },
+      {
+        "id": "switch-summary",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "一次完整切换的骨架",
+        "markdown": "一次完整切换可以概括为：时钟中断触发 → 硬件保存现场并进入内核 → 中断处理程序作出调度决策 → 需要切换时保存当前上下文、恢复目标上下文并切换内核栈 → 从陷阱返回并运行目标进程。决定切换的是调度策略，真正完成切换的是上下文切换机制，两者职责不同。\n\n与协作方式相比，时钟中断的价值在于它不依赖进程配合：即使进程陷入无限循环，操作系统也终将重新获得 CPU。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "context-switch-core",
+            "model-two-save-types",
+            "timer-answer"
+          ]
+        }
+      },
+      {
+        "id": "check-cooperative-timer",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查：判断并说明理由",
+        "markdown": "请判断下列说法是否正确并说明理由：\n\n1. 在协作方式中，只要进程愿意，它就能一直占用 CPU，操作系统没有任何办法打断它。\n2. 时钟中断之所以有效，是因为它不依赖进程主动配合。\n3. 上下文切换时，用户寄存器由硬件自动保存，内核寄存器由操作系统软件保存。\n\n参考要点：1 正确，协作方式依赖进程主动让出 CPU，无限循环时只能重启；2 正确，中断由时钟硬件按固定间隔触发；3 正确，但要注意两次保存发生的时机和存放位置不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "cooperative-yield",
+            "misbehavior-trap",
+            "timer-answer",
+            "context-switch-core"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "timer-switch-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-cooperative-timer",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "outcomeRefs": [
+          "evaluate-tradeoffs",
+          "describe-context-switch"
+        ],
+        "learningPurpose": "检查学习者能否区分协作方式与时钟中断的可靠性，并准确描述上下文切换中的两类寄存器保存。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "timer-answer",
+            "context-switch-core"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用自己的话写出一次时钟中断驱动 A 切换到 B 的步骤，并标出哪些寄存器由硬件保存、哪些由操作系统保存。"
+        }
+      }
+    ]
+  },
+  "subtitle": "机制:受限直接执行",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000073"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "问题 2：在进程之间切换"
+      ],
+      "lineStart": 1870,
+      "lineEnd": 1879,
+      "assetRefs": [],
+      "excerptSha256": "ac62942f1a7e5642054b5fac2496a1eb635859e3ea71f39e108994b7a9b90867"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000074"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "协作方式：等待系统调用"
+      ],
+      "lineStart": 1880,
+      "lineEnd": 1885,
+      "assetRefs": [],
+      "excerptSha256": "a084f1948ccd6f53308a2198fbe11ba4b87a6f98fd3997720cbd1d67efe630e0"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000075"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "提示：处理应用程序的不当行为"
+      ],
+      "lineStart": 1886,
+      "lineEnd": 1893,
+      "assetRefs": [],
+      "excerptSha256": "874d39909364d2f152cd676e08bffaab7c97e67b86f4f08cfa44d3a9fe9afc08"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000076"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "非协作方式：操作系统进行控制"
+      ],
+      "lineStart": 1894,
+      "lineEnd": 1897,
+      "assetRefs": [],
+      "excerptSha256": "9d1308fe6f74cd9a465a4868af16ee24dcf6055729f949032c08014f667d737e"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000077"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "关键问题：如何在没有协作的情况下获得控制权"
+      ],
+      "lineStart": 1898,
+      "lineEnd": 1903,
+      "assetRefs": [],
+      "excerptSha256": "2a3dc70bb4d4322e6184cd922cc8fb80651b16591d6c18bcbe60c76ad53a4946"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000078"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "提示：利用时钟中断重新获得控制权"
+      ],
+      "lineStart": 1904,
+      "lineEnd": 1911,
+      "assetRefs": [],
+      "excerptSha256": "214363f21d851da6bb2c5bdf271119031ebc0cd4220db4deef8b24ffb8c06a2d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000079"
+      ],
+      "headingPath": [
+        "操作系统导论",
+        "保存和恢复上下文"
+      ],
+      "lineStart": 1912,
+      "lineEnd": 1965,
+      "assetRefs": [],
+      "excerptSha256": "0dc77b09772e95745e1febef22184898c66611e63daecdfdc59083c311f5e31c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2613,
+    3487
+  ],
+  "scale": 0.93
+}

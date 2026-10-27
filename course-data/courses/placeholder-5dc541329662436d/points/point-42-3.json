@@ -1,0 +1,739 @@
+{
+  "id": "point-42-3",
+  "title": "解决方案2：日志（或预写日志）",
+  "shortSummary": "解释预写日志如何通过先写日志再更新数据来保证崩溃后的原子性。",
+  "keyTerms": [
+    "日志",
+    "预写日志",
+    "原子性",
+    "崩溃恢复"
+  ],
+  "animationType": "journalTransaction",
+  "animationSuggestion": "分阶段显示 TxB、内容块与 TxE 的写入和提交，允许在任意阶段插入崩溃并展示恢复是丢弃、重放还是依据撤销记录跳过，最后演示循环日志回收已检查点事务的空间。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-42-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-failure-recovery",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "围绕“日志写入—提交—加检查点—释放”的协议流程重排教材内容，保留全部定义、数值与边界，并补充崩溃点分析、模式对比和检查清单。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-journal-purpose",
+          "text": "解释预写日志为什么能把崩溃恢复的工作限制在日志范围内，而不必扫描整个磁盘。"
+        },
+        {
+          "id": "trace-journal-protocol",
+          "text": "按顺序叙述数据日志的日志写入、日志提交、加检查点和释放四个阶段，并说明每个阶段的完成条件。"
+        },
+        {
+          "id": "compare-journal-modes",
+          "text": "比较数据日志与元数据日志在写入内容、数据写入顺序和代价上的差异。"
+        },
+        {
+          "id": "analyze-crash-recovery",
+          "text": "根据崩溃发生的阶段判断恢复会跳过、重放还是需要撤销记录，并解释原因。"
+        }
+      ],
+      "misconceptions": [
+        "认为日志会无限增长：日志是循环结构，事务加检查点后其空间会被标记为空闲并复用。",
+        "认为事务写入日志即代表数据已写入最终位置：事务提交后仍需加检查点，崩溃后靠重放完成。",
+        "认为元数据日志可以随意安排数据写入顺序：数据必须先于指向它的元数据落盘，否则指针会指向垃圾。",
+        "认为日志记录的总是操作逻辑：数据日志保存的是待更新块的物理内容，逻辑日志才是更紧凑的操作表示。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-idea",
+          "title": "从一致更新问题到预写日志",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-journal-purpose"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-journal-protocol",
+          "title": "数据日志的事务与协议",
+          "role": "procedure",
+          "outcomeRefs": [
+            "trace-journal-protocol"
+          ],
+          "order": 1
+        },
+        {
+          "id": "durability-and-recovery",
+          "title": "写入顺序、校验和与恢复",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-journal-protocol",
+            "analyze-crash-recovery"
+          ],
+          "order": 2
+        },
+        {
+          "id": "batching-and-bounded-log",
+          "title": "批处理与循环日志",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-journal-purpose",
+            "analyze-crash-recovery"
+          ],
+          "order": 3
+        },
+        {
+          "id": "metadata-journaling",
+          "title": "元数据日志的取舍",
+          "role": "comparison",
+          "outcomeRefs": [
+            "compare-journal-modes"
+          ],
+          "order": 4
+        },
+        {
+          "id": "block-reuse-and-timeline",
+          "title": "块复用、撤销记录与协议时间线",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "analyze-crash-recovery"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-journal-purpose",
+          "trace-journal-protocol",
+          "compare-journal-modes",
+          "analyze-crash-recovery"
+        ],
+        "method": "根据给定的崩溃时刻和日志内容，判断恢复动作并说明协议依据。",
+        "successCriteria": [
+          "能准确说出协议各阶段的完成条件",
+          "能区分数据日志与元数据日志的写入内容与顺序要求",
+          "能指出块复用场景为何需要撤销记录"
+        ],
+        "summaryBlockId": "model-summary-checklist",
+        "nextPointId": "point-42-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-journal-idea",
+        "moduleId": "problem-and-idea",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：预写日志的基本思路",
+        "markdown": "日志（journaling）是一致更新问题最流行的解决方案之一，它借自数据库管理系统，正式名称是预写日志（write-ahead logging，WAL）。第一个实现它的文件系统是 Cedar，如今 Linux ext3/ext4、reiserfs、JFS、XFS 和 Windows NTFS 都使用它。\n\n基本思路是：更新磁盘时，在覆写旧结构之前，先在磁盘上一个众所周知的位置写下一段小注记，描述即将进行的更新；这段注记就是“预写”部分，集中存放它的结构就是“日志”。\n\next2 的布局由超级块和若干块组组成；ext3 在此基础上仅增加日志区域，真正的区别在于日志的使用方式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000587"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "解决方案2：日志（或预写日志）"
+              ],
+              "lineStart": 11522,
+              "lineEnd": 11539,
+              "assetRefs": [],
+              "excerptSha256": "190a6a6841b7eeb7436dd90094c6d7e87e7ed2c97daf81cf5f5599e71542a02a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-journal-analogy",
+        "moduleId": "problem-and-idea",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：先写便条再改账本",
+        "markdown": "**把它想成记账。** 直接在账本上涂改，写到一半停电，就分不清哪些改动生效。预写日志相当于先在便签上完整写下“我要把哪几页改成什么”，签好名，再去改账本；停电后只需看便签，不必翻遍整本账。\n\n对应到文件系统：注记说明“要改哪些块、改成什么”，因此恢复时按注记重做即可，而不必扫描整个磁盘。代价是正常更新期间多写一次日志。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-journal-idea"
+          ]
+        }
+      },
+      {
+        "id": "textbook-data-journaling",
+        "moduleId": "data-journal-protocol",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：数据日志的日志结构与初始协议",
+        "markdown": "数据日志（data journaling）是 ext3 提供的一种模式。以向文件追加数据为例，需要更新 inode（I[v2]）、位图（B[v2]）和数据块（Db）。数据日志先把它们写入日志：\n\n`Journal | TxB | I[v2] | B[v2] | Db | TxE`\n\n- TxB 是事务开始块，记录这次更新涉及的块地址和事务标识符（TID）；\n- 中间三块是待更新块的**确切内容**，因此称为**物理日志**；另一种更紧凑的**逻辑日志**只记录“把 Db 追加到文件 X”这类操作表示；\n- TxE 是事务结束块，同样携带 TID。\n\n事务安全落盘后，才把 I[v2]、B[v2]、Db 写到最终位置，这一步叫**加检查点**（checkpointing）。\n\n最初的协议只有两步：先写日志并等待完成，再加检查点。若把 5 个块一次性发出，磁盘内部可以重排完成顺序：可能先写完 TxB、I[v2]、B[v2]、TxE，最后才写 Db；此时断电，事务看似完整，重放却会把垃圾内容写进 Db。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000588"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "数据日志"
+              ],
+              "lineStart": 11540,
+              "lineEnd": 11561,
+              "assetRefs": [
+                "parts/part-0004/images/82cfe88c57774aafdfb74ecc8a0994251b95f42bb1c573c7ee9963c09f4c28d2.jpg"
+              ],
+              "excerptSha256": "5b5802f769c0750f2bc13739374e61ffa8bf4b14c747faddc42b30487f37db78"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-appendix-crash",
+        "moduleId": "data-journal-protocol",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一个可复现的崩溃场景",
+        "markdown": "假设追加操作应向数据块 Db 写入新内容，而 TxE 已落盘、Db 尚未落盘。重启后日志中 TxB 与 TxE 的 TID 匹配，恢复程序认为事务已提交并重放，把日志里 Db 的旧内容复制到最终位置。结果元数据一致，但文件尾部出现了不属于本文件的数据。\n\n这说明**日志事务完整不等于内容正确**：必须靠写入顺序或校验和保证事务中的每个块都真实落盘。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-data-journaling"
+          ]
+        }
+      },
+      {
+        "id": "textbook-force-to-disk",
+        "moduleId": "durability-and-recovery",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：强制写入磁盘与写屏障",
+        "markdown": "为了在两次写入之间强制顺序，现代文件系统需要额外手段。过去只需发出 A、等待完成中断，再发出 B。但磁盘写缓存（立即报告）可能在数据尚未到达盘面时就报告完成，后续写入因此可能先于前一次到达。\n\n一种办法是禁用写缓冲；更现代的做法是发出**写屏障**（write barrier）：屏障完成时，保证屏障之前发出的所有写入都先于屏障之后的写入到达磁盘。但研究指出，一些厂商为追求性能会忽略写屏障请求，磁盘看似更快，却留下出错风险。\n\n因此，若事务看起来完整而实际缺块，恢复会重放它，把垃圾数据复制到目标位置；如果发生在超级块等关键位置，甚至会导致文件系统无法挂载。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000589"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "补充：强制写入磁盘"
+              ],
+              "lineStart": 11562,
+              "lineEnd": 11571,
+              "assetRefs": [],
+              "excerptSha256": "dfd3c57492ec38aff6b7a63e3106dc5492c9dcdbf4e8a6218488191b5b617ece"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-barrier-checklist",
+        "moduleId": "durability-and-recovery",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：检查顺序保证是否真实存在",
+        "markdown": "1. 关闭写缓存，或确认设备支持并正确执行写屏障与刷新命令；\n2. 不要仅凭“写系统调用已返回”推断数据已持久；\n3. 对关键元数据使用显式刷新，并检查设备报告的写缓存状态；\n4. 在虚拟化或廉价硬件上，假设顺序保证可能失效，用校验和兜底。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-force-to-disk"
+          ]
+        }
+      },
+      {
+        "id": "textbook-journal-optimization",
+        "moduleId": "durability-and-recovery",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：校验和与三阶段提交协议",
+        "markdown": "直接写日志的效率很低：必须先写完 TxB 与事务内容，才能写 TxE，磁盘会多一次旋转。Prabhakaran 等人的办法是：在开始块和结束块中加入日志内容的**校验和**，于是整个事务可以一次全部写出。恢复时若校验和不匹配，就断定写入期间发生崩溃并丢弃该事务；校验和同时保护了从日志读出的任何内容。该机制后来进入 Linux ext4。\n\n为避免半写，文件系统分两步发出事务：先写除 TxE 外的所有块（TxB、I[v2]、B[v2]、Db），等待完成；再单独写 TxE。借助磁盘“任何 512 字节写入要么发生要么不发生”的原子性保证，把 TxE 做成 512 字节块，就能让“是否提交”成为一个原子事实。\n\n于是协议变成三个阶段：\n\n1. **日志写入**：写 TxB、元数据和数据，等待完成；\n2. **日志提交**：写 TxE，等待完成，事务才算已提交；\n3. **加检查点**：把更新写入最终磁盘位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000590"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "补充：优化日志写入"
+              ],
+              "lineStart": 11572,
+              "lineEnd": 11595,
+              "assetRefs": [
+                "parts/part-0004/images/5bc875e09a101376184d76f3c9a68d956d1baeab129cd9236614380318db2ea3.jpg"
+              ],
+              "excerptSha256": "c18d1a9a6824047cbf4d886c3bc2384e1b364ae4fce4cf32b4776f7254000feb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checksum-intuition",
+        "moduleId": "durability-and-recovery",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：校验和为什么能替代等待",
+        "markdown": "校验和把“事务是否完整”的判断从时序问题变成内容问题：只要事务所有块的内容都在，校验就能通过；只要缺块或损坏，校验必然失败，恢复就丢弃整个事务。这样文件系统可以并发发出所有块写入，不必为了顺序而停顿，代价是计算和存储少量校验值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-journal-optimization"
+          ]
+        }
+      },
+      {
+        "id": "textbook-recovery",
+        "moduleId": "durability-and-recovery",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：崩溃后的重做日志恢复",
+        "markdown": "崩溃可能发生在更新序列的任何时刻：\n\n- 若在事务安全写入日志之前（步骤 2 完成前）崩溃，直接跳过待执行的更新，日志中未提交的事务被丢弃；\n- 若在事务已提交之后、加检查点完成之前崩溃，系统引导时恢复过程扫描日志，找到已提交事务并按顺序**重放**（replay），再次把其中的块写入最终位置。这种形式称为**重做日志**（redo logging）。\n\n重放保证磁盘结构一致，随后即可挂载文件系统。即使某些更新已部分写入最终位置，再次执行也无害；恢复本身是罕见操作，几次冗余写入可以接受。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000591"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "恢复"
+              ],
+              "lineStart": 11596,
+              "lineEnd": 11603,
+              "assetRefs": [],
+              "excerptSha256": "0039357bdf66107690882fbdfa2dd3b3817e1830e18fb3d89a5dc8b310c6c003"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-crash-points",
+        "moduleId": "durability-and-recovery",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "模型补充：用崩溃点判断恢复行为",
+        "markdown": "| 崩溃时刻 | 日志状态 | 恢复动作 |\n|---|---|---|\n| TxB 尚未写完 | 事务不完整 | 丢弃，跳过更新 |\n| 内容写完、TxE 未写 | 未提交 | 丢弃，跳过更新 |\n| TxE 已提交、检查点未完成 | 已提交 | 重放整个事务 |\n| 检查点只写了一部分 | 已提交 | 重放，重复写无害 |\n\n判断依据始终是事务是否已提交，而不是最终位置写了多少。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-recovery"
+          ]
+        }
+      },
+      {
+        "id": "textbook-batching",
+        "moduleId": "batching-and-bounded-log",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "教材：批处理日志更新",
+        "markdown": "基本协议会产生大量额外磁盘流量。例如在同一目录中连续创建 file1 和 file2，需要更新 inode 位图、两个 inode、目录数据块和目录 inode；这些结构可能反复被写。\n\n一些文件系统（如 Linux ext3）不会一次提交一个更新，而是把所有更新缓冲到**全局事务**中：先在内存中把相关结构标记为脏并加入块列表，等到应当写盘时（例如超时 5 秒后）再提交包含全部更新的单个事务。通过缓冲，许多情况下可以避免过多的写入流量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000592"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "批处理日志更新"
+              ],
+              "lineStart": 11604,
+              "lineEnd": 11609,
+              "assetRefs": [],
+              "excerptSha256": "a80fb2eafb1c0d8cff0621ecfc0b09a2f4c76e5eb96a81b4de788b9a0cf2816d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batching-tradeoff",
+        "moduleId": "batching-and-bounded-log",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：批处理的代价是暴露窗口",
+        "markdown": "合并事务减少了写入次数，但在缓冲期间，已向应用返回成功的更新可能仍只在内存中；若此时断电，这部分更新会丢失。文件系统需要在吞吐、延迟与持久性之间选择：更长的缓冲窗口提升吞吐，却扩大未提交更新的丢失范围。应用若要求强持久性，仍须使用 `fsync` 等显式同步。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-batching"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bounded-log",
+        "moduleId": "batching-and-bounded-log",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：使日志有限与循环复用",
+        "markdown": "日志大小有限，不断追加事务会把它填满。日志满带来两个问题：日志越大，恢复时要重放的事务越多、越慢；更严重的是日志满或接近满时无法再提交新事务，文件系统实际上不可用。\n\n解决办法是把日志当作**循环日志**（circular log）：一旦事务被加检查点，就释放它在日志中占用的空间供复用。常见实现是在**日志超级块**（journal superblock，注意区别于主文件系统超级块）中记录最旧和最新的事务，其余空间均可空闲。\n\n最终的数据日志协议因此增加第四步：\n\n1. **日志写入**：写 TxB 与更新内容，等待完成；\n2. **日志提交**：写 TxE，等待完成，事务提交；\n3. **加检查点**：把更新写入最终位置；\n4. **释放**：一段时间后更新日志超级块，把该事务标记为空闲。\n\n代价仍然存在：每个数据块被写入磁盘两次。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000593"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "使日志有限"
+              ],
+              "lineStart": 11610,
+              "lineEnd": 11635,
+              "assetRefs": [],
+              "excerptSha256": "75910d4fe80ed70309ad29fe6cf24216bb7ef8f4ecf97e67433f7724bcec4ca4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-log-budget",
+        "moduleId": "batching-and-bounded-log",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：日志大小是一个可计算的预算",
+        "markdown": "日志越大，恢复越慢，但能容纳更多尚未检查点的事务；日志越小，回收越频繁，写入更容易因等待检查点而停顿。工程上通常让日志大到足以吸收突发写入，又小到让恢复时间可接受，并用日志超级块精确追踪哪些事务尚未检查点，避免无谓重放。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bounded-log"
+          ]
+        }
+      },
+      {
+        "id": "textbook-metadata-journaling",
+        "moduleId": "metadata-journaling",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材：元数据日志与数据写入顺序",
+        "markdown": "数据日志把每个数据块写两次，成本很高，顺序写入负载尤其明显，而且日志与主文件系统之间的寻道也增加开销。因此出现了**元数据日志**（metadata journaling），也称**有序日志**（ordered journaling）：几乎相同，但**用户数据不写入日志**。\n\n同样的更新中，日志只包含 TxB、I[v2]、B[v2]、TxE；数据块 Db 只写一次，直接写到文件系统。这大幅减少日志 I/O，但引出一个问题：数据块应该在什么时候写？\n\n若在事务完成后才写 Db，文件系统元数据一致，但 I[v2] 可能指向垃圾：重放 I[v2]、B[v2] 后得到的 inode 指向尚未正确写入的 Db。为避免这一点，ext3 等系统先写数据块，再写相关元数据。协议为：\n\n1. **数据写入**：把数据写到最终位置（等待可选）；\n2. **日志元数据写入**：把 TxB 和元数据写入日志，等待完成；\n3. **日志提交**：写 TxE，等待完成，事务（含数据）被认为已提交；\n4. **加检查点元数据**：把元数据写入最终位置；\n5. **释放**：稍后在日志超级块中标记事务空闲。\n\n“先写被指对象，再写指针对象”是崩溃一致性的核心规则。唯一真正的要求是：步骤 1 和 2 必须在发出 TxE（步骤 3）之前完成。NTFS、XFS 使用无序元数据日志，ext3 提供数据、有序、无序三种模式，它们都保持元数据一致，但数据语义不同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000594"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "元数据日志"
+              ],
+              "lineStart": 11636,
+              "lineEnd": 11667,
+              "assetRefs": [],
+              "excerptSha256": "8d0e8ce7921134d71a46722829a56e89c486379ff2b36ed23a132f2f0df88631"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mode-comparison",
+        "moduleId": "metadata-journaling",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：三种日志模式的取舍",
+        "markdown": "| 模式 | 写入日志的内容 | 数据写入顺序 | 代价与语义 |\n|---|---|---|---|\n| 数据日志 | 元数据 + 用户数据 | 随事务一起 | 最安全，但每块写两次 |\n| 有序元数据日志 | 仅元数据 | 数据须在 TxE 前完成 | 常用折中，避免指针指向垃圾 |\n| 无序元数据日志 | 仅元数据 | 数据可随时写 | 元数据一致，数据语义最弱 |\n\n选择取决于应用对数据一致性的要求，而不是日志本身能否工作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-metadata-journaling"
+          ]
+        }
+      },
+      {
+        "id": "textbook-block-reuse",
+        "moduleId": "block-reuse-and-timeline",
+        "depth": "advanced",
+        "kind": "example",
+        "title": "教材：块复用与撤销记录",
+        "markdown": "块复用让日志更棘手。ext3 主要开发者 Stephen Tweedie 说，删除相关的一切都“令人毛骨悚然”，因为块被删除后又被重新分配。\n\n例子：目录 foo 位于块 1000，用户在其中创建文件，foo 的目录数据作为元数据写入日志。随后用户删除 foo 中的全部内容及 foo 本身，块 1000 被释放；接着创建 foobar，恰好复用块 1000。由于使用元数据日志，foobar 的新数据不写入日志，只有它的 inode 写入日志。\n\n此时崩溃，日志中同时存在旧事务（写入块 1000 的 foo 目录数据）和新事务（foobar 的 inode）。重放会按顺序重放旧事务，把块 1000 覆盖成旧目录内容，从而破坏 foobar 的用户数据。\n\n解决方案之一是**撤销记录**（revoke record）：删除目录时向日志写入撤销记录；重放时先扫描撤销记录，被撤销的数据不再重放，问题得以避免。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000595"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "棘手的情况：块复用"
+              ],
+              "lineStart": 11668,
+              "lineEnd": 11685,
+              "assetRefs": [],
+              "excerptSha256": "8cbe42c48f2b9c6353ff40d31809aa30b93f8045edeff99e507853d1d595950d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-revoke-check",
+        "moduleId": "block-reuse-and-timeline",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "模型补充：判断是否需要撤销记录",
+        "markdown": "**情形 A**：删除文件后，其数据块尚未被复用就发生崩溃。重放旧元数据事务不会覆盖有效数据，通常无需撤销。\n\n**情形 B**：删除文件、块被新文件复用，且新文件数据未写入日志。此时必须有撤销记录，否则重放会用旧内容覆盖新文件。\n\n判断关键不是“是否删除”，而是**日志中的旧事务是否会重放到已被重新分配、且新内容不在日志中的块**。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-block-reuse"
+          ]
+        }
+      },
+      {
+        "id": "textbook-timeline",
+        "moduleId": "block-reuse-and-timeline",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材：日志协议的时间线",
+        "markdown": "表 42.1 与表 42.2 用时间线总结两种协议。每一行表示可以发出或可能完成写入的逻辑时刻，时间向下增加；水平虚线标出必须遵守的顺序约束。\n\n数据日志中，TxB 与事务内容的写入可以同时发出、按任意顺序完成，但在它们完成之前不得发出 TxE；TxE 提交之前，不得开始加检查点。\n\n元数据日志中，数据写入在逻辑上可以与 TxB 及日志内容一起发出，但必须在 TxE 发出之前完成。时间线中标注的完成时间是任意的，真实系统由 I/O 子系统重排以提高性能；真正必须保证的只有协议正确性所要求的那些顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000596"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "总结日志：时间线"
+              ],
+              "lineStart": 11686,
+              "lineEnd": 11705,
+              "assetRefs": [],
+              "excerptSha256": "255bd4a206a2fe4c2d667980014192c747fd6a825c59d4f6348b3615ff96aa01"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary-checklist",
+        "moduleId": "block-reuse-and-timeline",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：用四个问题检查一次日志更新",
+        "markdown": "1. 事务边界是否完整？TxB/TxE 或校验和能否证明事务完整？\n2. 提交是否早于检查点？只有已提交事务才允许重放。\n3. 数据是否先于指向它的元数据落盘（元数据日志）？\n4. 被复用的块是否会与日志中的旧事务冲突？是否需要撤销记录？\n\n四问都通过，崩溃恢复才既快又正确。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-timeline"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "journal-crash-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-crash-points",
+        "moduleId": "durability-and-recovery",
+        "depth": "core",
+        "outcomeRefs": [
+          "analyze-crash-recovery"
+        ],
+        "learningPurpose": "检查学习者能否依据事务提交状态判断恢复动作，而不是依据最终位置写入多少。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-recovery",
+            "textbook-journal-optimization"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "TxB 与事务内容已写完、TxE 尚未写入时崩溃，恢复应当怎么做？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请回答：TxB 与事务内容已写完、TxE 尚未写入时崩溃，恢复应当重放还是跳过？并引用“事务是否已提交”这一判据说明理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "崩溃一致性:FSCK和日志",
+  "clusterId": "chapter-42",
+  "clusterIds": [
+    "chapter-42"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000587"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "解决方案2：日志（或预写日志）"
+      ],
+      "lineStart": 11522,
+      "lineEnd": 11539,
+      "assetRefs": [],
+      "excerptSha256": "190a6a6841b7eeb7436dd90094c6d7e87e7ed2c97daf81cf5f5599e71542a02a"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000588"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "数据日志"
+      ],
+      "lineStart": 11540,
+      "lineEnd": 11561,
+      "assetRefs": [
+        "parts/part-0004/images/82cfe88c57774aafdfb74ecc8a0994251b95f42bb1c573c7ee9963c09f4c28d2.jpg"
+      ],
+      "excerptSha256": "5b5802f769c0750f2bc13739374e61ffa8bf4b14c747faddc42b30487f37db78"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000589"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "补充：强制写入磁盘"
+      ],
+      "lineStart": 11562,
+      "lineEnd": 11571,
+      "assetRefs": [],
+      "excerptSha256": "dfd3c57492ec38aff6b7a63e3106dc5492c9dcdbf4e8a6218488191b5b617ece"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000590"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "补充：优化日志写入"
+      ],
+      "lineStart": 11572,
+      "lineEnd": 11595,
+      "assetRefs": [
+        "parts/part-0004/images/5bc875e09a101376184d76f3c9a68d956d1baeab129cd9236614380318db2ea3.jpg"
+      ],
+      "excerptSha256": "c18d1a9a6824047cbf4d886c3bc2384e1b364ae4fce4cf32b4776f7254000feb"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000591"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "恢复"
+      ],
+      "lineStart": 11596,
+      "lineEnd": 11603,
+      "assetRefs": [],
+      "excerptSha256": "0039357bdf66107690882fbdfa2dd3b3817e1830e18fb3d89a5dc8b310c6c003"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000592"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "批处理日志更新"
+      ],
+      "lineStart": 11604,
+      "lineEnd": 11609,
+      "assetRefs": [],
+      "excerptSha256": "a80fb2eafb1c0d8cff0621ecfc0b09a2f4c76e5eb96a81b4de788b9a0cf2816d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000593"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "使日志有限"
+      ],
+      "lineStart": 11610,
+      "lineEnd": 11635,
+      "assetRefs": [],
+      "excerptSha256": "75910d4fe80ed70309ad29fe6cf24216bb7ef8f4ecf97e67433f7724bcec4ca4"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000594"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "元数据日志"
+      ],
+      "lineStart": 11636,
+      "lineEnd": 11667,
+      "assetRefs": [],
+      "excerptSha256": "8d0e8ce7921134d71a46722829a56e89c486379ff2b36ed23a132f2f0df88631"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000595"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "棘手的情况：块复用"
+      ],
+      "lineStart": 11668,
+      "lineEnd": 11685,
+      "assetRefs": [],
+      "excerptSha256": "8cbe42c48f2b9c6353ff40d31809aa30b93f8045edeff99e507853d1d595950d"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000596"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "总结日志：时间线"
+      ],
+      "lineStart": 11686,
+      "lineEnd": 11705,
+      "assetRefs": [],
+      "excerptSha256": "255bd4a206a2fe4c2d667980014192c747fd6a825c59d4f6348b3615ff96aa01"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    630,
+    105
+  ],
+  "scale": 0.93
+}

@@ -1,0 +1,485 @@
+{
+  "id": "point-23-2",
+  "title": "内存管理硬件",
+  "shortSummary": "描述 VAX 的内存管理硬件，包括页表、TLB 和段保护机制。",
+  "keyTerms": [
+    "VAX",
+    "内存管理硬件",
+    "页表",
+    "TLB",
+    "段保护"
+  ],
+  "animationType": "segmentedPagingWalk",
+  "animationSuggestion": "逐步高亮虚拟地址中的段位、页号与偏移，显示 TLB 命中与未命中两条路径，并在未命中时展开页表页自身的转换；提供重播回到同一初始地址。",
+  "difficulty": "进阶",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-23-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的地址划分、页表组织与 TLB 结论，按“地址结构—空间布局—内存压力—转换路径—故障诊断”的顺序重排讲解，并补充位级拆解与空指针故障的逐步推理。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-address-split",
+          "text": "解释 VAX 32 位虚拟地址如何划分为段选择位、VPN 与页内偏移。"
+        },
+        {
+          "id": "explain-three-spaces",
+          "text": "说明 P0、P1 与系统空间 S 的用途及各自的页表组织方式。"
+        },
+        {
+          "id": "explain-page-table-pressure",
+          "text": "解释 VMS 用哪些机制缓解小页面带来的页表内存压力。"
+        },
+        {
+          "id": "explain-translation-path",
+          "text": "描述页表位于内核虚拟内存时，一次地址转换要经过哪些查找步骤以及 TLB 的作用。"
+        },
+        {
+          "id": "apply-null-fault",
+          "text": "用地址转换流程解释空指针访问为何以陷阱或段错误结束。"
+        }
+      ],
+      "misconceptions": [
+        "把“分段”理解成每段占据一块独立连续的物理内存，而 VAX 这里的分段首先是虚拟地址空间的划分。",
+        "认为 TLB 是页表的替代品；TLB 只是页表项的缓存，未命中时仍要访问页表。",
+        "把页表一定放在物理内存中当成前提；VMS 把用户页表放进内核虚拟内存，因此可能还需要先转换页表自身的地址。"
+      ],
+      "modules": [
+        {
+          "id": "address-bit-layout",
+          "title": "地址的位级结构",
+          "role": "concept-introduction",
+          "description": "从 32 位虚拟地址的划分入手，说明段、VPN 与偏移三者的关系。",
+          "outcomeRefs": [
+            "explain-address-split"
+          ],
+          "order": 0
+        },
+        {
+          "id": "three-address-spaces",
+          "title": "P0、P1 与系统空间",
+          "role": "layout-explanation",
+          "description": "说明进程空间两半与系统空间各自的用途和共享方式。",
+          "outcomeRefs": [
+            "explain-three-spaces"
+          ],
+          "order": 1
+        },
+        {
+          "id": "page-table-pressure",
+          "title": "页表内存压力与两段页表",
+          "role": "problem-solution",
+          "description": "解释 512 字节页为何导致页表过大，以及基址界限寄存器与两段页表的作用。",
+          "outcomeRefs": [
+            "explain-page-table-pressure"
+          ],
+          "order": 2
+        },
+        {
+          "id": "kernel-resident-page-tables",
+          "title": "内核虚拟内存中的页表与地址转换",
+          "role": "worked-walkthrough",
+          "description": "把页表放进系统空间后，逐步还原一次地址转换的查找路径。",
+          "outcomeRefs": [
+            "explain-translation-path"
+          ],
+          "order": 3
+        },
+        {
+          "id": "tlb-and-fault",
+          "title": "TLB 与空指针故障",
+          "role": "diagnosis",
+          "description": "用 TLB 加速的转换路径诊断空指针访问为何产生陷阱。",
+          "outcomeRefs": [
+            "explain-translation-path",
+            "apply-null-fault"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点",
+          "role": "assessment",
+          "description": "通过对比与检查题确认对硬件机制的理解，并引出真实地址空间布局。",
+          "outcomeRefs": [
+            "explain-address-split",
+            "explain-three-spaces",
+            "explain-page-table-pressure",
+            "explain-translation-path",
+            "apply-null-fault"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-address-split",
+          "explain-three-spaces",
+          "explain-page-table-pressure",
+          "explain-translation-path",
+          "apply-null-fault"
+        ],
+        "method": "独立画出一次地址转换的步骤，并用它解释空指针访问的失败位置。",
+        "successCriteria": [
+          "能写出 32 位地址中段位、VPN 位与偏移位的数量",
+          "能说明为什么只为 P0 和 P1 各设一张页表可以省下页表空间",
+          "能指出 TLB 未命中后硬件还要查哪几级页表"
+        ],
+        "exerciseBlockId": "model-summary-check",
+        "nextPointId": "point-23-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-address-format",
+        "moduleId": "address-bit-layout",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：VAX-11 的虚拟地址划分",
+        "markdown": "VAX-11 为每个进程提供一个 32 位虚拟地址空间，划分为 512 字节的页。因此虚拟地址由 23 位 VPN 和 9 位页内偏移组成。此外，VPN 的高两位用于区分页所在的段，所以这套机制是分页与分段的混合体。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存管理硬件"
+              ],
+              "lineStart": 5524,
+              "lineEnd": 5546,
+              "assetRefs": [],
+              "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bit-breakdown",
+        "moduleId": "address-bit-layout",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：把 32 位拆开看",
+        "markdown": "把虚拟地址从高位到低位排开，可以得到三段：\n\n| 字段 | 位数 | 作用 |\n|---|---|---|\n| 段选择 | 2 | 决定这次访问落在哪一个段（P0、P1 或 S） |\n| 页号 VPN | 21 | 在该段的页表中定位页表项 |\n| 页内偏移 | 9 | 在 512 字节的页内定位具体字节 |\n\n因为页大小是 $2^{9}=512$ 字节，偏移正好占 9 位；VPN 一共 23 位，其中最高 2 位被拿去选段，所以真正用于段内页号的是剩下的 21 位。换句话说，“23 位 VPN”是硬件字段的宽度，而段的划分又会截走其中一部分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-address-format"
+          ]
+        }
+      },
+      {
+        "id": "textbook-space-layout",
+        "moduleId": "three-address-spaces",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：进程空间与系统空间",
+        "markdown": "地址空间的下半部分称为“进程空间”，对每个进程都是唯一的。进程空间的前半部分 P0 存放用户程序和向下增长的堆，后半部分 P1 存放向上增长的栈。地址空间的上半部分称为系统空间 S，只有一半被使用，受保护的操作系统代码和数据驻留在此，操作系统借此跨进程共享这些内容。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存管理硬件"
+              ],
+              "lineStart": 5524,
+              "lineEnd": 5546,
+              "assetRefs": [],
+              "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-space-intuition",
+        "moduleId": "three-address-spaces",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：两个相向生长的区域",
+        "markdown": "把 P0 和 P1 想成同一块地址空间里相向生长的两片区域：堆从低地址向上长，栈从高地址向下长，中间那段暂时没人用的地址区间就不必为它准备页表。系统空间 S 则像一份映射到每个进程地址空间里的公共资料，内容相同、权限更高，用户代码不能直接读写。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-space-layout"
+          ]
+        }
+      },
+      {
+        "id": "textbook-page-table-pressure",
+        "moduleId": "page-table-pressure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：小页面带来的页表压力",
+        "markdown": "VAX 的页大小只有 512 字节，这是历史原因造成的，由此产生一个根本问题：简单的线性页表会过大。VMS 用两种方式减少页表对内存的压力。第一，把用户地址空间分成两部分，为每个进程的 P0 和 P1 各提供一张页表，于是栈和堆之间未使用的地址空间不需要页表空间；基址寄存器保存该段页表的地址，界限寄存器保存其大小（页表项数量）。第二，把用户页表放在内核虚拟内存中（P0 和 P1 各一张，因此每个进程两张），需要分配或增长页表时就在 S 段申请虚拟内存；内存压力大时，内核还能把这些页表页交换到磁盘上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存管理硬件"
+              ],
+              "lineStart": 5524,
+              "lineEnd": 5546,
+              "assetRefs": [],
+              "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-base-limit",
+        "moduleId": "page-table-pressure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：基址与界限寄存器如何配合",
+        "markdown": "每张段页表都由一对寄存器描述：基址寄存器给出这张页表在本段虚拟内存中的起点，界限寄存器给出它的页表项数量。硬件用段内页号去和界限比较，超出范围就说明该页号从未被映射；在范围内则用“基址 + 页号 × 页表项大小”算出页表项地址。这样，地址空间里大片空洞既不需要页表项，也不会让硬件误以为它们可用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-page-table-pressure"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "page-table-pressure",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：三个容易混淆的点",
+        "markdown": "- **分段不等于分段连续分配物理内存。** 这里的段主要是虚拟地址空间的分区，页仍然可以映射到任意物理帧。\n- **两段页表省的是页表空间，不是地址空间。** P0 与 P1 的地址范围不变，只是栈和堆之间的空洞不再需要页表项。\n- **页表在内核虚拟内存中，不等于页表永远在物理内存中。** 内存紧张时，内核可以把页表页交换到磁盘，代价是转换时可能发生缺页。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-space-layout",
+            "textbook-page-table-pressure",
+            "model-base-limit"
+          ]
+        }
+      },
+      {
+        "id": "textbook-kernel-page-tables",
+        "moduleId": "kernel-resident-page-tables",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：页表进入内核虚拟内存后的转换",
+        "markdown": "把页表放进内核虚拟内存意味着地址转换更复杂。要转换 P0 或 P1 中的虚拟地址，硬件必须先在相应页表中找到该页的页表项；但此时页表本身也在虚拟内存里，硬件可能先要查阅位于物理内存中的系统页表。完成这一步后，硬件才知道页表页的地址，进而知道所需内存访问的地址。VAX 的硬件管理 TLB 让这些工作快得多，TLB 通常能绕过这种费力的查找。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存管理硬件"
+              ],
+              "lineStart": 5524,
+              "lineEnd": 5546,
+              "assetRefs": [],
+              "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-translation-walkthrough",
+        "moduleId": "kernel-resident-page-tables",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：一次地址转换的步骤",
+        "markdown": "把教材描述的路径展开成四个步骤：\n\n1. 用地址高 2 位确定段，选择对应的段页表基址与界限。\n2. 用段内页号在界限内定位页表项；若页表页本身尚未映射，先查系统页表得到该页表页的物理地址。\n3. 读出页表项，得到页所在物理帧号（若页表项无效则触发异常）。\n4. 用物理帧号拼接页内偏移得到物理地址。\n\n可以看到，页表放入内核虚拟内存后，转换可能变成“多级”查找：先转换页表页的地址，再转换数据页的地址。TLB 命中时可以跳过这些步骤，直接由虚拟页号得到物理帧号。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-kernel-page-tables"
+          ]
+        }
+      },
+      {
+        "id": "textbook-tlb",
+        "moduleId": "tlb-and-fault",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：硬件管理的 TLB",
+        "markdown": "VAX 的 TLB 由硬件管理，它通常（很有可能）会绕过这种费力的查找，使地址转换不必每次都在页表间来回穿梭。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存管理硬件"
+              ],
+              "lineStart": 5524,
+              "lineEnd": 5546,
+              "assetRefs": [],
+              "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-null-pointer",
+        "moduleId": "tlb-and-fault",
+        "depth": "support",
+        "kind": "example",
+        "title": "教材：空指针访问会发生什么",
+        "markdown": "进程执行 `int *p = NULL; *p = 10;` 时生成了虚拟地址 0。硬件先在 TLB 中查找 VPN 0，遇到 TLB 未命中；接着查询页表，发现 VPN 0 的页表项被标记为无效，于是发生无效访问，控制权交给操作系统，操作系统可能终止该进程（在 UNIX 系统上会先向进程发送信号，未被捕获则终止）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "内存管理硬件"
+              ],
+              "lineStart": 5524,
+              "lineEnd": 5546,
+              "assetRefs": [],
+              "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-null-fault-reasoning",
+        "moduleId": "tlb-and-fault",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "补充：空指针故障发生在哪一步",
+        "markdown": "空指针访问失败并不是因为“地址 0 不存在于物理内存”，而是因为该页在页表中被标记为无效：\n\n- TLB 未命中只说明缓存里没有这个映射，硬件因此去查页表；\n- 页表项无效才是决定性信号，硬件据此拒绝这次访问并陷入操作系统；\n- 操作系统随后把这一信号转成对进程的处理，例如在 UNIX 上发送信号。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-null-pointer",
+            "textbook-tlb"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：给一次访问排出正确顺序",
+        "markdown": "某进程访问 P0 中的一个虚拟地址，TLB 未命中，且该页对应的页表页当前不在物理内存中。请把下列步骤排成合理顺序，并说明每一步的依据：\n\n1. 查系统页表，得到页表页的物理地址；\n2. 用地址高 2 位确定访问的是 P0；\n3. 用物理帧号加页内偏移完成访问；\n4. 把页表页缺页交给操作系统处理，然后再读页表项。\n\n完成后再想一想：如果同一虚拟页随后再次被访问，哪些步骤可以被 TLB 命中跳过？下一节将转到 VAX/VMS 真实地址空间的完整布局。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-translation-walkthrough",
+            "textbook-address-format",
+            "textbook-tlb",
+            "model-null-fault-reasoning"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "translation-order-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-summary-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-translation-path",
+          "apply-null-fault"
+        ],
+        "title": "地址转换步骤排序",
+        "learningPurpose": "检查学习者能否把段选择、页表页转换与 TLB 命中放在同一条转换路径中。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-address-format",
+            "textbook-kernel-page-tables",
+            "model-translation-walkthrough"
+          ]
+        },
+        "config": {
+          "steps": [
+            "用地址高 2 位确定访问的是 P0",
+            "查系统页表，得到页表页的物理地址",
+            "把页表页缺页交给操作系统处理，然后再读页表项",
+            "用物理帧号加页内偏移完成访问"
+          ],
+          "expectedOrder": [
+            "用地址高 2 位确定访问的是 P0",
+            "查系统页表，得到页表页的物理地址",
+            "把页表页缺页交给操作系统处理，然后再读页表项",
+            "用物理帧号加页内偏移完成访问"
+          ],
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 TLB 未命中且页表页不在内存时，一次 P0 访问需要经过的转换步骤，并标出哪一步会触发操作系统介入。"
+        }
+      }
+    ]
+  },
+  "subtitle": "VAX/VMS 虚拟内存系统",
+  "clusterId": "chapter-23",
+  "clusterIds": [
+    "chapter-23"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000318"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "内存管理硬件"
+      ],
+      "lineStart": 5524,
+      "lineEnd": 5546,
+      "assetRefs": [],
+      "excerptSha256": "852ebb76fa4e67c260e88f520cc83b44536f13e1046684088fc4758189a0dba7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    4112,
+    1652
+  ],
+  "scale": 0.92
+}

@@ -1,0 +1,550 @@
+{
+  "id": "point-40-7",
+  "title": "缓存和缓冲",
+  "shortSummary": "说明页缓存和写缓冲如何减少磁盘访问，并分析它们对一致性的影响。",
+  "keyTerms": [
+    "页缓存",
+    "写缓冲",
+    "磁盘访问",
+    "一致性"
+  ],
+  "animationType": "cacheBufferingIO",
+  "animationSuggestion": "逐步播放同一目录的重复打开与连续小写入：读访问显示命中或未命中并更新缓存队列，写访问显示在缓冲中合并后再一次性刷盘；重播回到相同访问序列，便于对比缓存容量或缓冲窗口改变时的 I/O 次数。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-tradeoff-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于页缓存、静态与动态划分、写缓冲的核心论断，补充访问序列算例、划分维度对比表和按应用选择持久化手段的检查流程。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-read-cache",
+          "text": "解释页缓存为什么能减少读请求产生的磁盘 I/O，并说明固定大小缓存与统一页缓存的差别。"
+        },
+        {
+          "id": "distinguish-partitioning",
+          "text": "从可预测性、利用率、实现复杂度和资源回收四个维度区分静态划分与动态划分。"
+        },
+        {
+          "id": "explain-write-buffering",
+          "text": "说明写缓冲的批处理、调度和避免写入三类收益，以及它为何不能减少最终写入流量。"
+        },
+        {
+          "id": "choose-durability-tradeoff",
+          "text": "依据应用可容忍的数据丢失范围，在缓冲写入与 fsync、直接 I/O、裸磁盘之间做出取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为写缓冲可以像读缓存那样减少写入磁盘的总流量。",
+        "把静态划分当作总是优于动态划分，忽略其在需求低谷时的内存浪费。",
+        "认为缓冲窗口越长越好，忽略崩溃时未落盘更新会丢失。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-page-cache",
+          "title": "读放大问题与页缓存",
+          "role": "mechanism",
+          "description": "从打开文件的读放大出发，引出固定大小缓存与统一页缓存。",
+          "outcomeRefs": [
+            "explain-read-cache"
+          ],
+          "order": 0
+        },
+        {
+          "id": "static-vs-dynamic",
+          "title": "静态划分与动态划分",
+          "role": "comparison",
+          "description": "用统一维度比较两种内存划分方式，并判断适用情境。",
+          "outcomeRefs": [
+            "distinguish-partitioning"
+          ],
+          "order": 1
+        },
+        {
+          "id": "write-buffering",
+          "title": "写缓冲的收益与边界",
+          "role": "mechanism",
+          "description": "说明写缓冲的批处理、调度、避免写入三类收益及其不能减少写流量的原因。",
+          "outcomeRefs": [
+            "explain-write-buffering"
+          ],
+          "order": 2
+        },
+        {
+          "id": "durability-tradeoff",
+          "title": "耐用性与性能折中",
+          "role": "tradeoff-analysis",
+          "description": "分析缓冲窗口的崩溃风险，以及 fsync、直接 I/O、裸磁盘等控制手段。",
+          "outcomeRefs": [
+            "choose-durability-tradeoff"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点衔接",
+          "role": "formative-check",
+          "description": "用情境题检查持久化手段的选择，并过渡到文件系统小结。",
+          "outcomeRefs": [
+            "explain-read-cache",
+            "distinguish-partitioning",
+            "explain-write-buffering",
+            "choose-durability-tradeoff"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-read-cache",
+          "distinguish-partitioning",
+          "explain-write-buffering",
+          "choose-durability-tradeoff"
+        ],
+        "method": "完成情境判断题，并为所选持久化手段写出依据。",
+        "successCriteria": [
+          "能区分读缓存与写缓冲各自减少或不能减少的 I/O 类型",
+          "能说明缓冲窗口带来的数据丢失风险",
+          "能根据应用可容忍的丢失范围选择缓冲、fsync 或直接 I/O"
+        ],
+        "exerciseBlockId": "durability-check",
+        "summaryBlockId": "point-summary",
+        "nextPointId": "point-40-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "open-without-cache",
+        "moduleId": "problem-and-page-cache",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材起点：没有缓存时的读放大",
+        "markdown": "读取或写入文件可能触发对慢速磁盘的大量 I/O。以打开文件为例：没有缓存时，打开一个文件需要对目录层次结构中的每一级至少读取两次，一次读取相关目录的 inode，至少还有一次读取它的数据。路径越深，这部分开销越大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000562"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存和缓冲"
+              ],
+              "lineStart": 11125,
+              "lineEnd": 11140,
+              "assetRefs": [],
+              "excerptSha256": "310f4086491ad509e34844a41c2aebd23d763b24951771586c92884fce25e4d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-cost-intuition",
+        "moduleId": "problem-and-page-cache",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：长路径的读放大量级",
+        "markdown": "假设路径形如 `/1/2/3/.../100/file.txt`，包含 100 层目录。若每层至少两次读，那么仅仅为了打开这个文件，就可能产生数百次磁盘读取。这个算例只是把教材的计数规则具体化，用来说明读缓存针对的是一类重复发生的固定开销，而不是某一次特殊操作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "open-without-cache"
+          ]
+        }
+      },
+      {
+        "id": "fixed-size-cache",
+        "moduleId": "problem-and-page-cache",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "固定大小缓存与统一页缓存",
+        "markdown": "早期文件系统引入固定大小的缓存来保存常用块，通常在上电启动时分配，约占内存的 10%，并由 LRU 及其变体决定哪些块留在缓存中。\n\n这种静态划分存在浪费：如果文件系统在某段时间不需要那 10% 的内存，缓存中未使用的页面也不能被挪作他用。现代系统因此转向动态划分，把虚拟内存页面和文件系统页面集成到统一页缓存中，让内存在两者之间按当下需求灵活分配。\n\n缓存对读的效果很直接：第一次打开文件会产生较多 I/O 来读取目录的 inode 和数据，但此后打开同一文件或同一目录中的文件，大部分请求会命中缓存，不再访问磁盘。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000562"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存和缓冲"
+              ],
+              "lineStart": 11125,
+              "lineEnd": 11140,
+              "assetRefs": [],
+              "excerptSha256": "310f4086491ad509e34844a41c2aebd23d763b24951771586c92884fce25e4d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "cache-hit-example",
+        "moduleId": "problem-and-page-cache",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：命中率如何摊薄读成本",
+        "markdown": "设某目录的 inode 与数据块第一次访问共需 20 次读，之后缓存容量足以容纳这些块。\n\n| 访问次数 | 命中情况 | 累计磁盘读 |\n|---|---|---|\n| 第 1 次 | 全部未命中 | 20 |\n| 第 2 次 | 全部命中 | 20 |\n| 第 10 次 | 全部命中 | 20 |\n\n若每次都要访问磁盘，10 次访问需要 200 次读；缓存把重复访问的增量成本降为 0。关键不是缓存让第一次读变快，而是让后续重复读不再产生磁盘 I/O。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fixed-size-cache"
+          ]
+        }
+      },
+      {
+        "id": "static-dynamic-definition",
+        "moduleId": "static-vs-dynamic",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材提示：两种资源划分方式",
+        "markdown": "在不同客户端或用户之间划分资源时，静态划分把资源一次性切成固定比例，例如给两个可能的内存使用者各分一份固定的内存；动态划分则随时间提供不同数量的资源，例如一个用户先获得较高的磁盘带宽比例，之后系统又为另一用户调高比例。\n\n静态划分保证每个用户都分到资源，性能更可预测，也更易实现；动态划分能提高利用率，让资源匮乏者占用他人的空闲资源，但实现更复杂，而且空闲资源被占用后，原主需要时可能要花很长时间才能收回，导致其性能变差。没有普遍最优的方法，应结合手头问题判断。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000563"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：理解静态划分与动态划分"
+              ],
+              "lineStart": 11141,
+              "lineEnd": 11152,
+              "assetRefs": [],
+              "excerptSha256": "1f48fb1eac39c4873e806765fa88ebf85a3de0c8a4a98380c5aa42d2a64e70cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "partitioning-table",
+        "moduleId": "static-vs-dynamic",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：统一维度比较",
+        "markdown": "| 维度 | 静态划分 | 动态划分 |\n|---|---|---|\n| 资源分配 | 启动时一次切分固定比例 | 随时间按需求调整 |\n| 性能可预测性 | 高 | 较低，取决于争用情况 |\n| 利用率 | 低，低谷时可能闲置浪费 | 高，空闲资源可被借用 |\n| 实现复杂度 | 低 | 高，需要跟踪与收回机制 |\n| 主要风险 | 需求变化时容量错配 | 资源被占用后收回缓慢 |\n\n表格只是把教材给出的优缺点整理成可比维度，判断时仍要回到具体场景。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "static-dynamic-definition"
+          ]
+        }
+      },
+      {
+        "id": "partitioning-scenario",
+        "moduleId": "static-vs-dynamic",
+        "depth": "support",
+        "kind": "application",
+        "title": "补充：把划分方式用回页缓存",
+        "markdown": "固定大小缓存是静态划分在文件系统中的直接体现：启动时预留约 10% 的内存，文件系统不用时这部分内存也不能转给虚拟内存。统一页缓存则是动态划分：虚拟内存和文件缓存共享同一池页面，谁在当下更需要内存就获得更多。\n\n判断一个系统该选哪种方式，可以先问两个问题：负载是否稳定到可以提前预测比例？能否接受资源的收回延迟？前一问偏向静态，后一问偏向动态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fixed-size-cache",
+            "static-dynamic-definition",
+            "partitioning-table"
+          ]
+        }
+      },
+      {
+        "id": "write-buffering-benefits",
+        "moduleId": "write-buffering",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：写缓冲能做什么、不能做什么",
+        "markdown": "缓存可以靠足够大的容量几乎完全避免读 I/O，但写入流量必须进入磁盘才能持久，因此高速缓存不能像减少读那样减少写流量。\n\n尽管如此，写缓冲仍有三方面收益。第一是批处理：通过延迟写入，把多次更新合并成一组较小的 I/O。例如创建文件时更新了 inode 位图，稍后创建另一个文件又更新它，延迟第一次写入就能省下一次 I/O。第二是调度：把写入暂存在内存中，系统可以重新安排后续 I/O 的顺序以提高性能。第三是避免：某些写入可以靠拖延完全消失，例如应用创建文件后又将其删除，延迟写入就根本不需要写盘。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000562"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "缓存和缓冲"
+              ],
+              "lineStart": 11125,
+              "lineEnd": 11140,
+              "assetRefs": [],
+              "excerptSha256": "310f4086491ad509e34844a41c2aebd23d763b24951771586c92884fce25e4d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "batching-example",
+        "moduleId": "write-buffering",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：批处理与避免写入各是什么样",
+        "markdown": "场景一，连续创建两个文件：若每次创建都立刻写 inode 位图，位图需要写盘两次；延迟到第二次更新之后再写，位图只写一次，省掉一次 I/O。\n\n场景二，临时文件：应用创建文件、写入少量数据，随后删除。若写缓冲尚未把创建与数据写盘，文件就被删除，那么这次创建最终不需要任何磁盘写入。\n\n两种收益都来自“延后决定”，而不是让写入本身变少：场景一中写入次数减少是因为合并，场景二中写入消失是因为后续操作撤销了它。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "write-buffering-benefits"
+          ]
+        }
+      },
+      {
+        "id": "write-traffic-misconception",
+        "moduleId": "write-buffering",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清：写缓冲不减少最终写流量",
+        "markdown": "常见误解是“既然缓存能减少读，它也能等量减少写”。纠正：持久性要求数据最终落到磁盘，写缓冲只是把落盘时间推迟，并在此窗口内合并、重排或取消部分写入。\n\n因此评价写缓冲时，应分别看两件事：单位时间内的 I/O 次数是否下降，以及崩溃时最多可能丢失哪一段时间内的更新。前者是性能收益，后者是耐用性代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "write-buffering-benefits"
+          ]
+        }
+      },
+      {
+        "id": "buffer-window-risk",
+        "moduleId": "durability-tradeoff",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：5～30 秒的缓冲窗口",
+        "markdown": "由于写缓冲的收益，大多数现代文件系统会把写入在内存中缓冲 5～30 秒。这是一种折中：如果系统在更新传递到磁盘之前崩溃，这些更新就会丢失；缓冲时间越长，批处理、调度和避免写入的空间越大，性能越好，但崩溃时的潜在损失也越大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000563"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：理解静态划分与动态划分"
+              ],
+              "lineStart": 11141,
+              "lineEnd": 11152,
+              "assetRefs": [],
+              "excerptSha256": "1f48fb1eac39c4873e806765fa88ebf85a3de0c8a4a98380c5aa42d2a64e70cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "durability-controls",
+        "moduleId": "durability-tradeoff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：需要更强持久性时的手段",
+        "markdown": "有些应用，例如数据库，不接受这种折中。为了避免写缓冲导致的意外数据丢失，它们会强制把数据写入磁盘：调用 `fsync()`，使用绕过缓存的直接 I/O 接口，或者使用裸磁盘接口并完全避开文件系统。\n\n大多数应用能接受文件系统的默认折中；如果默认设置不满足要求，这些手段提供了按需加强持久性的控制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000563"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：理解静态划分与动态划分"
+              ],
+              "lineStart": 11141,
+              "lineEnd": 11152,
+              "assetRefs": [],
+              "excerptSha256": "1f48fb1eac39c4873e806765fa88ebf85a3de0c8a4a98380c5aa42d2a64e70cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "durability-tradeoff",
+        "moduleId": "durability-tradeoff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材提示：耐用性与性能的折中",
+        "markdown": "存储系统通常向用户提供耐用性与性能之间的折中。如果希望写入的数据立即持久，系统必须尽全力把新数据提交到磁盘，写入因此变慢但安全；如果能容忍丢失少量数据，系统可以先在内存中缓冲一段时间，再在后台写盘，写入因此快速完成，感受到的性能更好，但崩溃时未提交的写入会丢失。\n\n正确取舍的前提是了解使用该存储的应用真正需要什么：丢失浏览器下载的最后几张图片通常可以忍受，丢失数据库交易、让账户余额没有增加则不可接受。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000564"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：了解耐用性/性能权衡"
+              ],
+              "lineStart": 11153,
+              "lineEnd": 11156,
+              "assetRefs": [],
+              "excerptSha256": "6c8738586e41ceebfad03cb2cd40d4bd706855520601ecd3f817d0e57a3498d4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "application-choice",
+        "moduleId": "durability-tradeoff",
+        "depth": "support",
+        "kind": "application",
+        "title": "补充：按丢失代价选择持久化手段",
+        "markdown": "面对一个具体应用，可以按以下顺序判断。\n\n1. 崩溃时最多能丢多少数据？能丢几秒，默认缓冲通常够用；不能丢任何已确认的写入，就需要显式持久化。\n2. 丢失单位是文件还是事务？事务型系统需要把相关更新作为一个持久化单元提交，文件级缓冲不足以表达该语义。\n3. 需要多强的控制？调用 `fsync()` 仍使用文件系统；直接 I/O 绕过页缓存；裸磁盘则连文件系统也绕开，代价是自行管理块布局。\n\n例如，图片下载器可以接受缓冲窗口，崩溃后重下即可；而记账交易在向用户确认成功之前，必须确保对应更新已经持久化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "buffer-window-risk",
+            "durability-controls",
+            "durability-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "tradeoff-checklist",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "检查表：读缓存与写缓冲各看什么",
+        "markdown": "评估一次文件系统优化时，分别核对两类问题。\n\n- 读路径：重复访问的块是否留在缓存中？缓存大小是固定划分还是与虚拟内存共享？命中率不足时，是容量问题还是替换策略问题？\n- 写路径：写入是否被合并、重排或取消？缓冲窗口有多长？崩溃时最多丢失多少更新？应用是否调用了 `fsync()` 或使用直接 I/O？\n- 一致性：性能收益是否建立在延迟持久化之上？该延迟是否符合应用对数据丢失的容忍范围？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fixed-size-cache",
+            "write-buffering-benefits",
+            "durability-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "durability-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：为两种应用选择持久化策略",
+        "markdown": "情境 A：一个日志采集程序每秒写入大量小记录，崩溃后允许丢失最近两秒的数据，但要求吞吐尽可能高。\n\n情境 B：一个转账服务每次提交都必须保证崩溃后不丢失，提交成功后立即向用户返回结果。\n\n请分别选择缓冲写入、`fsync()` 或直接 I/O，并说明理由。\n\n参考思路：A 可以依赖写缓冲，因为窗口内的合并与重排能显著提高吞吐，丢失两秒在容忍范围内；但仍需注意实际窗口不要超过业务容忍值。B 必须在返回成功前完成持久化，通常在事务提交点调用 `fsync()` 或使用直接 I/O，避免把“已确认”建立在未落盘的缓冲上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "application-choice",
+            "tradeoff-checklist"
+          ]
+        }
+      },
+      {
+        "id": "point-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "收束：收益来自复用与延后，代价落在一致性",
+        "markdown": "页缓存与写缓冲解决的是同一类成本问题：磁盘 I/O 昂贵，因此尽量在内存中复用已读数据，并把写操作延后到更划算的时机。但两者的边界不同：读缓存可以让重复读不产生 I/O，写缓冲不能取消最终的写流量，只能合并、重排或撤销部分写入。\n\n由此形成的折中是：缓冲越长，性能收益越大，崩溃时可能丢失的更新越多。理解应用能容忍什么，才能决定是否需要 `fsync()`、直接 I/O 或裸磁盘。下一节将把 inode、目录、空闲空间与缓存这些机制收束成对文件系统的整体认识。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "durability-tradeoff",
+            "durability-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "durability-check-activity",
+        "type": "formative-check",
+        "anchorBlockId": "durability-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-durability-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否把耐用性与性能折中应用到具体的写入场景。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "durability-check"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别说明日志采集与转账服务应选择缓冲写入还是显式持久化，并写出依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "文件系统实现",
+  "clusterId": "chapter-40",
+  "clusterIds": [
+    "chapter-40"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000562"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "缓存和缓冲"
+      ],
+      "lineStart": 11125,
+      "lineEnd": 11140,
+      "assetRefs": [],
+      "excerptSha256": "310f4086491ad509e34844a41c2aebd23d763b24951771586c92884fce25e4d9"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000563"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：理解静态划分与动态划分"
+      ],
+      "lineStart": 11141,
+      "lineEnd": 11152,
+      "assetRefs": [],
+      "excerptSha256": "1f48fb1eac39c4873e806765fa88ebf85a3de0c8a4a98380c5aa42d2a64e70cb"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000564"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：了解耐用性/性能权衡"
+      ],
+      "lineStart": 11153,
+      "lineEnd": 11156,
+      "assetRefs": [],
+      "excerptSha256": "6c8738586e41ceebfad03cb2cd40d4bd706855520601ecd3f817d0e57a3498d4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1784,
+    139
+  ],
+  "scale": 0.94
+}

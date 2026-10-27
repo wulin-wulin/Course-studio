@@ -16,8 +16,14 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import HTMLResponse
 
 from ..models.course import (
+    CourseCatalogAssignmentRequest,
+    CourseCatalogEdgesRequest,
+    CourseCatalogGroupRequest,
+    CourseCatalogLayoutRequest,
+    CourseCatalogReorderRequest,
     ClusterWriteRequest,
     CourseCreateRequest,
+    PlaceholderCourseCreateRequest,
     CourseUpdateRequest,
     CourseValidationResponse,
     PointWriteRequest,
@@ -85,6 +91,80 @@ async def list_courses():
 async def create_course(body: CourseCreateRequest):
     course = await _run(get_course_store().create_course, body.course, body.index)
     return {"course": course}
+
+
+@router.post("/placeholders", status_code=status.HTTP_201_CREATED)
+async def create_placeholder_course(body: PlaceholderCourseCreateRequest):
+    result = await _run(
+        get_course_store().create_placeholder_course,
+        body.title,
+        body.group_id,
+    )
+    return result
+
+
+@router.get("/catalog")
+async def get_course_catalog():
+    return {"catalog": await _run(get_course_store().list_catalog)}
+
+
+@router.post("/catalog/groups", status_code=status.HTTP_201_CREATED)
+async def create_course_catalog_group(body: CourseCatalogGroupRequest):
+    group = await _run(get_course_store().create_catalog_group, body.name)
+    return {"group": group}
+
+
+@router.get("/catalog/groups/{group_id}")
+async def get_course_catalog_group(group_id: str):
+    group = await _run(get_course_store().read_catalog_group, group_id)
+    return {"group": group}
+
+
+@router.patch("/catalog/groups/{group_id}/edges")
+async def update_course_catalog_edges(group_id: str, body: CourseCatalogEdgesRequest):
+    group = await _run(
+        get_course_store().update_catalog_edges, group_id,
+        [edge.model_dump() for edge in body.edges],
+    )
+    return {"group": group}
+
+
+@router.patch("/catalog/groups/{group_id}/layout")
+async def update_course_catalog_layout(group_id: str, body: CourseCatalogLayoutRequest):
+    group = await _run(
+        get_course_store().update_catalog_layout,
+        group_id,
+        {course_id: position.model_dump() for course_id, position in body.positions.items()},
+    )
+    return {"group": group}
+
+
+@router.patch("/catalog/groups/{group_id}")
+async def update_course_catalog_group(group_id: str, body: CourseCatalogGroupRequest):
+    group = await _run(get_course_store().update_catalog_group, group_id, body.name)
+    return {"group": group}
+
+
+@router.delete("/catalog/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_course_catalog_group(group_id: str):
+    await _run(get_course_store().delete_catalog_group, group_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/catalog/assignments")
+async def assign_course_catalog_group(body: CourseCatalogAssignmentRequest):
+    catalog = await _run(
+        get_course_store().assign_course_to_catalog_group,
+        body.course_id,
+        body.group_id,
+    )
+    return {"catalog": catalog}
+
+
+@router.patch("/catalog/order")
+async def reorder_course_catalog(body: CourseCatalogReorderRequest):
+    catalog = await _run(get_course_store().reorder_catalog_groups, body.group_ids)
+    return {"catalog": catalog}
 
 
 @router.get("/{course_id}")

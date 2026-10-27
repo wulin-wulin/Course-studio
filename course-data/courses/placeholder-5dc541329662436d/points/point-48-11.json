@@ -1,0 +1,363 @@
+{
+  "id": "point-48-11",
+  "title": "服务器端写缓冲的隐含意义",
+  "shortSummary": "讨论服务器写缓冲对持久性和客户端可见一致性的影响及应对方式。",
+  "keyTerms": [
+    "服务器写缓冲",
+    "持久性",
+    "一致性",
+    "NFS"
+  ],
+  "animationType": "writebackCrashState",
+  "animationSuggestion": "按时间轴逐步展示三条写入、服务器内存缓冲与磁盘的块状态，并允许切换崩溃发生在哪一次写入之前或之后，对比客户端收到的成功回执与文件最终内容。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "failure-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于 WRITE 成功语义、崩溃序列和稳定存储要求的事实，按症状—证据—诊断—修复组织讲解，并补充客户端视角的检查与性能边界。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-write-ack",
+          "text": "解释 NFS 服务器为什么不能在数据落到稳定存储之前对 WRITE 请求返回成功。"
+        },
+        {
+          "id": "analyze-crash-outcome",
+          "text": "给定写入序列与崩溃时点，推断客户端看到的成功状态和文件最终内容。"
+        },
+        {
+          "id": "apply-commit-rule",
+          "text": "把“先提交再确认”的规则应用于评估电池备份内存等加速方案及其边界。"
+        }
+      ],
+      "misconceptions": [
+        "认为服务器只要把数据放进内存并返回成功就足够安全，反正迟早会写盘。",
+        "认为客户端收到的每个 WRITE 都成功，文件最终就一定是三次写入的完整结果。",
+        "把服务器端写缓冲当作纯粹的性能细节，认为它不影响客户端可观察的语义。"
+      ],
+      "modules": [
+        {
+          "id": "failure-symptom",
+          "title": "问题引入：服务器也会缓存",
+          "role": "symptom",
+          "description": "从服务器读缓存过渡到写缓冲，提出“成功”意味着什么的疑问。",
+          "outcomeRefs": [
+            "explain-write-ack"
+          ],
+          "order": 0
+        },
+        {
+          "id": "write-sequence",
+          "title": "证据：三次写入与期望结果",
+          "role": "evidence",
+          "description": "用覆盖三个块的写入序列建立客户端对最终内容的预期。",
+          "outcomeRefs": [
+            "explain-write-ack",
+            "analyze-crash-outcome"
+          ],
+          "order": 1
+        },
+        {
+          "id": "crash-diagnosis",
+          "title": "诊断：崩溃点如何留下旧块",
+          "role": "diagnosis",
+          "description": "逐条对成功回执与落盘状态，定位混合文件内容的成因。",
+          "outcomeRefs": [
+            "analyze-crash-outcome"
+          ],
+          "order": 2
+        },
+        {
+          "id": "durability-rule",
+          "title": "修复：先提交再确认",
+          "role": "repair",
+          "description": "给出稳定存储提交要求，并分析写入性能代价与加速手段的边界。",
+          "outcomeRefs": [
+            "apply-commit-rule"
+          ],
+          "order": 3
+        },
+        {
+          "id": "transfer-and-bridge",
+          "title": "迁移与桥接",
+          "role": "reflection",
+          "description": "把规则抽象为一般设计原则，并与客户端缓存问题对照。",
+          "outcomeRefs": [
+            "explain-write-ack",
+            "analyze-crash-outcome",
+            "apply-commit-rule"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-write-ack",
+          "analyze-crash-outcome",
+          "apply-commit-rule"
+        ],
+        "method": "完成一次崩溃时点判断，并说明服务器返回成功所需的前置条件。",
+        "successCriteria": [
+          "能指出哪个 WRITE 的成功回执与磁盘内容不一致",
+          "能说明“提交到稳定存储”为何是返回成功的前提",
+          "能指出电池备份内存方案成立所依赖的条件"
+        ],
+        "exerciseBlockId": "model-boundary-exercise",
+        "summaryBlockId": "model-transfer-summary",
+        "nextPointId": "point-48-12"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-server-cache",
+        "moduleId": "failure-symptom",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "服务器也会缓存数据",
+        "markdown": "NFS 服务器通常配备大量内存，因此也有自己的缓存问题。从磁盘读取数据和元数据时，服务器会把它们保留在内存中，后续读取不再访问磁盘，这能带来一定程度的性能提升。\n\n更有风险的是写缓冲。NFS 服务器在把一次 WRITE 请求真正提交到稳定存储（磁盘或其他持久设备）之前，绝对不应当向客户端返回成功；仅把数据副本放进服务器内存就回复成功，可能造成错误行为。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000666"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "服务器端写缓冲的隐含意义"
+              ],
+              "lineStart": 12895,
+              "lineEnd": 12935,
+              "assetRefs": [],
+              "excerptSha256": "ba0de8bf71cd63146cdb2baf811aa9e7042c6d185f9bd7f630f2cf792495a989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ack-meaning",
+        "moduleId": "failure-symptom",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "“成功”是一句持久性承诺",
+        "markdown": "客户端无法直接检查服务器的磁盘，它只能依据协议回执推断状态。因此 WRITE 的成功回执不是“我收到了”，而是“即使现在断电，这份数据也不会退回旧版本”。服务器若用内存副本换取更早的回执，就等于把尚未兑现的承诺提前交了出去。\n\n这也解释了为什么问题发生在服务器端却表现为客户端可见的语义错误：客户端据此停止重试，错误从此无人纠正。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-server-cache"
+          ]
+        }
+      },
+      {
+        "id": "textbook-write-sequence",
+        "moduleId": "write-sequence",
+        "depth": "core",
+        "kind": "example",
+        "title": "三次块写入的预期结果",
+        "markdown": "设想客户端连续发出三次写入，每次覆盖文件中的一个块：\n\n```txt\nwrite(fd, a_buffer, size); // 第一个块写入 a\nwrite(fd, b_buffer, size); // 第二个块写入 b\nwrite(fd, c_buffer, size); // 第三个块写入 c\n```\n\n若文件原本的三个块分别保存旧内容 x、y、z，客户端自然期望三次写入全部完成后，三个块依次变成 a、b、c。这个期望正是后续崩溃分析的基准：任何偏离都意味着某个成功回执没有兑现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000666"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "服务器端写缓冲的隐含意义"
+              ],
+              "lineStart": 12895,
+              "lineEnd": 12935,
+              "assetRefs": [],
+              "excerptSha256": "ba0de8bf71cd63146cdb2baf811aa9e7042c6d185f9bd7f630f2cf792495a989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-expectation-vs-evidence",
+        "moduleId": "write-sequence",
+        "depth": "support",
+        "kind": "note",
+        "title": "把预期写成可检验的断言",
+        "markdown": "分析这类故障时，先把预期写成一个可检验的断言：**三次写入都返回成功后，文件三个块应当是 a、b、c**。然后逐条核对每个成功回执与磁盘实际状态，就能判断哪一条断言被破坏。\n\n注意，写入覆盖的是不同块，所以不能靠“最后一次写入覆盖一切”来蒙混过关；每个块的状态都需要独立成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-write-sequence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-crash-scenario",
+        "moduleId": "crash-diagnosis",
+        "depth": "core",
+        "kind": "warning",
+        "title": "崩溃点落在第二次写入之后",
+        "markdown": "假设客户端的三个写入作为三条独立的 WRITE 消息发往服务器。服务器先收到第一条，把它写入磁盘并通知客户端成功。第二条写入只被缓冲在服务器内存中，服务器同样报告成功，但在强制写盘之前崩溃了。\n\n服务器很快重启，随后收到的第三条写入也成功了。于是从客户端看，三个请求全部成功；但文件里却留下了旧块，实际内容是混合的，而不是预期的 a、b、c。对于某些应用，这种混合内容可能是灾难性的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000666"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "服务器端写缓冲的隐含意义"
+              ],
+              "lineStart": 12895,
+              "lineEnd": 12935,
+              "assetRefs": [],
+              "excerptSha256": "ba0de8bf71cd63146cdb2baf811aa9e7042c6d185f9bd7f630f2cf792495a989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-crash-diagnosis",
+        "moduleId": "crash-diagnosis",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "诊断链条：症状、假设、证据、定位",
+        "markdown": "**症状**：客户端认为三个写入都成功，文件却包含旧内容。\n\n**假设**：某个成功回执只对应内存中的副本，并未对应稳定存储。\n\n**证据**：第一条写入已落盘；第二条写入被缓冲后服务器崩溃，内存副本随崩溃丢失；重启后第三条写入成功。\n\n**定位**：故障不在客户端重试，也不在第三条写入，而在第二条写入“先确认、后落盘”的顺序。服务器一旦在提交前返回成功，客户端就失去了发现并重试的机会。\n\n**修复方向**：让回执与持久化绑定，而不是与接收绑定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-crash-scenario",
+            "textbook-write-sequence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-commit-requirement",
+        "moduleId": "durability-rule",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "修复规则：提交后才报告成功",
+        "markdown": "为避免这类问题，NFS 服务器必须在通知客户端成功之前，把每次写入提交到稳定（持久）存储。这样客户端在写入期间就能检测服务器故障，并重试直到最终成功，从而不会得到前面例子中那种混合的文件内容。\n\n这个要求在实现上带来明显的写入性能压力，若处理不当会成为主要瓶颈。实际系统采用过两类技巧：先写入带电池备份的内存，从而快速报告 WRITE 成功而不必立即承担写盘成本；或者采用专门为快速写入磁盘而设计的文件系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000666"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "服务器端写缓冲的隐含意义"
+              ],
+              "lineStart": 12895,
+              "lineEnd": 12935,
+              "assetRefs": [],
+              "excerptSha256": "ba0de8bf71cd63146cdb2baf811aa9e7042c6d185f9bd7f630f2cf792495a989"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundary-exercise",
+        "moduleId": "durability-rule",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "检查：电池备份内存改变了什么",
+        "markdown": "某 NFS 服务器把 WRITE 数据先写入带电池备份的内存，然后立即返回成功。请回答：\n\n1. 它在正常断电场景下是否仍然满足“先提交再确认”的目标？依据是什么？\n2. 如果电池失效、后备供电耗尽，或者数据尚未转入磁盘时整机损坏，会退化成什么问题？\n3. 这个方案优化的是哪一段延迟，又没有消除哪一类风险？\n\n提示：判断的关键不是数据放在哪种介质上，而是“回执所承诺的持久性”是否真的被保证。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-commit-requirement"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-summary",
+        "moduleId": "transfer-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "从一次故障到一条设计原则",
+        "markdown": "把本例压缩成一条可迁移的原则：**凡是让远端相信状态已持久化的回执，都必须以持久化为前提**。客户端缓存关注的是“读到的数据是否足够新”，服务器写缓冲关注的是“确认过的写入是否真的留下了”，两者都在用缓存换性能，但都不能让缓存改写对外承诺的语义。\n\n这也解释了 NFS 设计中的一个反复出现的主题：性能优化可以改变实现，但不能改变客户端据以判断成败的协议含义。下一节将在这个基础上总结 NFS 的整体设计取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-commit-requirement",
+            "model-crash-diagnosis"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "crash-timing-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-crash-diagnosis",
+        "moduleId": "crash-diagnosis",
+        "depth": "core",
+        "outcomeRefs": [
+          "analyze-crash-outcome",
+          "apply-commit-rule"
+        ],
+        "learningPurpose": "让学习者选择崩溃发生的时点，判断哪些成功回执仍然成立，并据此推断文件最终内容。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-crash-scenario"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "crashPoints": [
+            "first-write-before-disk",
+            "second-write-before-disk",
+            "third-write-after-disk"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别假设服务器在第一次、第二次、第三次写入落盘前后崩溃，列出每个块的最终内容和客户端看到的成功回执，并指出哪一种情况会产生混合文件。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Sun 的网络文件系统(NFS)",
+  "clusterId": "chapter-48",
+  "clusterIds": [
+    "chapter-48"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000666"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "服务器端写缓冲的隐含意义"
+      ],
+      "lineStart": 12895,
+      "lineEnd": 12935,
+      "assetRefs": [],
+      "excerptSha256": "ba0de8bf71cd63146cdb2baf811aa9e7042c6d185f9bd7f630f2cf792495a989"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2649,
+    -763
+  ],
+  "scale": 0.93
+}

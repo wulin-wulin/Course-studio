@@ -1,0 +1,354 @@
+{
+  "id": "point-28-16",
+  "title": "两阶段锁",
+  "shortSummary": "自旋一段时间仍未取到锁就转入睡眠等待的混合锁策略，用两种等待方式平衡延迟与 CPU 开销。",
+  "keyTerms": [
+    "两阶段锁",
+    "自旋等待",
+    "睡眠等待",
+    "futex",
+    "混合方案"
+  ],
+  "animationType": "spinThenSleep",
+  "animationSuggestion": "用两条等待线程的时间轴演示：自旋阶段以高频重试计数显示，达到上限后转为睡眠并释放 CPU，锁释放时被唤醒；同时可切换自旋上限，直观看到短持有场景直接命中与长持有场景空转浪费的差别。",
+  "difficulty": "进阶",
+  "importance": 0.65,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-tradeoff-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的阶段划分与混合方案定位，围绕“为什么分两阶段”补充等待代价对比、时间线算例与检查题。",
+      "estimatedMinutes": 11,
+      "outcomes": [
+        {
+          "id": "explain-two-phase",
+          "text": "说明两阶段锁的第一阶段自旋与第二阶段睡眠各自做什么。"
+        },
+        {
+          "id": "justify-hybrid",
+          "text": "用自旋与睡眠的代价解释两阶段锁为何是混合方案，并判断其适用情境。"
+        },
+        {
+          "id": "identify-futex",
+          "text": "指出 Linux futex 锁如何对应两阶段锁的两次等待方式。"
+        }
+      ],
+      "misconceptions": [
+        "把两阶段锁当成数据库事务里的两阶段锁协议（2PL），两者同名但机制并不相同。",
+        "认为进入第二阶段后线程仍在持续自旋占用 CPU。",
+        "认为自旋次数越多、锁的实现就越好。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-tradeoff",
+          "title": "问题导入：等待锁的两种代价",
+          "role": "motivation",
+          "description": "从自旋与睡眠各自的代价出发，说明为什么需要一种同时使用两种等待方式的锁。",
+          "outcomeRefs": [
+            "justify-hybrid"
+          ],
+          "order": 0
+        },
+        {
+          "id": "phase-mechanics",
+          "title": "两阶段的执行流程",
+          "role": "mechanism",
+          "description": "按时间顺序拆解第一阶段自旋与第二阶段睡眠的判定与切换。",
+          "outcomeRefs": [
+            "explain-two-phase"
+          ],
+          "order": 1
+        },
+        {
+          "id": "real-world-linux",
+          "title": "真实实现：Linux futex 锁",
+          "role": "case",
+          "description": "用教材中的 Linux 锁说明两阶段思路如何落到具体代码与参数上。",
+          "outcomeRefs": [
+            "identify-futex",
+            "explain-two-phase"
+          ],
+          "order": 2
+        },
+        {
+          "id": "boundaries-and-check",
+          "title": "边界、代价与检查",
+          "role": "practice",
+          "description": "讨论混合方案的效果边界、常见混淆，并用检查题验证理解。",
+          "outcomeRefs": [
+            "justify-hybrid",
+            "explain-two-phase"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-two-phase",
+          "justify-hybrid",
+          "identify-futex"
+        ],
+        "method": "完成检查题，写出两阶段的切换条件，并解释 Linux 锁为什么只自旋一次。",
+        "successCriteria": [
+          "能按顺序说出自旋阶段与睡眠阶段的进入条件",
+          "能说明自旋与睡眠各自的代价来源",
+          "能把 Linux futex 锁归入两阶段锁方案"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-28-17"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-origin",
+        "moduleId": "problem-and-tradeoff",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义与来历",
+        "markdown": "两阶段锁（two-phase lock）是一种古老的锁方案，可以追溯到 20 世纪 60 年代早期的 Dahm 锁，Linux 采用了它并在多年中不断沿用。\n\n它针对的问题是：等待锁的线程并不总处于同一种处境。教材指出，两阶段锁意识到**自旋可能很有用，尤其是在很快就要释放锁的场景**，因此它不会在所有情况下都采用同一种等待方式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000373"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "两阶段锁"
+              ],
+              "lineStart": 7018,
+              "lineEnd": 7025,
+              "assetRefs": [],
+              "excerptSha256": "0689ad8666f0f15945649fb20120de10ee1233d9f5023fb95c94d25b3944195c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-costs",
+        "moduleId": "problem-and-tradeoff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "两种等待方式的代价",
+        "markdown": "自旋与睡眠的取舍可以拆成两条代价线：\n\n- **自旋**：线程反复执行原子测试并置位，不放弃 CPU。锁即将释放时它能几乎立刻拿到锁，延迟最低；但如果锁很久不释放，它就一直在空转烧 CPU。\n- **睡眠**：线程把控制权交给操作系统、进入等待队列。它不再占用 CPU，但唤醒需要操作系统介入，存在上下文切换与调度延迟。\n\n两种代价恰好互补，这就为“先试快路径、再走慢路径”提供了理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-origin"
+          ]
+        }
+      },
+      {
+        "id": "textbook-phase-flow",
+        "moduleId": "phase-mechanics",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材描述的两个阶段",
+        "markdown": "两阶段锁的执行流程按教材分为两段：\n\n1. **第一阶段先自旋一段时间**，希望在这段时间内获取锁。\n2. **如果第一个自旋阶段没有获得锁，第二阶段调用者会睡眠，直到锁可用。**\n\n也就是说，等待线程先付出少量 CPU 换取“锁马上释放”时的低延迟；一旦判断出现竞争或持有时间较长，就立刻改为让出 CPU，避免继续空转。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000373"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "两阶段锁"
+              ],
+              "lineStart": 7018,
+              "lineEnd": 7025,
+              "assetRefs": [],
+              "excerptSha256": "0689ad8666f0f15945649fb20120de10ee1233d9f5023fb95c94d25b3944195c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-timeline-example",
+        "moduleId": "phase-mechanics",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "时间线算例：短持有与长持有",
+        "markdown": "设自旋阶段允许尝试 100 次，每次尝试约几十个时钟周期。\n\n- **短持有场景**：持有者只差几十个周期就释放锁。线程在前几次自旋里拿到锁，没有进入睡眠，省下一次上下文切换。\n- **长持有场景**：持有者要做磁盘 I/O。线程很快用完 100 次自旋仍失败，于是进入睡眠，把 CPU 让给其他线程；释放者调用唤醒时它再被唤醒。\n\n关键点在于：**切换发生在“自旋失败”这一个判定上，而不是靠猜锁会持有多久**。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-phase-flow"
+          ]
+        }
+      },
+      {
+        "id": "textbook-linux-impl",
+        "moduleId": "real-world-linux",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材中的 Linux 实现",
+        "markdown": "教材把本节前面的 Linux 锁归入两阶段锁：**它就是这种锁，不过只自旋一次**。\n\n更常见的做法是：**在循环中自旋固定的次数，然后使用 futex 睡眠**。\n\n因此两阶段锁不是某个特定库的专属技巧，而是一类实现形状：自旋预算可大可小，自旋耗尽后统一交给 futex 睡眠等待。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000373"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "两阶段锁"
+              ],
+              "lineStart": 7018,
+              "lineEnd": 7025,
+              "assetRefs": [],
+              "excerptSha256": "0689ad8666f0f15945649fb20120de10ee1233d9f5023fb95c94d25b3944195c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spin-budget",
+        "moduleId": "real-world-linux",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "自旋预算是一个可调策略参数",
+        "markdown": "教材提到 Linux 锁只自旋一次，而常见实现会在循环中自旋固定次数后再 futex 睡眠，这说明**自旋预算是实现选择，不是定义的一部分**。\n\n| 自旋预算 | 短持有场景 | 长持有场景 |\n|---|---|---|\n| 0（纯睡眠） | 多一次唤醒与切换开销 | CPU 占用最低 |\n| 1 次（Linux 锁） | 抓住最接近的那一小段窗口 | 很快转入睡眠，代价可控 |\n| 固定较多次 | 更可能直接拿到锁 | 空转时间变长，浪费 CPU |\n\n预算调大偏向降低延迟，调小偏向节省 CPU，二者不能同时最优。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-linux-impl"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hybrid-position",
+        "moduleId": "boundaries-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材对混合方案的判断",
+        "markdown": "教材总结说，两阶段锁是又一个**杂合（hybrid）方案的例子**，即结合两种好想法得到更好的想法。\n\n同时它也划出了边界：**硬件环境、线程数、其他负载等因素，都会影响锁的效果**。让单个通用目标的锁在所有可能的场景下都很好，是巨大的挑战。因此“两阶段锁更快”不能脱离负载条件来断言。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000373"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "两阶段锁"
+              ],
+              "lineStart": 7018,
+              "lineEnd": 7025,
+              "assetRefs": [],
+              "excerptSha256": "0689ad8666f0f15945649fb20120de10ee1233d9f5023fb95c94d25b3944195c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-same-name-warning",
+        "moduleId": "boundaries-and-check",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "易混点：同名但不同的“两阶段”",
+        "markdown": "看到“两阶段锁”时先确认语境：\n\n- **本节的锁**：第二阶段指**等待方式**从自旋切换为睡眠，讨论的是单把互斥锁的等待成本。\n- **数据库事务的两阶段锁协议（2PL）**：两个阶段指**加锁阶段与解锁阶段**，全部锁在释放第一个锁之前加完，用来保证可串行化，与睡眠和 futex 无关。\n\n两者只是中文译名相近，机制、目标与正确性论证都不相同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-origin",
+            "textbook-hybrid-position"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "boundaries-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. 一个线程在第一阶段自旋了固定次数仍未获得锁，接下来它会进入哪个阶段？它还会占用 CPU 吗？\n2. 某临界区平均持有时间是几毫秒，且常伴随 I/O；把自旋预算从 1 次调到几万次，最可能改善还是恶化性能？请说明理由。\n3. Linux futex 锁只自旋一次，为什么教材仍把它算作两阶段锁？\n\n参考要点：第一题应区分“自旋失败”与“睡眠直到锁可用”；第二题要从空转浪费 CPU 与短持有低延迟两侧权衡；第三题的关键是“自旋阶段 + 睡眠阶段”的结构，而不是自旋次数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-phase-flow",
+            "model-timeline-example",
+            "textbook-linux-impl",
+            "textbook-hybrid-position"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "two-phase-check",
+        "type": "formative-check",
+        "title": "两阶段切换自检",
+        "anchorBlockId": "model-check",
+        "moduleId": "boundaries-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-two-phase",
+          "justify-hybrid"
+        ],
+        "learningPurpose": "检查学习者能否根据自旋预算与持有时间判断线程处于哪个阶段，并说明其代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-check"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            "自旋上限用完后线程进入什么状态？",
+            "短持有与长持有时两阶段锁分别省下或付出什么代价？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请用一句话写出两阶段的切换条件，再分别说明短持有与长持有场景下两阶段锁的得与失。"
+        }
+      }
+    ]
+  },
+  "subtitle": "锁",
+  "clusterId": "chapter-28",
+  "clusterIds": [
+    "chapter-28"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000373"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "两阶段锁"
+      ],
+      "lineStart": 7018,
+      "lineEnd": 7025,
+      "assetRefs": [],
+      "excerptSha256": "0689ad8666f0f15945649fb20120de10ee1233d9f5023fb95c94d25b3944195c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    872,
+    1833
+  ],
+  "scale": 0.89
+}

@@ -1,0 +1,419 @@
+{
+  "id": "point-49-2",
+  "title": "版本 1 的问题",
+  "shortSummary": "分析 AFSv1 在缓存一致性和扩展性上的问题及其根本原因。",
+  "keyTerms": [
+    "AFSv1",
+    "缓存一致性",
+    "扩展性",
+    "问题"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-49-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "diagnosis-evidence-fix",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对两个协议问题及其测量依据的原始诊断，围绕扩展性因果链补充成本估算、主次判断与迁移练习。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-two-problems",
+          "text": "复述 AFSv1 的两个主要协议问题，并说明它们如何限制扩展性。"
+        },
+        {
+          "id": "analyze-cost",
+          "text": "从路径遍历深度与验证消息数量出发，估算服务器开销的来源。"
+        },
+        {
+          "id": "prioritize-fixes",
+          "text": "区分主要问题与次要问题，判断一项改动是否真正缓解扩展性瓶颈。"
+        }
+      ],
+      "misconceptions": [
+        "把 AFSv1 的扩展性问题归因于客户端缓存不够快，而真正的瓶颈是服务器端的路径遍历与验证消息处理。",
+        "认为 TestAuth 问题说明缓存频繁失效；实际是客户端反复向服务器确认，而大多数时候文件并未改变。"
+      ],
+      "modules": [
+        {
+          "id": "problem-framing",
+          "title": "从测量到问题清单",
+          "role": "problem-setup",
+          "description": "先建立测量先行的诊断方法，再引出两个主要问题。",
+          "outcomeRefs": [
+            "explain-two-problems"
+          ],
+          "order": 0
+        },
+        {
+          "id": "path-lookup-cost",
+          "title": "路径查找成本过高",
+          "role": "cost-analysis",
+          "description": "分析 Fetch/Store 请求中服务器逐级遍历路径的开销。",
+          "outcomeRefs": [
+            "analyze-cost"
+          ],
+          "order": 1
+        },
+        {
+          "id": "testauth-traffic",
+          "title": "TestAuth 消息过多",
+          "role": "cost-analysis",
+          "description": "分析轮询式缓存验证带来的无效消息负担。",
+          "outcomeRefs": [
+            "analyze-cost"
+          ],
+          "order": 2
+        },
+        {
+          "id": "secondary-issues",
+          "title": "区分主次问题",
+          "role": "prioritization",
+          "description": "把负载不均与进程模型问题放到次要位置，并给出判据。",
+          "outcomeRefs": [
+            "explain-two-problems",
+            "prioritize-fixes"
+          ],
+          "order": 3
+        },
+        {
+          "id": "transfer-check",
+          "title": "诊断迁移与检查",
+          "role": "assessment",
+          "description": "用改动情境检验学习者能否定位真正的瓶颈。",
+          "outcomeRefs": [
+            "prioritize-fixes"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-two-problems",
+          "analyze-cost",
+          "prioritize-fixes"
+        ],
+        "method": "完成改动情境判断，并为每个主要问题写出对应的成本来源。",
+        "successCriteria": [
+          "能分别说明路径遍历成本与验证消息数量如何随客户端增多而放大",
+          "能指出只降低验证频率并不能消除路径遍历成本"
+        ],
+        "exerciseBlockId": "model-diagnosis-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-49-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-problems-overview",
+        "moduleId": "problem-framing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：两个主要问题从测量中浮现",
+        "markdown": "第一版 AFS（AFSv1）暴露出一些关键问题，促使设计者重新考虑他们的文件系统。为了把问题研究清楚，设计者花费大量时间测量已有原型，而不是凭直觉判断；测量是理解系统如何工作、如何改进系统的关键。\n\n测量的结论是：AFSv1 存在两个主要问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000671"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "版本 1 的问题"
+              ],
+              "lineStart": 12989,
+              "lineEnd": 12992,
+              "assetRefs": [],
+              "excerptSha256": "210f687ad2c8936dff28e507dcc08cf24b63eed0e3c152ac12ff023da1784024"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-measure-first",
+        "moduleId": "problem-framing",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：先测量后构建（Patterson 定律）",
+        "markdown": "教材在此提出一条方法论：先测量系统并揭示问题，再构建新系统去修复问题，这被称为 Patterson 定律。\n\n用实验证据代替直觉，既确认你在解决真实问题，也让你在改进之前就拥有衡量新系统的手段。AFSv1 正是先测量原型，再据此定位瓶颈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000672"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：先测量后构建（Patterson 定律）"
+              ],
+              "lineStart": 12993,
+              "lineEnd": 13002,
+              "assetRefs": [],
+              "excerptSha256": "b3602db69f41c3ec0cda1a9ed146ab357b86f577853c6174d46f3a402890c88a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shared-bottleneck",
+        "moduleId": "problem-framing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：两个问题为何都落在服务器 CPU 上",
+        "markdown": "把两个问题放进同一条因果链会更清楚：客户端越多、交互越频繁，服务器必须亲自完成的工作就越多。\n\n- 路径查找问题抬高的是每个 Fetch/Store 请求的处理成本；\n- TestAuth 问题抬高的是请求的数量。\n\n两者叠加，服务器 CPU 被占满，单台服务器能同时服务的客户端数随之受限。这也解释了为什么后续改进瞄准协议交互的次数与效率，而不是单纯让客户端缓存更快。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-problems-overview",
+            "textbook-measure-first"
+          ]
+        }
+      },
+      {
+        "id": "textbook-path-lookup",
+        "moduleId": "path-lookup-cost",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：路径查找成本过高",
+        "markdown": "执行 Fetch 或 Store 请求时，客户端把整个路径名（例如 `/home/remzi/notes.txt`）交给服务器。服务器要访问文件，必须完成完整的路径名遍历：先在根目录查找 `home`，再在 `home` 中查找 `remzi`，如此逐级向下，直到定位目标文件。\n\n由于许多客户端同时访问，服务器把大量 CPU 时间花在沿目录路径行走上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000672"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：先测量后构建（Patterson 定律）"
+              ],
+              "lineStart": 12993,
+              "lineEnd": 13002,
+              "assetRefs": [],
+              "excerptSha256": "b3602db69f41c3ec0cda1a9ed146ab357b86f577853c6174d46f3a402890c88a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-path-cost",
+        "moduleId": "path-lookup-cost",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：把路径查找成本写成可估算的量",
+        "markdown": "设路径深度为 $d$，服务器处理的 Fetch/Store 请求数为 $R$，仅路径遍历一项就要做约 $d \\times R$ 次目录项查找。\n\n以 `/home/remzi/notes.txt` 为例，深度为 3：每个请求都要先查根目录、再查 `home`、再查 `remzi`，才能碰到文件本身。请求数随客户端增长，这部分 CPU 成本也同步增长，而目录内容并不会因为被重复遍历而更好查找。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-path-lookup"
+          ]
+        }
+      },
+      {
+        "id": "textbook-testauth-traffic",
+        "moduleId": "testauth-traffic",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：客户端发出太多 TestAuth 消息",
+        "markdown": "AFSv1 用 TestAuth 协议消息检查本地文件或其状态信息是否仍然有效，这一点与 NFS 及其过多的 GETATTR 消息非常相似。\n\n结果是服务器要花大量时间回答“客户端能否继续使用缓存副本”，而大多数时候答案是：文件没有改变。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000672"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：先测量后构建（Patterson 定律）"
+              ],
+              "lineStart": 12993,
+              "lineEnd": 13002,
+              "assetRefs": [],
+              "excerptSha256": "b3602db69f41c3ec0cda1a9ed146ab357b86f577853c6174d46f3a402890c88a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-validation-overhead",
+        "moduleId": "testauth-traffic",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么大多数答案没变意味着浪费",
+        "markdown": "设客户端共发出 $Q$ 条 TestAuth 消息，其中只有 $q$ 条得到“已改变”的答复，那么约 $Q - q$ 次交互没有带来任何新信息。\n\n当 $q / Q$ 很小时，服务器几乎只是在重复“你的缓存仍然有效”。消息条数随客户端数量和检查频率一起放大，这正是轮询式验证难以扩展的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-testauth-traffic"
+          ]
+        }
+      },
+      {
+        "id": "textbook-secondary-issues",
+        "moduleId": "secondary-issues",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：另外两个较小的问题",
+        "markdown": "除两个主要协议问题外，AFSv1 还有两个问题：\n\n1. 服务器之间的负载不均衡；\n2. 服务器为每个客户端使用一个不同的进程，带来上下文切换等开销。\n\n前者通过引入卷（volume）解决，管理员可以跨服务器移动卷来平衡负载；后者在 AFSv2 中改用线程而非进程构建服务器。限于篇幅，教材把重点放在限制扩展性的两个主要协议问题上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000672"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "提示：先测量后构建（Patterson 定律）"
+              ],
+              "lineStart": 12993,
+              "lineEnd": 13002,
+              "assetRefs": [],
+              "excerptSha256": "b3602db69f41c3ec0cda1a9ed146ab357b86f577853c6174d46f3a402890c88a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-prioritize",
+        "moduleId": "secondary-issues",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：主要问题与次要问题的判据",
+        "markdown": "判断一个问题是否主要，可以看它是否随规模增长而恶化，并且是否直接消耗服务器最紧张的资源。\n\n| 问题 | 随客户端增多而恶化 | 消耗服务器 CPU | 解决路径 |\n| --- | --- | --- | --- |\n| 路径查找成本高 | 是，请求越多遍历越多 | 是 | 改协议，让服务器不再逐级遍历路径 |\n| TestAuth 消息过多 | 是，客户端越多消息越多 | 是 | 改协议，减少客户端与服务器的验证交互 |\n| 服务器间负载不均 | 部分 | 间接 | 引入卷并迁移 |\n| 每客户端一个进程 | 是 | 是，上下文切换 | 改用线程 |\n\n四类问题都要处理，但前两项改变的是协议的交互模型，因此被视为限制扩展性的主因；后两项可以在既有框架内各自修补。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-secondary-issues",
+            "model-shared-bottleneck"
+          ]
+        }
+      },
+      {
+        "id": "model-diagnosis-check",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "补充：练习——这个改动解决了哪个问题",
+        "markdown": "某团队只做了一件事：让每个客户端把 TestAuth 消息的发送频率降到原来的十分之一，其余协议行为不变。\n\n请判断：\n\n1. 这能缓解哪个问题？\n2. 它能否让 AFSv1 的扩展性瓶颈消失？\n\n参考思路：消息数量下降会直接减轻第二类问题，但每个 Fetch/Store 仍要求服务器沿完整路径名遍历目录；只要请求数随客户端增长，第一类成本依然存在。因此这只是局部缓解，不能替代协议层面的重设计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-path-cost",
+            "model-validation-overhead",
+            "model-prioritize"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "transfer-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：诊断链小结",
+        "markdown": "AFSv1 的扩展性问题可以概括为一条诊断链：\n\n- 症状：服务器 CPU 被占满，无法支撑更多客户端。\n- 证据：测量显示时间花在路径遍历和回答 TestAuth 上。\n- 定位：前者抬高单次 Fetch/Store 的成本，后者抬高交互次数。\n- 修复方向：减少服务器交互次数，并让保留下来的交互更便宜。\n\n这两条方向正是下一点“改进协议”要展开的内容。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-shared-bottleneck",
+            "model-path-cost",
+            "model-validation-overhead",
+            "model-prioritize",
+            "model-diagnosis-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "afsv1-bottleneck-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-diagnosis-check",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "prioritize-fixes"
+        ],
+        "learningPurpose": "检验学习者能否把两项协议成本对应到具体改动，并判断改动是否真正缓解扩展性瓶颈。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-path-cost",
+            "model-validation-overhead",
+            "model-diagnosis-check"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "pitfall": "把降低检查频率误当作彻底修复"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "只降低 TestAuth 频率会缓解消息洪流，但不会消除服务器端的路径遍历成本；请分别说明两项成本如何随客户端数量变化。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Andrew 文件系统(AFS)",
+  "clusterId": "chapter-49",
+  "clusterIds": [
+    "chapter-49"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000671"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "版本 1 的问题"
+      ],
+      "lineStart": 12989,
+      "lineEnd": 12992,
+      "assetRefs": [],
+      "excerptSha256": "210f687ad2c8936dff28e507dcc08cf24b63eed0e3c152ac12ff023da1784024"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000672"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "提示：先测量后构建（Patterson 定律）"
+      ],
+      "lineStart": 12993,
+      "lineEnd": 13002,
+      "assetRefs": [],
+      "excerptSha256": "b3602db69f41c3ec0cda1a9ed146ab357b86f577853c6174d46f3a402890c88a"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3497,
+    -590
+  ],
+  "scale": 0.86
+}

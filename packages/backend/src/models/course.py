@@ -19,6 +19,13 @@ class CourseCreateRequest(BaseModel):
     index: dict[str, Any] | None = None
 
 
+class PlaceholderCourseCreateRequest(BaseModel):
+    """Create a display-only course entry inside one subject group."""
+
+    title: str = Field(min_length=1, max_length=200)
+    group_id: str = Field(min_length=1, max_length=120)
+
+
 class CourseUpdateRequest(BaseModel):
     """Partial metadata update for ``course.json``."""
 
@@ -42,3 +49,45 @@ class CourseValidationResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     revision: str | None = None
+
+
+class CourseCatalogGroupRequest(BaseModel):
+    """Create or rename one user-managed course subject group."""
+
+    name: str = Field(min_length=1, max_length=80)
+
+
+class CourseCatalogAssignmentRequest(BaseModel):
+    """Move one course to exactly one subject group."""
+
+    course_id: str = Field(min_length=1, max_length=120)
+    group_id: str = Field(min_length=1, max_length=120)
+
+
+class CourseCatalogReorderRequest(BaseModel):
+    """Replace the visible order of all subject groups."""
+
+    group_ids: list[str] = Field(min_length=1)
+
+
+class CourseCatalogEdge(BaseModel):
+    fromId: str = Field(min_length=1, max_length=120)
+    toId: str = Field(min_length=1, max_length=120)
+
+
+class CourseCatalogEdgesRequest(BaseModel):
+    edges: list[CourseCatalogEdge]
+
+
+class CourseCatalogPosition(BaseModel):
+    """A user-adjusted graph anchor in the catalog coordinate space."""
+
+    x: float
+    y: float
+    pinned: bool = True
+
+
+class CourseCatalogLayoutRequest(BaseModel):
+    """Replace the manually pinned positions for one subject group."""
+
+    positions: dict[str, CourseCatalogPosition] = Field(default_factory=dict)

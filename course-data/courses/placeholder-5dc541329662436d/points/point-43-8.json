@@ -1,0 +1,376 @@
+{
+  "id": "point-43-8",
+  "title": "目录如何",
+  "shortSummary": "说明 LFS 中目录项和目录更新如何写入日志，以及其组织方式。",
+  "keyTerms": [
+    "目录项",
+    "LFS",
+    "目录更新",
+    "组织"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.55,
+  "prerequisites": [
+    "point-43-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-access-path",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材关于目录映射、访问路径和递归更新问题的解释，围绕学习目标补充分步追踪与检查题，不引入教材之外的机制。",
+      "estimatedMinutes": 10,
+      "outcomes": [
+        {
+          "id": "explain-directory-storage",
+          "text": "说明 LFS 中目录的结构，以及创建文件时目录相关结构如何被写入。"
+        },
+        {
+          "id": "trace-directory-access",
+          "text": "借助 inode 映射追踪一次通过目录访问文件的完整路径。"
+        },
+        {
+          "id": "explain-recursive-update",
+          "text": "解释递归更新问题，以及 inode 映射为什么能避免它。"
+        }
+      ],
+      "misconceptions": [
+        "误以为 LFS 的目录需要随 inode 位置变化而重写；实际上目录只保存名称到 inode 号的映射，位置变化由 inode 映射吸收。",
+        "误以为访问文件只需要读一次 inode；实际上要先经 inode 映射找到目录，再从目录得到文件 inode 号，并再次查询 inode 映射。"
+      ],
+      "modules": [
+        {
+          "id": "directory-basics",
+          "title": "目录的组织",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-directory-storage"
+          ],
+          "order": 0
+        },
+        {
+          "id": "sequential-write",
+          "title": "创建文件时的顺序写入",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-directory-storage"
+          ],
+          "order": 1
+        },
+        {
+          "id": "access-path",
+          "title": "通过 inode 映射访问文件",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "trace-directory-access"
+          ],
+          "order": 2
+        },
+        {
+          "id": "recursive-update",
+          "title": "递归更新问题与间接层",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-recursive-update"
+          ],
+          "order": 3
+        },
+        {
+          "id": "transfer-check",
+          "title": "检查与迁移",
+          "role": "check",
+          "outcomeRefs": [
+            "trace-directory-access",
+            "explain-recursive-update"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-directory-storage",
+          "trace-directory-access",
+          "explain-recursive-update"
+        ],
+        "method": "完成访问路径的分步追踪，并说明 inode 映射如何切断递归更新链。",
+        "successCriteria": [
+          "能按顺序说出两次 inode 映射查询的作用",
+          "能区分目录保存的 inode 号与 inode 的磁盘地址",
+          "能解释 inode 位置变化为何不引起目录更新"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-43-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-directory-mapping",
+        "moduleId": "directory-basics",
+        "depth": "core",
+        "kind": "definition",
+        "title": "目录是什么",
+        "markdown": "LFS 的目录结构与传统 UNIX 文件系统基本相同：目录只是（名称，inode 号）映射的集合。目录本身并不保存文件内容的物理位置，而是保存“文件名 → inode 号”的对应关系。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000611"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "目录如何"
+              ],
+              "lineStart": 11908,
+              "lineEnd": 11925,
+              "assetRefs": [
+                "parts/part-0005/images/a9bfeb8945f99143dc59ddd655fb5599285ec96f5f2ecd345f257c6ac5fdf14d.jpg"
+              ],
+              "excerptSha256": "897fd978c45b2e7de50cdea5324e66fc0b7a347693142aa9e53e68620a25f113"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-directory-table",
+        "moduleId": "directory-basics",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把目录看成一张小表",
+        "markdown": "可以把目录看成一个专门存放目录项的小表：每一行给出一个名称和它对应的 inode 号。查找文件时，文件系统先用这张表把名字翻译成 inode 号，再通过 inode 找到文件的数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-directory-mapping"
+          ]
+        }
+      },
+      {
+        "id": "textbook-create-file-write",
+        "moduleId": "sequential-write",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "创建文件时写入什么",
+        "markdown": "在磁盘上创建文件 foo 时，LFS 必须同时写入新的 inode、一些数据，以及引用这个文件的目录数据及其 inode。由于 LFS 会先把更新缓冲一段时间，再在磁盘上按顺序写入，因此目录数据并不单独原地修改，而是作为这批新结构的一部分一起写出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000611"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "目录如何"
+              ],
+              "lineStart": 11908,
+              "lineEnd": 11925,
+              "assetRefs": [
+                "parts/part-0005/images/a9bfeb8945f99143dc59ddd655fb5599285ec96f5f2ecd345f257c6ac5fdf14d.jpg"
+              ],
+              "excerptSha256": "897fd978c45b2e7de50cdea5324e66fc0b7a347693142aa9e53e68620a25f113"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-scope",
+        "moduleId": "sequential-write",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "创建文件不止改动一个目录项",
+        "markdown": "这意味着“创建文件”在 LFS 中不是只改一个目录项：目录的数据块和目录的 inode 都会随新结构一起写出。理解这一点，才能解释后面的读取路径为什么需要先查 inode 映射。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-create-file-write"
+          ]
+        }
+      },
+      {
+        "id": "textbook-imap-directory-location",
+        "moduleId": "access-path",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "目录位置由 inode 映射给出",
+        "markdown": "inode 映射的片段记录了目录文件 dir 以及新创建文件 f 的位置信息。访问文件 foo（inode 号为 f）时，路径是：先查 inode 映射，得到目录 dir 的 inode 所在位置 A3；读取目录的 inode，得到目录数据的位置 A2；读取目录数据块，得到名称到 inode 号的映射（foo, k）；再查 inode 映射得到 inode 号 k 的位置 A1；最后在地址 A0 读取所需的数据块。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000611"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "目录如何"
+              ],
+              "lineStart": 11908,
+              "lineEnd": 11925,
+              "assetRefs": [
+                "parts/part-0005/images/a9bfeb8945f99143dc59ddd655fb5599285ec96f5f2ecd345f257c6ac5fdf14d.jpg"
+              ],
+              "excerptSha256": "897fd978c45b2e7de50cdea5324e66fc0b7a347693142aa9e53e68620a25f113"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-access-path",
+        "moduleId": "access-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "分步追踪一次目录查找",
+        "markdown": "把上面的路径按步骤写下来，就是一次完整的目录查找：\n\n1. 查 inode 映射，定位目录 dir 的 inode（A3）。\n2. 读目录 inode，取得目录数据块地址（A2）。\n3. 读目录数据，得到（foo, k）。\n4. 再查 inode 映射，定位 inode k（A1）。\n5. 读 inode k 指向的数据块（A0）。\n\n每一步的地址都来自上一步读到的内容，而不是事先写死的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-imap-directory-location"
+          ]
+        }
+      },
+      {
+        "id": "textbook-recursive-update",
+        "moduleId": "recursive-update",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "递归更新问题及其避免方式",
+        "markdown": "inode 映射还解决了 LFS 的递归更新问题（recursive update problem）。在从不原地更新、而是把更新写到磁盘新位置的文件系统中，更新 inode 会改变 inode 的位置；如果目录直接指向 inode 的位置，就必须更新目录，进而更新目录的父目录，一路沿文件系统树向上。LFS 通过 inode 映射避免了这一点：即使 inode 的位置发生变化，变化也不会反映在目录中；目录保持相同的“名称 → inode 号”映射，实际被更新的是 inode 映射结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000611"
+              ],
+              "headingPath": [
+                "廉价冗余磁盘阵列（RAID）",
+                "目录如何"
+              ],
+              "lineStart": 11908,
+              "lineEnd": 11925,
+              "assetRefs": [
+                "parts/part-0005/images/a9bfeb8945f99143dc59ddd655fb5599285ec96f5f2ecd345f257c6ac5fdf14d.jpg"
+              ],
+              "excerptSha256": "897fd978c45b2e7de50cdea5324e66fc0b7a347693142aa9e53e68620a25f113"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-indirection",
+        "moduleId": "recursive-update",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "间接层如何切断更新链",
+        "markdown": "关键在于目录记录的是 inode 号，而不是 inode 的磁盘地址。inode 号是稳定的逻辑标识，位置变化由 inode 映射吸收；因此更新 inode 时，目录内容无需跟着改写，递归更新链在这里被切断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-recursive-update"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "transfer-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查题",
+        "markdown": "1. 访问文件 foo 时，LFS 为什么要查两次 inode 映射？分别得到了什么？\n2. 如果目录直接保存 inode 的磁盘地址，那么 inode 换到新位置后会触发哪些更新？LFS 用什么办法避免了这些更新？\n\n作答时请指出目录数据块地址与最终数据块地址分别由哪一步得到。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-imap-directory-location",
+            "textbook-recursive-update"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "transfer-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "LFS 的目录沿用传统映射结构；创建文件会把 inode、数据和目录相关结构一起顺序写出；访问文件需要借助 inode 映射在目录与 inode 之间做两次翻译；正因为目录只保存 inode 号，inode 位置变化不会引发递归更新。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-create-file-write",
+            "textbook-imap-directory-location",
+            "textbook-recursive-update"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "directory-access-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-access-path",
+        "moduleId": "access-path",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-directory-access"
+        ],
+        "learningPurpose": "检查学习者能否独立复述从 inode 映射到目录数据、再到目标 inode 的查找顺序。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-imap-directory-location"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "steps": 5
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按顺序写出访问文件 foo 的五个步骤，并标明每一步得到的地址（A3、A2、（foo, k）、A1、A0）。"
+        }
+      }
+    ]
+  },
+  "subtitle": "日志结构文件系统",
+  "clusterId": "chapter-43",
+  "clusterIds": [
+    "chapter-43"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000611"
+      ],
+      "headingPath": [
+        "廉价冗余磁盘阵列（RAID）",
+        "目录如何"
+      ],
+      "lineStart": 11908,
+      "lineEnd": 11925,
+      "assetRefs": [
+        "parts/part-0005/images/a9bfeb8945f99143dc59ddd655fb5599285ec96f5f2ecd345f257c6ac5fdf14d.jpg"
+      ],
+      "excerptSha256": "897fd978c45b2e7de50cdea5324e66fc0b7a347693142aa9e53e68620a25f113"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    -434,
+    315
+  ],
+  "scale": 0.89
+}

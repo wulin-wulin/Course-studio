@@ -1,0 +1,986 @@
+{
+  "id": "point-5-5",
+  "title": "程序中断方式",
+  "shortSummary": "说明中断请求、判优、响应、服务与返回过程，以及中断嵌套和屏蔽机制。",
+  "keyTerms": [
+    "中断请求",
+    "中断判优",
+    "中断响应",
+    "中断服务程序",
+    "中断嵌套",
+    "中断屏蔽"
+  ],
+  "animationType": "interruptHandling",
+  "animationSuggestion": "以时间轴呈现一次完整中断：设备在任意时刻就绪并置位 INTR，随后在指令结束的查询窗口让两个请求同时到达，显示链式排队器逐级封锁后只有高优先级源的 INTP 为高；再显示 INTA 有效、设备编码器形成向量地址送 PC、经转移指令进入服务程序，依次保护现场、设备服务、恢复现场、中断返回。允许学习者改变设备就绪时刻与优先级，观察请求被接受的时间窗口和选中结果如何变化。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-5-3",
+    "point-5-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材中断术语、五阶段划分与服务程序四部分顺序，围绕“请求如何登记、唯一请求如何选出、何时被响应、能否嵌套”重排讲解，补充时序判据、部件职责对照表和自检练习。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-interrupt-concept",
+          "text": "用自己的话解释中断的定义，并说明引入中断技术的三类原因。"
+        },
+        {
+          "id": "trace-request-path",
+          "text": "说明设备从就绪到提出中断请求所必须满足的硬件条件，并解释 INTR 与 MASK 的作用。"
+        },
+        {
+          "id": "explain-priority-vector",
+          "text": "解释链式排队器如何保证同一时刻只选中一个中断源，并区分向量地址与中断服务程序入口地址。"
+        },
+        {
+          "id": "sequence-service",
+          "text": "按五个阶段复述一次完整的 I/O 中断处理过程，指出响应条件与响应时刻。"
+        },
+        {
+          "id": "distinguish-nesting",
+          "text": "依据开中断指令的位置区分单重中断与多重中断，并说明实现中断嵌套的必要条件。"
+        },
+        {
+          "id": "apply-latency",
+          "text": "分析高速、频繁 I/O 交换下程序中断方式的局限，并说明其向 DMA 过渡的理由。"
+        }
+      ],
+      "misconceptions": [
+        "把向量地址当作中断服务程序的入口地址，忽略中间还要执行一条无条件转移指令。",
+        "认为设备一旦就绪就立即打断 CPU，忽略 CPU 只在每条指令执行阶段结束时刻统一查询中断请求。",
+        "认为中断响应后 CPU 仍可随时接受新请求，忽略硬件在响应时已自动关中断、必须再用开中断指令才能嵌套。",
+        "认为只要新请求的优先级更高就必然形成中断嵌套，忽略还需先执行开中断指令把 EINT 置 1。"
+      ],
+      "modules": [
+        {
+          "id": "why-interrupt",
+          "title": "为什么需要中断",
+          "role": "motivation",
+          "description": "从低速设备与 CPU 的速度矛盾出发建立中断定义，并与程序查询方式对照。",
+          "outcomeRefs": [
+            "explain-interrupt-concept",
+            "apply-latency"
+          ],
+          "order": 0
+        },
+        {
+          "id": "request-hardware",
+          "title": "请求的登记与屏蔽",
+          "role": "mechanism",
+          "description": "说明完成触发器、中断请求触发器与屏蔽触发器如何共同决定请求是否成立。",
+          "outcomeRefs": [
+            "trace-request-path"
+          ],
+          "order": 1
+        },
+        {
+          "id": "priority-and-vector",
+          "title": "判优与向量地址",
+          "role": "mechanism",
+          "description": "用链式排队器的逐级封锁解释唯一选中，再由设备编码器形成向量地址。",
+          "outcomeRefs": [
+            "explain-priority-vector"
+          ],
+          "order": 2
+        },
+        {
+          "id": "response-sequence",
+          "title": "响应条件与五阶段处理",
+          "role": "procedure",
+          "description": "把 EINT 条件与指令结束时刻的响应窗口落到十步流程，再归纳为五个阶段。",
+          "outcomeRefs": [
+            "sequence-service"
+          ],
+          "order": 3
+        },
+        {
+          "id": "service-flow-and-nesting",
+          "title": "服务程序流程与中断嵌套",
+          "role": "procedure",
+          "description": "按保护现场、中断服务、恢复现场、中断返回组织流程，并比较单重与多重中断。",
+          "outcomeRefs": [
+            "distinguish-nesting"
+          ],
+          "order": 4
+        },
+        {
+          "id": "limits-and-check",
+          "title": "适用边界与自检",
+          "role": "transfer",
+          "description": "汇总中断的固定开销，分析高频传送下的局限并完成自检。",
+          "outcomeRefs": [
+            "apply-latency",
+            "distinguish-nesting"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-interrupt-concept",
+          "trace-request-path",
+          "explain-priority-vector",
+          "sequence-service",
+          "distinguish-nesting",
+          "apply-latency"
+        ],
+        "method": "先复述五阶段流程，再完成自检练习并说明每一步判断所依据的信号或指令位置。",
+        "successCriteria": [
+          "能准确判出 D、MASK、INTR、EINT 各自的条件作用，不把查询时刻与就绪时刻混为一谈",
+          "能说清向量地址与入口地址的两级关系",
+          "能由开中断指令位置判定单重或多重中断，并给出嵌套的两个必要条件"
+        ],
+        "exerciseBlockId": "model-self-check",
+        "summaryBlockId": "tb-nesting",
+        "nextPointId": "point-5-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-interrupt-definition",
+        "moduleId": "why-interrupt",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：什么是中断",
+        "markdown": "计算机在执行程序的过程中，当出现异常情况或特殊请求时，停止现行程序的运行，转向对这些异常情况或特殊请求的处理，处理结束后再返回到现行程序的间断处，继续执行原程序，这就是**中断**。\n\n实现中断所需的软硬件技术统称为**中断技术**。教材强调中断是现代计算机有效、合理发挥效能并提高效率的重要功能：它把“发现事件”和“处理事件”分开，使 CPU 不必一直守候在某台设备旁边。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000350"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "程序中断方式"
+              ],
+              "lineStart": 4698,
+              "lineEnd": 4699,
+              "assetRefs": [],
+              "excerptSha256": "81c881492479a5a41b4a0cbfaf3e69c71551057456587743943112779a348291"
+            },
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000351"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "中断的概念"
+              ],
+              "lineStart": 4700,
+              "lineEnd": 4703,
+              "assetRefs": [],
+              "excerptSha256": "eea7ebfcd679aa2c3154f2aec6d8866b11b66912c20de53ce342309e51b0e20d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-interrupt-intuition",
+        "moduleId": "why-interrupt",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：关键在断点可恢复",
+        "markdown": "可以把主程序想成一条正在推进的主线，中断就是随时可能响起、必须当场接听的紧急电话：接电话前先记住自己读到哪一句（断点），处理完再回到原处继续。\n\n这个类比里真正关键的不是“打断”，而是**断点可恢复**。若既不能准确回到被打断的位置，也不能恢复被打断时的寄存器内容，中断就无法成立。本节后面的硬件与流程，基本都是围绕“如何可靠地记录请求、如何只选出一个请求、如何保存与恢复现场”展开的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-interrupt-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-io-interrupt-origin",
+        "moduleId": "why-interrupt",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "I/O 中断的产生与引入中断技术的原因",
+        "markdown": "在 I/O 设备与主机交换信息时，设备受本身机电特性的影响，工作速度较低，与 CPU 无法匹配。CPU 启动设备后往往需要等待一段时间才能实现主机与 I/O 设备之间的信息交换。如果在设备准备的同时 CPU 不进行无谓的等待而继续执行现行程序，只有当 I/O 设备准备就绪并向 CPU 提出请求后，才暂时中断现行程序转入 I/O 服务程序，这就产生了 **I/O 中断**。教材用打印机引起 I/O 中断的示意图说明了 CPU 与打印机并行工作的时间关系。\n\n引入中断技术的原因并不局限于适应低速 I/O。当计算机运行中突然掉电时，若能在瞬间立即启动另一个备份电源并迅速进行必要的处理，例如把有用信息送至不受电源影响的存储系统，待电源恢复后接着使用，这种处理技术也要用中断技术实现。在实时控制领域中，要求 CPU 能即时响应外来信号的请求并完成相应操作，同样要求采用中断技术。总之，为了提高整机效率、应付突发事件和满足实时控制需要，在计算机技术发展过程中产生了中断技术；而为了实现中断，计算机系统中必须配有相应的中断系统或中断机构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000352"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "I/O 中断的产生"
+              ],
+              "lineStart": 4704,
+              "lineEnd": 4714,
+              "assetRefs": [
+                "parts/part-0003/images/a27bcfebc9227b9d81d2cd65e5d0acbaca8fef851bda442fee09c8d815fe20e6.jpg"
+              ],
+              "excerptSha256": "509b456570b0edaf9078c3c2d5b637230e46b2ae16a8d6774dc84e280ae862a0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-not-polling",
+        "moduleId": "why-interrupt",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充对照：中断与程序查询的分工差异",
+        "markdown": "把中断与程序查询方式对照，可以看清二者交换的不是“能否发现设备就绪”，而是**由谁承担等待**：\n\n- 程序查询方式由 CPU 反复读取设备状态，设备未就绪时 CPU 原地踏步，这段时间不能做别的事；\n- 程序中断方式由接口在设备就绪后登记请求，CPU 继续执行现行程序，直到统一的查询时刻才处理。\n\n因此中断把“等待”从 CPU 转移给了接口硬件，使 CPU 与 I/O 得以并行。但并行不是免费的：每次中断都要付出响应、保护现场、恢复现场的固定开销，这笔开销将决定它的适用边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-interrupt-intuition",
+            "tb-io-interrupt-origin"
+          ]
+        }
+      },
+      {
+        "id": "tb-request-hardware",
+        "moduleId": "request-hardware",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "中断请求触发器 INTR 与中断屏蔽触发器 MASK",
+        "markdown": "为处理 I/O 中断，I/O 接口电路中必须配置相关的硬件线路。每台外部设备都必须配置一个**中断请求触发器 INTR**，当其为“1”时表示该设备向 CPU 提出中断请求；但设备欲提出中断请求时，其本身必须准备就绪，即接口内的**完成触发器 D** 的状态必须为“1”。\n\n由于提出中断请求的原因越来越多，凡能向 CPU 提出中断请求的各种因素统称为**中断源**。当多个中断源向 CPU 提出请求时，CPU 必须坚持一个原则：在任何瞬间只能接受一个中断源的请求。所以当多个中断源同时提出请求时，CPU 必须对各请求进行排队，只能接受级别最高的中断源的请求，不允许级别低的中断源中断正在运行的中断服务程序。为此，I/O 接口中需设置**中断屏蔽触发器 MASK**，当其为“1”时表示被屏蔽，即封锁该中断源的请求。可见中断请求触发器与中断屏蔽触发器在 I/O 接口中成对出现。\n\n此外，CPU 总是在统一的时间，即每条指令执行阶段的最后时刻，查询所有设备是否有中断请求。综合上述因素：仅当设备准备就绪（D=1）且该设备未被屏蔽（MASK=0）时，CPU 的中断查询信号才可将中断请求触发器置“1”（INTR=1）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000353"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "程序中断方式的接口电路"
+              ],
+              "lineStart": 4715,
+              "lineEnd": 4718,
+              "assetRefs": [],
+              "excerptSha256": "257bae836c390450c8c7bd71e0eae318b8ced1fc717d975b92cd7ef38203ddff"
+            },
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000354"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "中断请求触发器和中断屏蔽触发器"
+              ],
+              "lineStart": 4719,
+              "lineEnd": 4728,
+              "assetRefs": [],
+              "excerptSha256": "cb9f8a362758ee1f38bd08642bcc0ec610f90cb302bcb345a1e65d5c1d3315d6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-request-condition",
+        "moduleId": "request-hardware",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充判据：请求成立的条件与时序",
+        "markdown": "把教材的关系写成一句判据：**查询脉冲到来时，若 D=1 且 MASK=0，则 INTR 被置 1**。三个信号各管一件事：\n\n- D 回答“设备是否已经准备好”，是设备侧的事实；\n- MASK 回答“这一路设备是否允许参与中断”，是程序可设置的开关；\n- INTR 是上述两者同时成立后留下的“待处理请求”记录。\n\n要注意 INTR 记录的是请求，而不是“中断已经发生”：置 1 之后还要经过判优与响应，请求才真正被 CPU 接受。屏蔽也不等于关掉设备，它只封锁该设备的请求，设备照常工作，只是 CPU 不会因此被打断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-request-hardware"
+          ]
+        }
+      },
+      {
+        "id": "tb-priority-queue",
+        "moduleId": "priority-and-vector",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "排队器与中断判优",
+        "markdown": "当多个中断源同时向 CPU 提出请求时，CPU 只能按中断源的不同性质对其排队，给予不同等级的优先权，并按优先等级高低予以响应。就 I/O 中断而言，**速度越高的 I/O 设备优先级越高**，因为若 CPU 不及时响应高速 I/O 的请求，其信息可能会立即丢失。\n\n设备优先权的处理可以采用硬件方法，也可采用软件方法。硬件排队器的实现方法很多，既可在 CPU 内部设置一个统一的排队器对所有中断源排队，也可在接口电路内分别设置各个设备的排队器。设在各个接口电路中的排队器又称为**链式排队器**：每个接口中有一个反相器和一个“与非”门，它们之间犹如链条一样串接在一起。该电路中级别最高的中断源是 1 号，其次是 2 号、3 号、4 号。不论是哪个中断源提出中断请求，排队器输出端 INTPi 只有一个高电平。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000355"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "排队器"
+              ],
+              "lineStart": 4729,
+              "lineEnd": 4748,
+              "assetRefs": [
+                "parts/part-0003/images/abdb9e61516d7b0427228896276c9e7e32d7fa49d7cc81302983c0ce5ad5ef9f.jpg",
+                "parts/part-0003/images/2fc5f92b7f570245fa02c8a66e7a7d40e49927459b6eee3453dabe04b9429912.jpg"
+              ],
+              "excerptSha256": "f952be1570000cf55d24b629d2bf4bbc19708e734510b75eafea66559d3b1094"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-queue-trace",
+        "moduleId": "priority-and-vector",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充推演：2 号与 3 号同时请求时谁被选中",
+        "markdown": "以教材的 2 号、3 号同时请求为例，走一遍链式排队器的传播过程：\n\n1. 无请求时，各中断请求信号取反后为高电平，各级 INTP′ 均为高电平，没有任何源被选中；\n2. 2 号与 3 号同时请求，二者取反后变为低电平；\n3. 低电平沿链条向后传播，迫使 3 号及往后各级的 INTP′ 变为低电平，从而封锁级别更低的源；\n4. 2 号之前的各级仍为高电平，经上面一排两个输入端的“与非”门译码后，只有 2 号的 INTP 为高电平。\n\n结论是：请求同时到达并不会产生两个选中信号，链式结构用**逐级封锁**把“同时”化解为“按位置排序”，位置越靠前优先级越高。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-priority-queue"
+          ]
+        }
+      },
+      {
+        "id": "tb-vector-address",
+        "moduleId": "priority-and-vector",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "中断向量地址形成部件（设备编码器）",
+        "markdown": "CPU 一旦响应了 I/O 中断，就要暂停现行程序，转去执行该设备的中断服务程序。不同设备有不同的中断服务程序，每个服务程序都有一个入口地址，CPU 必须找到这个入口地址。寻找入口地址也可用硬件或软件方法完成，教材介绍**硬件向量法**：通过向量地址来寻找服务程序入口地址，而且向量地址由硬件电路产生。\n\n中断向量地址形成部件的输入是来自排队器的输出 INTP1、INTP2、…、INTPn，输出是中断向量（二进制代码表示的向量地址），其位数与计算机可以处理的中断源个数有关，即一个中断源对应一个向量地址。可见该部件实质上是一个编码器，在 I/O 接口中的编码器又称为**设备编码器**。\n\n这里必须分清：**向量地址和中断服务程序的入口地址是两个不同的概念**。教材的示例中 12H、13H、14H 是向量地址，200、300 分别是打印机服务程序和显示器服务程序的入口地址。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000356"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "中断向量地址形成部件(设备编码器)"
+              ],
+              "lineStart": 4749,
+              "lineEnd": 4764,
+              "assetRefs": [
+                "parts/part-0003/images/078824ed4531036076d4b96dba3e3ab90f218a57ad7bf39d24b6a8b87b0ef91c.jpg",
+                "parts/part-0003/images/3d90a5a7bd15dcde67daf4ce13e5fd512e9eb867204552a912590af6599cc821.jpg"
+              ],
+              "excerptSha256": "c12f7fefeb254827273968facf3bc31dc71079f6b434dbec1354b63a09b57be1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vector-vs-entry",
+        "moduleId": "priority-and-vector",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充辨析：为什么中间要隔一层向量地址",
+        "markdown": "既然最终要跳到入口地址，为什么不直接由硬件给出入口地址？因为向量地址给出的是**存放一条无条件转移指令的单元地址**，教材的流程正是“向量地址送 PC → 执行该处的无条件转移指令 → 到达服务程序入口”。\n\n多出这一层带来两个实际后果：\n\n- 跳转目标集中在少数表项中，服务程序搬家时只需改表项，不必改硬件编码器；\n- 向量地址的位数只与中断源个数有关，与主存容量无关，编码器可以做得小而固定。\n\n所以“设备被选中”的编码结果与“服务程序在哪里”是两个分开的问题，把二者混为一谈是本节最常见的失分点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vector-address"
+          ]
+        }
+      },
+      {
+        "id": "tb-interface-composition",
+        "moduleId": "response-sequence",
+        "depth": "core",
+        "kind": "example",
+        "title": "接口电路的基本组成与例 5.2",
+        "markdown": "综合一般接口电路的分析以及上述为程序中断方式增设的硬件，以输入设备为例，其接口电路的基本组成包括数据缓冲与状态标志、设备选择与命令、中断请求与屏蔽触发器、排队器以及中断向量地址形成部件，共同构成一条“设备就绪 → 登记请求 → 判优 → 形成向量地址”的通路。\n\n例 5.2 给出一个综合设计：设备 A、B、C 的优先级按降序排列，向量地址分别是 001010、001011、001100，要求设计链式排队线路和产生 3 个向量地址的设备编码器。解中 INTRi（i=A、B、C）为中断请求信号，有请求时 INTRi=1（即其反相信号为 0）；INTPi 为排队器输出；INTA 为中断响应信号；点画线框内为设备编码器。当中断响应信号 INTA 有效时，被选中的排队信号 INTPi 通过设备编码器形成的向量地址可通过数据总线送至 CPU。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000357"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "程序中断方式接口电路的基本组成"
+              ],
+              "lineStart": 4765,
+              "lineEnd": 4772,
+              "assetRefs": [],
+              "excerptSha256": "abfdf318594eef2397cd8c698169f80bd4d7b700471192f9b377a64c6bee2798"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-circuit-roles",
+        "moduleId": "response-sequence",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充整理：各部件职责与两个层级的开关",
+        "markdown": "把接口中各部件的职责分开记，比背整张图更可靠：\n\n| 部件或信号 | 回答的问题 | 由谁改变 |\n| --- | --- | --- |\n| 完成触发器 D | 设备是否就绪 | 设备工作结束时置 1 |\n| B（忙标志） | 设备是否正在工作 | 启动命令置 1，工作结束置 0 |\n| 屏蔽触发器 MASK | 这一路请求是否被封锁 | 程序设置 |\n| 中断请求触发器 INTR | 是否有待处理的请求 | 查询信号在 D=1 且 MASK=0 时置 1 |\n| 排队器 | 本时刻该选哪个中断源 | 硬件，随请求组合变化 |\n| 设备编码器 | 被选中的源对应哪个向量地址 | 硬件，在 INTA 有效时输出 |\n| 允许中断触发器 EINT | CPU 整体是否允许响应 | 开中断、关中断指令或硬件 |\n\n注意 MASK 与 EINT 处在两个层级：MASK 管“这一路设备能不能发请求”，EINT 管“CPU 现在愿不愿意接请求”。前者是设备级开关，后者是 CPU 级总开关。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-interface-composition"
+          ]
+        }
+      },
+      {
+        "id": "tb-response-condition",
+        "moduleId": "response-sequence",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "CPU 响应中断的条件和时间",
+        "markdown": "CPU 响应 I/O 设备提出中断请求的条件，是必须满足 CPU 中的**允许中断触发器 EINT 为“1”**。该触发器可用开中断指令置位（称为开中断），也可用关中断指令或硬件自动使其复位（称为关中断）。\n\n响应的时间由查询机制决定：I/O 设备准备就绪的时间（即 D=1）是随机的，而 CPU 是在统一的时刻——每条指令执行阶段结束前——向接口发中断查询信号，以获取 I/O 的中断请求。因此，CPU 响应中断的时间一定是在每条指令执行阶段的结束时刻。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000358"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "I/O 中断处理过程"
+              ],
+              "lineStart": 4773,
+              "lineEnd": 4774,
+              "assetRefs": [],
+              "excerptSha256": "40fef4b02c9293701547a2951b04c8702586280a7c6e0788677a4e0eb24b935b"
+            },
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000359"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "CPU 响应中断的条件和时间"
+              ],
+              "lineStart": 4775,
+              "lineEnd": 4783,
+              "assetRefs": [
+                "parts/part-0003/images/2f9e3cedb2a1a0bd6a7e8e63a93e026b3fd799115820bc401549cb2a54039b54.jpg"
+              ],
+              "excerptSha256": "e23ad2b10faf6f72b6b1f14f6e3d9cd3d237ab37c8fe46a1fce7066895f73561"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-response-window",
+        "moduleId": "response-sequence",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充理解：响应窗口为何固定在指令结束时刻",
+        "markdown": "两个条件缺一不可：设备侧有请求（INTR=1 且被排队选中），CPU 侧允许响应（EINT=1）。教材特意把响应时刻钉在“指令执行阶段结束”，因为只有这样，被打断的位置才是一条完整指令的边界，断点才是明确、可恢复的。\n\n把这一时刻想成 CPU 的“检查窗口”会更清楚：D、MASK 以及由此产生的 INTR 随时可能变化，但 CPU 只在固定窗口读取一次请求并决定是否响应。窗口之外即使请求已经置位，也要等到下一个窗口才可能被接受——这就是中断响应看似不“即时”、却完全可预测的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-response-condition",
+            "model-circuit-roles"
+          ]
+        }
+      },
+      {
+        "id": "tb-io-interrupt-process",
+        "moduleId": "service-flow-and-nesting",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "I/O 中断处理过程与五个阶段",
+        "markdown": "以输入设备为例，教材把一次完整的 I/O 中断处理过程分为十步：\n\n1. CPU 发启动 I/O 设备命令，将接口中的 B 置“1”、D 置“0”；\n2. 接口启动输入设备开始工作；\n3. 输入设备将数据送入数据缓冲寄存器；\n4. 输入设备向接口发出“设备工作结束”信号，将 D 置“1”、B 置“0”，标志设备准备就绪；\n5. 当设备准备就绪（D=1）且本设备未被屏蔽（MASK=0）时，在指令执行阶段的结束时刻，由 CPU 发出中断查询信号；\n6. 设备中断请求触发器 INTR 被置“1”，标志设备向 CPU 提出中断请求，与此同时 INTR 送至排队器进行中断判优；\n7. 若 CPU 允许中断（EINT=1）且设备被排队选中，则进入中断响应阶段，由中断响应信号 INTA 将排队器输出送至编码器形成向量地址；\n8. 向量地址送至 PC，作为下一条指令的地址；\n9. 由于向量地址中存放的是一条无条件转移指令，该指令执行结束后即无条件转至该设备的服务程序入口地址，开始执行中断服务程序，通过输入指令把数据缓冲寄存器中的输入数据送至 CPU 的通用寄存器，再存入主存相关单元；\n10. 中断服务程序的最后一条指令是中断返回指令，执行结束时即中断返回至原程序的断点处。\n\n教材把上述过程归纳为**中断请求、中断判优、中断响应、中断服务、中断返回**五个阶段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000360"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "I/O 中断处理过程"
+              ],
+              "lineStart": 4784,
+              "lineEnd": 4812,
+              "assetRefs": [
+                "parts/part-0003/images/80cc91f854757739939d90a61ad1903f17b749a3b4f69f9d46c5ed96d5b7483b.jpg"
+              ],
+              "excerptSha256": "225c2a91304cae3912a119f5cb11599f811dc25f2fc7ffcea07f6bced557db04"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-five-stages",
+        "moduleId": "service-flow-and-nesting",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充归纳：五阶段的分界与完成者",
+        "markdown": "五阶段的分界点是“谁在做事”，记住这条线索就不容易混淆：\n\n| 阶段 | 触发条件 | 主要动作 | 完成者 |\n| --- | --- | --- | --- |\n| 中断请求 | 设备就绪且未被屏蔽 | 查询信号把 INTR 置 1 | 接口硬件 |\n| 中断判优 | INTR 送排队器 | 选出唯一的最高优先级源 | 排队器硬件 |\n| 中断响应 | EINT=1 且被选中 | INTA 有效、形成向量地址、送 PC | CPU 与接口硬件 |\n| 中断服务 | 转到服务程序入口 | 保护现场、设备服务、恢复现场 | 服务程序（软件） |\n| 中断返回 | 执行中断返回指令 | 回到原程序断点 | 服务程序（软件） |\n\n容易忽略的是：第 8 步与第 9 步之间还隔着一条转移指令。向量地址送 PC 只是让 CPU 下一条去取那条转移指令，真正的入口地址要靠它执行之后才得到。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-io-interrupt-process"
+          ]
+        }
+      },
+      {
+        "id": "tb-service-flow",
+        "moduleId": "service-flow-and-nesting",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "中断服务程序的流程：保护现场、中断服务、恢复现场、中断返回",
+        "markdown": "不同设备的服务程序是不相同的，可它们的程序流程又是类似的，一般分为保护现场、中断服务、恢复现场和中断返回四大部分。\n\n**保护现场**有两个含义：其一是保存程序的断点，其二是保存通用寄存器和状态寄存器的内容。前者由中断隐指令完成，后者由中断服务程序完成。具体而言，可在服务程序的起始部分安排若干条存数指令，把寄存器内容存至存储器保存，或用进栈指令（PUSH）把各寄存器内容推入堆栈保存。\n\n**中断服务（设备服务）**是服务程序的主体部分，对于不同的中断请求源，服务操作内容不同。例如打印机要求 CPU 把需打印的一行字符代码通过接口送入打印机的缓冲存储器；显示设备要求 CPU 把需显示的一屏字符代码通过接口送入显示器的显示存储器。\n\n**恢复现场**是服务程序的结尾部分，要求在退出服务程序前把原程序中断时的现场恢复到原来的寄存器中，通常用取数指令或出栈指令（POP）把保存在存储器或堆栈中的信息送回原寄存器。\n\n**中断返回**由服务程序的最后一条中断返回指令完成，使 CPU 返回原程序的断点处，以便继续执行原程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000361"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "中断服务程序的流程"
+              ],
+              "lineStart": 4813,
+              "lineEnd": 4816,
+              "assetRefs": [],
+              "excerptSha256": "40b14680999088b92c6ea5159e0423d190c1392ffca4b0bce8fd42d18960c992"
+            },
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000362"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "保护现场"
+              ],
+              "lineStart": 4817,
+              "lineEnd": 4820,
+              "assetRefs": [],
+              "excerptSha256": "c8ddbd431a0390ee69bb73962704829bb673f1bf7c37790c10c91e29405b30ef"
+            },
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000363"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "中断服务(设备服务)"
+              ],
+              "lineStart": 4821,
+              "lineEnd": 4824,
+              "assetRefs": [],
+              "excerptSha256": "19558bf5f994a302f6e84727134f8dd9dc51f8a6b01b92cbe30d6b4c04145cd6"
+            },
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000364"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "恢复现场"
+              ],
+              "lineStart": 4825,
+              "lineEnd": 4828,
+              "assetRefs": [],
+              "excerptSha256": "1748407050549180b474bde19d13cc87766f10577f6ae6c135185ef6154cd5d8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-save-restore",
+        "moduleId": "service-flow-and-nesting",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充提醒：现场必须成对保存与恢复",
+        "markdown": "保护现场与恢复现场是一对操作：压栈顺序与出栈顺序相反，存入哪些寄存器就要取回哪些寄存器。只要有一项没有恢复，返回主程序后该寄存器就带着服务程序的痕迹，错误往往在很远的地方才暴露。\n\n责任划分也值得注意：断点由中断隐指令（硬件）保存，因为只有硬件才知道被中断的那条指令的地址；通用寄存器由服务程序用指令保存，因为要保存哪些寄存器取决于服务程序会用到哪些。“保护现场由谁完成”这类问题的判据，就落在这条分工上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-service-flow"
+          ]
+        }
+      },
+      {
+        "id": "tb-nesting",
+        "moduleId": "service-flow-and-nesting",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "中断嵌套、单重中断与程序中断方式的边界",
+        "markdown": "计算机在处理中断的过程中，有可能出现新的中断请求。此时如果 CPU 暂停现行的中断服务程序、转去处理新的中断请求，这种现象称为**中断嵌套**，或多重中断；倘若 CPU 在执行中断服务程序时对新的中断请求不予理睬，这种中断称为**单重中断**。两种处理方式的中断服务程序略有区别，区别在于“开中断”的设置时间。\n\nCPU 一旦响应了某中断源的中断请求，便由硬件线路自动关中断，即中断允许触发器 EINT 被置“0”，以确保该中断服务程序顺利执行。因此如果不用开中断指令把 EINT 置“1”，CPU 就不能再响应其他任何一个中断源的请求。对于单重中断，开中断指令设置在最后“中断返回”之前，意味着整个中断服务处理过程中不能再响应其他中断源的请求；对于多重中断，开中断指令提前至“保护现场”之后，意味着保护现场后若有级别更高的中断源提出请求（这是实现多重中断的必要条件），CPU 也可以响应，再次中断现行的服务程序。\n\n从宏观上分析，程序中断方式克服了程序查询方式中的 CPU“踏步”现象，实现了 CPU 与 I/O 的并行工作，提高了 CPU 的资源利用率。但从微观操作分析，CPU 在处理中断服务程序时仍需暂停原程序的正常运行，尤其当高速 I/O 设备或辅助存储器频繁地、成批地与主存交换信息时，需不断地打断 CPU 执行主程序而执行中断服务程序。为此，人们探索出使 CPU 效率更高的 DMA 控制方式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-846b2541511be5b24c39dd42",
+              "blockIds": [
+                "block-000365"
+              ],
+              "headingPath": [
+                "计算机组成原理",
+                "中断返回"
+              ],
+              "lineStart": 4829,
+              "lineEnd": 4848,
+              "assetRefs": [
+                "parts/part-0003/images/7eaa8c01b89096a1e5ac9c0ab61bb10558709252c953e0786f93a8792a12e016.jpg",
+                "parts/part-0003/images/82032943c8120ff73cd0bda9cd33a9f889a342fe52bf568e2b769bbcfc7234ba.jpg",
+                "parts/part-0003/images/39770c1977733740474e3b2de76eb30b5ede92b42ee6bfea2cf9341ea31a05bb.jpg"
+              ],
+              "excerptSha256": "7d3a0f898e47973693421eeefbb5b42a632f7753d95a9b185b3ff1f96e8001dc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-nesting-decision",
+        "moduleId": "service-flow-and-nesting",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充判据：由开中断指令的位置判断单重还是多重",
+        "markdown": "判断一段服务程序属于哪种中断处理，只需找开中断指令的位置：\n\n- 开中断设在保护现场之后：保护现场一旦完成就可能被更高优先级的请求打断，属于多重中断；\n- 开中断设在中断返回之前：整个服务过程都处在关中断状态，属于单重中断。\n\n能否真正嵌套还要同时满足两个条件：EINT 已重新置“1”，并且新请求的优先级高于正在服务的源。只满足其一不会产生嵌套。代价也很实际：嵌套越深，堆栈占用越多，现场管理越复杂，所以嵌套不是越多越好，而是按响应时限的需要来设计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-nesting"
+          ]
+        }
+      },
+      {
+        "id": "model-latency-analysis",
+        "moduleId": "limits-and-check",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "补充分析：中断的固定开销与向 DMA 过渡的理由",
+        "markdown": "把中断开销显式列出来，就能解释教材末尾为什么要引出 DMA。一次中断的固定开销包括响应与转向、保护现场、恢复现场、中断返回，再加上真正的设备服务时间。设备请求越频繁，这笔固定开销被重复的次数越多，CPU 用于主程序的时间比例就越低。\n\n于是出现一个看似矛盾的结论：中断解决了“低速设备让 CPU 空等”的问题，却没有解决“高速设备频繁打断 CPU”的问题。教材指出，高速 I/O 或辅助存储器成批与主存交换信息时，CPU 会被不断打断，因此需要让数据传送本身不经过 CPU、也不需要保护与恢复现场的 DMA 方式。判断该用哪种方式，依据不是设备贵不贵，而是单位时间内需要多少次传送、每次传送的数据量有多大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-io-interrupt-process",
+            "tb-nesting"
+          ]
+        }
+      },
+      {
+        "id": "model-self-check",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：四个必须分清的条件",
+        "markdown": "先用自己的话回答，再回到前面的块核对依据：\n\n1. 某设备 D=1、MASK=0，但它在两次指令执行的中间时刻才准备就绪，能否立刻引起 CPU 响应？为什么？\n2. 向量地址 13H 与服务程序入口地址 300 是什么关系？若把服务程序搬到别处，应改编码器还是改表项？\n3. 一段服务程序在保护现场之后才出现开中断指令，它属于单重中断还是多重中断？若此时到来一个优先级更低的请求，会怎样？\n4. 为什么说程序中断方式既提高了 CPU 利用率，又会在高频传送时成为瓶颈？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-response-condition",
+            "tb-nesting"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "interrupt-condition-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-self-check",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "sequence-service",
+          "distinguish-nesting"
+        ],
+        "learningPurpose": "检查学习者能否把 D、MASK、INTR、EINT 的条件关系与开中断指令的位置迁移到新情境，而不是复述流程步骤。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-response-condition",
+            "tb-nesting"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "feedbackMode": "show-evidence"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出判断顺序：(1) 该请求是否成立（D 与 MASK 的组合）;(2) 当前是否可响应（EINT）;(3) 是否被排队选中（优先级）;(4) 若要嵌套，开中断指令应在何处。逐条给出教材依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "输入输出系统",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [
+    "point-3-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000350"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "程序中断方式"
+      ],
+      "lineStart": 4698,
+      "lineEnd": 4699,
+      "assetRefs": [],
+      "excerptSha256": "81c881492479a5a41b4a0cbfaf3e69c71551057456587743943112779a348291"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000351"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "中断的概念"
+      ],
+      "lineStart": 4700,
+      "lineEnd": 4703,
+      "assetRefs": [],
+      "excerptSha256": "eea7ebfcd679aa2c3154f2aec6d8866b11b66912c20de53ce342309e51b0e20d"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000352"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "I/O 中断的产生"
+      ],
+      "lineStart": 4704,
+      "lineEnd": 4714,
+      "assetRefs": [
+        "parts/part-0003/images/a27bcfebc9227b9d81d2cd65e5d0acbaca8fef851bda442fee09c8d815fe20e6.jpg"
+      ],
+      "excerptSha256": "509b456570b0edaf9078c3c2d5b637230e46b2ae16a8d6774dc84e280ae862a0"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000353"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "程序中断方式的接口电路"
+      ],
+      "lineStart": 4715,
+      "lineEnd": 4718,
+      "assetRefs": [],
+      "excerptSha256": "257bae836c390450c8c7bd71e0eae318b8ced1fc717d975b92cd7ef38203ddff"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000354"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "中断请求触发器和中断屏蔽触发器"
+      ],
+      "lineStart": 4719,
+      "lineEnd": 4728,
+      "assetRefs": [],
+      "excerptSha256": "cb9f8a362758ee1f38bd08642bcc0ec610f90cb302bcb345a1e65d5c1d3315d6"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000355"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "排队器"
+      ],
+      "lineStart": 4729,
+      "lineEnd": 4748,
+      "assetRefs": [
+        "parts/part-0003/images/abdb9e61516d7b0427228896276c9e7e32d7fa49d7cc81302983c0ce5ad5ef9f.jpg",
+        "parts/part-0003/images/2fc5f92b7f570245fa02c8a66e7a7d40e49927459b6eee3453dabe04b9429912.jpg"
+      ],
+      "excerptSha256": "f952be1570000cf55d24b629d2bf4bbc19708e734510b75eafea66559d3b1094"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000356"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "中断向量地址形成部件(设备编码器)"
+      ],
+      "lineStart": 4749,
+      "lineEnd": 4764,
+      "assetRefs": [
+        "parts/part-0003/images/078824ed4531036076d4b96dba3e3ab90f218a57ad7bf39d24b6a8b87b0ef91c.jpg",
+        "parts/part-0003/images/3d90a5a7bd15dcde67daf4ce13e5fd512e9eb867204552a912590af6599cc821.jpg"
+      ],
+      "excerptSha256": "c12f7fefeb254827273968facf3bc31dc71079f6b434dbec1354b63a09b57be1"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000357"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "程序中断方式接口电路的基本组成"
+      ],
+      "lineStart": 4765,
+      "lineEnd": 4772,
+      "assetRefs": [],
+      "excerptSha256": "abfdf318594eef2397cd8c698169f80bd4d7b700471192f9b377a64c6bee2798"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000358"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "I/O 中断处理过程"
+      ],
+      "lineStart": 4773,
+      "lineEnd": 4774,
+      "assetRefs": [],
+      "excerptSha256": "40fef4b02c9293701547a2951b04c8702586280a7c6e0788677a4e0eb24b935b"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000359"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "CPU 响应中断的条件和时间"
+      ],
+      "lineStart": 4775,
+      "lineEnd": 4783,
+      "assetRefs": [
+        "parts/part-0003/images/2f9e3cedb2a1a0bd6a7e8e63a93e026b3fd799115820bc401549cb2a54039b54.jpg"
+      ],
+      "excerptSha256": "e23ad2b10faf6f72b6b1f14f6e3d9cd3d237ab37c8fe46a1fce7066895f73561"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000360"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "I/O 中断处理过程"
+      ],
+      "lineStart": 4784,
+      "lineEnd": 4812,
+      "assetRefs": [
+        "parts/part-0003/images/80cc91f854757739939d90a61ad1903f17b749a3b4f69f9d46c5ed96d5b7483b.jpg"
+      ],
+      "excerptSha256": "225c2a91304cae3912a119f5cb11599f811dc25f2fc7ffcea07f6bced557db04"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000361"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "中断服务程序的流程"
+      ],
+      "lineStart": 4813,
+      "lineEnd": 4816,
+      "assetRefs": [],
+      "excerptSha256": "40b14680999088b92c6ea5159e0423d190c1392ffca4b0bce8fd42d18960c992"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000362"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "保护现场"
+      ],
+      "lineStart": 4817,
+      "lineEnd": 4820,
+      "assetRefs": [],
+      "excerptSha256": "c8ddbd431a0390ee69bb73962704829bb673f1bf7c37790c10c91e29405b30ef"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000363"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "中断服务(设备服务)"
+      ],
+      "lineStart": 4821,
+      "lineEnd": 4824,
+      "assetRefs": [],
+      "excerptSha256": "19558bf5f994a302f6e84727134f8dd9dc51f8a6b01b92cbe30d6b4c04145cd6"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000364"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "恢复现场"
+      ],
+      "lineStart": 4825,
+      "lineEnd": 4828,
+      "assetRefs": [],
+      "excerptSha256": "1748407050549180b474bde19d13cc87766f10577f6ae6c135185ef6154cd5d8"
+    },
+    {
+      "materialId": "doc-846b2541511be5b24c39dd42",
+      "blockIds": [
+        "block-000365"
+      ],
+      "headingPath": [
+        "计算机组成原理",
+        "中断返回"
+      ],
+      "lineStart": 4829,
+      "lineEnd": 4848,
+      "assetRefs": [
+        "parts/part-0003/images/7eaa8c01b89096a1e5ac9c0ab61bb10558709252c953e0786f93a8792a12e016.jpg",
+        "parts/part-0003/images/82032943c8120ff73cd0bda9cd33a9f889a342fe52bf568e2b769bbcfc7234ba.jpg",
+        "parts/part-0003/images/39770c1977733740474e3b2de76eb30b5ede92b42ee6bfea2cf9341ea31a05bb.jpg"
+      ],
+      "excerptSha256": "7d3a0f898e47973693421eeefbb5b42a632f7753d95a9b185b3ff1f96e8001dc"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1806,
+    1750
+  ],
+  "scale": 0.91
+}

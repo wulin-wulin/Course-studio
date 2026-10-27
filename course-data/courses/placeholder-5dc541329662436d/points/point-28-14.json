@@ -1,0 +1,383 @@
+{
+  "id": "point-28-14",
+  "title": "使用队列：休眠替代自旋",
+  "shortSummary": "介绍用等待队列和休眠替代自旋的锁实现，以及唤醒时处理竞争的关键细节。",
+  "keyTerms": [
+    "等待队列",
+    "休眠",
+    "唤醒",
+    "锁实现"
+  ],
+  "animationType": "parkWakeup",
+  "animationSuggestion": "分步展示线程到达、guard 自旋、入队休眠、解锁唤醒与锁的直接转交，并可在 park 之前暂停，对比未使用 setpark 与使用 setpark 两种交错的结果。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-28-7",
+    "point-28-13"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-race-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的锁代码、字段名与术语，按获取、释放、竞争三段重排讲解，补充跟踪示例、类比与迁移检查清单。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-queue-over-spin",
+          "text": "解释为什么用等待队列加休眠替代自旋，以及它如何决定谁获得锁。"
+        },
+        {
+          "id": "trace-acquire-and-release",
+          "text": "追踪 lock() 与 unlock() 中 flag、guard 和队列的状态变化，说明锁如何被直接转交。"
+        },
+        {
+          "id": "diagnose-wakeup-race",
+          "text": "定位 park() 之前的唤醒/等待竞争，并说明 setpark() 如何关闭该窗口。"
+        }
+      ],
+      "misconceptions": [
+        "认为改用等待队列后就不再有任何自旋；实际上 guard 仍会在少量指令上短暂自旋。",
+        "认为解锁时必须先把 flag 置 0 再唤醒等待者；实际做法是把锁直接转交给队首线程。",
+        "把 park() 当成普通的主动让出；若不处理唤醒/等待竞争，线程可能永久沉睡。"
+      ],
+      "modules": [
+        {
+          "id": "why-explicit-queue",
+          "title": "从偶发竞争到显式队列",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-queue-over-spin"
+          ],
+          "order": 0
+        },
+        {
+          "id": "lock-acquire-path",
+          "title": "获取路径：快速路径与休眠",
+          "role": "procedure",
+          "outcomeRefs": [
+            "trace-acquire-and-release"
+          ],
+          "order": 1
+        },
+        {
+          "id": "release-and-handoff",
+          "title": "释放路径：锁的直接转交",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-acquire-and-release"
+          ],
+          "order": 2
+        },
+        {
+          "id": "wakeup-race",
+          "title": "唤醒/等待竞争与 setpark",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "diagnose-wakeup-race"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundary-and-transfer",
+          "title": "边界、代价与迁移检查",
+          "role": "summary",
+          "outcomeRefs": [
+            "explain-queue-over-spin",
+            "trace-acquire-and-release",
+            "diagnose-wakeup-race"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-queue-over-spin",
+          "trace-acquire-and-release",
+          "diagnose-wakeup-race"
+        ],
+        "method": "按给定线程到达顺序推演 lock/unlock 的状态变化，并指出可能发生丢失唤醒的窗口及其修复方式。",
+        "successCriteria": [
+          "能说明 flag、guard 与等待队列各自承担的作用",
+          "能解释解锁时为何不把 flag 置 0 而是直接唤醒队首",
+          "能定位 park 之前的竞争窗口并说明 setpark 如何关闭它"
+        ],
+        "summaryBlockId": "model-checklist-transfer",
+        "nextPointId": "point-28-15"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-why-queue",
+        "moduleId": "why-explicit-queue",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为什么需要显式的等待队列",
+        "markdown": "自旋和让出都把“锁释放后谁能抢到锁”交给调度器决定。教材指出，前面几种方法真正的问题是**偶然性太多**：调度不合理时，线程可能一直自旋，也可能立刻让出 CPU，两种做法都会浪费 CPU，而且无法防止饿死。\n\n要控制结果，就必须显式决定锁释放时谁获得锁。为此需要操作系统提供更多支持，并用一个队列保存等待锁的线程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000371"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "使用队列：休眠替代自旋"
+              ],
+              "lineStart": 6909,
+              "lineEnd": 6975,
+              "assetRefs": [],
+              "excerptSha256": "e25819db547c4b42f71d8e30e1554a06e44e601c5e7fe633db67b497c0614b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bank-ticket-analogy",
+        "moduleId": "why-explicit-queue",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：取号排队而不是反复询问",
+        "markdown": "可以把等待队列想成银行取号：没有空位时，顾客不再反复询问柜台（自旋），而是领号后去休息区等待（park）；柜台办完业务后按号叫下一位（unpark），而不是让所有人重新抢一次。\n\n这个类比只帮助理解排队思想：真实的锁仍然需要原子指令来保护队列本身，取号动作不能真的“随便插队”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-why-queue"
+          ]
+        }
+      },
+      {
+        "id": "textbook-lock-acquire",
+        "moduleId": "lock-acquire-path",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：加锁时的两条路径",
+        "markdown": "教材利用 Solaris 提供的两个调用实现锁：`park()` 让调用线程休眠，`unpark(threadID)` 唤醒指定线程。锁结构包含 `flag`（锁是否已被持有）、`guard`（保护 flag 与队列的自旋锁）和等待队列 `q`。\n\n```c\ntypedef struct lock_t {\n    int flag;\n    int guard;\n    queue_t *q;\n} lock_t;\n\nvoid lock(lock_t *m) {\n    while (TestAndSet(&m->guard, 1) == 1)\n        ;                       /* 自旋获取 guard */\n    if (m->flag == 0) {\n        m->flag = 1;            /* 获得锁 */\n        m->guard = 0;\n    } else {\n        queue_add(m->q, gettid());\n        m->guard = 0;\n        park();                 /* 休眠，等待被唤醒 */\n    }\n}\n```\n\n获取路径分两支：锁空闲时直接置 `flag = 1` 完成加锁；锁已被持有时，线程先把自己加入队列，释放 `guard`，再 `park()` 让自己休眠。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000371"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "使用队列：休眠替代自旋"
+              ],
+              "lineStart": 6909,
+              "lineEnd": 6975,
+              "assetRefs": [],
+              "excerptSha256": "e25819db547c4b42f71d8e30e1554a06e44e601c5e7fe633db67b497c0614b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-acquire-trace",
+        "moduleId": "lock-acquire-path",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "跟踪三个线程的加锁过程",
+        "markdown": "设 T1、T2、T3 依次竞争同一把锁：\n\n1. T1 取得 `guard`，看到 `flag == 0`，置 `flag = 1`，释放 `guard` 后进入临界区。\n2. T2 取得 `guard`，看到 `flag == 1`，把自身 ID 加入队列，释放 `guard`，然后休眠。\n3. T3 重复 T2 的步骤，排在 T2 之后休眠。\n\n注意 T2、T3 的自旋范围只有 `guard` 保护下的几条指令，而不是整个临界区。临界区越长，这个差别越明显：自旋锁会把整段临界区的时间花在等待上，队列锁只花几条指令。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-lock-acquire"
+          ]
+        }
+      },
+      {
+        "id": "textbook-lock-release",
+        "moduleId": "release-and-handoff",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：解锁时按队列转交锁",
+        "markdown": "解锁路径先取得 `guard`，再检查队列是否为空：为空时把 `flag` 置 0，表示无人等待；否则唤醒队首线程，并且**不把 `flag` 置 0**。\n\n```c\nvoid unlock(lock_t *m) {\n    while (TestAndSet(&m->guard, 1) == 1)\n        ;\n    if (queue_empty(m->q))\n        m->flag = 0;                        /* 没人要锁 */\n    else\n        unpark(queue_remove(m->q));         /* 把锁交给下一位 */\n    m->guard = 0;\n}\n```\n\n教材把这一点列为该实现两处有趣之处：它把测试并设置与等待队列结合成更高性能的锁，同时用队列控制谁获得锁，从而避免饿死。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000371"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "使用队列：休眠替代自旋"
+              ],
+              "lineStart": 6909,
+              "lineEnd": 6975,
+              "assetRefs": [],
+              "excerptSha256": "e25819db547c4b42f71d8e30e1554a06e44e601c5e7fe633db67b497c0614b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-handoff-why-no-flag-reset",
+        "moduleId": "release-and-handoff",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么唤醒时 flag 保持为 1",
+        "markdown": "被唤醒的线程从 `park()` 返回时并没有持有 `guard`，因此它无法安全地把 `flag` 设置为 1。教材的做法是把锁从释放者直接转交给下一个线程，期间 `flag` 始终保持为 1；这样既不破坏互斥，也不需要被唤醒者重新竞争。\n\n这个设计把“唤醒”与“移交所有权”合并成一步：队列非空时，解锁者不是公布一把空锁让所有人争抢，而是点名下一位继承者。与之相对，队列为空时才把 `flag` 置 0，表示这把锁真的空闲了。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-lock-release",
+            "textbook-lock-acquire"
+          ]
+        }
+      },
+      {
+        "id": "textbook-wakeup-race",
+        "moduleId": "wakeup-race",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：park 之前的唤醒/等待竞争",
+        "markdown": "教材指出，在 `park()` 调用之前存在竞争条件。设想线程 A 发现锁已被持有、把自己加入队列，正准备 `park()`；此时调度切换到持锁线程 B，B 释放锁并调用 `unpark(A)`，但 A 还没有真正休眠。如果这次唤醒没有被记录，A 随后的 `park()` 就（可能）永远睡下去。这种问题称为**唤醒/等待竞争**（wakeup/waiting race）。\n\nSolaris 用第三个系统调用 `setpark()` 解决：线程先声明自己马上要 park；如果在此期间另一个线程调用了 `unpark`，后续 `park` 会直接返回，而不是一直睡眠。修改后的顺序是：\n\n```c\nqueue_add(m->q, gettid());\nsetpark();   /* new code：声明即将 park */\nm->guard = 0;\n```\n\n教材还提到另一种方案：把 `guard` 传入内核，由内核采取预防措施，原子地释放锁并把运行线程移出队列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000371"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "使用队列：休眠替代自旋"
+              ],
+              "lineStart": 6909,
+              "lineEnd": 6975,
+              "assetRefs": [],
+              "excerptSha256": "e25819db547c4b42f71d8e30e1554a06e44e601c5e7fe633db67b497c0614b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-race-timeline",
+        "moduleId": "wakeup-race",
+        "depth": "core",
+        "kind": "example",
+        "title": "把竞争写成一条时间线",
+        "markdown": "丢失唤醒的场景可以拆成三步：\n\n1. A 发现 `flag == 1`，把自身 ID 加入队列。\n2. B 释放锁，看到队列非空，调用 `unpark(A)`，此时 A 尚未执行 `park()`。\n3. 若没有任何机制记录这次唤醒，A 随后执行 `park()`，唤醒已经发生过，A 便一直等待。\n\n加入 `setpark()` 后，第 3 步的 `park()` 会立即返回，因为系统已经记录下“唤醒先于休眠”这一事实。修复的关键不是让休眠更快，而是消除“检查条件”与“进入休眠”之间的窗口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-wakeup-race"
+          ]
+        }
+      },
+      {
+        "id": "textbook-guard-boundary",
+        "moduleId": "boundary-and-transfer",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：guard 仍会自旋，但范围有限",
+        "markdown": "教材同时提醒：这个实现并没有完全避免自旋等待。`guard` 基本上起到自旋锁的作用，围绕 `flag` 和队列操作提供保护；线程在获取锁或释放锁时可能被中断，从而导致其他线程在 `guard` 上自旋。\n\n但这段自旋时间是很有限的——它不是用户定义的临界区，只是 `lock` 和 `unlock` 代码中的几条指令，因此这种方法也许是合理的。排队顺序还带来另一项收益：由队列决定谁获得锁，避免某个线程长期抢不到锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000371"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "使用队列：休眠替代自旋"
+              ],
+              "lineStart": 6909,
+              "lineEnd": 6975,
+              "assetRefs": [],
+              "excerptSha256": "e25819db547c4b42f71d8e30e1554a06e44e601c5e7fe633db67b497c0614b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist-transfer",
+        "moduleId": "boundary-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "迁移到其他系统时的检查清单",
+        "markdown": "面对任何“休眠式锁”实现，可以用下面的清单核对：\n\n- 谁保护等待队列本身？该保护是否可能被长时间持有？\n- 加锁失败时，线程如何进入等待，之后由谁唤醒它？\n- 解锁时是把锁直接交给下一位，还是让所有等待者重新竞争？\n- 从“决定休眠”到“真正休眠”之间，是否存在丢失唤醒的窗口，系统如何关闭它？\n\n由前三问可以推出这个实现的定位：它用极短的自旋换取长临界区上的休眠，用队列换取确定性。第四问则提示一条可推广的原则——把“检查条件”与“进入休眠”绑定为不可分割的一步，才能避免唤醒丢失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-guard-boundary",
+            "textbook-wakeup-race",
+            "textbook-lock-acquire"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "wakeup-race-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-race-timeline",
+        "moduleId": "wakeup-race",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-wakeup-race"
+        ],
+        "learningPurpose": "检查学习者能否在一段具体的线程交错中判断是否发生丢失唤醒，并说出对应的修复手段。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-wakeup-race"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "若 unpark 发生在 park 之前且未调用 setpark，A 随后的 park 会发生什么？应如何修改加锁路径？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 A 在 unpark 之后才调用 park 时可能的结果，并说明 setpark() 应插入到加锁路径的哪个位置、为什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "锁",
+  "clusterId": "chapter-28",
+  "clusterIds": [
+    "chapter-28"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000371"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "使用队列：休眠替代自旋"
+      ],
+      "lineStart": 6909,
+      "lineEnd": 6975,
+      "assetRefs": [],
+      "excerptSha256": "e25819db547c4b42f71d8e30e1554a06e44e601c5e7fe633db67b497c0614b41"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    942,
+    1758
+  ],
+  "scale": 0.96
+}

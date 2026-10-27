@@ -1,0 +1,319 @@
+{
+  "id": "point-33-6",
+  "title": "解决方案：异步 I/O",
+  "shortSummary": "介绍异步 I/O 接口如何避免阻塞事件循环，并说明其回调与完成通知机制。",
+  "keyTerms": [
+    "异步 I/O",
+    "非阻塞",
+    "事件循环",
+    "回调"
+  ],
+  "animationType": "asyncNotification",
+  "animationSuggestion": "逐步展示请求发起、控制权立即返回、循环继续处理其他事件、完成通知到达后回调处理的完整过程，并可切换轮询与信号两条通知路径以比较检查时机。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-33-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的接口定义与信号说明为事实边界，围绕“把等待移出事件循环”重建讲解顺序，补充代价分析、轮询与信号对比及检查题。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-async-return",
+          "text": "解释异步 I/O 如何发出请求并立即把控制权返回事件循环。"
+        },
+        {
+          "id": "trace-completion-check",
+          "text": "追踪 AIO 控制块、aio_read 与完成检查接口之间的调用流程。"
+        },
+        {
+          "id": "choose-completion-notify",
+          "text": "比较轮询与信号通知两种完成通知方式，并说明选择依据。"
+        }
+      ],
+      "misconceptions": [
+        "认为异步 I/O 会让磁盘读写本身变快，而不只是改变调用者等待的方式。",
+        "认为 aio_read 成功返回就代表数据已经读入缓冲区。",
+        "认为既然异步 I/O 不阻塞，事件服务器就可以随意调用阻塞系统调用。"
+      ],
+      "modules": [
+        {
+          "id": "async-io-interface",
+          "title": "异步 I/O 的接口与立即返回",
+          "role": "mechanism-introduction",
+          "description": "从阻塞事件循环的问题出发，介绍 AIO 控制块与异步读接口，并解释控制权为何能提前返回。",
+          "outcomeRefs": [
+            "explain-async-return",
+            "trace-completion-check"
+          ],
+          "order": 0
+        },
+        {
+          "id": "completion-check",
+          "title": "检查 I/O 是否完成",
+          "role": "mechanism-walkthrough",
+          "description": "说明 aio_error 的返回值含义，以及轮询完成状态的代价与前提。",
+          "outcomeRefs": [
+            "trace-completion-check",
+            "choose-completion-notify"
+          ],
+          "order": 1
+        },
+        {
+          "id": "signal-notification",
+          "title": "用信号替代重复询问",
+          "role": "comparison",
+          "description": "介绍教材补充的 UNIX 信号机制，并按统一维度比较轮询与信号两条完成通知路径。",
+          "outcomeRefs": [
+            "choose-completion-notify",
+            "trace-completion-check"
+          ],
+          "order": 2
+        },
+        {
+          "id": "synthesis-check",
+          "title": "综合检查与迁移",
+          "role": "assessment",
+          "description": "通过一个会在完成前误用缓冲区的例子检查理解，并小结异步 I/O 解决与未解决的问题。",
+          "outcomeRefs": [
+            "explain-async-return",
+            "trace-completion-check",
+            "choose-completion-notify"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-async-return",
+          "trace-completion-check",
+          "choose-completion-notify"
+        ],
+        "method": "完成误用缓冲区的诊断题，并为给定规模的未完成请求选择完成通知方式。",
+        "successCriteria": [
+          "能指出 aio_read 返回与 I/O 完成之间的区别",
+          "能正确解释 aio_error 返回 0 与 EINPROGRESS 的含义",
+          "能为具体场景给出轮询或信号通知并说明依据"
+        ],
+        "exerciseBlockId": "check-apply",
+        "summaryBlockId": "summary-bridge",
+        "nextPointId": "point-33-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-aio-interface",
+        "moduleId": "async-io-interface",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：异步 I/O 的接口与完成检查",
+        "markdown": "异步 I/O（asynchronous I/O）是许多现代操作系统为磁盘系统引入的接口族。它允许应用程序发出 I/O 请求，**在 I/O 完成之前就立即把控制权返回给调用者**；另有一些接口让应用程序能够确定各个 I/O 是否已经完成。\n\n以 macOS 的接口为例，基本结构是 AIO 控制块（AIO control block）`struct aiocb`，简化形式如下：\n\n```c\nstruct aiocb {\n    int    aio_fildes;    /* File descriptor */\n    off_t    aio_offset;    /* File offset */\n    volatile void  *aio_buf;    /* Location of buffer */\n    size_t    aio_nbytes;    /* Length of transfer */\n};\n```\n\n发起异步读之前，程序先填充该结构：要读取的文件描述符 `aio_fildes`、文件内偏移 `aio_offset`、传输长度 `aio_nbytes`，以及读入结果的目标内存 `aio_buf`。随后调用异步读取 API：\n\n```txt\nint aio_read(struct aiocb *aiocbp);\n```\n\n该调用尝试发出 I/O；成功时它会立即返回，事件服务器可以继续工作。要判断 I/O 何时完成、缓冲区是否已有数据，还需要完成检查接口：\n\n```c\nint aio_error(const struct aiocb *aiocbp);\n```\n\n这个系统调用检查控制块引用的请求是否完成：已完成则返回成功（0），未完成则返回 `EINPROGRESS`。因此，对每个未完成的异步 I/O，应用程序都可以周期性地轮询（poll）系统，确认该请求是否尚未完成。为了避免逐个反复检查，一些系统还提供了基于中断的方法：异步 I/O 完成时用 UNIX 信号通知应用程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000454"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "解决方案：异步 I/O"
+              ],
+              "lineStart": 9151,
+              "lineEnd": 9189,
+              "assetRefs": [],
+              "excerptSha256": "e4650c3becf26227149d6e739990fa741603ba8e6a8f544b20b8a5b25b2993d4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loop-continues",
+        "moduleId": "async-io-interface",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么“立即返回”能救活事件循环",
+        "markdown": "`aio_read()` 返回时，请求只是被交给了存储系统，数据通常尚未就绪。真正关键的变化是控制权已经回到事件循环，唯一的线程不会停在 I/O 上。于是循环在等待期间仍能处理其他连接或事件——线程化服务器靠“其他线程”获得的 I/O 与计算重叠，在这里由“控制权提前返回”换来。\n\n代价也要看清：异步 I/O 并不让磁盘变快，它只改变谁来等待、等待期间能做什么。请求发起后，程序必须额外记住这个请求的上下文，并在完成通知到来时接着做原本没做完的工作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aio-interface"
+          ]
+        }
+      },
+      {
+        "id": "model-completion-polling",
+        "moduleId": "completion-check",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "轮询完成状态：aio_error 的返回值怎么读",
+        "markdown": "对每个未完成请求，事件循环可以在合适时机调用 `aio_error()`：\n\n- 返回 0：请求已完成，`aio_buf` 指向的缓冲区现在含有读到的数据，可以安全进入后续处理；\n- 返回 `EINPROGRESS`：请求尚未完成，保留该请求的控制块，继续处理其他事件或稍后再查。\n\n由此可得一条重要区分：`aio_read()` 成功只表示请求已被成功发出，**并不表示数据已经读入缓冲区**；只有完成检查返回 0，才能使用缓冲区内容。轮询的代价是检查次数随未完成请求数增长，检查本身还要占用事件循环的时间，因此需要与事件分发的节奏配合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aio-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-unix-signal",
+        "moduleId": "signal-notification",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：UNIX 信号与信号处理程序",
+        "markdown": "所有现代 UNIX 变体都有信号（signal）机制。最简单的信号提供了一种与进程通信的方式：把信号传递给应用程序后，程序暂停当前工作，开始运行信号处理程序（signal handler），即应用程序中处理该信号的代码；完成后，进程恢复先前的行为。\n\n每个信号都有名字，例如 HUP（挂断）、INT（中断）、SEGV（段违规）。信号有时由内核本身发出：程序发生段违规时，操作系统发送 `SIGSEGV`；若进程没有配置处理该信号，就会执行默认行为，对 `SIGSEGV` 而言就是杀死进程。\n\n教材示例先设置处理函数，再进入无限循环：\n\n```c\n#include <stdio.h>\n#include <signal.h>\n\nvoid handle(int arg) {\n    printf(\"stop wakin' me up...\\n\");\n}\n\nint main(int argc, char *argv[]) {\n    signal(SIGHUP, handle);\n    while (1)\n    ; // doin' nothin' except catchin' some sigs\n    return 0;\n}\n```\n\n用 `kill` 命令行工具发送信号后，主循环被中断并运行 `handle()`，打印提示后进程回到原来的行为。教材同时指出：在没有异步 I/O 的系统中，纯基于事件的方法无法实现；研究者也提出过用线程池管理未完成 I/O 的混合方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-98b367ee24452fe791591fee",
+              "blockIds": [
+                "block-000455"
+              ],
+              "headingPath": [
+                "关于内存虚拟化的对话",
+                "补充：UNIX 信号"
+              ],
+              "lineStart": 9190,
+              "lineEnd": 9230,
+              "assetRefs": [],
+              "excerptSha256": "438fa0fab86b90c459c36273bb91551c3e72df85c8844a61d9b4f7af15d351db"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-polling-vs-signal",
+        "moduleId": "signal-notification",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "轮询与信号：两条完成通知路径怎么选",
+        "markdown": "两种方式回答的是同一个问题——“I/O 何时完成”，但责任分配不同：\n\n| 维度 | 轮询 `aio_error()` | 信号通知 |\n|---|---|---|\n| 触发者 | 应用程序主动检查 | 系统在完成时通知 |\n| 循环负担 | 每次检查都占用时间，未完成请求越多负担越大 | 无需反复询问，但处理程序会打断当前工作 |\n| 时序控制 | 检查时机由循环决定，容易与事件分发配合 | 到达时机不可预测，处理程序应尽量短小 |\n| 适合情境 | 请求较少、需要精细控制检查节奏 | 请求较多、希望完成即响应 |\n\n教材指出逐个检查未完成 I/O“很痛苦”，信号方案正是为消除重复询问而引入。选择时可先看未完成请求的规模，再看事件循环对时序控制的要求，最后决定是否引入信号这种异步打断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-completion-polling",
+            "textbook-unix-signal"
+          ]
+        }
+      },
+      {
+        "id": "check-apply",
+        "moduleId": "synthesis-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：这段事件服务器会卡在哪里、错在哪里",
+        "markdown": "某事件服务器为每个请求填入 `aiocb` 并调用 `aio_read()`，随后立刻把 `aio_buf` 的内容写回客户端。请回答：\n\n1. 这段处理为什么会得到不完整甚至错误的数据？\n2. 若改用轮询，至少要在什么条件成立后才能写回？\n3. 若改用信号通知，处理程序被调用时说明什么已经发生？\n\n参考思路：`aio_read()` 只表示请求已成功发出；轮询必须等到 `aio_error()` 返回 0；信号处理程序被调用说明对应的异步 I/O 已完成，但处理程序仍应尽量短小，把后续工作交回事件循环。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aio-interface",
+            "model-polling-vs-signal"
+          ]
+        }
+      },
+      {
+        "id": "summary-bridge",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "异步 I/O 用“立即返回 + 完成检查或通知”把等待移出事件循环：`aiocb` 描述请求，`aio_read()` 发起请求，`aio_error()` 轮询结果，信号则可以替代轮询在完成时通知。它解决的是阻塞调用卡住循环的问题，而不是让 I/O 本身变快。\n\n完成通知到来后，处理程序还必须知道“这是哪个请求、接下来该做什么”。这正是下一个知识点要讨论的状态管理问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aio-interface",
+            "model-completion-polling",
+            "textbook-unix-signal",
+            "check-apply"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "completion-path-check",
+        "type": "formative-check",
+        "title": "选择完成通知路径",
+        "anchorBlockId": "model-polling-vs-signal",
+        "moduleId": "signal-notification",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-completion-notify"
+        ],
+        "learningPurpose": "检查学习者能否按未完成请求规模与时序控制需求，在轮询与信号通知之间做出选择。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-aio-interface",
+            "model-completion-polling",
+            "textbook-unix-signal"
+          ]
+        },
+        "config": {
+          "scenario": "事件服务器同时有 200 个未完成的异步读请求，并希望在请求完成时尽快处理",
+          "options": [
+            "在每个循环轮次逐个调用 aio_error()",
+            "为异步 I/O 完成注册信号处理程序"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若同时有 200 个未完成的异步读请求，且希望完成时尽快处理，你会选择轮询还是信号通知？请结合未完成请求规模与事件循环的时序控制需求说明依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "基于事件的并发(进阶)",
+  "clusterId": "chapter-33",
+  "clusterIds": [
+    "chapter-33"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000454"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "解决方案：异步 I/O"
+      ],
+      "lineStart": 9151,
+      "lineEnd": 9189,
+      "assetRefs": [],
+      "excerptSha256": "e4650c3becf26227149d6e739990fa741603ba8e6a8f544b20b8a5b25b2993d4"
+    },
+    {
+      "materialId": "doc-98b367ee24452fe791591fee",
+      "blockIds": [
+        "block-000455"
+      ],
+      "headingPath": [
+        "关于内存虚拟化的对话",
+        "补充：UNIX 信号"
+      ],
+      "lineStart": 9190,
+      "lineEnd": 9230,
+      "assetRefs": [],
+      "excerptSha256": "438fa0fab86b90c459c36273bb91551c3e72df85c8844a61d9b4f7af15d351db"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2274,
+    867
+  ],
+  "scale": 0.94
+}

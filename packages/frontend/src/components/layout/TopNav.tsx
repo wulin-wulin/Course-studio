@@ -1,4 +1,4 @@
-import { BookOpen, Bot, Home } from "lucide-react";
+import { BookOpen, Bot } from "lucide-react";
 
 type TopNavProps = {
   onGoHome: () => void;
@@ -25,10 +25,12 @@ export function TopNav({ onGoHome, isCatalog }: TopNavProps) {
           {isCatalog ? "课程导览" : "课程学习空间"}
         </span>
       </div>
-      <div className="flex items-center gap-2 text-xs text-text-secondary">
-        {isCatalog ? <Home className="w-4 h-4 text-primary" /> : <Bot className="w-4 h-4 text-primary" />}
-        <span className="max-sm:hidden">课程助手</span>
-      </div>
+      {!isCatalog && (
+        <div className="flex items-center gap-2 text-xs text-text-secondary" aria-label="课程助手">
+          <Bot className="w-4 h-4 text-primary" aria-hidden="true" />
+          <span className="max-sm:hidden">课程助手</span>
+        </div>
+      )}
     </header>
   );
 }
