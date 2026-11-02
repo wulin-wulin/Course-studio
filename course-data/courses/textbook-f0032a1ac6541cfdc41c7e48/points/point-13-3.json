@@ -1,0 +1,607 @@
+{
+  "id": "point-13-3",
+  "title": "嵌套列式存储",
+  "shortSummary": "解释嵌套数据如何拆解为列式存储，理解重复层次与定义层次的作用。",
+  "keyTerms": [
+    "列式存储",
+    "嵌套编码",
+    "重复层次"
+  ],
+  "animationType": "nestedRecordAssembly",
+  "animationSuggestion": "逐步显示各列当前行、r 与 d 的取值，以及状态机在 DocId、Links.Backward、Name.Url、Name.Language.Code 等 reader 之间的跳转，让学习者看到一条记录如何在若干次深度驱动的状态转移后被装配完成。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-13-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于重复深度、定义深度、拆分算法与装配自动机的定义和实例，围绕“无损还原”重组讲解顺序，补充逐步推演、编码开销解释与检查题。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-two-levels",
+          "text": "解释重复深度与定义深度如何配合，使嵌套记录拆成列后仍能无损还原。"
+        },
+        {
+          "id": "compute-levels",
+          "text": "给定嵌套记录中的字段值，计算它的重复深度和定义深度。"
+        },
+        {
+          "id": "trace-assembly",
+          "text": "依据深度信息说明状态机如何把列值重新装配成原记录。"
+        }
+      ],
+      "misconceptions": [
+        "认为列式存储只要把同一字段的值连续存放就能还原嵌套结构，忽略重复深度与定义深度这些位置元数据。",
+        "把重复深度当成字段在 schema 中的绝对层级，或把定义深度当成值出现的次数。",
+        "认为 NULL 必须显式存储值；实际上空值由定义深度推导，值本身不写入。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-lossless",
+          "title": "为什么需要无损表示",
+          "role": "motivation",
+          "description": "从按列连续存放的目标引出记录肢解后位置信息丢失的问题。",
+          "outcomeRefs": [
+            "explain-two-levels"
+          ],
+          "order": 0
+        },
+        {
+          "id": "levels-overview",
+          "title": "两种深度元数据",
+          "role": "concept-introduction",
+          "description": "介绍重复深度与定义深度这两个共同实现无损表达的概念。",
+          "outcomeRefs": [
+            "explain-two-levels"
+          ],
+          "order": 1
+        },
+        {
+          "id": "repetition-level",
+          "title": "重复深度",
+          "role": "mechanism-step",
+          "description": "用 Code 列实例推演重复深度的取值规则。",
+          "outcomeRefs": [
+            "explain-two-levels",
+            "compute-levels"
+          ],
+          "order": 2
+        },
+        {
+          "id": "definition-level",
+          "title": "定义深度与编码",
+          "role": "mechanism-step",
+          "description": "说明定义深度如何区分不同层级的缺失，以及深度如何编码进列块。",
+          "outcomeRefs": [
+            "explain-two-levels",
+            "compute-levels"
+          ],
+          "order": 3
+        },
+        {
+          "id": "dissect-record",
+          "title": "把记录拆解为列",
+          "role": "algorithm",
+          "description": "梳理 fieldWriter 树与 DissectRecord 算法如何计算每个值的深度。",
+          "outcomeRefs": [
+            "compute-levels"
+          ],
+          "order": 4
+        },
+        {
+          "id": "assemble-record",
+          "title": "记录的装配",
+          "role": "algorithm",
+          "description": "用有限状态机和深度跳转规则重组记录。",
+          "outcomeRefs": [
+            "trace-assembly",
+            "explain-two-levels"
+          ],
+          "order": 5
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与下一步",
+          "role": "assessment",
+          "description": "通过缺失层级判断与装配回退练习检验掌握程度，并衔接查询语言。",
+          "outcomeRefs": [
+            "explain-two-levels",
+            "compute-levels",
+            "trace-assembly"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-two-levels",
+          "compute-levels",
+          "trace-assembly"
+        ],
+        "method": "完成三道深度判断题，并解释重复深度与定义深度在拆分和装配中各自承担的作用。",
+        "successCriteria": [
+          "能区分定义深度为 1 与 2 时缺失发生的不同层级",
+          "能说明重复深度表示新一次重复发生在第几级",
+          "能写出 (f; l) → n 的装配跳转并说明其回退方向"
+        ],
+        "exerciseBlockId": "model-practice",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-13-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-column-goal",
+        "moduleId": "problem-and-lossless",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材目标：把同一字段的值连续存放",
+        "markdown": "图 13-1 的右侧把同一字段的所有值连续存放。教材把这一节的目标概括为：**连续地存储一个给定字段的所有值来改善查询效率**，并为此要解决三个问题：\n\n1. 给出列式格式记录的无损表示；\n2. 把一条记录分割到各个列；\n3. 高效地把列重新装配成原记录。\n\n“无损”是硬约束：记录被肢解之后，仍必须能唯一确定每个值属于哪条记录、属于记录中的哪个嵌套字段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000387"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "嵌套列式存储"
+              ],
+              "lineStart": 5172,
+              "lineEnd": 5175,
+              "assetRefs": [],
+              "excerptSha256": "7defa76e9ecc13481d11bd0ef336a5bd2e212cc392dc00d289aac948b634f863"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-column-order",
+        "moduleId": "problem-and-lossless",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：列式存储丢掉的是位置关系",
+        "markdown": "按列存储让同类值物理相邻，扫描时可以只读需要的字段。但一个值离开原本的嵌套位置后，它与兄弟值之间的层级关系就不再直接可见。因此列式格式必须为每个值附带能还原位置的元数据，否则“连续存放”换来的读取效率会以丢失结构为代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-column-goal"
+          ]
+        }
+      },
+      {
+        "id": "tb-two-level-concepts",
+        "moduleId": "levels-overview",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材引入：重复深度与定义深度",
+        "markdown": "把图 13-2 的嵌套文档改成列式存储后，不同记录的同类值会被放在一起。例如把 r1、r2 的 URL 值收集成 `[\"http://A\", \"http://B\", \"http://C\"]`，仅凭这一列无法判断每个值属于哪条记录、又属于记录中的哪个 Name。\n\n教材为此引入两个概念，共同实现无损表达：\n\n- **重复深度**（Repetition Level，记作 r）：告诉我们值在路径中的哪个重复字段上开始了新的一次重复，依此确定值的位置；\n- **定义深度**（Definition Level，记作 d）：描述路径上有多少级可选或重复字段确实被定义。\n\n图 13-3 用 DocId、Name.Url、Links.Forward、Links.Backward、Name.Language.Code 等列给出了同时带 r 与 d 的实例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000388"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "重复深度、定义深度"
+              ],
+              "lineStart": 5176,
+              "lineEnd": 5191,
+              "assetRefs": [],
+              "excerptSha256": "847a72445ae6e9281190ff6f44cc0be83065c03164aec77f45d2e9b9043167eb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-two-levels",
+        "moduleId": "levels-overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：r 与 d 是两个坐标",
+        "markdown": "可以把每一列想象成一本按记录顺序排列的清单，r 和 d 就是每个条目的两个坐标：r 回答“从哪一级开始新的一次重复”，d 回答“沿路径真正定义到了第几层”。两者合起来才能唯一确定一个值在嵌套结构中的位置，缺一不可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-level-concepts"
+          ]
+        }
+      },
+      {
+        "id": "tb-repetition-level",
+        "moduleId": "repetition-level",
+        "depth": "core",
+        "kind": "definition",
+        "title": "重复深度如何确定位置",
+        "markdown": "**重复深度**回答“这个值是在路径中哪一级重复字段上开始新的一次重复”。Name.Language.Code 这条路径含有 Name 与 Language 两个重复字段：Name 在第 1 级，Language 在第 2 级，所以该列的重复深度取值范围是 0 到 2，其中 0 表示一条新记录的开始。\n\n从上到下扫描记录 r1 的 Code 列：\n\n- `en-us`：此前没有遇到任何重复字段，r = 0；\n- `en`：Language 重复了，而 Language 是路径中的第 2 级重复字段，r = 2；\n- `en-gb`：这次是 Name 重复（Name 之后只出现过一次 Language，Language 本身没有再重复），Name 是第 1 级，r = 1。\n\nr1 的第二个 Name 没有任何 Code 值。为了让装配时能确定 `en-gb` 属于第三个 Name 而不是第二个，必须在 `en` 与 `en-gb` 之间补一个 NULL；这个 NULL 的位置还要靠定义深度说明。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000389"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 重复深度（Repetition Level）"
+              ],
+              "lineStart": 5192,
+              "lineEnd": 5197,
+              "assetRefs": [],
+              "excerptSha256": "555cf331c3b6c528f9fd5e85ef41e9915f13cb7ef9cca951f7c3c1777ee315b9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-repetition-walk",
+        "moduleId": "repetition-level",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：三步算出重复深度",
+        "markdown": "计算重复深度只需两个判断：\n\n1. 列出字段路径上的全部重复字段，由外到内编号（Name 为 1，Language 为 2）；\n2. 看当前值相对上一个值，第一次发生重复的是哪一级，r 就取那一级的编号；若没有任何重复，取 0。\n\n用这条规则复核 r1 的 Code 列：`en` 相对 `en-us` 是 Language 层第一次重复，得 2；`en-gb` 相对 `en` 时 Language 没有重复，重复发生在更外层的 Name，得 1。可见 r 记的是“新重复发生的那一级”，既不是值的个数，也不是字段的绝对深度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-level-concepts",
+            "tb-repetition-level"
+          ]
+        }
+      },
+      {
+        "id": "tb-definition-level",
+        "moduleId": "definition-level",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "定义深度如何区分缺失层级",
+        "markdown": "只在“仅靠重复深度无法确定字段值位置”时，才需要参考定义深度，典型情形就是字段值为 NULL。定义深度描述**路径上有多少级可选或重复字段确实被定义**。\n\n- r1 没有 Backward 链接，但 Links 字段本身已定义（位于第 1 级），所以 Links.Backward 列要补一个 NULL 并设 d = 1，说明 Links 有定义、只是没有取值；\n- r2 中为 NULL 的 Name.Language.Country，d = 1，因为 Country 虽然没有值，Name 字段是有定义的；\n- r1 的两个 Name.Language.Country 空值，d 分别为 2（缺失发生在 Name.Language 内）和 1（缺失发生在 Name 内）。\n\n同样是 NULL，d = 2 与 d = 1 表示完全不同的结构，装配算法必须把它们区分开。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000390"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 定义深度（Definition Level）"
+              ],
+              "lineStart": 5198,
+              "lineEnd": 5205,
+              "assetRefs": [],
+              "excerptSha256": "a92c3fcf5c052b893052214a308693c3e982234518b1b90f8e17bc181d45cd67"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-definition-rule",
+        "moduleId": "definition-level",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：把 d 读成“走到了第几层”",
+        "markdown": "可以把 d 读成“这个值所在的路径向下走到了第几层”。d 越小，说明缺失发生得越靠外：d = 1 时外层 Name 尚在、缺的是 Language；d = 2 时 Language 已存在、缺的只是它下面的 Country。因此描述空值时不能只说“这列有个 NULL”，必须同时报出 d，否则装配时会把不同层级的情况混为一谈。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-definition-level"
+          ]
+        }
+      },
+      {
+        "id": "tb-encoding",
+        "moduleId": "definition-level",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "深度的编码方式",
+        "markdown": "**编码**时每列存储为一组块，每块包括重复深度、定义深度与压缩后的字段值。NULL 由定义深度决定，所以不会显式存储值：字段路径对应的定义深度小于路径上可选字段与重复字段个数总和的，就认为该值为 NULL；值确实被定义时也不存储它的定义深度。重复深度只在必要时存储，例如定义深度为 0 时重复深度必为 0，后者可以省略，图 13-3 中就没有为 DocId 存储深度。深度被打包成 bit 序列，只使用必需的位：最大定义深度为 3 时用 2 个 bit 即可。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000390"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 定义深度（Definition Level）"
+              ],
+              "lineStart": 5198,
+              "lineEnd": 5205,
+              "assetRefs": [],
+              "excerptSha256": "a92c3fcf5c052b893052214a308693c3e982234518b1b90f8e17bc181d45cd67"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-encoding-bits",
+        "moduleId": "definition-level",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：省略深度不丢信息",
+        "markdown": "把 d 与 r 压成 bit 而不是存成整数，是为了让每列的块尽量小；只取“最大深度需要几位”就够，因此深度上界直接决定了列式文件的额外开销。重复深度之所以能省则省，是因为可省的部分已被其他字段蕴含：d = 0 必然对应 r = 0，省掉恒为 0 的 r 不会丢失任何可还原信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-encoding",
+            "tb-definition-level"
+          ]
+        }
+      },
+      {
+        "id": "tb-dissect",
+        "moduleId": "dissect-record",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材算法：把记录分解为多个列",
+        "markdown": "图 13-4 的算法解决“如何高效构造 column-stripe，并算出每个值的深度”。要点如下：\n\n- 按 schema 建一棵 fieldWriter 树，节点与字段层级对应；只在 fieldWriter 真正拿到对应字段的值时才更新，不主动向下传递父节点状态，以廉价地处理大量未被使用的字段；\n- 子 fieldWriter 继承父节点的深度值，任一值被添加时再把深度同步给父节点；每个 writer 带版本号，深度增加时版本号加 1，子 writer 据此高效判断父节点是否变化；\n- `DissectRecord(decoder, writer, repetitionLevel)` 从根开始，初始 repetitionLevel 为 0，用 `seenFields` 记录本层已出现过的字段：若当前子字段已出现过，则把它视为最近重复的那一层，`chRepetitionLevel` 取该子节点的树深度，否则取父层传入的 repetitionLevel；\n- 遇到原子字段就直接写出值和深度，遇到嵌套记录就递归调用 `DissectRecord`；\n- 当前的 definitionLevel 由 writer 在 schema 中的位置决定，等于字段路径上可选字段与重复字段个数之和。\n\n记录常以几十万条、上千字段计，深度信息可以暂存到磁盘；非原子字段（如 Name.Language）可能需要只含深度、不含非空值的独立 column stripe，这样空记录也能无损编码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000391"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "将记录转换为列式存储"
+              ],
+              "lineStart": 5206,
+              "lineEnd": 5247,
+              "assetRefs": [],
+              "excerptSha256": "d9b01ddc3140067bbba97a0b76fd17e9c10e9249da7f08ff48eabb2b39c51275"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dissect-trace",
+        "moduleId": "dissect-record",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：沿算法走一遍 Code 列",
+        "markdown": "把算法的判断顺序走一遍，就能明白 0、2、1 是怎么产生的。解码器按记录顺序读取字段，每进入一层嵌套就递归一次，`seenFields` 在该层内记录哪些子字段已经出现：\n\n- 第一个 Name 的第一个 Language 首次出现，重复深度沿用父层传入的 0；\n- 在同一个 Language 下再读到一个 Code 值，说明重复发生在 Language 层（第 2 级），得到 2；\n- 进入第三个 Name 时，新 Name 下的 Language 是首次出现，重复退回到 Name 层（第 1 级），得到 1。\n\n`seenFields` 的作用正在这里：它标识“最近重复出现的那个字段”，让子 writer 取到正确的树深度，而不必逐层比较整条路径。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dissect"
+          ]
+        }
+      },
+      {
+        "id": "tb-assembly",
+        "moduleId": "assemble-record",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材方法：用状态机装配记录",
+        "markdown": "从列式数据装配记录的目标是：给定字段的一个子集，重组出的记录就好像只包含这些字段，其他字段当作不存在。核心作法是为字段子集建一个有限状态机（FSM），状态对应字段的 reader，读取字段值和深度后顺序把值接到输出上。\n\n- 状态变化标记重复深度：reader 拿到一个值后，看下一个值的重复深度决定状态如何变化、跳到哪个 reader；\n- 对每条记录，FSM 都从开始状态走到结束状态一次；\n- 以 Document 为例，FSM 从 DocId 开始，读完 DocId 转到 Links.Backward，取完所有重复的 Backward 值再转 Links.Forward，依此类推；\n- 扫描某张“表”的某一行时，要先判断它与下一条记录的关系。对 repeated 字段的子孙字段，还要判断它属于哪个层次的祖先：正在装配 r1 某个 Name 的 Language 时读到 Name.Language.Country 的一行，r = 0 表示属于下一条记录，r = 1 表示属于 r1 的下一个 Name，两者都应转到 Name.Url；r = 2 表示属于当前 Name 的下一个 Language，要回到 Name.Language.Code 继续装配。\n\nFSM 的构造规则可简写为：令 l 为字段 f 读取到的下一个重复深度，在 schema 树中找到它在深度 l 的祖先，取该祖先节点的第一个叶子字段 n，状态变化记为 (f; l) → n。例如 f = Name.Language.Country、l = 1 时，深度 1 的祖先是 Name，它的第一个叶子字段是 Name.Url。\n\n只处理部分字段时 FSM 更简单：只读 DocId 与 Name.Language.Country 时，输出记录 s1、s2 仍保留 Country 的封闭结构，因此可以按 /Name[2]/Language[1]/Country 这样的 XPath 定位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000392"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "记录的装配"
+              ],
+              "lineStart": 5248,
+              "lineEnd": 5264,
+              "assetRefs": [
+                "parts/part-0003/images/b871f84003a22633f3dd56992c64622bfee54a3718718aad7e8b9275b5c6e499.jpg",
+                "parts/part-0003/images/19a65d3f11e27eac934eef2623767e5476157ba889eb8bae5901232e736bb162.jpg"
+              ],
+              "excerptSha256": "1fe305f6dcc473125373219779321e3595f4be2107f07c17b6240b77fb54e68b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-assembly-transition",
+        "moduleId": "assemble-record",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：把深度当作跳转指令",
+        "markdown": "可以把 (f; l) → n 当作装配时的三步查表：\n\n1. 从当前字段 f 在 schema 中的节点向上找到深度为 l 的祖先；\n2. 取该祖先的第一个叶子字段 n；\n3. 把状态切到 n 的 reader，继续读取对应列的下一个值。\n\n于是重复深度同时承担了两件事：拆分阶段记录“重复发生在第几级”，装配阶段被当作“退回第几级祖先”的指令。这也解释了为什么每条记录都要让 FSM 完整循环一次——重复深度为 0 的那一行就是循环边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-assembly",
+            "tb-repetition-level"
+          ]
+        }
+      },
+      {
+        "id": "model-practice",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：缺失在哪一层，该退回哪一级",
+        "markdown": "给定一条记录中某 Name.Language.Country 列的条目，请判断并说明理由：\n\n1. 条目值为 `NULL`、d = 1，结构缺在哪一层？\n2. 条目值为 `NULL`、d = 2，结构缺在哪一层？\n3. 装配时读到 r = 1，应退回到哪个祖先继续？\n\n参考答案：1）Name 有定义、Language 缺失；2）Language 有定义、Country 缺失；3）退回深度为 1 的祖先 Name，再从它的第一个叶子字段继续读取。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-definition-level",
+            "tb-assembly"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：值与位置分开保存",
+        "markdown": "嵌套列式存储用两条元数据把“值”和“位置”分开保存：r 记录新重复发生在第几级，d 记录路径上定义到第几层。拆分算法沿 schema 建的 fieldWriter 树一边扫描记录一边计算深度，只在实际取值时更新；装配时把深度当作状态机的跳转条件，按 (f; l) → n 逐列回填，每条记录走完一轮状态机。二者的配合保证了记录被肢解后仍能无损还原，这也是后续在嵌套数据上执行查询的基础。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-level-concepts",
+            "tb-definition-level",
+            "tb-dissect",
+            "tb-assembly"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "country-depth-check",
+        "type": "formative-check",
+        "title": "缺失层级与回退方向判断",
+        "anchorBlockId": "model-practice",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-two-levels",
+          "compute-levels",
+          "trace-assembly"
+        ],
+        "learningPurpose": "检查学习者能否依据定义深度区分不同的缺失层级，并据重复深度判断装配时的回退方向。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-definition-level",
+            "tb-assembly",
+            "model-practice"
+          ]
+        },
+        "config": {
+          "items": 3,
+          "feedback": "逐项对照 d 与 r 的含义说明理由"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别写出 d = 1 与 d = 2 时缺失发生的层级，并说明 r = 1 时应退回到 Name 祖先继续装配。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Google Dremel",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000387"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "嵌套列式存储"
+      ],
+      "lineStart": 5172,
+      "lineEnd": 5175,
+      "assetRefs": [],
+      "excerptSha256": "7defa76e9ecc13481d11bd0ef336a5bd2e212cc392dc00d289aac948b634f863"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000388"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "重复深度、定义深度"
+      ],
+      "lineStart": 5176,
+      "lineEnd": 5191,
+      "assetRefs": [],
+      "excerptSha256": "847a72445ae6e9281190ff6f44cc0be83065c03164aec77f45d2e9b9043167eb"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000389"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 重复深度（Repetition Level）"
+      ],
+      "lineStart": 5192,
+      "lineEnd": 5197,
+      "assetRefs": [],
+      "excerptSha256": "555cf331c3b6c528f9fd5e85ef41e9915f13cb7ef9cca951f7c3c1777ee315b9"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000390"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 定义深度（Definition Level）"
+      ],
+      "lineStart": 5198,
+      "lineEnd": 5205,
+      "assetRefs": [],
+      "excerptSha256": "a92c3fcf5c052b893052214a308693c3e982234518b1b90f8e17bc181d45cd67"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000391"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "将记录转换为列式存储"
+      ],
+      "lineStart": 5206,
+      "lineEnd": 5247,
+      "assetRefs": [],
+      "excerptSha256": "d9b01ddc3140067bbba97a0b76fd17e9c10e9249da7f08ff48eabb2b39c51275"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000392"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "记录的装配"
+      ],
+      "lineStart": 5248,
+      "lineEnd": 5264,
+      "assetRefs": [
+        "parts/part-0003/images/b871f84003a22633f3dd56992c64622bfee54a3718718aad7e8b9275b5c6e499.jpg",
+        "parts/part-0003/images/19a65d3f11e27eac934eef2623767e5476157ba889eb8bae5901232e736bb162.jpg"
+      ],
+      "excerptSha256": "1fe305f6dcc473125373219779321e3595f4be2107f07c17b6240b77fb54e68b"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1233,
+    254
+  ],
+  "scale": 1.25
+}

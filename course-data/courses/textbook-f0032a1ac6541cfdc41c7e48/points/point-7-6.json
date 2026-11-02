@@ -1,0 +1,851 @@
+{
+  "id": "point-7-6",
+  "title": "HBase 的实现",
+  "shortSummary": "说明 HBase 依托 HDFS 存储并借助协调服务管理集群的实现方式。",
+  "keyTerms": [
+    "HRegion",
+    "HStore",
+    ".META. 表",
+    "-ROOT- 表",
+    "三层定位"
+  ],
+  "animationType": "regionLookup",
+  "animationSuggestion": "让一个客户端标记沿三层目录逐层移动，每一步显示当前层级和行键区间比较结果，并用分叉展示缓存命中与失效两条路径；旁边实时统计网络来回次数，使学习者直观看出为什么多数请求不与 HMaster 通信。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-7-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "layered-mechanism-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于组件职责、HRegion 层次与三层定位的事实和数值，按“存储层次—定位路径—启动装配—版本辨析”重排讲解顺序，并补充示例、表格与检查题，教材未涉及的对比以模型补充块明确标注。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "describe-components",
+          "text": "说明库函数、HMaster 与 HRegion 服务器三类组件各自的职责，并解释为什么客户端读写不经过 HMaster。"
+        },
+        {
+          "id": "explain-region-hierarchy",
+          "text": "用 [startkey, endkey)、HStore、memStore 与 HStoreFile 描述从表到 HDFS 文件的层次，并说清 HRegion 分裂与两个“最小单元”的区别。"
+        },
+        {
+          "id": "trace-region-lookup",
+          "text": "按 Zookeeper → -ROOT- → .META. → 用户表的顺序说明 HRegion 定位过程，并解释缓存失效后为什么需要 6 次网络来回。"
+        },
+        {
+          "id": "judge-version-context",
+          "text": "判断教材所述结构与主服务器单点描述对应哪一代 HBase 实现，并说明阅读旧版资料时要注意什么。"
+        }
+      ],
+      "misconceptions": [
+        "认为 HBase 的所有读写请求都要经过 HMaster；实际读写由客户端直接与 HRegion 服务器交互。",
+        "认为 HRegion 是底层存储的最小单元；实际 HRegion 由 HStore 组成，落盘单位是 HStoreFile（HFile）。",
+        "认为一个 HRegion 可以跨多台 HRegion 服务器存放；实际同一 HRegion 只保存在一台服务器上。",
+        "把教材的三层定位结构当作当前所有 HBase 版本都具备的结构。"
+      ],
+      "modules": [
+        {
+          "id": "section-framing",
+          "title": "本节要回答的两个问题",
+          "role": "problem-intro",
+          "outcomeRefs": [
+            "describe-components"
+          ],
+          "order": 0
+        },
+        {
+          "id": "components-roles",
+          "title": "三个功能组件与控制面、数据面",
+          "role": "concept",
+          "outcomeRefs": [
+            "describe-components"
+          ],
+          "order": 1
+        },
+        {
+          "id": "region-hierarchy",
+          "title": "表、HRegion 与 HStore 的层次",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-region-hierarchy"
+          ],
+          "order": 2
+        },
+        {
+          "id": "lookup-path",
+          "title": "HRegion 的三层定位路径",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-region-lookup"
+          ],
+          "order": 3
+        },
+        {
+          "id": "metadata-and-startup",
+          "title": "元数据表与主服务器启动装配",
+          "role": "procedure",
+          "outcomeRefs": [
+            "trace-region-lookup"
+          ],
+          "order": 4
+        },
+        {
+          "id": "version-and-check",
+          "title": "版本背景辨析与达成检查",
+          "role": "consolidation",
+          "outcomeRefs": [
+            "judge-version-context"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-components",
+          "explain-region-hierarchy",
+          "trace-region-lookup",
+          "judge-version-context"
+        ],
+        "method": "先复述一次三层定位路径，再完成三道检查题并说明依据。",
+        "successCriteria": [
+          "能指出读写流量与 HMaster 管理流量的分工",
+          "能画出表到 HFile 的层次并区分两个“最小单元”",
+          "能说明缓存命中与全部失效两种路径的差别",
+          "能指出教材结构对应的版本背景"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-7-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-overview",
+        "moduleId": "section-framing",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材本节的结构",
+        "markdown": "教材 7.6 节标题为“HBase 的实现”，其第一小节标题为“表和 HRegion”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000219"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HBase 的实现"
+              ],
+              "lineStart": 2715,
+              "lineEnd": 2716,
+              "assetRefs": [],
+              "excerptSha256": "8be743690527e25a02f2f4a204b9d5a73c04c3f7e62f7a7f57f7335e332526da"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-questions",
+        "moduleId": "section-framing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：读实现细节前先立两个问题",
+        "markdown": "读实现细节之前，可以先立两个问题：\n\n1. **表怎么落到多台机器上？** 一个表的数据量可能远超单机容量，必须切成若干块，再让不同机器分担。\n2. **客户端怎么找到数据？** 即使数据分布在各处，客户端也要能凭行键定位到真正持有数据的服务器。\n\n教材先回答第一个问题，即表和 HRegion 的层次，然后转入第二个问题，即 HRegion 的定位。带着这两问往下读，每个细节都能落到具体问题上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-section-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-three-components",
+        "moduleId": "components-roles",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：三个主要功能组件",
+        "markdown": "HBase 实现包括三个主要的功能组件：\n\n- **库函数**：链接到每个客户端；\n- **一个 HMaster 主服务器**；\n- **许多个 HRegion 服务器**，其数量可以根据工作负载的变化，从一个簇中动态地增加或删除。\n\n主服务器 HMaster 负责把 HRegion（类似 BigTable 中的 Tablet）分配到 HRegion 服务器，探测 HRegion 服务器的增加和过期，进行 HRegion 服务器的负载均衡，以及 HDFS 文件系统中的垃圾收集；除此以外，它还处理表、列族创建这类模式变化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "表和 HRegion"
+              ],
+              "lineStart": 2717,
+              "lineEnd": 2752,
+              "assetRefs": [
+                "parts/part-0002/images/dcc1c1045ef76083ea456451714a3e75eb6e9462d5e64e74af9f89c0c476be8e.jpg",
+                "parts/part-0002/images/1088be7765ed92fc011b909370e7a6c3e20cd0a186b1dafcf396ad6b34a328c3.jpg",
+                "parts/part-0002/images/864d223c97bd9f5043b14ee63be2a1a564e8a4c0e809f4520a8aee69051de912.jpg",
+                "parts/part-0002/images/b85e963c498bb29ed29fbde43dc09b182cc1d856b83a9bc78aace39474823aef.jpg"
+              ],
+              "excerptSha256": "c8da90040d6f15c1128278a1aebb27704d6e97764db0814f1deca4a18822a8bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-region-server-load",
+        "moduleId": "components-roles",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：HRegion 服务器的日常职责",
+        "markdown": "每个 HRegion 服务器管理一个 HRegion 集合，通常每个 HRegion 服务器上会放置 10 到 1000 个 HRegion。HRegion 服务器处理针对那些已经加载的 HRegion 而提出的读写请求，并且会对过大的 HRegion 进行划分。\n\n客户端并不是直接从主服务器读取数据，而是直接从 HRegion 服务器上读取数据。因为 HBase 客户端并不依赖主服务器 HMaster 来获得 HRegion 的位置信息，所以大多数客户端从来不和主服务器 HMaster 通信，从而使得实际应用中主服务器负载很小。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "表和 HRegion"
+              ],
+              "lineStart": 2717,
+              "lineEnd": 2752,
+              "assetRefs": [
+                "parts/part-0002/images/dcc1c1045ef76083ea456451714a3e75eb6e9462d5e64e74af9f89c0c476be8e.jpg",
+                "parts/part-0002/images/1088be7765ed92fc011b909370e7a6c3e20cd0a186b1dafcf396ad6b34a328c3.jpg",
+                "parts/part-0002/images/864d223c97bd9f5043b14ee63be2a1a564e8a4c0e809f4520a8aee69051de912.jpg",
+                "parts/part-0002/images/b85e963c498bb29ed29fbde43dc09b182cc1d856b83a9bc78aace39474823aef.jpg"
+              ],
+              "excerptSha256": "c8da90040d6f15c1128278a1aebb27704d6e97764db0814f1deca4a18822a8bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-control-data-plane",
+        "moduleId": "components-roles",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：控制面与数据面的分工",
+        "markdown": "把上面的职责按“频次”分类，就能看清 HMaster 负载为什么小：\n\n- **控制面（HMaster）**：分配 HRegion、发现服务器上下线、做负载均衡、清理 HDFS 上的无用文件、处理表和列族的结构变更。这些都是低频的管理动作。\n- **数据面（HRegion 服务器）**：承接客户端真正的读和写，是流量主体。\n\n所以关键不是“客户端数量少”，而是高频读写根本不经过 HMaster。反过来说，任何需要询问“这个 HRegion 现在在哪”的操作都必须尽量少打扰 HMaster，这也正是教材随后介绍客户端缓存位置信息的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-components",
+            "textbook-region-server-load"
+          ]
+        }
+      },
+      {
+        "id": "textbook-table-to-regions",
+        "moduleId": "region-hierarchy",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：一个表就是一组 HRegion",
+        "markdown": "一个 HBase 中存储了许多表。每个表都是一个 HRegion 集合，每个 HRegion 包含了位于某个值域区间内的所有数据。在最初阶段，每个表只包含一个 HRegion；随着表的增长，它会被自动分解成许多 HRegion，每个 HRegion 默认尺寸大约是 100 到 200MB。\n\n关于表和 HRegion 的关系，教材总结如下：\n\n- 表中的所有行都按照行键的字典序排列；\n- 表在行的方向上分割为多个 HRegion；\n- HRegion 会按照大小进行分割：随着数据不断插入，HRegion 不断增大，当增大到一个阈值的时候，HRegion 就会等分成两个新的 HRegion；\n- 一个 HRegion 由 `[startkey, endkey)` 表示，不同的 HRegion 会被 HMaster 分配给相应的 HRegionServer 进行管理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "表和 HRegion"
+              ],
+              "lineStart": 2717,
+              "lineEnd": 2752,
+              "assetRefs": [
+                "parts/part-0002/images/dcc1c1045ef76083ea456451714a3e75eb6e9462d5e64e74af9f89c0c476be8e.jpg",
+                "parts/part-0002/images/1088be7765ed92fc011b909370e7a6c3e20cd0a186b1dafcf396ad6b34a328c3.jpg",
+                "parts/part-0002/images/864d223c97bd9f5043b14ee63be2a1a564e8a4c0e809f4520a8aee69051de912.jpg",
+                "parts/part-0002/images/b85e963c498bb29ed29fbde43dc09b182cc1d856b83a9bc78aace39474823aef.jpg"
+              ],
+              "excerptSha256": "c8da90040d6f15c1128278a1aebb27704d6e97764db0814f1deca4a18822a8bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-split-example",
+        "moduleId": "region-hierarchy",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次分裂算例",
+        "markdown": "设某表最初的 HRegion 覆盖区间 `[a, z)`，当它增长到阈值并在行键 `m` 处等分时，会得到 `[a, m)` 与 `[m, z)` 两个新 HRegion。因为区间是左闭右开，边界值 `m` 归后一个区间所有，两段既不重叠也不遗漏。\n\n分裂只改变“数据归哪个 HRegion”，不改变全局顺序：行键字典序在整个表上仍然成立，两个新区间首尾相接。变化的是元数据——原来一条区间记录变成两条，所以“这个 HRegion 现在在哪台服务器”的映射必须可更新、可查询，这正是后文三层定位结构要解决的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-table-to-regions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-region-min-unit",
+        "moduleId": "region-hierarchy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：HRegion 是最小分配单元",
+        "markdown": "HRegion 是 HBase 中分布式存储和负载均衡的最小单元。最小单元就表示不同的 HRegion 可以分布在不同的 HRegionServer 上，但是，同一个 HRegion 是不会拆分到多个 HRegionServer 上的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "表和 HRegion"
+              ],
+              "lineStart": 2717,
+              "lineEnd": 2752,
+              "assetRefs": [
+                "parts/part-0002/images/dcc1c1045ef76083ea456451714a3e75eb6e9462d5e64e74af9f89c0c476be8e.jpg",
+                "parts/part-0002/images/1088be7765ed92fc011b909370e7a6c3e20cd0a186b1dafcf396ad6b34a328c3.jpg",
+                "parts/part-0002/images/864d223c97bd9f5043b14ee63be2a1a564e8a4c0e809f4520a8aee69051de912.jpg",
+                "parts/part-0002/images/b85e963c498bb29ed29fbde43dc09b182cc1d856b83a9bc78aace39474823aef.jpg"
+              ],
+              "excerptSha256": "c8da90040d6f15c1128278a1aebb27704d6e97764db0814f1deca4a18822a8bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-hstore",
+        "moduleId": "region-hierarchy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：HRegion 内部按列族分成 HStore",
+        "markdown": "HRegion 虽然是分布式存储的最小单元，但并不是底层存储的最小单元。事实上，HRegion 由一个或者多个 HStore 组成，每个 HStore 保存一个列族。每个 HStore 又由一个 memStore 和 0 至多个 HStoreFile 组成，HStoreFile 以 HFile 格式保存在 HDFS 上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "表和 HRegion"
+              ],
+              "lineStart": 2717,
+              "lineEnd": 2752,
+              "assetRefs": [
+                "parts/part-0002/images/dcc1c1045ef76083ea456451714a3e75eb6e9462d5e64e74af9f89c0c476be8e.jpg",
+                "parts/part-0002/images/1088be7765ed92fc011b909370e7a6c3e20cd0a186b1dafcf396ad6b34a328c3.jpg",
+                "parts/part-0002/images/864d223c97bd9f5043b14ee63be2a1a564e8a4c0e809f4520a8aee69051de912.jpg",
+                "parts/part-0002/images/b85e963c498bb29ed29fbde43dc09b182cc1d856b83a9bc78aace39474823aef.jpg"
+              ],
+              "excerptSha256": "c8da90040d6f15c1128278a1aebb27704d6e97764db0814f1deca4a18822a8bf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-storage-chain",
+        "moduleId": "region-hierarchy",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：从表到 HDFS 文件的层次链",
+        "markdown": "把教材的层次连起来，可以得到完整链条：\n\n| 层次 | 作用 | 关键点 |\n|---|---|---|\n| 表 | 用户看到的数据集合 | 行按键字典序排列 |\n| HRegion | 表的一段连续行区间 | 用 `[startkey, endkey)` 表示，分配与负载均衡的单位 |\n| HStore | 一个列族在 HRegion 内的存储单元 | 一个 HRegion 含一个或多个 HStore |\n| memStore / HStoreFile | 内存写缓冲与落盘文件 | HStoreFile 以 HFile 格式存放在 HDFS |\n\n由此可以区分两个容易被混为一谈的“最小单元”：**分布式存储和负载均衡的最小单元是 HRegion**，而**底层存储的最小单元是 HStore 及其落盘形态 HStoreFile（HFile）**。前者决定“哪台服务器管哪段数据”，后者决定“数据最终写成什么文件”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-region-min-unit",
+            "textbook-hstore"
+          ]
+        }
+      },
+      {
+        "id": "textbook-lookup-section",
+        "moduleId": "lookup-path",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：单独讨论 HRegion 的定位",
+        "markdown": "教材在 7.6 节中把“HRegion 的定位”单列为 7.6.2 节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HRegion 的定位"
+              ],
+              "lineStart": 2753,
+              "lineEnd": 2754,
+              "assetRefs": [],
+              "excerptSha256": "70aae21715adff64aa041ee5ce0536e14c9a3d397a757053db6dde2c517480ec"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lookup-question",
+        "moduleId": "lookup-path",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：定位问题的两步拆解",
+        "markdown": "定位可以拆成两步：先由行键判断它落在哪个 HRegion 的 `[startkey, endkey)` 区间内，再查出这个 HRegion 当前由哪台 HRegionServer 管理。\n\n难点在第二步。HRegion 会分裂、会被重新分配，位置关系随时间变化，因此不能把映射硬编码进客户端，也不能每次都去问主服务器（那会让主服务器重新变成瓶颈）。可行的办法是维护一份**可查询、可更新的目录**，让客户端自己按目录逐层找到目标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-lookup-section",
+            "textbook-region-server-load"
+          ]
+        }
+      },
+      {
+        "id": "textbook-three-layer",
+        "moduleId": "lookup-path",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：类似 B+ 树的三层结构",
+        "markdown": "HBase 使用类似 B+ 树的三层结构来保存 HRegion 位置信息：\n\n- 第一层是 **Zookeeper 文件**：它记录了 `-ROOT-` 表的位置信息，即 root region 的位置信息；\n- 第二层是 **`-ROOT-` 表**：只包含一个 root region，记录了 `.META.` 表中的 region 信息；通过 root region，就可以访问 `.META.` 表的数据；\n- 第三层是 **`.META.` 表**：是一个特殊的表，记录了用户表的 HRegion 信息；`.META.` 表可以有多个 HRegion，保存了 HBase 中所有数据表的 HRegion 位置信息。\n\nClient 访问用户数据之前，需要首先访问 Zookeeper，然后访问 `-ROOT-` 表，接着访问 `.META.` 表，最后才能找到用户数据的位置去访问。中间需要多次网络操作，不过 client 端会做 cache 缓存。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000222"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HBase 三层结构"
+              ],
+              "lineStart": 2755,
+              "lineEnd": 2782,
+              "assetRefs": [
+                "parts/part-0002/images/7323215661d5f132e50398675a5312a7f6e25cad5d58997ed1bd386fe833197d.jpg",
+                "parts/part-0002/images/6e431049a6ab0159bebbf0b0a856c4971464060107a57695f777d6235a1b93fa.jpg"
+              ],
+              "excerptSha256": "460f9279fd5ac0945cfd4620d2878699b251d84269ca12dddfc40fdda782e8da"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lookup-walkthrough",
+        "moduleId": "lookup-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次定位的完整走法",
+        "markdown": "以查询某个行键为例，客户端的一次定位大致是：\n\n1. 先看本地缓存里有没有该行键所属 HRegion 的服务器地址，有则直接跳到第 4 步；\n2. 缓存未命中时，从 Zookeeper 读到 `-ROOT-` 表所在的 HRegion 服务器，读 `-ROOT-` 表得到 `.META.` 表的位置；\n3. 读 `.META.` 表，用行键比较找到覆盖该行键的 HRegion，以及它的 HRegionServer 地址；\n4. 直接向该 HRegionServer 发起读写请求，并把位置信息写入缓存。\n\n整个过程都不需要客户端连接 HMaster，这正是前文“主服务器负载很小”的具体表现：位置查询由客户端沿目录自行完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-layer"
+          ]
+        }
+      },
+      {
+        "id": "textbook-lookup-bounds",
+        "moduleId": "lookup-path",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：跳转次数、行键编码与容量估算",
+        "markdown": "关于 HRegion 定位，教材给出几点说明：\n\n- root region 永远不会被分裂，保证了最多需要三次跳转，就能定位到任意 HRegion；\n- `.META.` 表每行保存一个 HRegion 的位置信息，行键采用“表名 + HRegion 的第一个行键 + HRegion 的 ID”编码而成；\n- 为了加快访问，`.META.` 表的全部 HRegion 都保存在内存中；假设 `.META.` 表的一行在内存中大约占用 1KB，并且每个 HRegion 限制为 128MB，那么三层结构可以保存的 HRegion 数目为 $(128\\text{ MB} / 1\\text{ KB}) \\times (128\\text{ MB} / 1\\text{ KB}) = 2^{34}$ 个；\n- client 会将查询过的位置信息保存缓存起来，缓存不会主动失效，因此如果 client 上的缓存全部失效，则需要进行 6 次网络来回，才能定位到正确的 HRegion，其中三次用来发现缓存失效，另外三次用来获取位置信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000222"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HBase 三层结构"
+              ],
+              "lineStart": 2755,
+              "lineEnd": 2782,
+              "assetRefs": [
+                "parts/part-0002/images/7323215661d5f132e50398675a5312a7f6e25cad5d58997ed1bd386fe833197d.jpg",
+                "parts/part-0002/images/6e431049a6ab0159bebbf0b0a856c4971464060107a57695f777d6235a1b93fa.jpg"
+              ],
+              "excerptSha256": "460f9279fd5ac0945cfd4620d2878699b251d84269ca12dddfc40fdda782e8da"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lookup-cost",
+        "moduleId": "lookup-path",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "模型补充：把容量上限和失效代价算清楚",
+        "markdown": "两项数字值得拆开看：\n\n- **容量估算**：$128\\text{ MB} / 1\\text{ KB} = 2^{17}$，两层各能索引 $2^{17}$ 项，于是 $2^{17} \\times 2^{17} = 2^{34}$ 个 HRegion。它是把“一行约占 1KB、每个 HRegion 限制 128MB”当作上限假设得到的量级估算，用来说明三层结构在容量上留有很大余量。\n- **失效代价**：缓存不主动失效，意味着客户端可能拿着过期的位置。教材估计最坏情况需要 6 次网络来回——三次用于发现缓存失效，三次用于重新获取位置信息。\n\n这两个数字合起来说明同一件事：位置缓存省下的是**常态开销**，代价则集中在**异常路径**上，所以客户端逻辑必须处理重试与映射过期。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-lookup-bounds"
+          ]
+        }
+      },
+      {
+        "id": "textbook-region-identity",
+        "moduleId": "metadata-and-startup",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：HRegion 的唯一标识与元数据表",
+        "markdown": "HRegion 按表名和主键范围区分，由于主键范围是连续的，一般用开始主键就能表达。但只有开始主键还不够：因为有合并和分割操作，如果正好在这些操作过程中出现死机，就可能存在多份表名和开始主键一样的数据，需要用元数据来判断哪一份才是正确的数据文件。为区分这种情况，每个 HRegion 都有一个 HRegionId 来标识它的唯一性。\n\n所以一个 HRegion 的表达式最后是：**表名 + 开始主键 + 唯一 id**（tablename + startkey + regionId）。教材给出的例子是 `hbaserepository`、`w-nk5YNZ8TBb2uWFIRJo7==`、`6890601455914043877`。\n\n这些数据称为“元数据”，而元数据本身也保存在 HRegion 里面，这个表称为“元数据表”（`.META.` 表），里面保存的就是 HRegion 标识符和实际 HRegion 服务器的映射关系。元数据表本身也会增长，并且可能被分割为几个 HRegion；为了定位这些 HRegion，有一个根数据表（ROOT table）保存了所有元数据表的位置，而根数据表不能被分割，永远只存在一个 HRegion。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000223"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "关于.META.表"
+              ],
+              "lineStart": 2783,
+              "lineEnd": 2818,
+              "assetRefs": [],
+              "excerptSha256": "c568b2431fcef424bd35a1a2ea879c11ca03dd8c73a53c5cc21fe156939e15ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-region-id",
+        "moduleId": "metadata-and-startup",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：regionId 相当于区间的版本号",
+        "markdown": "可以把 `regionId` 理解为“同一段行区间的版本号”。表名和开始主键只能回答“数据属于哪一段”，而分裂或合并进行到一半时，旧区间与新区间可能共用同一个开始主键；此时只有 `regionId` 能区分哪一份是当前有效的 HRegion。\n\n这也点出了元数据的性质：它不备份数据本身，只记录“哪个 HRegion 现在归哪台服务器”。正因为它记录的是映射而非数据，才能随分配变化频繁更新。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-region-identity"
+          ]
+        }
+      },
+      {
+        "id": "textbook-startup-scan",
+        "moduleId": "metadata-and-startup",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：主服务器启动时的扫描顺序",
+        "markdown": "HBase 启动时，主服务器的处理顺序是：\n\n1. 先扫描根数据表。因为这个表只会有一个 HRegion，所以这个 HRegion 的名字是被写死的；把根数据表分配到一个 HRegion 服务器需要一定时间。\n2. 当根数据表被分配好之后，主服务器扫描根数据表，获取元数据表的名字和位置，然后把元数据表分配到不同的 HRegion 服务器。\n3. 最后扫描元数据表，找到所有 HRegion 区域的信息，然后把它们分配给不同的 HRegion 服务器。\n\n主服务器在内存中保存着当前活跃的 HRegion 服务器的数据，因此，如果主服务器死机的话，整个系统也就无法访问了；而服务器的信息也没有必要保存到文件里面。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000223"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "关于.META.表"
+              ],
+              "lineStart": 2783,
+              "lineEnd": 2818,
+              "assetRefs": [],
+              "excerptSha256": "c568b2431fcef424bd35a1a2ea879c11ca03dd8c73a53c5cc21fe156939e15ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-startup-dependency",
+        "moduleId": "metadata-and-startup",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：启动顺序是一条依赖链",
+        "markdown": "这个顺序本身就是一条依赖链：`-ROOT-` 未分配，就无法读 `.META.` 的位置；`.META.` 未分配，就无法分配用户表的 HRegion。把根数据表的名字写死，等价于给这条链一个无需查询的起点，代价是根数据表成为启动关键路径上的单点。\n\n“服务器信息不落盘”也可以从同一角度理解：活跃服务器列表变化频繁，教材据此认为没有必要写入文件，从而由主服务器的内存状态承担这份记录。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-startup-scan"
+          ]
+        }
+      },
+      {
+        "id": "textbook-info-family",
+        "moduleId": "metadata-and-startup",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：元数据表的 info 列族与客户端访问",
+        "markdown": "元数据表和根数据表的每一行都包含一个列族——`info` 列族：\n\n- `info:regioninfo`：包含了一个串行化的 `HRegionInfo` 对象；\n- `info:server`：保存了一个字符串，是服务器地址 `HServerAddress.toString()`；\n- `info:startcode`：一个长整型数字的字符串，是 HRegion 服务器启动的时候传给主服务器的，让主服务器决定这个 HRegion 服务器的信息有没有更改。\n\n因此，当一个客户端从 Zookeeper 服务器上拿到根数据表地址以后，就可以直接访问相应的 HRegion 服务器获得数据，没有必要再连接主服务器。所以主服务器的负载相对小了很多，它只会处理超时的 HRegion 服务器、在启动的时候扫描根数据表和元数据表，以及返回根数据表的 HRegion 服务器地址。\n\n教材同时指出 HBase 的客户端十分复杂：它经常需要浏览元数据表和根数据表；查询表时如果某个 HRegion 服务器死机或者它上面的数据更改了，客户端就会继续重试，而客户端保留的映射关系并不会一直正确。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000223"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "关于.META.表"
+              ],
+              "lineStart": 2783,
+              "lineEnd": 2818,
+              "assetRefs": [],
+              "excerptSha256": "c568b2431fcef424bd35a1a2ea879c11ca03dd8c73a53c5cc21fe156939e15ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-info-purpose",
+        "moduleId": "metadata-and-startup",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三个 info 列各管什么",
+        "markdown": "三个列的分工可以概括为：\n\n- `regioninfo` 描述“这段区间的边界与身份”；\n- `server` 描述“这段区间现在归谁管”；\n- `startcode` 描述“这台服务器的这一次启动”，相当于给服务器地址附上一个启动序号。\n\n服务器重启后地址字符串可能不变，但 `startcode` 会变，主服务器据此判断旧记录是否已经过期。这也解释了客户端缓存为什么会失效：缓存保存的是地址，而映射是否仍然有效取决于服务器当前的启动状态，所以客户端必须准备好重试并刷新映射。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-info-family",
+            "textbook-startup-scan"
+          ]
+        }
+      },
+      {
+        "id": "model-version-context",
+        "moduleId": "version-and-check",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "模型补充：教材结构对应的版本背景",
+        "markdown": "教材这段描述对应其写作时期（2013 年前后）的 HBase 实现，阅读时要注意两处后来已经变化的细节：\n\n- **`-ROOT-` 表**：较新的 HBase 版本取消了 `-ROOT-` 表，客户端从 Zookeeper 直接取得 `.META.`（现在的 `hbase:meta`）表的位置，定位由三层变为两层；教材“最多三次跳转”的结论只属于三层结构。\n- **主服务器单点**：教材强调 HMaster 死机则整个系统无法访问；后续版本为 HMaster 提供备份节点与自动切换，单点影响减弱，但 HMaster 仍承担 HRegion 分配、负载均衡等控制面职责。\n\n因此本节内容适合作为理解 HBase 设计演进的起点：涉及具体结构名称、跳转次数和可用性结论时，先确认所读资料对应哪一代实现，再决定它是否仍适用于当前系统。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-layer",
+            "textbook-region-identity",
+            "textbook-startup-scan",
+            "textbook-info-family"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "version-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：HRegion 定位的总结",
+        "markdown": "教材对 HRegion 定位的总结是：\n\n- HRegion 服务器提供对 HRegion 的访问，一个 HRegion 只会保存在一个 HRegion 服务器上面；\n- HRegion 会注册到主服务器上面；\n- 如果主服务器死机，那么整个系统都会无效；\n- 当前的 HRegion 服务器列表只有主服务器知道；\n- HRegion 区域和 HRegion 服务器的对应关系保存在两个特别的 HRegion 里面（根数据表和元数据表），它们像其他 HRegion 一样被分配到不同的服务器；\n- 根数据表是最特别的一个表，主服务器永远知道它的位置（在程序中写死）；\n- 客户端需要自己浏览这些表，来找到数据在哪里。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000224"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "总结"
+              ],
+              "lineStart": 2819,
+              "lineEnd": 2836,
+              "assetRefs": [],
+              "excerptSha256": "d6128d16a478237426b1df23115964b5351d7bde7a7cb1dcf8e78404d11de4f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "version-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：达成检查",
+        "markdown": "用三个问题检查是否真正理解了本节：\n\n1. 客户端要读取行键 `k` 的数据，依次会经过哪些组件？如果本地缓存命中了，路径会缩短成几步？\n2. 有人说“一个 HRegion 太大时可以拆到两台 HRegionServer 上”，这句话错在哪里？正确做法是什么？\n3. 如果 `.META.` 表本身增长到需要分裂，系统为什么仍然能定位它的各个 HRegion？\n\n参考要点：第 1 题应提到 Zookeeper → `-ROOT-` → `.META.` → HRegionServer，缓存命中时可直接访问 HRegionServer；第 2 题混淆了两个“最小单元”，正确做法是按大小把过大的 HRegion 等分成两个新的 HRegion，再分别分配；第 3 题依靠不可分裂的根数据表记录元数据表各 HRegion 的位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-region-min-unit"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "version-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：与下一点的衔接",
+        "markdown": "本节回答的是“数据存在哪里、怎样找到”。下一小节“HBase 系统架构”会把同样的组件放进一张部署图，逐个说明 Client、Zookeeper、HMaster、HRegionServer 的职责，以及 HRegion 分配、HRegionServer 上线与下线、HMaster 上线与下线的处理流程。带着本节的层次关系和定位路径去读，会更容易看清各组件之间的协作。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "region-lookup-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "version-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-region-lookup",
+          "explain-region-hierarchy"
+        ],
+        "learningPurpose": "检查学习者能否独立复述三层定位路径，并纠正“HRegion 可跨服务器拆分”的错误理解。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-three-layer",
+            "textbook-region-min-unit",
+            "textbook-hstore"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请在纸上画出 Zookeeper、-ROOT- 表、.META. 表与 HRegionServer 的位置关系，再说明一个过大的 HRegion 应该如何拆分。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HBase",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000219"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HBase 的实现"
+      ],
+      "lineStart": 2715,
+      "lineEnd": 2716,
+      "assetRefs": [],
+      "excerptSha256": "8be743690527e25a02f2f4a204b9d5a73c04c3f7e62f7a7f57f7335e332526da"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000220"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "表和 HRegion"
+      ],
+      "lineStart": 2717,
+      "lineEnd": 2752,
+      "assetRefs": [
+        "parts/part-0002/images/dcc1c1045ef76083ea456451714a3e75eb6e9462d5e64e74af9f89c0c476be8e.jpg",
+        "parts/part-0002/images/1088be7765ed92fc011b909370e7a6c3e20cd0a186b1dafcf396ad6b34a328c3.jpg",
+        "parts/part-0002/images/864d223c97bd9f5043b14ee63be2a1a564e8a4c0e809f4520a8aee69051de912.jpg",
+        "parts/part-0002/images/b85e963c498bb29ed29fbde43dc09b182cc1d856b83a9bc78aace39474823aef.jpg"
+      ],
+      "excerptSha256": "c8da90040d6f15c1128278a1aebb27704d6e97764db0814f1deca4a18822a8bf"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000221"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HRegion 的定位"
+      ],
+      "lineStart": 2753,
+      "lineEnd": 2754,
+      "assetRefs": [],
+      "excerptSha256": "70aae21715adff64aa041ee5ce0536e14c9a3d397a757053db6dde2c517480ec"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000222"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HBase 三层结构"
+      ],
+      "lineStart": 2755,
+      "lineEnd": 2782,
+      "assetRefs": [
+        "parts/part-0002/images/7323215661d5f132e50398675a5312a7f6e25cad5d58997ed1bd386fe833197d.jpg",
+        "parts/part-0002/images/6e431049a6ab0159bebbf0b0a856c4971464060107a57695f777d6235a1b93fa.jpg"
+      ],
+      "excerptSha256": "460f9279fd5ac0945cfd4620d2878699b251d84269ca12dddfc40fdda782e8da"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000223"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "关于.META.表"
+      ],
+      "lineStart": 2783,
+      "lineEnd": 2818,
+      "assetRefs": [],
+      "excerptSha256": "c568b2431fcef424bd35a1a2ea879c11ca03dd8c73a53c5cc21fe156939e15ab"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000224"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "总结"
+      ],
+      "lineStart": 2819,
+      "lineEnd": 2836,
+      "assetRefs": [],
+      "excerptSha256": "d6128d16a478237426b1df23115964b5351d7bde7a7cb1dcf8e78404d11de4f8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1433,
+    1974
+  ],
+  "scale": 0.89
+}

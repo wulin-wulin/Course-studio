@@ -1,0 +1,704 @@
+{
+  "id": "point-6-2",
+  "title": "Zookeeper 的工作原理",
+  "shortSummary": "解释 Zookeeper 基于领导者选举和一致性协议的协作机制，理解其读写角色分工。",
+  "keyTerms": [
+    "领导者选举",
+    "一致性",
+    "读写角色"
+  ],
+  "animationType": "zookeeperLeaderElection",
+  "animationSuggestion": "分阶段播放：先让各 server 处于 LOOKING 并交换 zxid，逐步累计票数直到某个候选者达到多数票；再展示 Follower 连接 Leader 上报 zxid、Leader 按差值补齐事务并标记 UPTODATE；最后切换到广播模式，演示一次写请求的 PROPOSAL、ACK 过半与 COMMIT。提供重播按钮回到同一初始状态，并允许切换“有一台 server 失效”的场景观察多数派门槛。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "protocol-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对原子广播、Zab 两种模式、zxid 与选主/同步步骤的定义和顺序，围绕“一次完整的协作链路”补充直觉、算例和检查题，不改变教材中的条件、票数规则和消息职责。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-zab",
+          "text": "解释原子广播与 Zab 的恢复模式、广播模式如何配合保证各服务器状态同步。"
+        },
+        {
+          "id": "explain-zxid-states",
+          "text": "说明 zxid 的 epoch 与计数两部分含义，以及服务器三种状态分别表示什么。"
+        },
+        {
+          "id": "trace-election-sync",
+          "text": "按步骤复述选主与状态同步流程，并说明多数派票数和同步点的判定方式。"
+        },
+        {
+          "id": "compare-roles",
+          "text": "区分 Leader、Follower 与 observer 的职责和消息处理差异。"
+        }
+      ],
+      "misconceptions": [
+        "认为任意服务器都能独立提交写请求；教材中的写请求要发给 Leader 投票，超过半数 Follower 通过才 commit。",
+        "把选主和同步理解成两条互不相关的流程；两者都发生在 Zab 恢复模式内部，恢复模式在选出 Leader 且多数 server 完成同步后才结束，之后才进入广播模式。",
+        "认为获得相对多数票就能当选；教材要求推荐 Leader 获得 n/2+1 的 Server 票数。"
+      ],
+      "modules": [
+        {
+          "id": "m-overview",
+          "title": "总体机制与两种模式",
+          "role": "concept-intro",
+          "description": "先从原子广播和 Zab 两种模式建立整体框架。",
+          "outcomeRefs": [
+            "explain-zab"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-identity",
+          "title": "事务标识与服务器状态",
+          "role": "concept-detail",
+          "description": "理解 zxid 如何标识事务顺序，以及 LOOKING、LEADING、FOLLOWING 的含义。",
+          "outcomeRefs": [
+            "explain-zxid-states"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-election",
+          "title": "恢复模式下的选主流程",
+          "role": "procedure",
+          "description": "跟踪选举线程的询问、计票和多数派判定。",
+          "outcomeRefs": [
+            "trace-election-sync"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-sync",
+          "title": "选出 Leader 后的状态同步",
+          "role": "procedure",
+          "description": "根据 zxid 确定同步点并回到可服务状态。",
+          "outcomeRefs": [
+            "trace-election-sync"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-workflow",
+          "title": "广播模式下的常态工作流程",
+          "role": "role-comparison",
+          "description": "比较 Leader、Follower 与 observer 的职责和消息类型。",
+          "outcomeRefs": [
+            "compare-roles"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-check",
+          "title": "达成检查与下一点衔接",
+          "role": "assessment",
+          "description": "用完整链路和检查题确认理解。",
+          "outcomeRefs": [
+            "explain-zab",
+            "explain-zxid-states",
+            "trace-election-sync",
+            "compare-roles"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-zab",
+          "explain-zxid-states",
+          "trace-election-sync",
+          "compare-roles"
+        ],
+        "method": "先口述一次从崩溃到恢复服务的完整链路，再完成四道检查题并说明依据。",
+        "successCriteria": [
+          "能指出恢复模式与广播模式的切换条件",
+          "能说明 zxid 的 epoch 部分和低 32 位计数各自的作用",
+          "能写出多数派票数要求并解释集群规模为何取奇数",
+          "能区分 Leader、Follower 和 observer 在投票中的角色"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-6-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "m-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "核心机制：原子广播与 Zab 协议",
+        "markdown": "教材指出，Zookeeper 的核心是原子广播，这个机制保证各个服务器之间的同步；实现该机制的协议叫做 Zab 协议。Zab 有两种模式：恢复模式（选主）和广播模式（同步）。当服务启动，或者在领导者崩溃之后，Zab 进入恢复模式；当领导者被选举出来，并且大多数 server 完成了和 leader 的状态同步以后，恢复模式结束。状态同步保证 leader 和 server 具有相同的系统状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000180"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Zookeeper 的工作原理"
+              ],
+              "lineStart": 2155,
+              "lineEnd": 2168,
+              "assetRefs": [],
+              "excerptSha256": "53cc43423993e03ef005c959f5f7bbd22293e1a12d7be406a02e05370a327466"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-modes",
+        "moduleId": "m-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：两种模式如何交替",
+        "markdown": "把 Zab 看成一个在两档之间切换的状态机，比死记两个名字更容易掌握。\n\n- 服务启动或 Leader 崩溃时，系统切到**恢复模式**：先选出新的 Leader，再让各 server 与它同步状态。\n- 选出 Leader 且多数 server 同步完成后，系统切到**广播模式**：Leader 持续把事务按顺序广播出去，各 server 按同一顺序应用。\n- 一旦 Leader 再次崩溃或失去大多数 Follower，就回到恢复模式。\n\n因此“选主”和“同步”不是两件独立的事，而是恢复模式内部的两个阶段；广播模式则是恢复正常后的稳定运行状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-zxid",
+        "moduleId": "m-identity",
+        "depth": "core",
+        "kind": "definition",
+        "title": "事务标识 zxid 与 epoch",
+        "markdown": "为了保证事务的顺序一致性，Zookeeper 采用递增的事务 id 号（zxid）来标识事务，所有提议（proposal）在被提出的时候都会加上 zxid。实现时 zxid 是一个 64 位的数字：高 32 位是 epoch，用来表示 leader 关系是否改变，每次一个 leader 被选出来时都会有一个新的 epoch，表示当前属于那个 leader 的统治时期；低 32 位用于递增计数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000180"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Zookeeper 的工作原理"
+              ],
+              "lineStart": 2155,
+              "lineEnd": 2168,
+              "assetRefs": [],
+              "excerptSha256": "53cc43423993e03ef005c959f5f7bbd22293e1a12d7be406a02e05370a327466"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-zxid-epoch",
+        "moduleId": "m-identity",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：epoch 更大为什么代表数据更新",
+        "markdown": "把 zxid 当作一个 64 位整数来读：高 32 位在前，所以 **epoch 更大的 zxid 数值一定更大**。\n\n假设旧 Leader 在 epoch 7 时产生的事务，其 zxid 高 32 位是 7；新 Leader 当选后 epoch 变为 8。即使新 Leader 的低 32 位计数还很小，它产生的事务 zxid 也已经大于 epoch 7 的所有事务。这样，选举时比较各 server 的最大 zxid，就能判断谁掌握的数据更新；广播时按 zxid 递增排序，也保证了事务顺序一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-zxid"
+          ]
+        }
+      },
+      {
+        "id": "tb-states",
+        "moduleId": "m-identity",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "服务器的三种状态",
+        "markdown": "每个 server 在工作过程中有三种状态：\n\n- **LOOKING**：当前 server 不知道 leader 是谁，正在搜寻；\n- **LEADING**：当前 server 即为选举出来的 leader；\n- **FOLLOWING**：leader 已经选举出来，当前 server 与之同步。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000180"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Zookeeper 的工作原理"
+              ],
+              "lineStart": 2155,
+              "lineEnd": 2168,
+              "assetRefs": [],
+              "excerptSha256": "53cc43423993e03ef005c959f5f7bbd22293e1a12d7be406a02e05370a327466"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-transition",
+        "moduleId": "m-identity",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：状态是角色，不是固定身份",
+        "markdown": "三种状态描述的是 server 在当前时刻承担的角色，而不是永久身份。刚启动或与 Leader 失联的 server 处于 LOOKING，它在搜寻 Leader；选举结束后，胜出的 server 进入 LEADING，其余参与同步的 server 进入 FOLLOWING。同一条 server 在不同时间可能经历 LOOKING、FOLLOWING、甚至 LEADING，取决于它在哪一轮选举中胜出。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-states"
+          ]
+        }
+      },
+      {
+        "id": "tb-election",
+        "moduleId": "m-election",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "选主触发与 basic paxos 流程",
+        "markdown": "当 leader 崩溃，或者 leader 失去大多数的 follower，Zookeeper 就会进入恢复模式，需要重新选举出一个新的 leader，让所有 server 恢复到一个正确的状态。教材介绍两种选举算法：基于 basic paxos 的实现和基于 fast paxos 的实现，系统默认使用 fast paxos。\n\nbasic paxos 的流程如下：\n\n1. 选举线程由当前 Server 发起选举的线程担任，负责统计投票结果并选出推荐的 Server。\n2. 选举线程向所有 Server 发起一次询问（包括自己）。\n3. 收到回复后，验证是否是自己发起的询问（验证 zxid 是否一致），获取对方的 id（myid）并存入当前询问对象列表，再获取对方提议的 leader 相关信息（id、zxid），存入当次选举的投票记录表。\n4. 收到所有 Server 回复后，计算出 zxid 最大的那个 Server，把它设为下一次要投票的 Server。\n5. 将当前 zxid 最大的 Server 设为要推荐的 Leader；如果它获得 n/2+1 的 Server 票数，就产生选举结果，并按获胜 Server 的信息设置自己的状态；否则继续这个过程，直到 leader 被选举出来。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000181"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "选主流程"
+              ],
+              "lineStart": 2169,
+              "lineEnd": 2194,
+              "assetRefs": [
+                "parts/part-0002/images/24ce5859fd85ebad8b56d9dd14c137eacfdbc4020d9968bf46f0def28e25bd73.jpg",
+                "parts/part-0002/images/1c7a73cd9f18d52900367b5cab4174bf9944866b1d673611a42fdb9ff29e43dd.jpg"
+              ],
+              "excerptSha256": "56d3ce90f1257ebe55e4a4150748be1d03edfc593b06c89d58ba81756ed46d3d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-majority",
+        "moduleId": "m-election",
+        "depth": "core",
+        "kind": "note",
+        "title": "多数派条件与集群规模",
+        "markdown": "由流程可以看出：要使 leader 获得多数 Server 的支持，Server 总数必须是奇数 2n+1，且存活的 Server 数目不得少于 n+1。每个 Server 启动后都会重复以上流程。在恢复模式下，刚从崩溃状态恢复或刚启动的 Server 还会从磁盘快照中恢复数据和会话信息；Zookeeper 会记录事务日志并定期进行快照，方便恢复时进行状态恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000181"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "选主流程"
+              ],
+              "lineStart": 2169,
+              "lineEnd": 2194,
+              "assetRefs": [
+                "parts/part-0002/images/24ce5859fd85ebad8b56d9dd14c137eacfdbc4020d9968bf46f0def28e25bd73.jpg",
+                "parts/part-0002/images/1c7a73cd9f18d52900367b5cab4174bf9944866b1d673611a42fdb9ff29e43dd.jpg"
+              ],
+              "excerptSha256": "56d3ce90f1257ebe55e4a4150748be1d03edfc593b06c89d58ba81756ed46d3d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-majority-example",
+        "moduleId": "m-election",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：5 台服务器需要几票",
+        "markdown": "以 5 台部署为例，按教材的取整方式计算：当选票数为 $5/2+1=3$ 票（整数除法先取整），存活 server 至少要有 3 台。\n\n这里 5 = 2n+1 对应 n = 2，也就是最多容忍 2 台失效，存活下限正好是 n+1 = 3 台。所以 5 台集群里即使有 2 台宕机，剩下的 3 台仍能选出 Leader 并继续服务；如果只剩 2 台存活，就凑不出 3 票多数派，选主无法完成。这也解释了教材为什么强调总数取奇数：多数派门槛和容错台数能直接对应起来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-majority"
+          ]
+        }
+      },
+      {
+        "id": "tb-fast-paxos",
+        "moduleId": "m-election",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "fast paxos 的差别",
+        "markdown": "fast paxos 流程是在选举过程中，某 Server 首先向所有 Server 提议自己要成为 leader；其他 Server 收到提议后，解决 epoch 和 zxid 的冲突并接受对方的提议，然后向对方发送接受提议完成的消息。重复这个流程，最后一定能选举出 leader。教材指出系统默认采用这一算法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000181"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "选主流程"
+              ],
+              "lineStart": 2169,
+              "lineEnd": 2194,
+              "assetRefs": [
+                "parts/part-0002/images/24ce5859fd85ebad8b56d9dd14c137eacfdbc4020d9968bf46f0def28e25bd73.jpg",
+                "parts/part-0002/images/1c7a73cd9f18d52900367b5cab4174bf9944866b1d673611a42fdb9ff29e43dd.jpg"
+              ],
+              "excerptSha256": "56d3ce90f1257ebe55e4a4150748be1d03edfc593b06c89d58ba81756ed46d3d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-sync",
+        "moduleId": "m-sync",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "选出 Leader 后的状态同步流程",
+        "markdown": "选完 leader 以后，Zookeeper 进入状态同步过程：\n\n1. leader 等待 server 连接；\n2. Follower 连接 leader，将最大的 zxid 发送给 leader；\n3. Leader 根据 follower 的 zxid 确定同步点；\n4. 完成同步后通知 follower 已经成为 uptodate 状态；\n5. Follower 收到 uptodate 消息后，又可以重新接受 client 的请求进行服务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000182"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "同步流程"
+              ],
+              "lineStart": 2195,
+              "lineEnd": 2213,
+              "assetRefs": [
+                "parts/part-0002/images/c24d6f3285ad4bd1a066460593cf877e47a874a91f3e4ca3aa2b0bd199c1e300.jpg"
+              ],
+              "excerptSha256": "487371b4386b11937aaf4a23d378922c359c3f1b5917fba5da28f277747cd9a3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sync-point",
+        "moduleId": "m-sync",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：同步点如何决定补哪些事务",
+        "markdown": "设 Leader 当前最新的 zxid 对应计数 100，某个 Follower 报告自己的最大 zxid 对应计数 96。Leader 以 96 为同步点，把它之后的事务 97、98、99、100 依次补发给该 Follower；补完后发送 uptodate，该 Follower 才重新接受 client 请求。\n\n如果 Follower 落后得更多，需要补的事务就更多，但判断依据始终是双方 zxid 的差值，而不是猜测数据内容。这让“同步到哪一步”成为一个可比较、可复现的判断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sync"
+          ]
+        }
+      },
+      {
+        "id": "tb-workflow-intro",
+        "moduleId": "m-workflow",
+        "depth": "support",
+        "kind": "note",
+        "title": "转入常态工作流程",
+        "markdown": "教材在介绍选主和同步之后进入 6.2.3 工作流程，随后分别展开 Leader 工作流程与 Follower 工作流程两节，说明两者的职责以及如何处理不同类型的消息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000183"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "工作流程"
+              ],
+              "lineStart": 2214,
+              "lineEnd": 2215,
+              "assetRefs": [],
+              "excerptSha256": "3f71270ed766068bf8beabcbfff15703c71b136da7a9fdded7b4a35b5fe383c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-leader",
+        "moduleId": "m-workflow",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Leader 的职责与消息类型",
+        "markdown": "Leader 主要有三个功能：\n\n- 恢复数据；\n- 维持与 Learner 的心跳，接收 Learner 请求并判断请求消息类型；\n- 按消息类型分别处理。\n\nLearner 的消息主要有 PING、REQUEST、ACK、REVALIDATE 四类：PING 是 Learner 的心跳信息；REQUEST 是 Follower 发送的提议信息，包括写请求及同步请求；ACK 是 Follower 对提议的回复，超过半数的 Follower 通过则 commit 该提议；REVALIDATE 用来延长 SESSION 有效时间。教材说明实际实现比简图复杂，启动了三个线程来完成这些功能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000184"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Leader 工作流程"
+              ],
+              "lineStart": 2216,
+              "lineEnd": 2232,
+              "assetRefs": [
+                "parts/part-0002/images/5d3f107a3811e14e14aa43e0303025cad31c9d9bcf42b15fb2886eeb1cf8658c.jpg"
+              ],
+              "excerptSha256": "5ad973d257ec7842d54e53ee62abc8c02570c07e9de8e155fd70e2d33c7e61ed"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-follower",
+        "moduleId": "m-workflow",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Follower 的职责与消息处理",
+        "markdown": "Follower 主要有四个功能：\n\n- 向 Leader 发送请求（PING、REQUEST、ACK、REVALIDATE 消息）；\n- 接收 Leader 消息并进行处理；\n- 接收 Client 的请求，如果为写请求，发送给 Leader 进行投票；\n- 返回 Client 结果。\n\nFollower 循环处理来自 Leader 的 PING（心跳）、PROPOSAL（Leader 发起的提案，要求 Follower 投票）、COMMIT（服务器端最新一次提案的信息）、UPTODATE（表明同步完成）、REVALIDATE（根据 Leader 的 REVALIDATE 结果决定关闭待 revalidate 的 session 还是允许其接受消息）和 SYNC（把最初由客户端发起、用于强制获得最新更新的 SYNC 结果返回客户端）消息。教材指出 Follower 通过 5 个线程实现功能。observer 流程与 Follower 唯一不同的地方，是 observer 不会参加 leader 发起的投票。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000185"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Follower 工作流程"
+              ],
+              "lineStart": 2233,
+              "lineEnd": 2265,
+              "assetRefs": [
+                "parts/part-0002/images/c4a54cf92fdfc40a32797a4149c919b73c1111d7f302c161b8c204fc066481bc.jpg"
+              ],
+              "excerptSha256": "f6f88f55b2fbdb68c9f9b720d30b5181a4575ab03b4a41a49def5fa701696d72"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-message-table",
+        "moduleId": "m-workflow",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：按方向整理的消息对照",
+        "markdown": "教材按角色分别列出消息，容易混淆方向。下表把它们放在一起对照：\n\n| 消息 | 方向 | 作用 |\n| --- | --- | --- |\n| PING | 双向 | Learner 与 Leader 之间的心跳 |\n| REQUEST | Follower 到 Leader | 提议信息，含写请求与同步请求 |\n| PROPOSAL | Leader 到 Follower | Leader 发起提案，要求 Follower 投票 |\n| ACK | Follower 到 Leader | 对提议的回复，超过半数通过则 commit |\n| COMMIT | Leader 到 Follower | 服务器端最新一次提案的信息 |\n| UPTODATE | Leader 到 Follower | 表明同步完成 |\n| REVALIDATE | 双向 | 延长 SESSION 有效时间，或按结果处理 session |\n| SYNC | 经 Follower 返回 Client | 强制取得最新的更新结果 |\n\n读表时可以抓住一条主线：**Follower 提请求与投票，Leader 定提案与提交，UPTODATE 和 COMMIT 是 Leader 回给 Follower 的结果。**",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-leader",
+            "tb-follower"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "m-workflow",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解：Follower 接收写请求不等于它自己提交",
+        "markdown": "Follower 的功能里确实有“接收 Client 的请求”，但这不表示 Follower 能独立决定写入。教材给出的处理是：如果接收到的是写请求，就发送给 Leader 进行投票；只有超过半数的 Follower 通过 ACK，Leader 才 commit 该提议。\n\n同理，observer 也不参与 leader 发起的投票，所以不能把 observer 当作可投票的 Follower 来理解多数派计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-leader",
+            "tb-follower"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：一次完整协作链路",
+        "markdown": "把前面的片段串起来，一次完整的协作可以概括为：\n\n1. **触发**：服务启动，或 Leader 崩溃、失去大多数 Follower，进入恢复模式；\n2. **选主**：各 server 处于 LOOKING，比较 zxid 并投票，候选者拿到 n/2+1 票后当选，状态转为 LEADING / FOLLOWING；\n3. **同步**：Follower 上报最大 zxid，Leader 确定同步点并补齐事务，完成后发 UPTODATE；\n4. **广播**：进入广播模式，Client 的写请求经 Follower 转给 Leader 形成提案，Follower 以 ACK 投票，过半后 COMMIT；\n5. **再触发**：Leader 再次失效时回到第 1 步。\n\n贯穿全过程的是 zxid：它既用于选主时比较谁的数据更新，也用于同步时确定补齐范围，还用于广播时保证事务顺序一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-election",
+            "tb-sync",
+            "tb-leader",
+            "tb-follower"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "先不看小结，尝试回答：\n\n1. 为什么说选主和同步都属于恢复模式，而广播模式是恢复完成后的状态？\n2. 某 server 报告最大 zxid 的高 32 位是 6，Leader 最新事务的高 32 位是 7。仅凭这一条信息，能否判断该 server 需要同步？为什么？\n3. 一个 7 台 server 的集群，选主需要多少票？最多允许几台同时宕机仍能选出 Leader？\n4. Client 的写请求到达 Follower 后，到最终 commit 之间经过了哪些消息？observer 在哪一步不参与？\n\n回答时请引用教材中的条件与消息名称，而不是只给结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-majority",
+            "tb-leader",
+            "tb-follower",
+            "tb-sync"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "workflow-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "m-check",
+        "depth": "core",
+        "title": "工作原理四问自测",
+        "outcomeRefs": [
+          "explain-zab",
+          "explain-zxid-states",
+          "trace-election-sync",
+          "compare-roles"
+        ],
+        "learningPurpose": "检查学习者能否把选主、同步与广播串成一条链路，并用票数与消息名称说明依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-majority",
+            "tb-sync",
+            "tb-leader",
+            "tb-follower"
+          ]
+        },
+        "config": {
+          "itemCount": 4
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考要点：\n\n1. 恢复模式负责选出 Leader 并让多数 server 与之同步，两者完成后才结束，随后才进入广播模式。\n2. 不能只看高 32 位就下结论；epoch 更大通常说明对方来自更新的 leader 时期，但同步点要由双方完整 zxid 的差值确定，教材的做法是 Follower 上报最大 zxid，Leader 据此确定同步点。\n3. 7 台即 2n+1 中 n = 3，需要 7/2+1 = 4 票，存活不少于 n+1 = 4 台，因此最多允许 3 台宕机。\n4. 写请求由 Follower 以 REQUEST 发给 Leader，Leader 发起 PROPOSAL，Follower 用 ACK 投票，过半后 Leader 下发 COMMIT；observer 不参加 leader 发起的投票。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Zookeeper",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000180"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Zookeeper 的工作原理"
+      ],
+      "lineStart": 2155,
+      "lineEnd": 2168,
+      "assetRefs": [],
+      "excerptSha256": "53cc43423993e03ef005c959f5f7bbd22293e1a12d7be406a02e05370a327466"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000181"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "选主流程"
+      ],
+      "lineStart": 2169,
+      "lineEnd": 2194,
+      "assetRefs": [
+        "parts/part-0002/images/24ce5859fd85ebad8b56d9dd14c137eacfdbc4020d9968bf46f0def28e25bd73.jpg",
+        "parts/part-0002/images/1c7a73cd9f18d52900367b5cab4174bf9944866b1d673611a42fdb9ff29e43dd.jpg"
+      ],
+      "excerptSha256": "56d3ce90f1257ebe55e4a4150748be1d03edfc593b06c89d58ba81756ed46d3d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000182"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "同步流程"
+      ],
+      "lineStart": 2195,
+      "lineEnd": 2213,
+      "assetRefs": [
+        "parts/part-0002/images/c24d6f3285ad4bd1a066460593cf877e47a874a91f3e4ca3aa2b0bd199c1e300.jpg"
+      ],
+      "excerptSha256": "487371b4386b11937aaf4a23d378922c359c3f1b5917fba5da28f277747cd9a3"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000183"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "工作流程"
+      ],
+      "lineStart": 2214,
+      "lineEnd": 2215,
+      "assetRefs": [],
+      "excerptSha256": "3f71270ed766068bf8beabcbfff15703c71b136da7a9fdded7b4a35b5fe383c4"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000184"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Leader 工作流程"
+      ],
+      "lineStart": 2216,
+      "lineEnd": 2232,
+      "assetRefs": [
+        "parts/part-0002/images/5d3f107a3811e14e14aa43e0303025cad31c9d9bcf42b15fb2886eeb1cf8658c.jpg"
+      ],
+      "excerptSha256": "5ad973d257ec7842d54e53ee62abc8c02570c07e9de8e155fd70e2d33c7e61ed"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000185"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Follower 工作流程"
+      ],
+      "lineStart": 2233,
+      "lineEnd": 2265,
+      "assetRefs": [
+        "parts/part-0002/images/c4a54cf92fdfc40a32797a4149c919b73c1111d7f302c161b8c204fc066481bc.jpg"
+      ],
+      "excerptSha256": "f6f88f55b2fbdb68c9f9b720d30b5181a4575ab03b4a41a49def5fa701696d72"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2052,
+    1672
+  ],
+  "scale": 1.23
+}

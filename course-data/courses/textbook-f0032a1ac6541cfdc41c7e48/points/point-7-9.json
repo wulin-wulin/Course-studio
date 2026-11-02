@@ -1,0 +1,391 @@
+{
+  "id": "point-7-9",
+  "title": "读写数据",
+  "shortSummary": "说明 HBase 读写请求的处理路径，包括定位区域、写入日志和读取合并等环节。",
+  "keyTerms": [
+    "读路径",
+    "写路径",
+    "预写日志"
+  ],
+  "animationType": "hbaseWritePath",
+  "animationSuggestion": "分步播放写请求的处理路径，在 HLog 与 HMemStore 两处分别高亮写入顺序；达到阈值时显示 flush 与新 HStoreFile 的出现和检查点推进，再演示一次宕机后从检查点向后重放的分支。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-7-7",
+    "point-7-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-failure-recovery",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材给出的写请求步骤、检查点与只读文件描述，补充步骤之间因果关系的解释、读路径的归并推理和一个故障恢复练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "describe-write-path",
+          "text": "按顺序说明一次写请求从客户端提交到写入 HMemStore 的完整处理路径。"
+        },
+        {
+          "id": "explain-durability",
+          "text": "解释 HLog 与 Zookeeper 检查点如何配合，使内存中丢失的更新仍可恢复。"
+        },
+        {
+          "id": "explain-merge",
+          "text": "解释 HStoreFile 只读追加带来的合并与分裂需求及其对读写的影响。"
+        },
+        {
+          "id": "describe-read-path",
+          "text": "说明读请求为何要合并全部 HStoreFile 与 HMemStore，以及合并为何能较快完成。"
+        }
+      ],
+      "misconceptions": [
+        "认为更新会像关系数据库那样直接改写磁盘上已有的 HStoreFile。",
+        "认为读请求只要访问最新写入的那一份文件就能得到结果。",
+        "认为记录检查点之后就不再需要 HLog 中的对应记录，或反过来认为恢复要从头重放整份日志。"
+      ],
+      "modules": [
+        {
+          "id": "write-path-steps",
+          "title": "写请求的处理步骤",
+          "role": "core-procedure",
+          "description": "按教材顺序给出写请求的各处理环节，并解释顺序背后的理由。",
+          "outcomeRefs": [
+            "describe-write-path"
+          ],
+          "order": 0
+        },
+        {
+          "id": "durability-recovery",
+          "title": "日志、内存与检查点",
+          "role": "mechanism",
+          "description": "说明更新如何经 HLog 与 HMemStore 落成 HStoreFile，以及事故后如何恢复。",
+          "outcomeRefs": [
+            "explain-durability"
+          ],
+          "order": 1
+        },
+        {
+          "id": "store-lifecycle",
+          "title": "只读文件的追加、合并与分裂",
+          "role": "mechanism",
+          "description": "从 HStoreFile 不可修改这一事实推出合并与分裂的必要性。",
+          "outcomeRefs": [
+            "explain-merge"
+          ],
+          "order": 2
+        },
+        {
+          "id": "read-path",
+          "title": "读请求的多文件合并",
+          "role": "mechanism",
+          "description": "解释读请求为什么要访问全部 HStoreFile 与 HMemStore 并做归并。",
+          "outcomeRefs": [
+            "describe-read-path"
+          ],
+          "order": 3
+        },
+        {
+          "id": "practice-check",
+          "title": "两条路径的汇总",
+          "role": "review",
+          "description": "汇总读写两条路径的共同前提，并为下一知识点做衔接。",
+          "outcomeRefs": [
+            "describe-write-path",
+            "explain-durability",
+            "explain-merge",
+            "describe-read-path"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-write-path",
+          "explain-durability",
+          "explain-merge",
+          "describe-read-path"
+        ],
+        "method": "完成宕机场景的恢复判断与步骤排序检查，并说明每一步的依据。",
+        "successCriteria": [
+          "写请求的七个环节顺序正确，HLog 先于 HMemStore",
+          "能指出恢复应从最近检查点之后开始",
+          "能用只读追加解释合并与分裂为何存在"
+        ],
+        "exerciseBlockId": "practice-recovery-check",
+        "summaryBlockId": "wrap-up-summary",
+        "nextPointId": "point-7-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "write-path-steps-textbook",
+        "moduleId": "write-path-steps",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：写请求的处理过程",
+        "markdown": "教材给出的一次写请求处理顺序如下：\n\n1. client 向 HRegionServer 提交写请求；\n2. HRegionServer 找到目标 HRegion；\n3. HRegion 检查数据是否与 schema 一致；\n4. 如果客户端没有指定版本，则获取当前系统时间作为数据版本；\n5. 将更新写入 HLog；\n6. 将更新写入 HMemStore；\n7. 判断 HMemStore 是否需要 flush 为 HStore 文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "读写数据"
+              ],
+              "lineStart": 3048,
+              "lineEnd": 3077,
+              "assetRefs": [],
+              "excerptSha256": "0b44c1ee471e657459ddf15dd75e7f10235e8ee49850571bbe6ba87b4347b2f2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "write-order-rationale",
+        "moduleId": "write-path-steps",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：这个顺序保证了什么",
+        "markdown": "把七步拆成两段看，顺序的意义就清楚了。前四步是「确认这次更新合法且可定位」：schema 校验放在写日志之前，不合法的新值根本进不了日志；版本时间戳在写入之前定好，同一份更新在日志和内存里记录的是同一个版本。后三步是「先留证、再进内存」：HLog 的写入排在 HMemStore 之前，因此只要内存里曾经接收过这条更新，日志里一定已经有对应记录，这正是内存数据意外丢失时还能重放的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "write-path-steps-textbook"
+          ]
+        }
+      },
+      {
+        "id": "persistence-checkpoint-textbook",
+        "moduleId": "durability-recovery",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：HMemStore、flush 与检查点",
+        "markdown": "HBase 使用 HMemStore 和 HStoreFile 存储对表的更新。数据在更新时，首先写入 HLog 和内存（HMemStore）中。HMemStore 中的数据是排序的，当 HMemStore 累计到一定阈值时，就会创建一个新的 HMemStore，并且将老的 HMemStore 添加到 flush 队列，由单独的线程 flush 到磁盘上，成为一个 HStoreFile。与此同时，系统会在 Zookeeper 中记录一个检查点，表示这个时刻之前的变更已经持久化了。\n\n当系统出现意外时，可能导致内存（HMemStore）中的数据丢失，此时使用 HLog 来恢复检查点之后的数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "读写数据"
+              ],
+              "lineStart": 3048,
+              "lineEnd": 3077,
+              "assetRefs": [],
+              "excerptSha256": "0b44c1ee471e657459ddf15dd75e7f10235e8ee49850571bbe6ba87b4347b2f2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "checkpoint-as-boundary",
+        "moduleId": "durability-recovery",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：检查点是恢复的起点",
+        "markdown": "可以把检查点理解成一条「已确认落盘」的时间线。检查点之前的变更已经进入 HStoreFile，不必再重放；检查点之后的变更可能还只存在于 HMemStore，事故后需要靠 HLog 逐条补回。所以恢复不是把整份日志从头读一遍，而是从最近的检查点往后重放。这也说明了写日志这部分开销换来的东西：内存里那部分尚未落盘的数据是可恢复的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "persistence-checkpoint-textbook"
+          ]
+        }
+      },
+      {
+        "id": "practice-recovery-check",
+        "moduleId": "durability-recovery",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：宕机后从哪里恢复",
+        "markdown": "某 HRegionServer 在把一批更新写入 HLog 和 HMemStore 之后、对应 HMemStore 尚未 flush 时宕机，而集群中最近一次检查点记录在这批更新之前。请回答两个问题：内存中的这批更新会丢失吗？恢复时应该从哪里开始重放？\n\n参考思路：这批更新在检查点之后，HStoreFile 里还没有它们，所以内存数据会丢失；恢复时从最近一次检查点之后的位置开始，用 HLog 重放这批变更。如果反过来认为要从头重放整份日志，就忽略了检查点已经把更早的变更持久化这一事实。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "persistence-checkpoint-textbook",
+            "checkpoint-as-boundary"
+          ]
+        }
+      },
+      {
+        "id": "store-lifecycle-textbook",
+        "moduleId": "store-lifecycle",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：HStoreFile 的只读、合并与分裂",
+        "markdown": "HStoreFile 是只读的，一旦创建后就不可以再修改，因此 HBase 的更新其实是不断追加的操作。当一个 HStore 中的 HStoreFile 达到一定的阈值后，就会进行一次合并，将对同一个 key 的修改合并到一起，形成一个大的 HStoreFile；当 HStoreFile 的大小达到一定阈值后，又会对 HStoreFile 进行分裂，等分为两个 HStoreFile。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "读写数据"
+              ],
+              "lineStart": 3048,
+              "lineEnd": 3077,
+              "assetRefs": [],
+              "excerptSha256": "0b44c1ee471e657459ddf15dd75e7f10235e8ee49850571bbe6ba87b4347b2f2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "append-not-overwrite",
+        "moduleId": "store-lifecycle",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：更新不是原地改写，合并与分裂是必付的维护成本",
+        "markdown": "一个常见误读是认为这里的「更新」会像关系数据库那样直接改写磁盘上已有的文件。按教材的描述，磁盘上的 HStoreFile 创建后不可修改，更新只能以追加的形式先进入内存和日志，再随 flush 形成新的 HStoreFile。这直接推出两个必然的维护动作：同一 key 的多个版本分散在多个文件里，靠合并把它们归并到一起，否则读请求要参与的文件越来越多；单个文件过大时靠分裂等分成两份，否则一份文件会膨胀到难以搬运。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "store-lifecycle-textbook"
+          ]
+        }
+      },
+      {
+        "id": "read-merge-textbook",
+        "moduleId": "read-path",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：读请求为什么要合并",
+        "markdown": "由于对表的更新是不断追加的，处理读请求时，需要访问 HStore 中全部的 HStoreFile 和 HMemStore，将它们按照行键进行合并。由于 HStoreFile 和 HMemStore 都是经过排序的，并且 HStoreFile 带有内存中索引，合并的过程还是比较快的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000239"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "读写数据"
+              ],
+              "lineStart": 3048,
+              "lineEnd": 3077,
+              "assetRefs": [],
+              "excerptSha256": "0b44c1ee471e657459ddf15dd75e7f10235e8ee49850571bbe6ba87b4347b2f2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-merge-walkthrough",
+        "moduleId": "read-path",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：把读过程写成可检查的步骤",
+        "markdown": "结合前面的写路径，读请求可以拆成四步来核对：\n\n1. client 提交读请求，请求被路由到承载目标行的 HRegion；\n2. 该 HStore 取出自己全部的 HStoreFile，以及当前正在内存中的 HMemStore；\n3. 因为每一份数据都按行键有序、且 HStoreFile 带内存索引，可以直接按行键做多路归并，找到目标 key 对应的记录，并按写请求第 4 步确定的版本时间戳挑出符合版本条件的值；\n4. 参与归并的文件份数越多，读的工作量越大。\n\n第 4 步正好把读写两条路径连了起来：flush、合并与分裂表面上服务于写入，实际决定了读请求每次要并行处理多少份数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "read-merge-textbook",
+            "write-path-steps-textbook",
+            "store-lifecycle-textbook"
+          ]
+        }
+      },
+      {
+        "id": "wrap-up-summary",
+        "moduleId": "practice-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：两条路径的共同前提",
+        "markdown": "写路径是「客户端提交 → HRegionServer 定位目标 HRegion → schema 校验与版本确定 → HLog → HMemStore → 达到阈值时 flush 成 HStoreFile」，Zookeeper 中的检查点随之推进。读路径是「定位 HRegion → 汇集全部 HStoreFile 与 HMemStore → 按行键归并」。两条路径共享同一个前提：磁盘文件只读、更新靠追加。于是写的代价被摊到 flush、合并与分裂上，读的代价取决于需要归并的份数和索引效率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "write-path-steps-textbook",
+            "persistence-checkpoint-textbook",
+            "store-lifecycle-textbook",
+            "read-merge-textbook"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "write-path-ordering-check",
+        "type": "step-ordering",
+        "anchorBlockId": "write-path-steps-textbook",
+        "moduleId": "write-path-steps",
+        "depth": "core",
+        "outcomeRefs": [
+          "describe-write-path"
+        ],
+        "learningPurpose": "通过给写请求步骤排序，检查学习者是否记住校验先于写入、HLog 先于 HMemStore 的次序。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "write-path-steps-textbook"
+          ]
+        },
+        "config": {
+          "instruction": "把下列环节拖成教材给出的处理顺序。",
+          "steps": [
+            "client 提交写请求",
+            "HRegionServer 找到目标 HRegion",
+            "HRegion 检查 schema 一致性",
+            "确定数据版本",
+            "写入 HLog",
+            "写入 HMemStore",
+            "判断是否需要 flush"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "按教材顺序口头复述七个环节：提交写请求、定位 HRegion、校验 schema、确定版本、写 HLog、写 HMemStore、判断是否 flush。能说出 HLog 排在 HMemStore 之前的理由即可。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HBase",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000239"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "读写数据"
+      ],
+      "lineStart": 3048,
+      "lineEnd": 3077,
+      "assetRefs": [],
+      "excerptSha256": "0b44c1ee471e657459ddf15dd75e7f10235e8ee49850571bbe6ba87b4347b2f2"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1260,
+    1803
+  ],
+  "scale": 0.95
+}

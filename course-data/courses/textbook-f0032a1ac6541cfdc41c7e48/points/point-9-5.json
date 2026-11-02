@@ -1,0 +1,520 @@
+{
+  "id": "point-9-5",
+  "title": "Pregel 的基本体系结构",
+  "shortSummary": "描述 Pregel 的主节点、工作节点和分区管理结构，理解其分布式执行组织。",
+  "keyTerms": [
+    "体系结构",
+    "工作节点",
+    "图分区"
+  ],
+  "animationType": "pregelSuperstep",
+  "animationSuggestion": "用分块图表示各 worker 负责的 partition，按超步推进时点亮当前被处理的 active 顶点，显示消息在 worker 内队列与跨机器缓存之间的流动，并用顶部计数显示超步编号、active 顶点数和归约后的 aggregator 值，支持重播同一初始图。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-9-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "structure-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对集群环境、分区、执行步骤、容错和主从角色的原始划分与结论，围绕职责归属重排讲解，并补充时间线与状态归属对照帮助迁移。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-architecture",
+          "text": "说明 Pregel 中 master、worker 与 partition 的分工，以及各自依赖的集群设施。"
+        },
+        {
+          "id": "trace-execution",
+          "text": "按教材给出的步骤追踪一次 Pregel 作业从加载输入到保存结果的过程。"
+        },
+        {
+          "id": "locate-state",
+          "text": "判断顶点状态、消息队列、检查点、barrier 与 aggregator 值分别由哪类组件维护。"
+        }
+      ],
+      "misconceptions": [
+        "把 master 也当成承担一部分图分区和顶点计算的机器。",
+        "认为容错依靠整个作业从头重跑，而不是从检查点恢复已保存的分区状态。",
+        "把输入的划分和图的划分当成同一件事，以为两者必须按相同边界切分。"
+      ],
+      "modules": [
+        {
+          "id": "cluster-context",
+          "title": "集群运行环境",
+          "role": "context",
+          "description": "先看 Pregel 运行在什么样的集群与管理系统之上。",
+          "outcomeRefs": [
+            "explain-architecture"
+          ],
+          "order": 0
+        },
+        {
+          "id": "partition-and-execution",
+          "title": "图分区与一次作业的执行步骤",
+          "role": "procedure",
+          "description": "从分区规则走到五个执行步骤，建立整体时间线。",
+          "outcomeRefs": [
+            "explain-architecture",
+            "trace-execution"
+          ],
+          "order": 1
+        },
+        {
+          "id": "fault-tolerance",
+          "title": "检查点与失效恢复",
+          "role": "mechanism",
+          "description": "说明检查点如何保存状态、失效如何被检测和恢复。",
+          "outcomeRefs": [
+            "explain-architecture",
+            "trace-execution"
+          ],
+          "order": 2
+        },
+        {
+          "id": "worker-state",
+          "title": "Worker 维护的本地状态",
+          "role": "concept",
+          "description": "看清一个 worker 上顶点状态的具体组成与消息收发路径。",
+          "outcomeRefs": [
+            "locate-state"
+          ],
+          "order": 3
+        },
+        {
+          "id": "master-role",
+          "title": "Master 的协调职责",
+          "role": "concept",
+          "description": "理解 master 只做协调，以及 barrier 如何划分处理阶段。",
+          "outcomeRefs": [
+            "locate-state"
+          ],
+          "order": 4
+        },
+        {
+          "id": "aggregators-and-review",
+          "title": "Aggregators 与整体回顾",
+          "role": "application",
+          "description": "补全全局聚合路径，并用对照表和检查题总结状态归属。",
+          "outcomeRefs": [
+            "locate-state",
+            "explain-architecture"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-architecture",
+          "trace-execution",
+          "locate-state"
+        ],
+        "method": "完成状态归属对照与检查题，说明每一步由哪类组件执行。",
+        "successCriteria": [
+          "能按顺序复述执行步骤并指出每步的执行者",
+          "能正确判断顶点状态、消息、检查点与 aggregator 值的归属",
+          "能说明 master 为何不承担顶点计算"
+        ],
+        "summaryBlockId": "model-state-map",
+        "nextPointId": "point-9-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-cluster-runtime",
+        "moduleId": "cluster-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：Pregel 所处的集群环境",
+        "markdown": "Pregel 是为 Google 的集群架构设计的。每个集群包含上千台机器，机器分布在许多机架上，机架之间有非常高的内部通信带宽；集群之间内部互联，但地理上分布在不同地方。\n\n应用程序通常通过集群管理系统执行，该系统通过调度作业优化集群资源使用率，有时会杀掉任务或把任务迁移到其他机器。系统中提供名字服务，因此各任务之间可以用与物理地址无关的逻辑名称标识自己。持久化数据存放在 GFS 或 Bigtable 中，缓存消息等临时文件则存放在本地磁盘。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000293"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Pregel 的基本体系结构"
+              ],
+              "lineStart": 3940,
+              "lineEnd": 3945,
+              "assetRefs": [],
+              "excerptSha256": "5ea0476d7ca6abac0872c91e133bf1ae188e80429f285cd2965698d6f0b5a59d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-runtime-matters",
+        "moduleId": "cluster-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：这些设施为什么影响结构",
+        "markdown": "把上面三条设施对上它们约束的对象，就能理解后面的设计。\n\n| 设施 | 约束的对象 | 对 Pregel 结构的影响 |\n|---|---|---|\n| 集群管理系统 | 任务可能被杀掉或迁移 | 组件之间不能依赖固定机器身份 |\n| 名字服务 | 逻辑名称与物理地址解耦 | master 与 worker 用逻辑名称互相注册和定位 |\n| GFS、Bigtable 与本地磁盘 | 持久数据与临时数据分开放 | 检查点写入持久存储，消息缓存放在本地磁盘 |\n\n这三条是模型对教材内容的归纳，教材只分别陈述了设施本身。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cluster-runtime"
+          ]
+        }
+      },
+      {
+        "id": "textbook-partition-and-steps",
+        "moduleId": "partition-and-execution",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：图分区与执行过程",
+        "markdown": "Pregel 把一张图划分成许多 partition，每个 partition 包含一些顶点以及以这些顶点为起点的边。顶点被分配到哪个 partition 取决于该顶点的 ID，因此即使顶点已经不存在，也能由其 ID 推断出它原本属于哪个 partition。默认的分区函数是 $hash(ID) \\bmod N$，其中 $N$ 是 partition 总数，用户可以替换该函数。\n\n把顶点分配给哪个 worker 机器，是 Pregel 中对分布式不透明的主要地方。默认策略对许多应用够用，但有的应用可以定义更好利用图局部性的分配函数，例如把来自同一站点的网页数据分到同一台机器。\n\n在不考虑出错的情况下，执行过程分为五步：\n\n1. 用户程序的多个副本在集群机器上执行，其中一个作为 master，其余作为 worker。master 不被分配图的任何部分，只负责协调；worker 用名字服务定位 master 并发送注册信息。\n2. master 决定需要多少个 partition，并把一个或多个 partition 分配到各 worker 所在的机器上，数量也可由用户控制。一个 worker 上有多个 partition 可以提高并行度、改善负载平衡。每个 worker 维护自己那部分图的状态（顶点与边的增删），对该部分顶点执行 Compute()，并管理收发的消息；每个 worker 都知道整张图在所有 worker 上的分配情况。\n3. master 为每个 worker 分配用户输入的一部分。输入被视为一系列记录，每条记录可包含任意数目的顶点和边；输入划分与图划分是正交的，通常按文件边界划分。若一个 worker 加载的顶点正属于自己负责的 partition，数据结构立即更新；否则把该顶点发送给应负责它的 worker。全部输入加载完成后，所有顶点被标记为 active。\n4. master 给每个 worker 发指令运行一个超步。worker 轮询自己之上的顶点，为每个 partition 启动一个线程，对每个 active 顶点调用 Compute()，并传入上一次超步发来的消息。消息异步发送以让计算和通信并行并便于成批处理，但发送会在本超步结束前完成。worker 完成工作后通知 master，并报告下一个超步还有多少 active 顶点。只要有顶点 active 或仍有消息在传输，就重复该步骤。\n5. 计算结束后，master 指示所有 worker 保存自己那部分计算结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000294"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Pregel 的执行过程"
+              ],
+              "lineStart": 3946,
+              "lineEnd": 3972,
+              "assetRefs": [
+                "parts/part-0003/images/c6ed39847b71dc6d6aa0355af8dd574f2fb8f7b16c5def2da05f3722f098524f.jpg",
+                "parts/part-0003/images/15560bef92cadbce8fe73d2a11c0415ea0421d6646badb5e444674f4099047d0.jpg",
+                "parts/part-0003/images/fd26f79a740f28705980bc59e70fb9dbd9545bea18a1b818fb8db16cd6f30446.jpg"
+              ],
+              "excerptSha256": "befeb3a8474ff58848b8b568358ca8dd14dee0a13958155f9873330a93e76930"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-partition-consequences",
+        "moduleId": "partition-and-execution",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：由分区函数推出的三点结论",
+        "markdown": "默认分区函数带来三个可以直接推演的结论，教材在叙述中已用到但未集中说明。\n\n1. 归属可以本地计算。因为归属只由 $hash(ID) \\bmod N$ 决定，任何 worker 不必查全局表就能判断某个顶点属于哪个 partition，这与教材所说“即使顶点已经不存在也能知道它属于哪个 partition”一致。\n2. 图划分与输入划分互不相同。输入按记录与文件边界切分，加载到的顶点可能不属于当前 worker，所以需要转发；这正是第三步存在跨 worker 发送的原因。\n3. 分区函数是调优入口。改变分区只改变“谁负责算”，不改变图的计算语义，因此可以按局部性改写，如把同一站点网页放在同一台机器。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-partition-and-steps"
+          ]
+        }
+      },
+      {
+        "id": "model-execution-timeline",
+        "moduleId": "partition-and-execution",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充：五步执行时间线与执行者",
+        "markdown": "把教材的五步整理成一张按时间推进的对照表，便于在检查时逐项核对执行者与完成标志。\n\n| 步骤 | 执行者 | 主要动作 | 完成标志 |\n|---|---|---|---|\n| 1 启动 | 全部副本 | 一个副本成为 master，其余成为 worker 并注册 | master 收到各 worker 注册 |\n| 2 分区 | master | 决定 partition 数量并分配到 worker 机器 | 每个 worker 知道自己负责哪些 partition |\n| 3 加载输入 | master 分配，worker 加载 | 按记录读入顶点与边，不属于自己的转发出去 | 全部输入加载完成，所有顶点置为 active |\n| 4 迭代超步 | master 下令，worker 计算 | 对 active 顶点执行 Compute() 并收发消息 | 无 active 顶点且无在途消息 |\n| 5 输出 | master 下令，worker 保存 | 各自保存负责分区的结果 | 结果写出完成 |\n\n注意第四步的终止条件同时包含“没有 active 顶点”和“没有在途消息”两项，只有前者不成立时仍需继续，因为消息还会唤醒顶点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-partition-and-steps"
+          ]
+        }
+      },
+      {
+        "id": "textbook-fault-tolerance",
+        "moduleId": "fault-tolerance",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：检查点与恢复",
+        "markdown": "容错通过检查点实现。在每个超步开始时，master 命令 worker 把自己之上 partition 的状态保存到持久存储，包括顶点值、边值以及接收到的消息；master 自己也保存 aggregator 的值。\n\nworker 的失效由 master 周期性发送的 ping 消息检测。worker 在特定时间间隔内没收到 ping 就终止；master 在一定时间内没收到某个 worker 的反馈，就把该 worker 标记为失败。\n\n当一个或多个 worker 发生故障时，分配到这些 worker 的 partition 的当前状态就丢失了。master 把图的 partition 重新分配给当前可用的 worker，所有 partition 从最近某个超步 $S$ 开始时写出的检查点重新加载状态。该超步可能比失败 worker 上最后运行的超步 $S'$ 早好几个阶段，失去的几个超步需要重新执行。检查点频率根据故障模型的平均时间选择，以平衡检查点开销与恢复执行开销。\n\n为改进恢复开销与延迟，Confined recovery 在开发中：先通过检查点恢复，再通过回放来自正常 partition 的记入日志的消息，以及恢复过来的 partition 重新生成的消息，把状态更新到 $S'$ 阶段。它只对丢失的 partition 重新计算，节省恢复时的计算资源，也减少恢复延迟；保存发出的消息会产生开销，但磁盘带宽通常不会让这类 IO 成为瓶颈。Confined recovery 要求用户算法是确定性的，以避免原始执行保存的消息与恢复时产生的新消息并存造成不一致；随机化算法可以基于超步和 partition 生成伪随机数使其确定化，非确定性算法则需关闭它而使用原有恢复机制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000295"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "容错性"
+              ],
+              "lineStart": 3973,
+              "lineEnd": 3984,
+              "assetRefs": [],
+              "excerptSha256": "8cc7ee5bb4626a8b004607d0719abf24ccea2679a497407857e4e7946937767c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recovery-cost",
+        "moduleId": "fault-tolerance",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：两种恢复方式的取舍",
+        "markdown": "教材给出了两种恢复方式，可以用统一维度对照。\n\n| 维度 | 从检查点恢复 | Confined recovery |\n|---|---|---|\n| 重算范围 | 从超步 $S$ 起重跑全部 partition 的相关超步 | 只重算并重放丢失 partition 相关的状态 |\n| 恢复目标 | 回到检查点状态，再继续迭代 | 恢复到失败前最后运行的超步 $S'$ |\n| 额外开销 | 检查点写入；丢失区间全部重算 | 额外记录发出的消息，产生存储与 IO 开销 |\n| 前提条件 | 无额外算法要求 | 用户算法必须是确定性的 |\n\n所以 Confined recovery 并不是无条件更优：它用“记录消息”的开销换取更小的重算范围和更短的恢复延迟，并额外要求算法可确定化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fault-tolerance"
+          ]
+        }
+      },
+      {
+        "id": "textbook-worker",
+        "moduleId": "worker-state",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：Worker 维护的顶点状态",
+        "markdown": "一个 worker 在内存中维护分配到其上的 graph partition 的状态，概念上可看作从顶点 ID 到顶点状态的 Map。顶点状态包括：该顶点的当前值；一个以该顶点为起点的出射边列表（含目标顶点 ID 与边本身的值）；一个保存接收到的消息的队列；一个记录当前是否 active 的标志位。\n\nworker 在每个超步中循环遍历所有顶点，调用每个顶点的 Compute()，传入顶点当前值、接收到的消息的迭代器以及出射边的迭代器。这里不提供入射边访问，因为每条入射边本身就是其源顶点出射边的一部分，而源顶点通常在另外的机器上。\n\n出于性能考虑，表示顶点是否 active 的标志位与输入消息队列分开保存。顶点值与边值只保存一份，但 active 标志和输入消息队列各保存两份，分别用于当前超步和下一个超步。worker 处理超步 $S$ 的顶点时，另有线程负责接收同属超步 $S$ 的那批消息；顶点当前需要的是超步 $S-1$ 的消息，所以超步 $S$ 与超步 $S+1$ 的消息必须分开保存。类似地，顶点 $V$ 收到消息只表示它将在下一个超步 active，而不是当前这一次。\n\nCompute() 请求发送消息时，worker 先判断目标顶点属于远程 worker 还是本机。远程时消息被缓存，缓存达到阈值时把最大的那批缓存数据异步 flush 出去，作为单独的网络消息传输到目标 worker；本机时做优化，消息直接放入目标顶点的输入消息队列。如果用户提供了 Combiner，消息加入输出队列或到达输入队列时会执行 combiner 函数；后一种情况不节省网络开销，但节省消息存储空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000296"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Worker"
+              ],
+              "lineStart": 3985,
+              "lineEnd": 3996,
+              "assetRefs": [],
+              "excerptSha256": "3668dd4a4282d5f677a44bb03fe014b83d8651181d234240271521612570e42c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-worker-buffers",
+        "moduleId": "worker-state",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：双缓冲与 active 标志的作用",
+        "markdown": "为什么必须准备两份 active 标志和消息队列？因为一个超步内同时存在两条时间线：一边在处理本次要计算的消息，一边在接收本次发出的、属于下一次的消息。若共用一份队列，尚未处理完的消息会和新到达的消息混在一起，顶点就可能提前使用本该下一个超步才看到的消息。\n\n同理，“收到消息”与“当前 active”是两件事。顶点在超步 $S$ 收到消息，只是把它标记为超步 $S+1$ 的 active；本次超步是否继续调用它，由当前的 active 标志决定。这解释了教材为何强调顶点值与边值只需一份、而标志与队列要两份。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-worker"
+          ]
+        }
+      },
+      {
+        "id": "textbook-master",
+        "moduleId": "master-role",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：Master 的职责",
+        "markdown": "Master 主要负责 worker 之间的工作协调。每个 worker 注册到 master 时会被分配唯一 ID。Master 内部维护当前活动 worker 列表，包括每个 worker 的 ID、地址信息，以及哪些 worker 被分配到整个图的哪一部分。Master 中保存这些信息的数据结构大小与 partition 个数相关，与图中顶点和边的数目无关，因此虽然只有一台 master，也足以协调对一个非常大的图的计算。\n\n绝大部分 master 工作——输入、输出、计算、保存以及从 checkpoint 恢复——都在称为 barrier 的地方终止。每次操作时 master 向所有活着的 worker 发送相同指令，然后等待每个 worker 的响应；任何 worker 失败时 master 进入恢复模式，barrier 同步成功则进入下一处理阶段，例如增加超步 index 并进入下一个超步。\n\nMaster 还保存整个计算过程和整个 graph 状态的统计数据，例如图的总大小、关于出度分布的柱状图、处于 active 状态的顶点个数、当前超步的时间信息与消息流量，以及所有用户自定义 aggregators 的值。为方便监控，master 内部运行一个 HTTP 服务器来显示这些信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000297"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Master"
+              ],
+              "lineStart": 3997,
+              "lineEnd": 4004,
+              "assetRefs": [],
+              "excerptSha256": "c60fdff9f2a12aaed90997fdfbc732e84ffdd227a5dbd6f1b8f5726499312fd6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-master-scaling",
+        "moduleId": "master-role",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：单 master 为何够用",
+        "markdown": "判断 master 会不会成为瓶颈，看它保存和操作的数据量级：它只维护 worker 列表、partition 与 worker 的对应关系、超步计数和统计汇总，规模随 partition 数增长而不随顶点数增长。顶点级状态始终留在各 worker 的内存中。\n\nbarrier 的含义也可以这样理解：它把一次协调切成“下发指令—等待全部响应—进入下一阶段”三段，每个阶段结束时所有存活 worker 必须一起对齐，任何缺席都进入恢复流程。因此 master 的协调成本取决于同步次数与 worker 数量，而不是图的规模。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-master"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "aggregators-and-review",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "补充：检查题",
+        "markdown": "1. 某个顶点 $V$ 收到一条消息，它在本超步会更活跃还是下一个超步？为什么？\n   答：下一个超步。收到消息只把它标记为下一个超步的 active，当前超步是否调用它由现有 active 标志决定，并且两份标志与消息队列分别服务当前与下一个超步。\n\n2. 一次作业在超步 $S$ 中途有 worker 失败，另一台 worker 上仍在运行的超步是 $S'$，但 $S'$ 比 $S$ 晚。恢复后从哪个状态继续？\n   答：所有 partition 从超步 $S$ 开始时写出的检查点重新加载，失去的若干超步需要重新执行；Confined recovery 才通过回放消息把状态追到 $S'$，且要求算法具有确定性。\n\n3. 输入划分与图划分按同样边界切分，是否就可以省略加载阶段的跨 worker 转发？\n   答：不能直接这样推断。教材明确两者正交，输入通常按文件边界划分；是否转发取决于加载到的顶点是否正属于该 worker 负责的 partition。\n\n4. master 需要保存每个顶点的值吗？\n   答：不需要。顶点级状态由 worker 保存，master 只维护 worker 列表、分区对应、超步与统计，其数据结构大小与 partition 数相关、与顶点和边数无关。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-worker",
+            "textbook-fault-tolerance",
+            "textbook-master"
+          ]
+        }
+      },
+      {
+        "id": "textbook-aggregators",
+        "moduleId": "aggregators-and-review",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：Aggregators 的全局归约",
+        "markdown": "每个 Aggregator 通过对一组 value 应用 aggregation 函数计算出一个全局值。每个 worker 保存一份 aggregators 实例集，由 type name 和实例名称标识。\n\n当一个 worker 对 graph 的某个 partition 执行一个超步时，会把提供给本地 aggregator 实例的所有值归约成一个 local value，即用 aggregator 对当前 partition 内所有顶点的值做局部归约。超步结束时，所有 worker 把包含局部归约值的 aggregators 汇总并汇报给 master。这个汇总由所有 worker 构造一棵归约树完成，而不是顺序流水线归约，目的是并行化归约时的 CPU 使用。下一个超步开始时，master 把 aggregators 的全局值发送给每一个 worker。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000298"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Aggregators"
+              ],
+              "lineStart": 4005,
+              "lineEnd": 4008,
+              "assetRefs": [],
+              "excerptSha256": "aaf0a420e852209ae851c8702296c43f8daf97a8895ae44adada140eaeac178c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-map",
+        "moduleId": "aggregators-and-review",
+        "depth": "core",
+        "kind": "summary",
+        "title": "补充：状态与职责归属对照",
+        "markdown": "把整节的组件职责压成一张对照表，判断归属时先问“这份数据是顶点级的、分区级的还是全局的”。\n\n| 状态或职责 | 归属 | 依据 |\n|---|---|---|\n| 顶点值、出射边、顶点消息队列、active 标志 | worker，按 partition 保存 | 顶点状态 Map 与双缓冲 |\n| 分区划分结果、worker 地址与分区的对应 | master | master 的 worker 列表 |\n| 超步推进、阶段同步 | master 发起，worker 响应 | barrier |\n| 检查点内容 | worker 写持久存储，master 写 aggregator 值 | 超步开始的检查点 |\n| 局部归约值 | worker | 本 partition 内归约 |\n| 全局 aggregator 值 | master 汇总并下发 | 归约树与下一超步广播 |\n| 运行统计与监控页面 | master | 内部 HTTP 服务器 |\n\n可以看到，顶点级的数据从不集中到 master；master 掌握的是分区级与全局级的信息，这也是它能用一台机器协调大图的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-worker",
+            "textbook-master",
+            "textbook-aggregators"
+          ]
+        }
+      }
+    ]
+  },
+  "subtitle": "图计算",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000293"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Pregel 的基本体系结构"
+      ],
+      "lineStart": 3940,
+      "lineEnd": 3945,
+      "assetRefs": [],
+      "excerptSha256": "5ea0476d7ca6abac0872c91e133bf1ae188e80429f285cd2965698d6f0b5a59d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000294"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Pregel 的执行过程"
+      ],
+      "lineStart": 3946,
+      "lineEnd": 3972,
+      "assetRefs": [
+        "parts/part-0003/images/c6ed39847b71dc6d6aa0355af8dd574f2fb8f7b16c5def2da05f3722f098524f.jpg",
+        "parts/part-0003/images/15560bef92cadbce8fe73d2a11c0415ea0421d6646badb5e444674f4099047d0.jpg",
+        "parts/part-0003/images/fd26f79a740f28705980bc59e70fb9dbd9545bea18a1b818fb8db16cd6f30446.jpg"
+      ],
+      "excerptSha256": "befeb3a8474ff58848b8b568358ca8dd14dee0a13958155f9873330a93e76930"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000295"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "容错性"
+      ],
+      "lineStart": 3973,
+      "lineEnd": 3984,
+      "assetRefs": [],
+      "excerptSha256": "8cc7ee5bb4626a8b004607d0719abf24ccea2679a497407857e4e7946937767c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000296"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Worker"
+      ],
+      "lineStart": 3985,
+      "lineEnd": 3996,
+      "assetRefs": [],
+      "excerptSha256": "3668dd4a4282d5f677a44bb03fe014b83d8651181d234240271521612570e42c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000297"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Master"
+      ],
+      "lineStart": 3997,
+      "lineEnd": 4004,
+      "assetRefs": [],
+      "excerptSha256": "c60fdff9f2a12aaed90997fdfbc732e84ffdd227a5dbd6f1b8f5726499312fd6"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000298"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Aggregators"
+      ],
+      "lineStart": 4005,
+      "lineEnd": 4008,
+      "assetRefs": [],
+      "excerptSha256": "aaf0a420e852209ae851c8702296c43f8daf97a8895ae44adada140eaeac178c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2145,
+    1055
+  ],
+  "scale": 0.91
+}

@@ -1,0 +1,836 @@
+{
+  "id": "point-7-5",
+  "title": "HBase 数据模型",
+  "shortSummary": "解释行键、列族、时间戳和单元格等 HBase 数据模型要素及其组织规则。",
+  "keyTerms": [
+    "行键",
+    "列族",
+    "时间戳",
+    "单元格"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-boundary-compare-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对行键、列族、时间戳三要素以及概念视图、物理视图的讲解框架和全部数值与例子，围绕辨析列族与列、理解多版本与稀疏存储补充对照表、推导和检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-mapping",
+          "text": "说明 HBase 表是稀疏、多维、有序的映射表，并指出行键、列和时间戳各自起什么作用。"
+        },
+        {
+          "id": "read-row-key",
+          "text": "解释行键的字典序排序、三种访问方式和行级原子性。"
+        },
+        {
+          "id": "distinguish-family",
+          "text": "区分列族与列限定符在模式固定性和动态扩展上的差别。"
+        },
+        {
+          "id": "explain-version",
+          "text": "说明单元格如何用时间戳保存多个版本，以及两种版本回收方式。"
+        },
+        {
+          "id": "compare-views",
+          "text": "对比概念视图与物理视图，说明按列族存储和空单元格不存储的后果。"
+        }
+      ],
+      "misconceptions": [
+        "以为 HBase 表的所有列都必须事先定义，实际上属于表结构的只有列族，列限定符可以按行动态增加。",
+        "以为概念视图里的空白单元格会占用存储，实际上空白列不被存储，读取时返回 null。",
+        "以为 HBase 中的值带有类型，实际上数据都按字节数组存储，类型需要用户自行转换。"
+      ],
+      "modules": [
+        {
+          "id": "overview-mapping",
+          "title": "先把表读成多维映射",
+          "role": "concept-introduction",
+          "description": "从教材定义出发，把 HBase 表理解为用行键、列和时间戳定位值的有序映射表。",
+          "outcomeRefs": [
+            "explain-mapping"
+          ],
+          "order": 0
+        },
+        {
+          "id": "row-key",
+          "title": "行键：排序的主键",
+          "role": "concept-detail",
+          "description": "说明行键的访问方式、字节数组存储、字典序排序和行级原子性。",
+          "outcomeRefs": [
+            "read-row-key"
+          ],
+          "order": 1
+        },
+        {
+          "id": "column-family",
+          "title": "列族：表结构中固定的那一层",
+          "role": "concept-comparison",
+          "description": "区分列族与列限定符的地位，说明列族的模式约束和存储分组作用。",
+          "outcomeRefs": [
+            "distinguish-family"
+          ],
+          "order": 2
+        },
+        {
+          "id": "versions",
+          "title": "时间戳与单元格版本",
+          "role": "concept-detail",
+          "description": "解释单元格多版本、时间戳赋值来源、倒序排列和版本回收策略。",
+          "outcomeRefs": [
+            "explain-version"
+          ],
+          "order": 3
+        },
+        {
+          "id": "concept-physical-views",
+          "title": "概念视图与物理视图",
+          "role": "worked-example",
+          "description": "用教材的网页行范例对照两种视图，理解按列族存储与稀疏性。",
+          "outcomeRefs": [
+            "compare-views"
+          ],
+          "order": 4
+        },
+        {
+          "id": "apply-and-check",
+          "title": "把模型用于建模判断",
+          "role": "transfer-task",
+          "description": "用检查清单和练习把各要素组合成一次实际的表设计判断。",
+          "outcomeRefs": [
+            "explain-mapping",
+            "read-row-key",
+            "distinguish-family",
+            "explain-version",
+            "compare-views"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-mapping",
+          "read-row-key",
+          "distinguish-family",
+          "explain-version",
+          "compare-views"
+        ],
+        "method": "完成建模练习，逐一说明行键、列族、列、版本策略的选择依据。",
+        "successCriteria": [
+          "能指出行键、列族、时间戳各自约束了什么",
+          "能用字典序解释行键设计对范围访问的影响",
+          "能说明空列不存储、无时间戳读取返回最新版本",
+          "能针对给定场景给出列族划分与版本回收方案"
+        ],
+        "exerciseBlockId": "b-model-exercise",
+        "nextPointId": "point-7-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "b-tb-overview",
+        "moduleId": "overview-mapping",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：稀疏、多维、有序的映射表",
+        "markdown": "HBase 是类似 BigTable 的分布式数据库，大部分特性与 BigTable 相同：它是一张**稀疏的、长期存储在硬盘上的、多维度的、排序的映射表**。这张表的索引是行关键字、列关键字和时间戳；每个值都是不解释的字符数组，数据都是字符串，没有类型。\n\n表里每一行都有一个可排序的主键和任意多的列。因为采用稀疏存储，同一张表里每一行的数据可以有截然不同的列。列名的格式是 `<family>:<label>`，都由字符串组成；每张表有一个固定不变的 family 集合，相当于表的结构，只能通过改变表结构来改变，而 label 相对每一行都可以改变。\n\nHBase 把同一个 family 里的数据存储在同一个目录下，写操作锁行，每一行都是一个原子元素。所有更新都有时间戳标记，每个更新是一个新版本，HBase 会保留一定数量的版本，这个数量可以设定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000211"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HBase 数据模型"
+              ],
+              "lineStart": 2555,
+              "lineEnd": 2556,
+              "assetRefs": [],
+              "excerptSha256": "37a9768f6cea16bc7c050ae11ddfd05aed98e7f6c8299fa0886676eb9024343b"
+            },
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000212"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "概述"
+              ],
+              "lineStart": 2557,
+              "lineEnd": 2572,
+              "assetRefs": [],
+              "excerptSha256": "fd4312e224242b86a3a45af6776f8f36022482a4117b99f7102c92d17dadfb21"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-coordinate",
+        "moduleId": "overview-mapping",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把表读成坐标：三个维度定位一个值",
+        "markdown": "教材说这张表是“多维度”的，最实用的读法是把它想成用三个坐标定位一个值：\n\n- **行键（Row Key）**：定位是哪一行；\n- **列（Column）**：定位这一行里的哪一列，列名写成 `列族:限定符`；\n- **时间戳（Timestamp）**：定位这一列的哪一个版本。\n\n三者共同确定一个单元格（cell）。同一行、同一列可以有多个时间戳不同的版本；同一行里没有出现的列不占位置。读表时依次问三个问题：这一行的行键是什么？数据放在哪个列族的哪个列下？要读哪个时间点的版本？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-table-example",
+        "moduleId": "overview-mapping",
+        "depth": "support",
+        "kind": "table",
+        "title": "教材表 7-1：HBase 数据实例",
+        "markdown": "教材用表 7-1 给出一个数据实例：行键为 r1、r2，数据分属 URI 和 Parser 两个列族，URI 列族下有 url、host 两列，Parser 列族下有 title、content 两列。\n\n| Row Key | Timestamp | URI 列族 | Parser 列族 |\n| --- | --- | --- | --- |\n| r1 | t3 | url=http://www.taobao.com | title=天天特价 |\n| r1 | t2t1 | host=taobao.com | （空） |\n| r2 | t5 | url=http://www.alibaba.com | content=每天…… |\n| r2 | t4 | host=alibaba.com | （空） |\n\n教材把行键、时间戳和列族画在同一张表里，正是为了说明：行键确定行，列族和限定符确定列，时间戳确定版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000212"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "概述"
+              ],
+              "lineStart": 2557,
+              "lineEnd": 2572,
+              "assetRefs": [],
+              "excerptSha256": "fd4312e224242b86a3a45af6776f8f36022482a4117b99f7102c92d17dadfb21"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-read-example",
+        "moduleId": "overview-mapping",
+        "depth": "support",
+        "kind": "example",
+        "title": "按三个坐标读表 7-1",
+        "markdown": "用三个坐标去读这张表：\n\n- r1 在 URI 列族里同时有 url 和 host 两列，但 Parser 列族里只有 title，没有 content；r2 正好相反，Parser 里只有 content。同一张表、不同行有不同列，这就是稀疏存储的直接结果。\n- r1 的 url 出现在 t3、host 出现在 t2t1，r2 的 url 在 t5、host 在 t4，说明写入是按列和时间戳逐步落下的，而不是一次写满整行。\n- 如果只关心某个列族，其他列族里没有数据的列根本不需要返回。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-overview",
+            "b-tb-table-example"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-concepts",
+        "moduleId": "overview-mapping",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材归纳：三个重要概念",
+        "markdown": "教材把 HBase 数据模型概括为三个重要概念：\n\n- **行键（Row Key）**：HBase 表的主键，表中的记录按照行键排序；\n- **时间戳（Timestamp）**：每次数据操作对应的时间戳，可以看作是数据的版本号；\n- **列族（Column Family）**：表在水平方向由一个或者多个列族组成，一个列族中可以由任意多个列组成，即列族支持动态扩展，无需预先定义列的数量以及类型，所有列均以二进制格式存储，用户需要自行进行类型转换。\n\n下面依次展开这三个概念。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000213"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "数据模型相关概念"
+              ],
+              "lineStart": 2573,
+              "lineEnd": 2582,
+              "assetRefs": [],
+              "excerptSha256": "801b68c1f0e39dad9161322bc715e2b323f49123caaef09288a88c73ea581144"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-tb-row-key-access",
+        "moduleId": "row-key",
+        "depth": "core",
+        "kind": "definition",
+        "title": "行键的访问方式与物理形态",
+        "markdown": "行键是用来检索记录的主键。访问 HBase 表中的行只有三种方式：\n\n1. 通过单个行键访问；\n2. 通过行键的区间范围访问；\n3. 全表扫描。\n\n行键可以是任意字符串，最大长度是 64KB，实际应用中长度一般为 10–100 字节；在 HBase 内部，行键保存为字节数组。行的一次读写是原子操作，不论一次读写多少列。这个设计决策能够使用户很容易地理解程序在对同一行进行并发更新时的行为。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000214"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "行键"
+              ],
+              "lineStart": 2583,
+              "lineEnd": 2596,
+              "assetRefs": [],
+              "excerptSha256": "43652c8b52d721e033444df0337e37039393d1454a5d8e26fe2cd1126b62b8ac"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-tb-row-key-order",
+        "moduleId": "row-key",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "字典序排序与补零陷阱",
+        "markdown": "存储时，数据按照行键的字典序（byte order）排序存储。设计键时要充分考虑这个特性，把经常一起读取的行放到一起，也就是利用位置相关性。\n\n教材特别提醒字典序的陷阱：对 int 使用字典序排序，结果是 1、10、100、11、12、13……19、2、20、21……9、91、92……99，并不是数值大小顺序。要保持整形的自然序，行键必须用 0 作左填充。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000214"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "行键"
+              ],
+              "lineStart": 2583,
+              "lineEnd": 2596,
+              "assetRefs": [],
+              "excerptSha256": "43652c8b52d721e033444df0337e37039393d1454a5d8e26fe2cd1126b62b8ac"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-row-key-design",
+        "moduleId": "row-key",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "从排序规则推导行键设计含义",
+        "markdown": "把行键的排序特性和三种访问方式放在一起，可以推出几个直接的建模含义：\n\n- 因为数据按字典序连续存放，“通过行键的区间范围访问”才能高效读到一段相邻数据；希望同一类记录相邻，就要让它们的行键共享前缀。\n- 时间或编号类行键必须补齐位数，否则 10 会排在 2 前面，范围扫描结果与数值顺序不一致。\n- 行级原子性意味着并发更新同一行时不需要跨行协调，但不要把它理解为一次写多行也具有整体原子性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-row-key-access",
+            "b-tb-row-key-order"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-family",
+        "moduleId": "column-family",
+        "depth": "core",
+        "kind": "definition",
+        "title": "列族是模式的一部分，列不是",
+        "markdown": "HBase 表中的每个列都归属于某个列族。列族是表的模式的一部分（而列不是表的模式的一部分），必须在使用表之前定义。列名都以列族作为前缀，例如 `courses:history`、`courses:math` 都属于 `courses` 这个列族。\n\n访问控制、磁盘和内存的使用统计都是在列族层面进行的。实际应用中，列族上的控制权限能帮助管理不同类型的应用：我们允许一些应用添加新的基本数据，一些应用读取基本数据并创建继承的列族，一些应用则只允许浏览数据，甚至可能因为隐私的原因不能浏览所有数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000215"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "列族"
+              ],
+              "lineStart": 2597,
+              "lineEnd": 2604,
+              "assetRefs": [],
+              "excerptSha256": "b66f8b5d34e639968a7a892b553688a85dd2dd11a113f3038a6b5e159ea013af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-family-vs-column",
+        "moduleId": "column-family",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "列族与列（限定符）的对照",
+        "markdown": "把教材的几句规定对照起来看，列族与列的地位并不对等：\n\n| 对比项 | 列族 | 列（限定符 label） |\n| --- | --- | --- |\n| 是否属于表结构 | 是，使用表之前就要定义 | 不是，按行动态增加 |\n| 数量是否固定 | 每张表的 family 集合固定不变 | 每行可以不同，无需预先定义数量与类型 |\n| 改变的成本 | 只能通过改变表结构来做 | 写入新列即可 |\n| 管理与统计 | 访问控制、磁盘和内存统计按列族进行 | 不单独承担这些职责 |\n\n所以设计 HBase 表时真正要提前想清楚的是“划几个列族、叫什么”，而不是“定义哪些列”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-overview",
+            "b-tb-family"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-family-rules",
+        "moduleId": "column-family",
+        "depth": "core",
+        "kind": "note",
+        "title": "列族的两条附加规则",
+        "markdown": "除列族定义外，教材还给出两条与列族直接相关的规则：\n\n- 每一张表有一个 family 集合，这个集合是固定不变的，相当于表的结构，只能通过改变表结构来改变；但是 label 值相对于每一行来说都是可以改变的。\n- HBase 把同一个 family 里面的数据存储在同一个目录底下。因此列族不仅是一个命名前缀，也对应底层存储上的一个分组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000212"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "概述"
+              ],
+              "lineStart": 2557,
+              "lineEnd": 2572,
+              "assetRefs": [],
+              "excerptSha256": "fd4312e224242b86a3a45af6776f8f36022482a4117b99f7102c92d17dadfb21"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-tb-cell",
+        "moduleId": "versions",
+        "depth": "core",
+        "kind": "definition",
+        "title": "单元格、时间戳与多版本",
+        "markdown": "HBase 中通过行和列确定的一个存储单元称为 cell（单元格）。每个 cell 都保存着同一份数据的多个版本，不同的版本通过时间戳来进行索引。时间戳的类型是 64 位整型，可以由 HBase 在数据写入时自动赋值，此时时间戳是精确到毫秒的当前系统时间；也可以由客户显式赋值。\n\n如果应用程序要避免数据版本冲突，就必须自己生成具有唯一性的时间戳。每个 cell 中，不同版本的数据按照时间倒序排序，即最新的数据排在最前面。cell 中的数据是没有类型的，全部是字节码形式存储。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000216"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TimeStamp"
+              ],
+              "lineStart": 2605,
+              "lineEnd": 2610,
+              "assetRefs": [],
+              "excerptSha256": "381226ac1110378bcd27011241639ce96732040a12807e1d332e1b082f95437a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-timestamp-role",
+        "moduleId": "versions",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "时间戳同时是版本号和写入时刻",
+        "markdown": "时间戳在这里承担两个角色：它既是“版本号”，也是写入时刻的记录。\n\n- 自动赋值时，时间戳就是写入的毫秒级系统时间，读到的版本顺序与写入先后一致。\n- 客户端显式赋值时，时间戳由应用决定；教材的提醒是，若要避免版本冲突，应用必须自己保证时间戳唯一。\n- 因为同一 cell 的版本按时间倒序排列，读最新版本不需要扫描全部历史，取排在最前面的那个版本即可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-cell"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-version-reclaim",
+        "moduleId": "versions",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：两种版本回收方式",
+        "markdown": "为了避免数据存在过多版本造成的管理（包括存储和索引）负担，HBase 提供了两种数据版本回收方式：一是保存数据的最后 n 个版本；二是保存最近一段时间内的版本（比如最近七天）。用户可以针对每个列族进行设置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000216"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TimeStamp"
+              ],
+              "lineStart": 2605,
+              "lineEnd": 2610,
+              "assetRefs": [],
+              "excerptSha256": "381226ac1110378bcd27011241639ce96732040a12807e1d332e1b082f95437a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-reclaim-tradeoff",
+        "moduleId": "versions",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "两种回收策略的取舍",
+        "markdown": "两种回收方式的取舍不同：\n\n- 按“最后 n 个版本”回收，保留的是固定数量的历史，适合需要固定回溯深度的场景；\n- 按“最近一段时间”回收，保留的是固定时间窗内的历史，适合按时间追查的场景。\n\n由于设置粒度是列族，同一个列族内的所有列共享同一套版本策略。这也是划分列族时需要一并考虑的因素。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-version-reclaim"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-concept-view",
+        "moduleId": "concept-physical-views",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材表 7-2：概念视图",
+        "markdown": "概念视图把一个表想象成一个大的映射关系：通过主键，或者主键加时间戳，可以定位一行数据；由于是稀疏数据，某些列可以是空白的。\n\n教材用表 7-2 给出一个存储 Web 网页的范例片断。行名是一个反向 URL（`com.cnn.www`）；`contents` 列族用来存放网页内容，`anchor` 列族存放引用该网页的锚链接文本，`mime` 列族记录类型。CNN 的主页被 Sports Illustrater（即 SI）和 MY-look 的主页引用，因此该行包含了名叫 `anchor:cnnsi.com` 和 `anchor:my.look.ca` 的列。\n\n| Row Key | TimeStamp | contents: | anchor: | mime: |\n| --- | --- | --- | --- | --- |\n| com.cnn.www | t9 | | anchor:cnnsi.com = “CNN” | |\n| com.cnn.www | t8 | | anchor:my.look.ca = “CNN.com” | |\n| com.cnn.www | t6 | “...” | | text/html |\n| com.cnn.www | t5 | “...” | | |\n| com.cnn.www | t3 | “...” | | |\n\n每个锚链接只有一个版本（由 t9、t8 标识）；而 `contents` 列则有三个版本，分别由 t3、t5 和 t6 标识。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000217"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "概念视图"
+              ],
+              "lineStart": 2611,
+              "lineEnd": 2620,
+              "assetRefs": [],
+              "excerptSha256": "701d738c61f83f0d9e9ea57b4ce1d9f4773f52f1b0a0f7c736e0ded723dcc3e5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-concept-view-read",
+        "moduleId": "concept-physical-views",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "读概念视图时注意三件事",
+        "markdown": "读表 7-2 时要注意三件事：\n\n- 一个行键下并列着多个时间戳，每一行代表该行在某个版本时刻的若干列取值，而不是多条独立记录。\n- `contents` 在 t3、t5、t6 各有内容，说明同一列可以保留多个历史版本；`anchor` 下的两个列各只有一个版本。\n- 空白格表示该时间戳下这一列没有值，这正是概念视图中的“稀疏”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-model-coordinate",
+            "b-tb-concept-view"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-physical-view",
+        "moduleId": "concept-physical-views",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材表 7-3：物理视图按列保存",
+        "markdown": "虽然从概念视图来看，HBase 中的每个表格是由很多行组成的，但是在物理存储上面，它是按照列来保存的，这点在数据设计和程序开发的时候必须牢记。表 7-2 的概念视图在物理存储的时候表现为类似表 7-3 的样子：同一个行键 `com.cnn.www` 被拆成三份，分别属于三个列族。\n\n- `contents` 列族：t6、t5、t3 三行，保存网页内容的不同版本；\n- `anchor` 列族：t9 的 `anchor:cnnsi.com` = “CNN”，t8 的 `anchor:my.look.ca` = “CNN.com”；\n- `mime` 列族：t6 的 `text/html`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000218"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "物理视图"
+              ],
+              "lineStart": 2621,
+              "lineEnd": 2714,
+              "assetRefs": [],
+              "excerptSha256": "1392e84a6f814dfbbdffc1717c94b587059b8ef2dc2e9a1cafd104ce71deb073"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-view-compare",
+        "moduleId": "concept-physical-views",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "两种视图描述同一份数据",
+        "markdown": "两张视图描述的是同一份数据，差别在于观察角度：\n\n| 对比项 | 概念视图（表 7-2） | 物理视图（表 7-3） |\n| --- | --- | --- |\n| 组织方式 | 按行展示整行 | 按列族拆成多份 |\n| 列族的位置 | 并排在一行内 | 每个列族单独存储 |\n| 空白格 | 出现大量空白 | 空白列不出现 |\n| 用途 | 理解表长什么样 | 理解数据怎么落盘 |\n\n教材强调物理上按列保存，正是因为按列族分组决定了数据写入哪个目录、读取时能否只碰需要的列族。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-concept-view",
+            "b-tb-physical-view"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-mvcc-example",
+        "moduleId": "concept-physical-views",
+        "depth": "support",
+        "kind": "code",
+        "title": "教材例子 1：同一列族的写入结果",
+        "markdown": "教材的例子 1 展示了同一列族内的写入如何落成文件。程序写 10 行数据 row[0-9]，先写入 `anchor:foo` 列，再写入 `anchor:bar` 列，最后重复写入 `anchor:foo` 列。由于是同一个列族，它们写到同一个映射文件里面。以 row0 为例，文件中的三行是：\n\n```text\nrow=row0, column=anchor:bar, timestamp=1174184619081\nrow=row0, column=anchor:foo, timestamp=1174184620720\nrow=row0, column=anchor:foo, timestamp=1174184617161\n```\n\n`anchor:foo` 被保存了两次，由于时间戳不同，是两个不同的版本，而最新的数据排在前面，所以最新那次更新会先被找到。row1 到 row9 的输出结构与 row0 相同，时间戳略有差异。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000218"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "物理视图"
+              ],
+              "lineStart": 2621,
+              "lineEnd": 2714,
+              "assetRefs": [],
+              "excerptSha256": "1392e84a6f814dfbbdffc1717c94b587059b8ef2dc2e9a1cafd104ce71deb073"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-example-takeaway",
+        "moduleId": "concept-physical-views",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "从例子读出排列规则",
+        "markdown": "从这段输出可以读出物理存储的排列规则：\n\n- 同一列族的数据集中写在一个映射文件里，不同列族自然分到不同文件。\n- 行按行键排序，列按列名排序（例子中 `anchor:bar` 排在 `anchor:foo` 之前），同一列的多个版本按时间戳倒序。\n- 所以“最新版本先被找到”不是查询时的特殊处理，而是文件里本来就这么排列。\n\n这也解释了为什么行键设计和列族划分会直接影响读写性能：它们决定了数据在文件中的相邻关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-physical-view",
+            "b-tb-mvcc-example"
+          ]
+        }
+      },
+      {
+        "id": "b-tb-sparse-and-order",
+        "moduleId": "concept-physical-views",
+        "depth": "core",
+        "kind": "note",
+        "title": "物理视图解释的两个读行为",
+        "markdown": "物理视图还解释了两个读行为：\n\n- 概念视图上面有些列是空白的，这样的列实际上并不会被存储；当请求这些空白的单元格时，会返回 null 值。\n- 如果在查询的时候不提供时间戳，那么会返回距离现在最近的那一个版本的数据，因为在存储的时候，数据会按照时间戳排序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000218"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "物理视图"
+              ],
+              "lineStart": 2621,
+              "lineEnd": 2714,
+              "assetRefs": [],
+              "excerptSha256": "1392e84a6f814dfbbdffc1717c94b587059b8ef2dc2e9a1cafd104ce71deb073"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b-model-design-checklist",
+        "moduleId": "apply-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "建模检查清单",
+        "markdown": "把本点的规则整理成一份建模检查清单：\n\n1. **行键**：能否用单个行键、区间范围或全表扫描访问到需要的数据？行键是否按字典序把常一起读的行排在一起？整数或日期是否补齐位数？\n2. **列族**：需要哪几个列族？列族划分决定底层目录分组、访问控制和存储统计的粒度，想清楚哪些列应当共享同一分组。\n3. **列**：具体列名（限定符）不必预先定义，按 `列族:限定符` 书写即可；确认应用能自行完成二进制到目标类型的转换。\n4. **版本**：每个列族保留最后 n 个版本，还是保留最近一段时间的版本？应用是否需要自己生成唯一时间戳？\n5. **稀疏性**：预期哪些列在多数行里为空？确认这些空白不需要额外存储。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-tb-row-key-order",
+            "b-tb-family",
+            "b-tb-version-reclaim",
+            "b-tb-sparse-and-order"
+          ]
+        }
+      },
+      {
+        "id": "b-model-exercise",
+        "moduleId": "apply-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：为一个网页存档场景建模",
+        "markdown": "一个网站要记录每个页面的正文、若干锚文本和 MIME 类型，并且需要保留最近 7 天的历史版本。请回答：\n\n1. 行键可以选什么？如果希望同一站点的页面相邻，行键应如何构造？\n2. 应该划分哪几个列族？每个列族下有哪些列？\n3. 版本保留策略应放在哪一层设置？如果某次导入需要重复执行且不能产生重复版本，时间戳应如何生成？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "b-model-design-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "hbase-model-check",
+        "type": "formative-check",
+        "anchorBlockId": "b-model-exercise",
+        "moduleId": "apply-and-check",
+        "depth": "core",
+        "title": "检查：能否把三个要素落到建模判断上",
+        "outcomeRefs": [
+          "read-row-key",
+          "distinguish-family",
+          "explain-version",
+          "compare-views"
+        ],
+        "learningPurpose": "检查学习者能否把行键排序、列族划分、版本回收和稀疏存储的规则组合成一次具体的设计判断。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "b-model-design-checklist"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "依次写出行键、列族、列和版本策略的选择，并说明每个选择对应教材中的哪条规则。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HBase",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000211"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HBase 数据模型"
+      ],
+      "lineStart": 2555,
+      "lineEnd": 2556,
+      "assetRefs": [],
+      "excerptSha256": "37a9768f6cea16bc7c050ae11ddfd05aed98e7f6c8299fa0886676eb9024343b"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000212"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "概述"
+      ],
+      "lineStart": 2557,
+      "lineEnd": 2572,
+      "assetRefs": [],
+      "excerptSha256": "fd4312e224242b86a3a45af6776f8f36022482a4117b99f7102c92d17dadfb21"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000213"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "数据模型相关概念"
+      ],
+      "lineStart": 2573,
+      "lineEnd": 2582,
+      "assetRefs": [],
+      "excerptSha256": "801b68c1f0e39dad9161322bc715e2b323f49123caaef09288a88c73ea581144"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000214"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "行键"
+      ],
+      "lineStart": 2583,
+      "lineEnd": 2596,
+      "assetRefs": [],
+      "excerptSha256": "43652c8b52d721e033444df0337e37039393d1454a5d8e26fe2cd1126b62b8ac"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000215"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "列族"
+      ],
+      "lineStart": 2597,
+      "lineEnd": 2604,
+      "assetRefs": [],
+      "excerptSha256": "b66f8b5d34e639968a7a892b553688a85dd2dd11a113f3038a6b5e159ea013af"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000216"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "TimeStamp"
+      ],
+      "lineStart": 2605,
+      "lineEnd": 2610,
+      "assetRefs": [],
+      "excerptSha256": "381226ac1110378bcd27011241639ce96732040a12807e1d332e1b082f95437a"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000217"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "概念视图"
+      ],
+      "lineStart": 2611,
+      "lineEnd": 2620,
+      "assetRefs": [],
+      "excerptSha256": "701d738c61f83f0d9e9ea57b4ce1d9f4773f52f1b0a0f7c736e0ded723dcc3e5"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000218"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "物理视图"
+      ],
+      "lineStart": 2621,
+      "lineEnd": 2714,
+      "assetRefs": [],
+      "excerptSha256": "1392e84a6f814dfbbdffc1717c94b587059b8ef2dc2e9a1cafd104ce71deb073"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1290,
+    1968
+  ],
+  "scale": 1.23
+}

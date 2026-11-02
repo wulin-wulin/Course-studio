@@ -1,0 +1,494 @@
+{
+  "id": "point-12-9",
+  "title": "Spanner 的并发控制",
+  "shortSummary": "说明 Spanner 结合时间戳与锁机制实现外部一致事务的并发控制方法。",
+  "keyTerms": [
+    "并发控制",
+    "时间戳",
+    "外部一致性"
+  ],
+  "animationType": "spannerTransaction",
+  "animationSuggestion": "用时间轴和锁状态两条轨道展示一个读写事务：逐个点亮读锁、写锁和准备时间戳，显示 coordinator 如何把提交时间戳推到 TrueTime 上界之后，再用一段等待窗口表示 2ε 后才对外可见；允许拖动误差 ε 或加入一个并发事务，观察提交时间戳被推迟的过程。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-12-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "transaction-type-comparison-with-commit-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对四类事务、读写事务提交流程和只读事务时间戳选择的原始结论，按“事务分类—提交流程—无锁读取—一致性闭环”重排讲解，并补充判断场景与版本提醒。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-transaction-types",
+          "text": "说明 Spanner 支持的四类事务，以及各自采用的并发控制方式和所需副本。"
+        },
+        {
+          "id": "explain-read-write-commit",
+          "text": "解释读写事务从加读锁、缓冲写、两阶段提交到提交时间戳生效的完整流程。"
+        },
+        {
+          "id": "explain-read-only-reads",
+          "text": "解释只读事务与快照读如何用时间戳实现无锁读取，并说明单组与跨组时读时间戳的确定方式。"
+        },
+        {
+          "id": "apply-transaction-choice",
+          "text": "针对给定场景选择合适的事务类型，并说明判断依据。"
+        }
+      ],
+      "misconceptions": [
+        "认为 Spanner 的所有事务都靠加锁控制并发，忽略了只读事务和快照读是 lock-free 的。",
+        "认为提交时间戳可以直接取本地当前时间，忽略了它必须晚于所有参与者的准备时间戳且晚于 TrueTime 的当前上界。",
+        "认为只读事务读到的可能是不一致的数据，忽略了它按固定时间戳读的是某个确定时刻的完整快照。"
+      ],
+      "modules": [
+        {
+          "id": "transaction-map",
+          "title": "四类事务与并发控制方式",
+          "role": "concept-comparison",
+          "description": "先建立事务类型与加锁策略的对照，作为后面流程和时间戳讨论的骨架。",
+          "outcomeRefs": [
+            "explain-transaction-types"
+          ],
+          "order": 0
+        },
+        {
+          "id": "read-write-commit",
+          "title": "读写事务的加锁与提交",
+          "role": "procedure-and-mechanism",
+          "description": "按教材顺序拆解缓冲写、wound-wait、两阶段提交和提交时间戳的确定。",
+          "outcomeRefs": [
+            "explain-read-write-commit"
+          ],
+          "order": 1
+        },
+        {
+          "id": "read-only-timestamp",
+          "title": "只读事务与快照读的时间戳",
+          "role": "mechanism-and-example",
+          "description": "说明无锁读取的条件，以及单组与跨组时读时间戳的选法。",
+          "outcomeRefs": [
+            "explain-read-only-reads"
+          ],
+          "order": 2
+        },
+        {
+          "id": "consistency-link",
+          "title": "写与读如何拼成外部一致性",
+          "role": "synthesis",
+          "description": "把提交时间戳与读取时间戳放回同一根 TrueTime 时间轴，解释外部一致性的来源。",
+          "outcomeRefs": [
+            "explain-read-write-commit",
+            "explain-read-only-reads"
+          ],
+          "order": 3
+        },
+        {
+          "id": "apply-and-check",
+          "title": "场景判断与自查",
+          "role": "transfer-check",
+          "description": "用四类典型场景检验能否根据是否写入和是否需要历史时间点做出选择。",
+          "outcomeRefs": [
+            "apply-transaction-choice",
+            "explain-transaction-types"
+          ],
+          "order": 4
+        },
+        {
+          "id": "chapter-recap",
+          "title": "教材小结与延伸阅读",
+          "role": "recap-and-bridge",
+          "description": "回到本章小结确认并发控制的位置，并给出阅读提醒。",
+          "outcomeRefs": [
+            "explain-transaction-types",
+            "explain-read-only-reads"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-transaction-types",
+          "explain-read-write-commit",
+          "explain-read-only-reads",
+          "apply-transaction-choice"
+        ],
+        "method": "完成四道场景判断题，并为每题写出所依据的事务类型与时间戳条件。",
+        "successCriteria": [
+          "四类事务的加锁策略与副本要求判断正确",
+          "能说明提交时间戳晚于所有准备时间戳并等待两倍误差的原因",
+          "能区分单 Paxos group 与跨 group 时读时间戳的确定方式"
+        ],
+        "exerciseBlockId": "choice-scenarios",
+        "summaryBlockId": "spanner-thread-and-bridge",
+        "nextPointId": "point-13-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "transaction-type-map",
+        "moduleId": "transaction-map",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材中的四类事务与并发控制方式",
+        "markdown": "Spanner 用 TrueTime 控制并发、实现外部一致性。教材把支持的事务分为四类：读写事务、只读事务，以及两种由客户端指定时间依据的快照读。四类事务的并发控制方式和所需副本并不相同，教材表 12-2 给出了对照：\n\n| 操作 | 并发控制 | 需要的副本 |\n|---|---|---|\n| 读写事务（Read-Write Transaction） | 悲观（pessimistic），即加锁 | 主副本（leader） |\n| 只读事务（Read-Only Transaction） | 无锁（lock-free） | 取时间戳需 leader，读取可在任意副本 |\n| 快照读，客户端给定时间戳 | 无锁 | 任意副本 |\n| 快照读，客户端给定时间范围 | 无锁 | 任意副本 |\n\n单独的写操作被实现为读写事务，单独的非快照读被实现为只读事务；这两类操作在事务失败时会自动重试，应用不必自己写重试循环。教材还用一句话概括了外部一致性：如果读写事务发生在时间 $t$，那么在世界上任何地方，按 $t$ 做快照读都能读到这次写入的值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000376"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Spanner 的并发控制"
+              ],
+              "lineStart": 5014,
+              "lineEnd": 5039,
+              "assetRefs": [],
+              "excerptSha256": "b5d21c821fdfd16f5bf7e57145af2f57ca9ad14f73fd8107776f1e555e073369"
+            }
+          ]
+        }
+      },
+      {
+        "id": "pessimistic-vs-lock-free",
+        "moduleId": "transaction-map",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：不加锁不等于不做并发控制",
+        "markdown": "教材把只读事务和快照读标为 lock-free，容易被误读成“这类读没有任何并发控制”。更准确的对比是：\n\n- **读写事务加锁**：事务可能修改多行并检查约束，需要互斥地完成读和写，因此教材采用悲观方式，先加读锁、提交时加写锁。\n- **只读事务与快照读不加锁**：它们不修改数据，读取时靠时间戳确定“看哪个版本”，再找一个已经充分更新的副本，因此不会阻塞同时进行的写。\n\n所以“lock-free”描述的是读取路径不加锁，而版本选择和一致性仍由时间戳机制负责。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "transaction-type-map"
+          ]
+        }
+      },
+      {
+        "id": "read-write-commit-flow",
+        "moduleId": "read-write-commit",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "读写事务：缓冲写、加锁与两阶段提交",
+        "markdown": "读写事务的流程可以按教材顺序拆成七步：\n\n1. **先缓存写**：和 BigTable 一样，事务先把所有写操作缓存起来，提交时一次写入，因此在同一事务内读不到自己刚写的值；教材指出这没有关系，因为 Spanner 的数据是有版本的。\n2. **避免死锁**：读写事务使用 wound-wait 算法避免死锁。\n3. **读阶段加读锁**：事务从读开始，先找到相关数据的 leader 副本，加上读锁并读取最近的数据；客户端事务存活期间持续向 leader 发心跳，防止超时。\n4. **进入两阶段提交**：所有读完成、写操作也缓存完毕后，客户端选择一个 coordinator，把 coordinator 的 id 和缓存的写数据发给每一个 leader。\n5. **leader 准备时间戳**：leader 先加写锁，并选一个比现有事务晚的时间戳；通过 Paxos 记录后，每个相关 leader 把自己准备的时间戳发给 coordinator。\n6. **coordinator 定提交时间戳**：coordinator 也加写锁，收到所有时间戳后选出一个提交时间戳，它必须比刚才所有时间戳都晚，而且要比 $TT.now()$ 加误差还晚，然后把这个信息记录到 Paxos。\n7. **等待后生效**：在让副本写入生效之前，coordinator 还要再等两倍时间误差，这段时间也刚好让 Paxos 完成同步。之后它把提交时间戳发给客户端和其他副本，各副本记录日志、写入生效、释放锁。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000377"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 读写事务"
+              ],
+              "lineStart": 5040,
+              "lineEnd": 5051,
+              "assetRefs": [],
+              "excerptSha256": "b76485fdcf873ed3563878890eebbbd7fcff52a7708be3b76b18484fd8b34ae1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "commit-timestamp-conditions",
+        "moduleId": "read-write-commit",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：提交时间戳为什么必须等两倍误差",
+        "markdown": "把第 6、7 步的条件写成式子会更清楚。设第 $i$ 个 leader 准备的时间戳为 $t_i$，提交时间戳为 $t_{\\mathrm{commit}}$，TrueTime 当前区间的上界为 $TT.now().latest$，误差为 $\\varepsilon$，则要求：\n\n$$t_{\\mathrm{commit}} > \\max_i t_i, \\qquad t_{\\mathrm{commit}} > TT.now().latest$$\n\n三个条件各有分工：\n\n- **晚于所有准备时间戳**：保证本事务在因果上排在它读到的那些事务之后。\n- **晚于 TrueTime 当前上界**：保证提交时间戳不是“真实时间还没到”的未来时刻。\n- **再等 $2\\varepsilon$**：等到真实时间确定越过提交时间戳，此后任何机器上开始的新事务，其开始时间都不会早于本事务的结束时间。\n\n直觉上，时间戳不是随手取一个“当前时刻”，而是一条必须在真实时间轴上站得住的标记；误差 $\\varepsilon$ 越大，coordinator 需要等待的可见性窗口越长。这同时纠正两个误解：提交时间戳不能直接取本地时间；事务读不到自己的写是由写缓存和版本化数据决定的，而不是因为读到了过期数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "read-write-commit-flow"
+          ]
+        }
+      },
+      {
+        "id": "read-only-and-snapshot",
+        "moduleId": "read-only-timestamp",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "只读事务与快照读：用时间戳代替加锁",
+        "markdown": "教材强调，时间戳的设计大大提高了只读事务的性能，具体规则是：\n\n- **先声明无写**：事务开始时就要声明这个事务里没有写操作。只读事务不是一个“没有写操作的读写事务”，它会用一个系统时间戳去读，因此对同时进行的其他写操作没有阻塞，并且可以在任意一台已经更新过的副本上读。\n- **快照读读过去的数据**：客户端指定一个时间戳或一个时间范围，Spanner 会找到一个已经充分更新好的副本去读取。\n- **副本中途出错也不必缓存**：只读事务执行到一半时如果该副本出错，客户端不必在本地缓存刚读过的数据，因为数据是按时间戳读的，用同一个时间戳再读一次就能得到一样的结果。\n\n教材进一步区分了两种 Key 范围：\n\n- **范围落在一个 Paxos group 内**：客户端向该 group 的 leader 发只读请求，leader 选一个比上一个事务结束时间更大的时间戳，再读取相应数据。这个事务满足外部一致性，读出的结果是最后一次写的结果，不会有不一致的数据。\n- **范围跨多个 Paxos group**：情况更复杂。一个较复杂的做法是遍历所有 group leader，寻找最近的事务发生时间再读取；客户端只要时间戳在 $TT.now().latest$ 之后就可以满足要求。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000378"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 只读事务"
+              ],
+              "lineStart": 5052,
+              "lineEnd": 5059,
+              "assetRefs": [],
+              "excerptSha256": "a0cdee9c76ad27a059b8d96b85297b352201e42dd5019c7d58913a0efb108bd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "timestamp-choice-examples",
+        "moduleId": "read-only-timestamp",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：一次跨区只读查询怎么定时间戳",
+        "markdown": "设区域 A 上的一笔转账已经作为读写事务提交，提交时间记为 $t$，随后区域 B 发起一次只读查询：\n\n- **单组情形**：查询涉及的 Key 都在同一个 Paxos group 内。group leader 只要选一个晚于该组上一个事务结束时间的时间戳，就一定能读到包含这笔转账的状态，同时不会阻塞新的写。\n- **跨组情形**：查询涉及多个 group。各组的最近事务时间可能不同，需要取一个不早于它们、并且晚于 $TT.now().latest$ 的时间戳，代价是要和多个 leader 打交道，但读取路径仍然不加锁。\n\n这也纠正一个常见误解：只读事务读到的是某个确定时间点的完整快照，而不是“新旧混杂的不一致数据”。如果客户端主动指定更早的时间戳，它读到的是那个时刻的快照，这是预期行为而非异常。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "read-only-and-snapshot"
+          ]
+        }
+      },
+      {
+        "id": "external-consistency-loop",
+        "moduleId": "consistency-link",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：写与读如何拼成外部一致性",
+        "markdown": "把前面两部分接起来，外部一致性可以看成三个环节的闭环：\n\n1. **写侧的可见时刻**：读写事务的提交时间戳由 TrueTime 定界，并等待 $2\\varepsilon$，保证它在真实时间上确实已经过去，才对外可见。\n2. **读侧的时间选择**：只读事务的 leader 选一个晚于上一事务结束时间的时间戳，跨组时则要求晚于 $TT.now().latest$，因此读取不会落在写入之前的版本上。\n3. **同一根时间轴**：两侧的时间戳都由 TrueTime 给出，可以直接比较，于是得到教材那句话——事务在 $t$ 提交后，任何地点的 $t$ 快照读都能读到这次写入。\n\n反过来说，如果没有 TrueTime 提供的误差界限，第 1 步不知道何时才算“真的过去”，第 2 步也不知道该取多晚，锁与时间戳就拼不成外部一致性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "read-write-commit-flow",
+            "read-only-and-snapshot"
+          ]
+        }
+      },
+      {
+        "id": "choice-scenarios",
+        "moduleId": "apply-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "场景判断：该用哪种事务",
+        "markdown": "对下面四个场景，先判断应使用哪类事务，再写出依据：\n\n1. 一条需要同时扣减 A 账户、增加 B 账户的转账操作。\n2. 只做报表统计、且不能阻塞线上写入的查询。\n3. 需要复现“昨天 10:00 那一刻”的数据视图。\n4. 客户端只知道一个时间范围，允许结果落在范围内任一时刻。\n\n参考判断：\n\n1. **读写事务**：涉及写入且要保证原子性，因此加锁、走两阶段提交，提交前等待两倍时间误差。\n2. **只读事务**：声明无写，用系统时间戳，在任意已更新的副本上读，不加锁。\n3. **客户端给定时间戳的快照读**：时间点明确，直接指定该时间戳。\n4. **客户端给定时间范围的快照读**：时间依据是一个区间，由 Spanner 在该范围内定位可读副本与版本。\n\n判断的关键问题只有两个：这次操作是否写数据；如果需要读历史，是给定时间点还是给定时间范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "transaction-type-map",
+            "read-write-commit-flow",
+            "read-only-and-snapshot"
+          ]
+        }
+      },
+      {
+        "id": "chapter-recap",
+        "moduleId": "chapter-recap",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材本章小结中的并发控制位置",
+        "markdown": "教材本章小结回顾了全章脉络：先介绍 Spanner 的诞生背景，并把 Spanner 与 BigTable、Megastore 进行对比；接着简单介绍 Spanner 的功能和体系结构；然后介绍具体设计方法，包括 Spanserver、Directory、数据模型、TrueTime；最后介绍并发控制机制。\n\n按这个顺序看，并发控制是前面各项设计的收口：TrueTime 提供时间界限，Paxos 提供复制与日志，读写事务和只读事务才在此基础上组合出外部一致性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000379"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 5060,
+              "lineEnd": 5063,
+              "assetRefs": [],
+              "excerptSha256": "08c635d95695f32de65a1aef4ef700e3d34ff335adc42628d4d210546348f25d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "spanner-thread-and-bridge",
+        "moduleId": "chapter-recap",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：从 TrueTime 到并发控制的连线",
+        "markdown": "本点把上一节的 TrueTime 真正用到了事务上：TrueTime 给出区间 $[earliest, latest]$ 和误差 $\\varepsilon$，并发控制用它判断提交时间戳何时可以对外可见。阅读时可以先回到 TrueTime 的区间语义，再看读写事务为什么敢在等待 $2\\varepsilon$ 后宣布提交。\n\n下一节转向 Google Dremel，主题是嵌套数据的交互式查询。它与本节的并发控制和一致性机制相对独立，但同样体现了 Google 大数据系统“针对特定数据形态设计专用系统”的思路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "chapter-recap",
+            "external-consistency-loop"
+          ]
+        }
+      },
+      {
+        "id": "further-reading",
+        "moduleId": "chapter-recap",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材给出的参考文献",
+        "markdown": "教材在本节末尾列出两条延伸材料：\n\n1. 林子雨翻译的《Google Spanner（中文版）》。\n2. 颜开的《全球级的分布式数据库 Google Spanner 原理》。\n\n两条都是中文二手介绍，适合补充背景和直观理解；涉及具体机制时仍应以教材正文和原始论文为准。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000380"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 5064,
+              "lineEnd": 5069,
+              "assetRefs": [],
+              "excerptSha256": "0d6584882f48d599de5c88c2c99d4181f689686e528e221aaf9c9618fb5274bd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "version-caveat",
+        "moduleId": "chapter-recap",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：阅读时的版本提醒",
+        "markdown": "教材内容对应 2013 年 12 月第一版，文中给出的投票间隔、时钟漂移比率和误差区间都是当时的线上取值，会随实现演进而变化。学习时应抓住“用时间不确定性换取外部一致性”这一思路，具体参数以官方文档和原始论文为准。\n\n同样地，二手译文可能与原文有出入，遇到关键结论建议回查原始论文。本节讨论的 wound-wait、两阶段提交和 Paxos 都是通用机制，理解它们的配合方式比记住某个具体数值更重要。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "further-reading"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "choice-scenarios",
+        "moduleId": "apply-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-transaction-choice"
+        ],
+        "learningPurpose": "检查学习者能否根据是否写入、是否需要历史时间点，为具体场景选择事务类型并说明依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "transaction-type-map",
+            "read-write-commit-flow",
+            "read-only-and-snapshot"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            "同时修改两个账户余额的操作应使用哪类事务？",
+            "不能阻塞线上写入的统计查询应使用哪类事务？",
+            "需要复现某个确定历史时刻的数据视图，应使用哪类事务？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请为三个场景各选一类事务，并各写一句话说明依据：是否写数据、是否需要指定历史时间。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Google Spanner",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000376"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Spanner 的并发控制"
+      ],
+      "lineStart": 5014,
+      "lineEnd": 5039,
+      "assetRefs": [],
+      "excerptSha256": "b5d21c821fdfd16f5bf7e57145af2f57ca9ad14f73fd8107776f1e555e073369"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000377"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 读写事务"
+      ],
+      "lineStart": 5040,
+      "lineEnd": 5051,
+      "assetRefs": [],
+      "excerptSha256": "b76485fdcf873ed3563878890eebbbd7fcff52a7708be3b76b18484fd8b34ae1"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000378"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 只读事务"
+      ],
+      "lineStart": 5052,
+      "lineEnd": 5059,
+      "assetRefs": [],
+      "excerptSha256": "a0cdee9c76ad27a059b8d96b85297b352201e42dd5019c7d58913a0efb108bd5"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000379"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 5060,
+      "lineEnd": 5063,
+      "assetRefs": [],
+      "excerptSha256": "08c635d95695f32de65a1aef4ef700e3d34ff335adc42628d4d210546348f25d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000380"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 5064,
+      "lineEnd": 5069,
+      "assetRefs": [],
+      "excerptSha256": "0d6584882f48d599de5c88c2c99d4181f689686e528e221aaf9c9618fb5274bd"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1964,
+    75
+  ],
+  "scale": 0.62
+}

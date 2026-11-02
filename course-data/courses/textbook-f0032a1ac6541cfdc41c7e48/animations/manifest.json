@@ -1,0 +1,529 @@
+{
+  "schema_version": "course-animation-runtime/1.0",
+  "source_schema_version": "course-content-animations/1.0",
+  "format": "sandboxed-iframe",
+  "animations": [
+    {
+      "type": "clusterJobScheduling",
+      "component": "ClusterJobScheduling",
+      "title": "集群作业调度与失败重跑",
+      "mechanism": {
+        "inputs": "一个已提交作业及其输入分片；集群中的主节点、若干工作节点，各节点忙闲状态与本地数据块不同",
+        "changingState": "任务队列、各工作节点的忙闲与任务归属、已完成任务数，以及节点故障后回到队列的任务",
+        "transitionRule": "主节点把作业拆成任务放入队列；空闲工作节点通过心跳领走任务并优先在持有对应数据块的节点上本地执行；节点故障时其未完成任务回到可分配状态，由其他空闲节点重新执行",
+        "terminalState": "全部任务完成，结果写回存储，集群回到空闲状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-8",
+          "suggestion": "按时间轴展示一次作业：先出现已存放数据块的 DataNode，再显示 JobTracker 拆分并分发任务，TaskTracker 读取数据块执行，随后一个任务失败被主节点重新分配，最后结果写回 HDFS，并标注每一步由哪一层的主节点或从节点负责。"
+        },
+        {
+          "pointId": "point-4-5",
+          "suggestion": "用一排节点表示集群，节点内显示它持有的数据块与当前运行的任务。逐步播放：作业提交后任务进入队列，空闲节点发心跳并领走任务、在持有对应数据块的节点上高亮为本地执行，随后让其中一台节点标记为故障、它的任务回到队列并由另一台空闲节点接手重跑，最后显示 R 个 Reduce 完成任务并各写一个结果文件。"
+        }
+      ]
+    },
+    {
+      "type": "yarnScheduling",
+      "component": "YarnScheduling",
+      "title": "YARN 资源分配与容器执行",
+      "mechanism": {
+        "inputs": "一个提交的作业、集群各节点可用的内存资源、分层队列的配额与调度策略",
+        "changingState": "各节点已分配与空闲的容器数量、ApplicationMaster 与任务所在机器、任务从等待到运行再到完成的状态",
+        "transitionRule": "ResourceManager 按作业请求和调度策略从队列分配容器；ApplicationMaster 领取容器后交给对应机器的 NodeManager 启动任务；NodeManager 通过心跳汇报资源使用与任务状态，失败任务由 ApplicationMaster 重新申请资源重试",
+        "terminalState": "作业全部任务完成，结果汇总，占用的容器资源释放回队列；ApplicationMaster 故障时由 ResourceManager 的监控模块重启",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-7",
+          "suggestion": "分步播放：先显示作业提交与队列资源，再显示为 ApplicationMaster 分配第一个容器，随后 ApplicationMaster 按任务需求批量申请容器并分散到多台 NodeManager，最后任务完成、容器释放回队列；用标签同时标出旧框架中由 JobTracker 集中承担的资源分配与任务监控，在新框架里分别落在哪个组件上。"
+        }
+      ]
+    },
+    {
+      "type": "mapReducePipeline",
+      "component": "MapReducePipeline",
+      "title": "MapReduce 数据流水线",
+      "mechanism": {
+        "inputs": "输入文件的分片、用户实现的 map 与 reduce 函数、reduce 任务数 R 与分区规则 hash(key) mod R",
+        "changingState": "中间键值对数量、每条记录所处环节与归属分区、map 端缓冲区占用与溢写文件数量、reduce 端已拉取的分区数据与合并结果",
+        "transitionRule": "map 读取分片产出键值对，combine 在本地合并相同键，再按分区函数写入缓冲区；缓冲区达到阈值时溢写落盘，任务结束后合并为正式输出文件；reduce 拉取对应分区的数据并合并，每个键调用一次 reduce 输出结果",
+        "terminalState": "R 个最终结果文件生成，可继续作为下一个作业的输入",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-9",
+          "suggestion": "按“数据块分布 → map → Combine → Partition → shuffle 拉取 → reduce → R 个结果”的顺序显示数据块与键值对在节点间的移动，用数字标注每步之后的键值对条数，允许调节 R 观察分区归属与拉取次数的变化，并高亮 map 任务失败后由其他节点重跑的那份数据块。"
+        },
+        {
+          "pointId": "point-4-4",
+          "suggestion": "按阶段展示一条记录从输入分片经 map、分区、缓冲区、溢写、合并到 reduce 输出的移动路径，同时显示缓冲区占用条与 80MB 溢写阈值线，标出每条记录被送往哪个 partition，支持单步推进和重播。"
+        },
+        {
+          "pointId": "point-4-6",
+          "suggestion": "用固定的三行输入分阶段播放：先显示每行被切分并逐条产出 (word,1)；再显示 combine 把同一 map 内的相同单词合并；然后显示 shuffle 按分区聚集、按 key 排序分组；最后显示 reduce 逐组求和并列出与输入对应的频数表，同时提供重播回到同一组初始输入。"
+        },
+        {
+          "pointId": "point-11-9",
+          "suggestion": "逐步展示两关系的元组在 Map 阶段被标上 R 或 S、按哈希值滑入不同 Reduce 分区，并在同一键下配对成 (a,b,c)；允许切换哈希函数观察同一批元组的分区变化，以及某个 B 值只出现在一侧时不被合并的结果。"
+        }
+      ]
+    },
+    {
+      "type": "hdfsWritePipeline",
+      "component": "HdfsWritePipeline",
+      "title": "HDFS 写入流水线复制",
+      "mechanism": {
+        "inputs": "待写入文件、块大小、副本因子（默认 3），以及名字节点为每个数据块分配的带机柜信息的数据节点列表",
+        "changingState": "文件切分出的数据块、每块已完成复制的副本数、数据包在流水线上从客户端到各数据节点的传输位置",
+        "transitionRule": "客户端按块向名字节点请求数据节点列表，把数据包沿列表顺序传给第一台数据节点；每台收到数据后写入本地并转发给下一台，该块的副本数随之加一",
+        "terminalState": "所有数据块达到设定副本份数，流水线关闭，写入与复制结束",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-5-5",
+          "suggestion": "用一条横向流水线展示单个数据块从客户端经三台数据节点完成 3 副本复制的过程，标注每台数据节点所在机柜，并实时显示副本数从 0 增加到 3；支持重播回到同一初始状态。"
+        }
+      ]
+    },
+    {
+      "type": "replicaRecovery",
+      "component": "ReplicaRecovery",
+      "title": "副本落盘与故障恢复",
+      "mechanism": {
+        "inputs": "一组数据节点、文件的切块与每块副本分布、副本因子，以及节点心跳状态",
+        "changingState": "各数据节点是否在线、有效节点列表、每个数据块的可读状态与当前副本数",
+        "transitionRule": "写入时按块把副本分配到不同数据节点；节点心跳中断后判定失效，其副本标记不可读、冗余份数减一；份数低于副本因子时从存活副本重新复制",
+        "terminalState": "所有数据块的副本数恢复到副本因子且均可读",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-5-2",
+          "suggestion": "按顺序展示文件切块、三份副本落到不同数据节点；随后让一个数据节点失效并标出缺失的副本，显示名字节点据映射定位其他副本并补回缺失的一份，最后核对每个块的副本数回到 3。"
+        },
+        {
+          "pointId": "point-5-7",
+          "suggestion": "用一组数据机图标和一个数据块的副本计数演示过程：先显示正常心跳与满份数副本，随后让一台数据机的心跳中断，画面上标出它被移出有效 I/O 列表、相关副本变为不可读且份数下降；再推进到目录服务器的巡检时刻，显示从存活副本重新复制、份数回到冗余因子。旁侧用文字标出当前处于“检测”还是“恢复”阶段。"
+        }
+      ]
+    },
+    {
+      "type": "eventQueueBacklog",
+      "component": "EventQueueBacklog",
+      "title": "事件到达与队列积压",
+      "mechanism": {
+        "inputs": "传感器按固定频率产生的事件，以及网络层的传输带宽与处理能力上限",
+        "changingState": "单位时间到达的事件数量、待处理队列长度和已汇总的分析结果条数",
+        "transitionRule": "事件按到达顺序进入队列，网络层每处理一条就出队一条；到达速率超过处理能力时队列增长，反之缩短",
+        "terminalState": "观察窗口结束时显示累计到达量、已处理量和最终积压量",
+        "replayMode": "loop"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-8",
+          "suggestion": "用时间轴显示传感器事件陆续到达、队列长度实时变化和已处理结果累加，并允许学习者看出到达速率与处理能力的关系如何决定是否产生积压。"
+        }
+      ]
+    },
+    {
+      "type": "cacheFailover",
+      "component": "CacheFailover",
+      "title": "分布式缓存故障转移与恢复",
+      "mechanism": {
+        "inputs": "若干缓存成员、初始成员列表、各成员承载的分区与副本，以及持续到达的读取请求",
+        "changingState": "每个成员的存活状态、成员列表内容、每个请求当前被路由到的目标成员",
+        "transitionRule": "成员故障时从成员列表移除，并把发往它的请求改道到仍持有副本且在服务的成员；成员重新加入时写回成员列表，并恢复处理归属自己的分区",
+        "terminalState": "请求由可用成员正常服务；重新加入完成后集群回到成员齐全、分区各归其位的稳定状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-11",
+          "suggestion": "画面中并列显示三到四台缓存成员节点及一条成员列表，按步骤推进：先正常服务，再让一台成员故障，观察它从列表消失、请求沿新的路由改道到持有副本的成员；随后让该成员重新加入，观察它回到列表并重新承担自己的分区。用文字标注每一步是故障转移还是故障恢复。"
+        }
+      ]
+    },
+    {
+      "type": "dataProcessingStages",
+      "component": "DataProcessingStages",
+      "title": "大数据处理阶段推进",
+      "mechanism": {
+        "inputs": "多路异构原始数据源，以及抽取与集成、分析、解释三个阶段的处理规则",
+        "changingState": "当前所处阶段，以及数据在该阶段的形态与中间结果",
+        "transitionRule": "抽取与集成阶段清洗并提取实体、关系后按统一结构存储；分析阶段选取数据并运行分析得到结果；解释阶段把结果转换为可视化或可追溯的呈现",
+        "terminalState": "结果以恰当方式呈现给终端用户，流程停留在最终呈现状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-1",
+          "suggestion": "分三个阶段逐步推进，每步同时显示数据载体的形态变化和该阶段规则说明，并允许暂停查看每阶段的输入与输出；可切换“跳过清洗”分支，观察脏数据如何传导到分析结果。"
+        }
+      ]
+    },
+    {
+      "type": "streamVsBatchLatency",
+      "component": "StreamVsBatchLatency",
+      "title": "流处理与批处理的延迟对比",
+      "mechanism": {
+        "inputs": "同一股按时间到达的数据序列，以及批处理的批次窗口长度与整批处理能力",
+        "changingState": "两条链路的待处理队列长度、已输出数据条数，以及每条数据从到达至结果产出的等待时长",
+        "transitionRule": "流处理链路到达即处理并立即输出；批处理链路先在存储队列中积累，达到批次窗口时才整批处理并输出，早到数据因此积压",
+        "terminalState": "数据停止后批处理完成最后一批，两条链路的累计处理条数相同，但批处理峰值延迟更高",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-2",
+          "suggestion": "用同一股匀速到达的数据流同时喂给两条链路：流处理侧数据项逐个穿过处理节点并立即输出，批处理侧先堆在存储队列中、达到批次窗口时整堆处理；用计时条显示每条链路从数据到达至结果产出的延迟，并提供重播以在相同到达序列下重复对比。"
+        },
+        {
+          "pointId": "point-8-1",
+          "suggestion": "用同一条事件流并排演示两条时间线：上方每到达一个事件就立即输出，等待时间始终只有单条处理时间；下方把事件堆进缓冲区，直到批次边界才集中输出，可以直观看到缓冲高度与等待时长随周期增长，从而理解批处理的延迟主要来自“等待成批”，而不是计算更慢。提供重播按钮回到同一事件序列。"
+        }
+      ]
+    },
+    {
+      "type": "streamProcessingPipeline",
+      "component": "StreamProcessingPipeline",
+      "title": "流数据采集与实时计算链路",
+      "mechanism": {
+        "inputs": "一条按时间到达的流数据记录，以及采集段与计算段处理节点的初始空状态",
+        "changingState": "记录当前所处阶段、各处理节点产生的中间结果，以及已进入查询服务的结果集合",
+        "transitionRule": "记录先被 Agent 采集并推送到 Collector 汇聚，再进入计算段按节点链依次处理，每个节点以上游输出为输入生成新结果，末端结果写入实时查询服务",
+        "terminalState": "计算结果出现在实时查询服务中，本轮展示结束",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-8-2",
+          "suggestion": "按阶段推进展示同一条记录从 Agent、Collector 进入处理节点链，再产出可查询结果的路径，并在每一段旁标注该段的约束（实时性、低延迟、可靠转发），重播可复现同一轨迹。"
+        }
+      ]
+    },
+    {
+      "type": "stormTupleRouting",
+      "component": "StormTupleRouting",
+      "title": "Storm 元组分组与流转",
+      "mechanism": {
+        "inputs": "Spout 持续发出的 Tuple 序列，以及各订阅边上的分组策略",
+        "changingState": "每条 Tuple 当前所在组件与被分配到的 Task，以及计数组中每个 key 的累计值",
+        "transitionRule": "Spout 每发出一个 Tuple，系统按分组策略选择接收 Task：随机分组随机投放，按字段分组按字段值投放，广播分组复制到全部 Task，全局分组投放到唯一 Task；接收的 Bolt 转换后发出新的 Tuple",
+        "terminalState": "固定批次处理完毕后停在各 Task 的累计结果",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-8-4",
+          "suggestion": "分步展示 Spout 发出一句输入、生成的单词 Tuple 按所选分组策略落到不同 Task、count 中的累计值随之更新的过程；提供分组策略切换与重播按钮，让学习者看到随机分组下同一单词的计数被拆散、按字段分组下计数收敛到正确结果。"
+        }
+      ]
+    },
+    {
+      "type": "zookeeperLeaderElection",
+      "component": "ZookeeperLeaderElection",
+      "title": "Zookeeper 领导者选举与同步",
+      "mechanism": {
+        "inputs": "若干 server 的初始状态、各自的 myid 与最大 zxid，以及可选的失效 server",
+        "changingState": "各 server 的状态、得票记录与推荐 Leader、同步进度和是否 uptodate",
+        "transitionRule": "处于 LOOKING 的 server 交换 zxid 并投票给 zxid 最大的候选者，候选者累计到多数票后当选；随后 Follower 上报最大 zxid，Leader 按 zxid 递增补齐事务并发送 UPTODATE",
+        "terminalState": "Leader 产生、多数 Follower 达到 uptodate，进入广播模式；票数不足时停留在恢复模式",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-6-2",
+          "suggestion": "分阶段播放：先让各 server 处于 LOOKING 并交换 zxid，逐步累计票数直到某个候选者达到多数票；再展示 Follower 连接 Leader 上报 zxid、Leader 按差值补齐事务并标记 UPTODATE；最后切换到广播模式，演示一次写请求的 PROPOSAL、ACK 过半与 COMMIT。提供重播按钮回到同一初始状态，并允许切换“有一台 server 失效”的场景观察多数派门槛。"
+        }
+      ]
+    },
+    {
+      "type": "zookeeperEphemeralWatch",
+      "component": "ZookeeperEphemeralWatch",
+      "title": "临时节点生命周期与监听触发",
+      "mechanism": {
+        "inputs": "一棵 znode 树、若干已建立会话的客户端，以及各客户端创建的临时顺序节点",
+        "changingState": "客户端会话的连接状态、父节点下的子节点列表、当前持锁者或主节点",
+        "transitionRule": "会话在线时临时节点随创建出现；会话失效时该会话创建的临时节点被删除，持久节点保留，watch 通知客户端重新获取子节点并比较编号，编号最小的在线节点接替",
+        "terminalState": "子节点列表稳定，编号最小的在线节点成为持锁者或主节点，其余节点等待或从属",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-6-3",
+          "suggestion": "以树形图展示节点随会话断开逐步消失的过程，持久节点保持高亮以便对比，并允许重播同一初始状态。"
+        },
+        {
+          "pointId": "point-6-4",
+          "suggestion": "用一棵目录树和三台 Server 演示：删除编号最小的临时节点后 watch 触发、子节点列表刷新、下一编号接替为 Master；重播时恢复到初始的三节点状态，并标出每一步的节点类型与判断条件。"
+        }
+      ]
+    },
+    {
+      "type": "regionLookup",
+      "component": "RegionLookup",
+      "title": "HBase 区域定位路径",
+      "mechanism": {
+        "inputs": "待查询的行键、客户端本地缓存中的区域位置信息，以及 Zookeeper 记录的根表位置",
+        "changingState": "当前已查到的层级与本次定位已消耗的网络来回次数",
+        "transitionRule": "缓存命中时直接跳到目标区域服务器；未命中时按 Zookeeper、根表、元数据表、用户表的顺序逐层查找，每层用行键区间缩小范围，找到后写入缓存",
+        "terminalState": "定位到持有目标行键区域的服务器；缓存全部失效时经过六次网络来回后取得位置",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-7-6",
+          "suggestion": "让一个客户端标记沿三层目录逐层移动，每一步显示当前层级和行键区间比较结果，并用分叉展示缓存命中与失效两条路径；旁边实时统计网络来回次数，使学习者直观看出为什么多数请求不与 HMaster 通信。"
+        }
+      ]
+    },
+    {
+      "type": "regionServerMembership",
+      "component": "RegionServerMembership",
+      "title": "HRegionServer 上线、失联与迁移",
+      "mechanism": {
+        "inputs": "HRegionServer 的启动或停止、它与 Zookeeper 的会话状态、HMaster 对目录锁状态的轮询结果",
+        "changingState": "server 目录下代表该服务器的文件与独占锁归属、可用服务器列表和区域分配关系",
+        "transitionRule": "启动时建立代表自己的文件并取得独占锁，HMaster 收到目录变更通知；会话断开时 Zookeeper 自动释放锁，HMaster 取得读写锁后删除文件并把区域分配给其他存活服务器",
+        "terminalState": "所有区域重新分配到存活服务器，集群回到稳定状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-7-7",
+          "suggestion": "按时间步演示 HRegionServer 注册、持锁、失联、锁释放、HRegion 迁移的完整状态链，并用文字标注每一步由哪个组件触发。"
+        }
+      ]
+    },
+    {
+      "type": "hbaseWritePath",
+      "component": "HbaseWritePath",
+      "title": "HBase 写请求与日志重放",
+      "mechanism": {
+        "inputs": "一次写请求的表、行键、列族与值，以及可选的版本时间戳",
+        "changingState": "请求所处环节、HLog 日志记录数、HMemStore 数据量与是否达阈值、已生成的存储文件数与检查点位置",
+        "transitionRule": "请求依次经过提交、定位区域、校验、确定版本、写 HLog、写 HMemStore；内存存储达到阈值时创建新的内存存储，旧的落成存储文件并推进检查点",
+        "terminalState": "更新持久化为存储文件且检查点已记录；故障分支下从最近检查点之后用 HLog 重放",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-7-9",
+          "suggestion": "分步播放写请求的处理路径，在 HLog 与 HMemStore 两处分别高亮写入顺序；达到阈值时显示 flush 与新 HStoreFile 的出现和检查点推进，再演示一次宕机后从检查点向后重放的分支。"
+        }
+      ]
+    },
+    {
+      "type": "pregelSuperstep",
+      "component": "PregelSuperstep",
+      "title": "Pregel 超步迭代与消息传播",
+      "mechanism": {
+        "inputs": "一张带初始顶点状态的有向图、顶点计算函数与待传递的消息",
+        "changingState": "各顶点的当前值与状态（active 或 halt）、在途消息集合、当前超步编号",
+        "transitionRule": "每个超步中 active 顶点读取上一超步的消息并按函数更新自身；有更新则向出边发送消息并保持 active，无更新则 vote to halt；收到消息的 halt 顶点在下一超步被唤醒",
+        "terminalState": "所有顶点 inactive 且没有在途消息时计算终止",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-9-1",
+          "suggestion": "依次展示超步内的本地计算、消息推送与获取、栅栏等待三个阶段，并用处理器状态说明最慢的处理器如何决定本轮结束时间。"
+        },
+        {
+          "pointId": "point-9-2",
+          "suggestion": "逐超步显示四个顶点的 PR 数值和沿边流动的消息：消息到达后高亮累加过程，再显示顶点值更新；同时用并列的小图提示 MapReduce 在每轮之间整体读写图状态，便于对比。"
+        },
+        {
+          "pointId": "point-9-3",
+          "suggestion": "按超步逐步播放四顶点环的最大值传播：用顶点颜色或线型区分 active 与 halt，用沿箭头移动的信封表示在途消息，并在每个超步结束时标注“消息将在下一超步被接收”和当前是否满足终止条件。提供重播按钮回到同一初始图，并允许在任意超步暂停查看各顶点的值和收件箱。"
+        },
+        {
+          "pointId": "point-9-5",
+          "suggestion": "用分块图表示各 worker 负责的 partition，按超步推进时点亮当前被处理的 active 顶点，显示消息在 worker 内队列与跨机器缓存之间的流动，并用顶部计数显示超步编号、active 顶点数和归约后的 aggregator 值，支持重播同一初始图。"
+        },
+        {
+          "pointId": "point-9-6",
+          "suggestion": "在同一张小图上逐超步高亮被刷新的顶点和新发出的消息，显示同一顶点可能被后续更小的候选值改写，并在某一轮无更新时停在终止状态；提供重播以复现同一条计算轨迹。"
+        }
+      ]
+    },
+    {
+      "type": "gasIteration",
+      "component": "GasIteration",
+      "title": "GAS 逐轮迭代与激活",
+      "mechanism": {
+        "inputs": "一张小图、各顶点初始 rank、邻居出度和激活阈值",
+        "changingState": "各顶点的 rank、变化量 delta，以及当前轮被激活的顶点集合",
+        "transitionRule": "对活跃顶点先 Gather 收集邻居按出度归一化的 rank 并求和，再 Apply 更新 rank 与 delta，最后 Scatter 把 delta 传给邻居，delta 超过阈值则激活邻居",
+        "terminalState": "没有顶点被激活，所有顶点停驻，迭代结束",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-9-7",
+          "suggestion": "逐步演示一轮 GAS：先高亮被收集的邻居边，显示 Apply 更新前后的 rank 与 delta，再显示 Scatter 沿边传出并按阈值点亮邻居；每轮结束暂停，并支持从同一初始图重播。"
+        }
+      ]
+    },
+    {
+      "type": "replicaQuorumReadWrite",
+      "component": "ReplicaQuorumReadWrite",
+      "title": "副本读写集合与一致性",
+      "mechanism": {
+        "inputs": "副本数 N、写成功所需节点数 W、读所需节点数 R，以及一次写入的新值",
+        "changingState": "各副本上的值从旧值变为新值，以及一次读取从 R 个节点取回的值",
+        "transitionRule": "写操作在 W 个节点确认后返回，中途按节点逐个推进新值；读操作从 R 个节点读取并取回其中一个值；读写集合相交时读到的必是新值",
+        "terminalState": "显示本次读取结果：W+R>N 时返回新值，W+R<=N 时可能返回旧值",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-10-7",
+          "suggestion": "展示 N 个副本节点；写入时按 W 逐个点亮被写入的节点并推进新值，读取时按 R 选出读节点，标出读写集合是否重叠，并给出最终读到的值；允许切换 W、R 组合，重新生成时用显式种子改变被选中的读节点。"
+        }
+      ]
+    },
+    {
+      "type": "elasticCapacityScaling",
+      "component": "ElasticCapacityScaling",
+      "title": "云数据库弹性容量调整",
+      "mechanism": {
+        "inputs": "初始基线容量，以及随时间起伏的负载曲线",
+        "changingState": "已分配的存储资源数量、当前余量阈值和计费中的资源用量",
+        "transitionRule": "负载超过余量阈值时追加存储资源，负载回落后释放，调整动作在分钟级完成",
+        "terminalState": "负载回到基线后追加资源全部释放，容量与计费用量回到初始状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-11-2",
+          "suggestion": "用横轴表示时间、纵轴表示容量，画出负载曲线与容量台阶。初始只保留基线容量；负载上升时逐段追加资源块，并用标签标出“需几分钟”；负载回落后资源块依次释放，计费用量同步下降。重播回到同一负载曲线和同一初始容量。"
+        }
+      ]
+    },
+    {
+      "type": "clientCacheLookup",
+      "component": "ClientCacheLookup",
+      "title": "客户端分区映射缓存访问",
+      "mechanism": {
+        "inputs": "客户端待读取的键，以及本地缓存中是否存在有效的分区映射图",
+        "changingState": "请求当前所在位置、映射图是否已获取，以及返回数据的是哪个数据节点",
+        "transitionRule": "缓存未命中时先向管理器请求映射图并在图中按键定位，命中时直接查本地映射图得到节点地址；随后向该数据节点请求并接收数据",
+        "terminalState": "客户端收到数据；若映射已过期，则访问旧地址失败并刷新映射后重试",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-11-8",
+          "suggestion": "用同一条读取请求演示两条路径：先走缓存未命中，显示客户端向管理器取映射图、在图里定位到节点再取数；再切换到缓存命中，跳过管理器直接访问数据节点；最后高亮映射过期时访问旧地址失败、需要刷新映射的分支，让学习者对比两次往返的差别。"
+        }
+      ]
+    },
+    {
+      "type": "directoryMigration",
+      "component": "DirectoryMigration",
+      "title": "Spanner 目录数据迁移",
+      "mechanism": {
+        "inputs": "一个目录及其当前所在的 paxos group、迁移的目标 group 与迁移动机",
+        "changingState": "目录实际数据所在的位置，以及记录目录位置信息的元数据指向",
+        "transitionRule": "先把目录实际数据整体移动到目标位置，全部到位后再用一次原子操作更新元数据，使后续访问切换到新位置",
+        "terminalState": "目录由目标 group 管理、元数据指向新位置，迁移作为后台任务完成",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-12-6",
+          "suggestion": "以一组带相同 key 前缀的键值代表目录，开始时放在 paxos group A 中；动画先逐块搬运实际数据到 group B，再高亮一次性的元数据原子切换，最后显示目录归属变为 group B，并可对比「若整段用事务实现会长时间阻塞读写」的差别。"
+        }
+      ]
+    },
+    {
+      "type": "trueTimeInterval",
+      "component": "TrueTimeInterval",
+      "title": "TrueTime 误差区间的生长与回落",
+      "mechanism": {
+        "inputs": "投票间隔、时钟漂移比率、通讯延迟，以及两种时间源的不确定性",
+        "changingState": "时间不确定区间的宽度、上下边界，以及当前是否刚完成一次投票校准",
+        "transitionRule": "两次投票之间区间按最差时钟漂移线性增大；投票时用多台 master 的投票重新校准，区间回落到通讯延迟底噪",
+        "terminalState": "完成若干次投票周期后停在锯齿峰值或投票后的回落点，可循环播放",
+        "replayMode": "loop"
+      },
+      "bindings": [
+        {
+          "pointId": "point-12-8",
+          "suggestion": "以时间轴显示 TTinterval 的下界和上界两条曲线，区间随时间线性张开，每到 30 秒投票时刻迅速收拢，并在旁侧同步显示当前 ε 数值与 1 到 7 毫秒的参考区间；可标注一次故障导致的异常增大，并允许切换到更短的投票间隔观察峰值变化。"
+        }
+      ]
+    },
+    {
+      "type": "spannerTransaction",
+      "component": "SpannerTransaction",
+      "title": "Spanner 读写事务与提交时间戳",
+      "mechanism": {
+        "inputs": "一个读写事务的读集与缓冲写集、各 leader 准备的时间戳、TrueTime 当前区间与误差",
+        "changingState": "事务所处阶段、各副本上的锁状态和版本可见性",
+        "transitionRule": "读阶段加读锁并读最新数据；提交阶段各 leader 加写锁并上报准备时间戳；协调者选出不早于所有准备时间戳且不早于当前时间上界的提交时间戳，等待两倍误差后把提交时间戳发往各副本并释放锁",
+        "terminalState": "提交时间戳在所有副本生效、锁全部释放，新事务的起始时间不早于本事务结束时间",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-12-9",
+          "suggestion": "用时间轴和锁状态两条轨道展示一个读写事务：逐个点亮读锁、写锁和准备时间戳，显示 coordinator 如何把提交时间戳推到 TrueTime 上界之后，再用一段等待窗口表示 2ε 后才对外可见；允许拖动误差 ε 或加入一个并发事务，观察提交时间戳被推迟的过程。"
+        }
+      ]
+    },
+    {
+      "type": "nestedRecordAssembly",
+      "component": "NestedRecordAssembly",
+      "title": "嵌套列式数据的记录装配",
+      "mechanism": {
+        "inputs": "若干列的字段值及其重复深度与定义深度，以及模式中的字段层级",
+        "changingState": "装配状态机当前所处的字段 reader，以及正在装配的记录已填充的嵌套结构",
+        "transitionRule": "每读到一个值，取它在重复深度处的祖先字段，跳到该祖先的第一个叶子字段 reader，并把值按定义深度装入对应层级",
+        "terminalState": "重复深度为 0 时结束当前记录，输出完整记录并开始下一条，直到所有列值读完",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-13-3",
+          "suggestion": "逐步显示各列当前行、r 与 d 的取值，以及状态机在 DocId、Links.Backward、Name.Url、Name.Language.Code 等 reader 之间的跳转，让学习者看到一条记录如何在若干次深度驱动的状态转移后被装配完成。"
+        }
+      ]
+    },
+    {
+      "type": "queryTreeExecution",
+      "component": "QueryTreeExecution",
+      "title": "Dremel 查询树逐层执行",
+      "mechanism": {
+        "inputs": "一条聚合查询、表元数据与 tablet 分布，以及各层服务器节点",
+        "changingState": "各层节点持有的子查询集合、叶子节点已完成的扫描进度，以及向上返回的局部聚合结果",
+        "transitionRule": "节点把子查询按分区重写为更小的子查询并下派；叶子节点扫描 tablet 得到局部结果后向上返回；父节点对同一分组键的局部结果做合并",
+        "terminalState": "根节点收齐全部子结果后完成最终合并并输出结果；达到扫描百分比参数时提前返回",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-13-5",
+          "suggestion": "自上而下逐层展开子查询节点，叶子节点按 tablet 逐个点亮扫描进度并向上冒泡局部计数，中间节点在收到同组结果时合并并显示合并后的值，最后根节点输出结果；提供重播按钮回到同一条查询的初始状态，并标注扫描百分比参数对返回时机的截断位置。"
+        }
+      ]
+    }
+  ],
+  "assets": {
+    "runtime.js": {
+      "bytes": 549904,
+      "sha256": "f122282ecba6be61d87ff65afb7220e5f3d108bc868f4ef1ade235432346ffed"
+    },
+    "runtime.css": {
+      "bytes": 116703,
+      "sha256": "e8abe6c9703339f2bfee21531e67133121719fd9c5e62e61d5add3ef8ff7602c"
+    }
+  }
+}

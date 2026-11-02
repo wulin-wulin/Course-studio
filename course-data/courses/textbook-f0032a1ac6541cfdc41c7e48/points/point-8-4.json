@@ -1,0 +1,1026 @@
+{
+  "id": "point-8-4",
+  "title": "流计算框架 Storm",
+  "shortSummary": "介绍 Storm 的拓扑、喷口和螺栓等核心概念，理解其流式任务组织方式。",
+  "keyTerms": [
+    "Storm",
+    "拓扑",
+    "喷口",
+    "螺栓"
+  ],
+  "animationType": "stormTupleRouting",
+  "animationSuggestion": "分步展示 Spout 发出一句输入、生成的单词 Tuple 按所选分组策略落到不同 Task、count 中的累计值随之更新的过程；提供分组策略切换与重播按钮，让学习者看到随机分组下同一单词的计数被拆散、按字段分组下计数收敛到正确结果。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-8-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-application",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 Storm 概念、集群组件和工作流程的定义与表述，围绕「如何组织一个流式任务」重排讲解顺序，补充职责区分、分组选择依据和推演练习，并标注教材术语与模型补充。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-position",
+          "text": "说明 Storm 在流计算中的定位，以及它与 MapReduce 批处理在数据到达方式、优化目标上的差别。"
+        },
+        {
+          "id": "explain-model",
+          "text": "用 Streams、Spouts、Bolts、Topology 和 Stream Groupings 解释一个 Storm 流式任务的组成与职责分工。"
+        },
+        {
+          "id": "apply-topology",
+          "text": "给定一个实时处理需求，说明应如何用 Spout、Bolt、Topology 和分组策略组织数据流，并解释分组策略对结果正确性的影响。"
+        }
+      ],
+      "misconceptions": [
+        "把 Topology 当成一次性的批处理作业，以为提交后会自然结束。",
+        "认为 Spout 负责业务计算，实际上 Spout 只负责从外部读取数据并发射 Tuple。",
+        "把 Stream Groupings 当作纯性能参数，忽略它决定了哪些 Tuple 会进入同一个 Task，从而影响有状态计算的正确性。"
+      ],
+      "modules": [
+        {
+          "id": "m-positioning",
+          "title": "定位与特点",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "explain-position"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-programming-model",
+          "title": "编程模型的五个抽象",
+          "role": "concept-explanation",
+          "outcomeRefs": [
+            "explain-model"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-grouping-and-execution",
+          "title": "分组策略与集群执行",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-model",
+            "apply-topology"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-worked-example",
+          "title": "单词统计实例推演",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "apply-topology"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-comparison-check",
+          "title": "框架定位比较与达成检查",
+          "role": "comparison-and-check",
+          "outcomeRefs": [
+            "explain-position",
+            "apply-topology"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-position",
+          "explain-model",
+          "apply-topology"
+        ],
+        "method": "完成分组策略选择题与三道自检题，并说明每题依据的教材概念。",
+        "successCriteria": [
+          "能正确区分 Spout 与 Bolt 的职责",
+          "能说明 Topology 为何持续运行而不是处理完即结束",
+          "能根据下游是否按 key 维护状态选择合适的分组策略"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "tb-chapter-summary",
+        "nextPointId": "point-9-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-position",
+        "moduleId": "m-positioning",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材背景：流数据处理为何需要专用系统",
+        "markdown": "教材在进入 Storm 之前先交代了流计算的产业背景：早期只有银行、政府等机构能通过昂贵的定制系统满足实时分析需求，例如 IBM 推出的商业流计算系统 InfoSphere Streams。在它出现之前，流计算已有学术研究，如 MIT 等三所大学合作的 Aurora，以及后来在 Aurora 基础上开发的 Borealis（该项目 2008 年已停止维护）。\n\n2010 年 Yahoo! 的分布式流式处理系统 S4 开源，2011 年 Twitter 的 Storm 开源，改变了这一局面。教材用 MapReduce 作对照：MapReduce 启动计算时数据一般已经到位，处理的是静态批量数据，重视数据处理的总吞吐量；流计算系统启动时数据并未完全到位，而是源源不断流入，因此更关注数据处理的延时。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000258"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "流计算框架 Storm"
+              ],
+              "lineStart": 3299,
+              "lineEnd": 3312,
+              "assetRefs": [],
+              "excerptSha256": "14ea35cd453eb705ba0370e111f783b4e0dd8555f67649eceb54c9c524ca8937"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-vs-stream",
+        "moduleId": "m-positioning",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：把「数据是否到位」落到具体任务上",
+        "markdown": "把两种模型放回任务里看：如果目标是每天汇总全量日志，数据先落盘再统一计算，追求的是吞吐；如果目标是让刚发布的微博尽快进入热门话题，数据是持续到达的事件，系统必须跟着到达节奏处理并尽快给出结果。教材强调的「计算启动时数据是否已经到位」以及「重视吞吐还是重视延时」，就是区分批处理与流处理的两个判断点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-position"
+          ]
+        }
+      },
+      {
+        "id": "tb-storm-intro",
+        "moduleId": "m-positioning",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：Storm 是什么",
+        "markdown": "Twitter Storm 是一个免费、开源的分布式实时计算系统，可以简单、高效、可靠地处理大量流数据。教材认为，Storm 对实时计算的意义类似于 Hadoop 对批处理的意义。它基于 Clojure 和 Java 开发。\n\nTwitter 自身采用分层的数据处理架构：Hadoop 与 ElephantDB（专门用于从 Hadoop 中导出 key/value 数据的数据库）组成批处理系统，Storm 与 Cassandra（混合型的非关系数据库）组成实时系统，实时系统处理的结果最终会由批处理系统来修正。教材指出，正是这个观点使 Storm 的设计与众不同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000259"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Storm 简介"
+              ],
+              "lineStart": 3313,
+              "lineEnd": 3327,
+              "assetRefs": [
+                "parts/part-0002/images/c1e36f89f0f7ea23d43aa871de5ab1d7bd77d1f03f8ac348539d797276fa44ca.jpg"
+              ],
+              "excerptSha256": "b32c5e5d4d88eb729ca37e371bcc357aff6e41005d57f19160f9a40d152f6f4b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-layered",
+        "moduleId": "m-positioning",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：分层架构中的职责边界",
+        "markdown": "教材只给出了「实时结果由批处理修正」这一结论，没有展开修正的具体机制。这里需要记住的是职责边界：Storm 负责尽快给出实时结果，Hadoop 一侧负责用完整数据校正结果。答题时不要把两条链路合并成一条，也不要把批处理系统说成 Storm 的一部分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-storm-intro"
+          ]
+        }
+      },
+      {
+        "id": "tb-features",
+        "moduleId": "m-positioning",
+        "depth": "support",
+        "kind": "table",
+        "title": "教材归纳的八个主要特点",
+        "markdown": "| 特点 | 教材含义 |\n|---|---|\n| 简单的编程模型 | 降低了进行实时处理的复杂性 |\n| 支持各种编程语言 | 默认支持 Clojure、Java、Ruby 和 Python，增加其他语言只需实现一个简单的 Storm 通信协议 |\n| 容错性 | 自动管理工作进程和节点的故障 |\n| 水平扩展 | 计算在多个线程、进程和服务器之间并行进行 |\n| 可靠的消息处理 | 保证每个消息至少得到一次完整处理 |\n| 快速 | 系统设计保证消息得到快速处理 |\n| 本地模式 | 可以在处理过程中完全模拟 Storm 集群，便于开发和单元测试 |\n| 容易部署 | 集群只需少量安装和配置即可运行 |\n\n教材强调，其中「能可靠地处理消息、保证每条消息都能得到处理」这一点，使 Storm 在流计算应用中得到了广泛使用；本地模式则让单机也能安装使用，降低了学习成本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000260"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Storm 主要特点"
+              ],
+              "lineStart": 3328,
+              "lineEnd": 3349,
+              "assetRefs": [],
+              "excerptSha256": "47de4a32a4334a950e9f3d8d29e58c42e6b7668b9c005d91bef67a18f1fa1363"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-applications",
+        "moduleId": "m-positioning",
+        "depth": "support",
+        "kind": "application",
+        "title": "教材列出的三大应用领域",
+        "markdown": "Twitter 列举了 Storm 的三大应用领域：\n\n- 信息流处理（Stream Processing）：实时处理新数据和更新数据库，兼具容错性和可扩展性；\n- 连续计算（Continuous Computation）：进行连续查询并把结果即时反馈给客户，例如把 Twitter 上的热门话题发送到客户端；\n- 分布式远程过程调用（Distributed RPC）：并行处理密集查询，拓扑结构本身是一个等待调用信息的分布函数，收到调用信息后对查询进行计算并返回结果。\n\n教材补充，除这些领域外，Storm 也可应用于各类实时计算场景。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000261"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Storm 应用领域"
+              ],
+              "lineStart": 3350,
+              "lineEnd": 3363,
+              "assetRefs": [],
+              "excerptSha256": "874d01f5bd954f3fab5436aa0650e555a14407c526387ef86366cf401fde3acf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-design-concepts",
+        "moduleId": "m-programming-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材的设计思想：五个术语的分工",
+        "markdown": "Storm 对流式计算做了概念抽象，主要术语包括 Streams、Spouts、Bolts、Topology 和 Stream Groupings。教材的设计思想部分正是围绕这五个概念展开：Streams 描述数据本身，Spouts 描述数据的来源，Bolts 描述如何处理，Topology 描述整体如何连成一张图，Stream Groupings 描述元组如何在组件之间分发。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000262"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Storm 设计思想"
+              ],
+              "lineStart": 3364,
+              "lineEnd": 3367,
+              "assetRefs": [],
+              "excerptSha256": "24394eb1cddf03b292f7ca5da066ce3a60ec29b9790506fc7f1a97b2c3b2ab98"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-streams",
+        "moduleId": "m-programming-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "Streams：无界的 Tuple 序列",
+        "markdown": "在 Storm 对流（Stream）的抽象描述中，流是一个不间断的无界的连续 Tuple（元组，是元素的有序列表）。这些无界的元组会以分布式的方式并行地创建和处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000263"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（1） Streams"
+              ],
+              "lineStart": 3368,
+              "lineEnd": 3374,
+              "assetRefs": [
+                "parts/part-0002/images/b7422ae4b8cd158d15b38c5502a3c53c8d04317043d5930558b191bedc0ff741.jpg"
+              ],
+              "excerptSha256": "5197180e2cc656d7072332173b3c769c63551e057572bda4c47ca99f8b0ce7e7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tuple-unbounded",
+        "moduleId": "m-programming-model",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：无界对编程单位的影响",
+        "markdown": "「无界」意味着不存在一个可以等待的「最后一条 tuple」。因此 Storm 的编程单位不是「处理一批数据」，而是「每来一个 tuple，按定义的处理逻辑处理一次」；任务提交后持续运行，而不是算完即止。这也能解释教材后文所说的：Topology 会一直处理消息，直到被 kill。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-streams"
+          ]
+        }
+      },
+      {
+        "id": "tb-spouts",
+        "moduleId": "m-programming-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "Spouts：流的源头",
+        "markdown": "Storm 认为每个 Stream 都有一个源头，并将这个源头抽象为 Spouts。Spouts 会从外部读取流数据并发出 Tuple。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000264"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（2） Spouts"
+              ],
+              "lineStart": 3375,
+              "lineEnd": 3381,
+              "assetRefs": [
+                "parts/part-0002/images/82332c05551a507e82c12027392fbb327546334ba10e3ebba484cd97baa466d5.jpg"
+              ],
+              "excerptSha256": "d2ed1a280db5ab18ea425228b9ee05ba2e25d2627689acde1e9b8b48c2f9e4d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-bolts",
+        "moduleId": "m-programming-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "Bolts：中间状态转换",
+        "markdown": "Storm 将流的中间状态转换抽象为 Bolts。Bolts 可以处理 tuples，同时也可以发送新的流给其他 Bolts 使用。Bolts 作为消息处理者，所有的消息处理逻辑都封装在 Bolts 里面，处理输入的数据流并产生输出的新数据流；Bolts 中可以执行过滤、聚合、查询数据库等操作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000265"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（3） Bolts"
+              ],
+              "lineStart": 3382,
+              "lineEnd": 3388,
+              "assetRefs": [
+                "parts/part-0002/images/8fbeccfbe033a7aadff709ffc6d6702c0da16d84348dfba61ab3ab5d5dd09142.jpg"
+              ],
+              "excerptSha256": "f89c32d18573f38dcd3fecdcc86b41125fbb617c3bb345aa3d7573197d4fceb0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spout-vs-bolt",
+        "moduleId": "m-programming-model",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：一句话区分 Spout 与 Bolt",
+        "markdown": "Spout 决定「数据从哪来、什么时候来」，Bolt 决定「数据怎么变」。只要把过滤、聚合等业务逻辑写进 Spout，Spout 之后就不再有可复用的处理层，多个下游也无法共享同一份处理结果，这与教材「所有消息处理逻辑封装在 Bolts 里」的抽象分工相冲突。检查一个拓扑设计时，先判断每个组件属于这两类中的哪一类。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-spouts",
+            "tb-bolts"
+          ]
+        }
+      },
+      {
+        "id": "tb-topology",
+        "moduleId": "m-programming-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "Topology：可提交执行的流转换图",
+        "markdown": "为了提高效率，Spout 源可以接上多个 Bolts 处理器；Storm 将这样的图抽象为 Topology。Topology 是 Storm 中最高层次的抽象概念，可以被提交到 Storm 集群执行，一个拓扑就是一个流转换图。图中的边表示 Bolt 订阅了哪些流。当 Spout 或者 Bolt 发送元组到流时，就发送到每个订阅了该流的 Bolt 上处理。\n\n实现上，Storm 中的拓扑定义仅仅是一些 Thrift 结构体（Thrift 是基于二进制的高性能通讯中间件），因此可以使用其他语言来创建和提交拓扑。流中的每一个 Tuple 就是一个值列表，列表中的每个值都有一个名称，可以是基本类型、字符类型、字节数组等可序列化类型；Topology 中的每个节点都要说明它发射的元组字段名称，其他节点只需订阅该名称就可以接收处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000266"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（4） Topology"
+              ],
+              "lineStart": 3389,
+              "lineEnd": 3403,
+              "assetRefs": [
+                "parts/part-0002/images/2cbdd2d44e30c858e8444dbc12827259e9b8af704e66bd173be60f16fe856ec1.jpg"
+              ],
+              "excerptSha256": "1aef199443ef76b44d003e10c359fc0b1a8a23d9bebcc01f89fff56123b15383"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-topology-dag",
+        "moduleId": "m-programming-model",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：教材「无向环图」表述的辨析",
+        "markdown": "教材此处写作「无向环图」，但同一段说明边表示「Bolt 订阅了哪些流」，元组只会从上游流向下游的订阅者，数据方向是单向的。按上下文应理解为有向无环图：Spout 是起点，Bolt 沿订阅边向下游传递。若真的按无向图理解，就会推出「下游可以把数据回传给数据源」这类错误结论，也会与「拓扑是一个流转换图」的定义矛盾。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-topology"
+          ]
+        }
+      },
+      {
+        "id": "tb-groupings",
+        "moduleId": "m-grouping-and-execution",
+        "depth": "core",
+        "kind": "table",
+        "title": "Stream Groupings：六种消息分发策略",
+        "markdown": "消息分发策略定义一个 Stream 应该如何分配给 Bolts。教材列出六种方式：\n\n| 分组方式 | 教材定义 |\n|---|---|\n| Shuffle Grouping | 随机分组，随机分发 Stream 中的 Tuple |\n| Fields Grouping | 按字段分组，具有相同值的 Tuple 会被分发到对应的 Bolts |\n| All Grouping | 广播分发，每个 Tuple 都会被分发到各个 Bolts 中 |\n| Global Grouping | 全局分组，Tuple 只会分发给 Bolt 中的一个任务 |\n| Non Grouping | 不分组，与随机分组效果类似 |\n| Direct Grouping | 直接分组，由 Tuple 的生产者来定义接收者 |\n\n通过这些策略，Storm 解决了 Spout 和 Bolt 两个组件之间如何发送 Tuple 的问题。教材还说明，示意图中的圆圈表示 Task，Task 就是具体的处理逻辑；每一个 Spout 和 Bolt 会被当作很多 Task 在整个集群里面执行，并且每一个 Task 对应到一个线程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000267"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（5） Stream Groupings"
+              ],
+              "lineStart": 3404,
+              "lineEnd": 3429,
+              "assetRefs": [
+                "parts/part-0002/images/2a23afbef5ff4a01aae9cb56169cde3fd9311afa2c37b9e7d9b0c8b51fd0b9bd.jpg",
+                "parts/part-0002/images/4912549095639947950c37b5d0f97d1a0f11197050690b5f5c0b6a11275424b6.jpg"
+              ],
+              "excerptSha256": "d411e253f83a8f0cd2502d447771ff03763f9062f316cd2ec92844af4e584754"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-grouping-choice",
+        "moduleId": "m-grouping-and-execution",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：分组策略决定谁拿到哪条数据",
+        "markdown": "分组策略不只是性能参数，它决定了哪些 Tuple 会进入同一个 Task。如果某个 Bolt 需要按 key 维护状态，例如累加同一个单词出现的次数，就必须让相同 key 的 Tuple 进入同一个 Task；随机分组做不到这一点，同一个单词会被拆到多个 Task 各自计数，最终得到多份局部结果。反过来，只有需要每个下游都拿到完整副本时才用广播分发。选择时先问三个问题：下游是否按 key 维护状态、是否需要全量副本、是否需要由生产者指定接收者。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-groupings"
+          ]
+        }
+      },
+      {
+        "id": "tb-cluster",
+        "moduleId": "m-grouping-and-execution",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材的集群设计与工作流程",
+        "markdown": "Storm 运行于集群之上，与 Hadoop 集群类似，但 Hadoop 上运行的是 MapReduce Jobs，Storm 上运行的是 Topologies：一个 MapReduce Job 最终会结束，而一个 Topology 永远处理消息（或直到 kill 它）。\n\nStorm 集群有两种节点：控制（Master）节点和工作者（Worker）节点。Master 节点运行 Nimbus 后台程序，负责在集群范围内分发代码、为 worker 分配任务和故障监测；每个 Worker 节点运行 Supervisor 后台程序，监听分配给该机器的工作，基于 Nimbus 的分配决定启动或停止工作者进程。\n\nStorm 采用 Zookeeper 作为分布式协调组件，一个 Zookeeper 集群负责 Nimbus 和多个 Supervisor 之间的所有协调工作。Nimbus 和 Supervisor 都是快速失败（fail-fast）和无状态的，所有状态维持在 Zookeeper 或本地磁盘中。Master 节点并不直接与 Worker 节点通信，而是借助 Zookeeper 分离依赖、存放状态，以便快速恢复任何失败的一方；因此杀掉 Nimbus 和 Supervisor 进程再重启，它们会恢复状态并继续工作。\n\n工作流程是：客户端提交定义好的 Topology；Nimbus 建立 Topology 本地目录，把分配写入 Zookeeper；Supervisor 从 Zookeeper 获取任务并启动；Worker 节点中的 Task 执行具体任务逻辑。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000268"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Storm 框架设计"
+              ],
+              "lineStart": 3430,
+              "lineEnd": 3464,
+              "assetRefs": [
+                "parts/part-0002/images/e551c719799dcacfaa43468041099f2596608dadad14e02488d0ebb852738453.jpg",
+                "parts/part-0002/images/94cd08e7c1defb44e78b42ee5e4cae20c2f669211904223fbbb10a2ee9bf5ad9.jpg"
+              ],
+              "excerptSha256": "11e07889f5d53a1e4ac6c7333f4e65dea54482f1856a0b8654a27ba725686742"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stateless-coordination",
+        "moduleId": "m-grouping-and-execution",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：无状态为什么能换来可重启",
+        "markdown": "Nimbus 和 Supervisor 自身不保存「我有哪些任务」这类状态，状态放在 Zookeeper 或本地磁盘，所以进程重启后重新读取即可恢复，这也解释了教材为什么说可以 kill 掉两个进程再重启。反过来说，如果状态只留在进程内存里，主节点故障就会连带丢失任务分配，与 Storm 追求的容错目标冲突。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cluster"
+          ]
+        }
+      },
+      {
+        "id": "tb-example",
+        "moduleId": "m-worked-example",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材实例：单词统计 Topology",
+        "markdown": "教材用一个单词统计实例加深对 Topology 的认识。整个单词统计逻辑由如下代码定义：\n\n```txt\nTopologyBuilder builder = new TopologyBuilder();\n\nbuilder.setSpout(\"sentences\", new RandomSentenceSpout(), 5);\nbuilder.setBolt(\"split\", new SplitSentence(), 8)\n    .shuffleGrouping(\"sentences\");\nbuilder.setBolt(\"count\", new WordCount(), 12)\n    .fieldsGrouping(\"split\", new Fields(\"word\"));\n```\n\n第一行新建一个 Topology builder。`setSpout` 有三个参数：第一个定义 Spout 来源名称为 sentences，第二个定义数据源的处理函数，第三个定义并发线程数。两个 `setBolt` 同样有三个参数，并各自定义了消息分发策略：split 从句子中提取单词，以随机分发的方式把 Tuple 分发给每个 Bolt；count 对分割后的单词计数，采用按字段分组，只有具有相同 field 值的 Tuple 才会发给同一个 Task 进行统计，从而保证统计准确性。\n\nBolts 通过订阅 Tuple 的名称接收数据，例如 count 订阅了 split 分割后的单词数据。Topology 只定义计算逻辑，具体处理函数可以用多种语言完成，例如 SplitSentence 用 `super(\"python\", \"splitsentence.py\")` 指定由 Python 脚本按空格分割单词；分割后的单词通过 emit 发射出去。count 的 WordCount 类中，单词若已统计过则计数加 1，否则置为 0，最终输出字段为 (word, count)。\n\n教材还以 Twitter 实时热门话题为例：以用户发布的 tweets 为数据源，经 Spout 处理后分发给 RollingCountsBolt 做滑动窗口计数与 TopN 排序，再经 IntermediateRankingsBolt 排序、TotalRankingBolt 汇总，最后由 RankingsReportBolt 完成筛选、提取和输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000269"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Storm 实例"
+              ],
+              "lineStart": 3465,
+              "lineEnd": 3550,
+              "assetRefs": [
+                "parts/part-0002/images/661f539ca992d4efca7b26d9140bdf0019e945fa297666f9dd8e34f2dae46330.jpg",
+                "parts/part-0002/images/08fdd762c08b6973caef5b732808cd98962ee8aeffaa051d62bd59aa66505a55.jpg",
+                "parts/part-0002/images/c5c6e0992c2af925213c25aeca1dc53d0ac3b000ef27ef91767b8abb81eb3f46.jpg"
+              ],
+              "excerptSha256": "4db75c32034962dc3eb0d18aa7d8f56c1a477b508d866b06bcebf69df592751e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-example-trace",
+        "moduleId": "m-worked-example",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：用一个句子走一遍数据流",
+        "markdown": "假设 Spout 发射句子「the cat and the cat」。split Bolt 把它拆成 the、cat、and、the、cat 五条单词 Tuple 并发射。由于 count 使用按字段分组，所有 word 为 the 的 Tuple 会进入同一个 Task，cat 的 Tuple 进入另一个 Task，各自累加后得到 the: 2、cat: 2、and: 1。若 count 改用随机分组，同一个单词可能落到不同 Task，就会得到多份局部计数，最终结果不再正确。这个推演也说明：并发线程数决定有多少个 Task 并行处理，而分组策略决定某条 Tuple 交给哪个 Task。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-adoption",
+        "moduleId": "m-worked-example",
+        "depth": "support",
+        "kind": "application",
+        "title": "教材补充：谁在使用 Storm",
+        "markdown": "Storm 自 2011 年发布以来，凭借其流计算框架设计及开源特性，吸引了许多大型互联网公司将其应用到实际项目中，典型用户如淘宝和阿里巴巴。淘宝和阿里巴巴的许多业务需要实时流计算支撑，如业务监控、广告推荐、买家实时数据分析等；淘宝数据部门开发的新架构已把 Storm 作为重要组成部分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000270"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "哪些公司在使用 Storm"
+              ],
+              "lineStart": 3551,
+              "lineEnd": 3562,
+              "assetRefs": [
+                "parts/part-0002/images/df4375dbc99179acca49f74e13df3680fe07b7d3044a3cdade7c973dfe617be7.jpg",
+                "parts/part-0002/images/428d1b265e1daee8b6a5c76dee76b49673cc4e2e07b4c09ea1b7e5d2d4205be1.jpg"
+              ],
+              "excerptSha256": "1c187d3469cf6d72cd1164cbcce0eb35082300d957df96ea2d1934bf596d4d02"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-landscape",
+        "moduleId": "m-comparison-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材的流计算框架汇总",
+        "markdown": "教材把当时的流计算框架与平台分为三类：\n\n- 商业级平台：IBM InfoSphere Streams（商业级高级计算平台，可从数千个实时源摄取、分析和关联信息）、IBM StreamBase（另一款商业流计算系统，用于金融和政府部门）。\n- 开源框架：Twitter Storm（免费、开源的分布式实时计算系统）、Yahoo! S4（通用的、分布式的、可扩展的、分区容错的、可插拔的流式系统）。\n- 公司自研框架（未开源但有不少学习资料）：Facebook 的 Puma（与 HBase 结合处理实时数据）、百度的 DStream、淘宝的银河流数据处理平台、基于 Erlang 和 Zookeeper 的 Super Mario。\n\n教材还提到，业界出现了像 SQLstream 这样专门提供实时大数据流处理服务的公司。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000271"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "流计算框架汇总"
+              ],
+              "lineStart": 3563,
+              "lineEnd": 3588,
+              "assetRefs": [],
+              "excerptSha256": "d642d85471fb0dea4823fa2cefc330978a545bd0093001b73e86f3e1afcc7a68"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-when-storm",
+        "moduleId": "m-comparison-check",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：什么任务该选 Storm",
+        "markdown": "把教材的特点清单与框架清单合起来看，可以形成选择判断：需要持续、低延时地处理到达的数据，希望计算能在多线程、多进程、多服务器上水平扩展，并且能接受「每条消息至少处理一次」的语义时，Storm 是合适的选择；如果任务是等全量数据到齐后算一次总账，就应按批处理思路交给 MapReduce 与 Hadoop。教材给出的是 2013 年前后的框架格局，比较时应标明这一时间背景。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-landscape",
+            "tb-features"
+          ]
+        }
+      },
+      {
+        "id": "tb-chapter-summary",
+        "moduleId": "m-comparison-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材本章小结",
+        "markdown": "本章先介绍什么是流计算，包括其产生背景与基本概念，接着介绍流计算的处理模型与处理流程，分析以 Hadoop 为代表的批处理能否胜任流计算的工作；然后总结流计算的应用场景，并通过实例说明流计算框架的重要性。接下来着重介绍开源流计算框架 Twitter Storm，包括主要特点、应用领域、设计思想和框架设计，并用一个简单实例加深认知；最后对流计算框架做了汇总。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000272"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 3589,
+              "lineEnd": 3592,
+              "assetRefs": [],
+              "excerptSha256": "fd157bc1bf238ae415e040ed764fbc69b89ebbb0767b8c4fc8fd179feda3d806"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "m-comparison-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：三个自检问题",
+        "markdown": "1. 一个拓扑里，负责从消息队列读取日志并发射 Tuple 的组件属于 Spout 还是 Bolt？它之后还需要哪一类组件完成过滤与聚合？\n   参考要点：属于 Spout；过滤与聚合属于 Bolt 的消息处理逻辑。\n\n2. 为什么说 Topology 不是一个「跑完就结束的作业」？\n   参考要点：Stream 是无界的连续 Tuple 序列，Topology 会一直处理消息，直到被 kill；这是它与 MapReduce Job 的关键区别。\n\n3. 某个 Bolt 要按单词累加计数，为什么不能用随机分组？\n   参考要点：随机分组会把同一单词的 Tuple 分到不同 Task，产生多份局部计数；按字段分组才能让相同值的 Tuple 进入同一 Task。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-design-concepts",
+            "tb-groupings",
+            "tb-chapter-summary"
+          ]
+        }
+      },
+      {
+        "id": "tb-references",
+        "moduleId": "m-comparison-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材列出的延伸阅读",
+        "markdown": "教材在本节末尾列出延伸阅读，包括《Beyond MapReduce：谈 2011 年风靡的数据流计算系统》、对互联网海量数据实时计算的理解、Storm 三十分钟入门材料，以及 Storm 实时流式计算与实时流式数据处理及应用方面的资料。它们用于补充流计算的产业背景和 Storm 的工程细节，不构成本节正文的事实依据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000273"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 3593,
+              "lineEnd": 3602,
+              "assetRefs": [],
+              "excerptSha256": "079b9c21777a0e60cd1beaa96ec36e31de61b16e9433f39349e3ed50634f808b"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "grouping-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-grouping-choice",
+        "moduleId": "m-grouping-and-execution",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-topology"
+        ],
+        "learningPurpose": "检查学习者能否根据「下游是否按 key 维护状态」这一条件选择合适的分组策略。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-groupings"
+          ]
+        },
+        "config": {
+          "question": "在单词统计拓扑中，要求同一个单词的所有 Tuple 都由同一个 Task 计数，应选择哪种分组方式？",
+          "options": [
+            "随机分组",
+            "按字段分组",
+            "广播分发",
+            "全局分组"
+          ],
+          "answerIndex": 1
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请从随机分组、按字段分组、广播分发、全局分组的教材定义出发，说明哪一种能让同一单词的 Tuple 进入同一个 Task，并解释原因。"
+        }
+      }
+    ]
+  },
+  "subtitle": "流计算",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "trunk",
+  "related": [
+    "point-8-3"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000258"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "流计算框架 Storm"
+      ],
+      "lineStart": 3299,
+      "lineEnd": 3312,
+      "assetRefs": [],
+      "excerptSha256": "14ea35cd453eb705ba0370e111f783b4e0dd8555f67649eceb54c9c524ca8937"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000259"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Storm 简介"
+      ],
+      "lineStart": 3313,
+      "lineEnd": 3327,
+      "assetRefs": [
+        "parts/part-0002/images/c1e36f89f0f7ea23d43aa871de5ab1d7bd77d1f03f8ac348539d797276fa44ca.jpg"
+      ],
+      "excerptSha256": "b32c5e5d4d88eb729ca37e371bcc357aff6e41005d57f19160f9a40d152f6f4b"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000260"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Storm 主要特点"
+      ],
+      "lineStart": 3328,
+      "lineEnd": 3349,
+      "assetRefs": [],
+      "excerptSha256": "47de4a32a4334a950e9f3d8d29e58c42e6b7668b9c005d91bef67a18f1fa1363"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000261"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Storm 应用领域"
+      ],
+      "lineStart": 3350,
+      "lineEnd": 3363,
+      "assetRefs": [],
+      "excerptSha256": "874d01f5bd954f3fab5436aa0650e555a14407c526387ef86366cf401fde3acf"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000262"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Storm 设计思想"
+      ],
+      "lineStart": 3364,
+      "lineEnd": 3367,
+      "assetRefs": [],
+      "excerptSha256": "24394eb1cddf03b292f7ca5da066ce3a60ec29b9790506fc7f1a97b2c3b2ab98"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000263"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（1） Streams"
+      ],
+      "lineStart": 3368,
+      "lineEnd": 3374,
+      "assetRefs": [
+        "parts/part-0002/images/b7422ae4b8cd158d15b38c5502a3c53c8d04317043d5930558b191bedc0ff741.jpg"
+      ],
+      "excerptSha256": "5197180e2cc656d7072332173b3c769c63551e057572bda4c47ca99f8b0ce7e7"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000264"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（2） Spouts"
+      ],
+      "lineStart": 3375,
+      "lineEnd": 3381,
+      "assetRefs": [
+        "parts/part-0002/images/82332c05551a507e82c12027392fbb327546334ba10e3ebba484cd97baa466d5.jpg"
+      ],
+      "excerptSha256": "d2ed1a280db5ab18ea425228b9ee05ba2e25d2627689acde1e9b8b48c2f9e4d9"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000265"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（3） Bolts"
+      ],
+      "lineStart": 3382,
+      "lineEnd": 3388,
+      "assetRefs": [
+        "parts/part-0002/images/8fbeccfbe033a7aadff709ffc6d6702c0da16d84348dfba61ab3ab5d5dd09142.jpg"
+      ],
+      "excerptSha256": "f89c32d18573f38dcd3fecdcc86b41125fbb617c3bb345aa3d7573197d4fceb0"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000266"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（4） Topology"
+      ],
+      "lineStart": 3389,
+      "lineEnd": 3403,
+      "assetRefs": [
+        "parts/part-0002/images/2cbdd2d44e30c858e8444dbc12827259e9b8af704e66bd173be60f16fe856ec1.jpg"
+      ],
+      "excerptSha256": "1aef199443ef76b44d003e10c359fc0b1a8a23d9bebcc01f89fff56123b15383"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000267"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（5） Stream Groupings"
+      ],
+      "lineStart": 3404,
+      "lineEnd": 3429,
+      "assetRefs": [
+        "parts/part-0002/images/2a23afbef5ff4a01aae9cb56169cde3fd9311afa2c37b9e7d9b0c8b51fd0b9bd.jpg",
+        "parts/part-0002/images/4912549095639947950c37b5d0f97d1a0f11197050690b5f5c0b6a11275424b6.jpg"
+      ],
+      "excerptSha256": "d411e253f83a8f0cd2502d447771ff03763f9062f316cd2ec92844af4e584754"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000268"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Storm 框架设计"
+      ],
+      "lineStart": 3430,
+      "lineEnd": 3464,
+      "assetRefs": [
+        "parts/part-0002/images/e551c719799dcacfaa43468041099f2596608dadad14e02488d0ebb852738453.jpg",
+        "parts/part-0002/images/94cd08e7c1defb44e78b42ee5e4cae20c2f669211904223fbbb10a2ee9bf5ad9.jpg"
+      ],
+      "excerptSha256": "11e07889f5d53a1e4ac6c7333f4e65dea54482f1856a0b8654a27ba725686742"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000269"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Storm 实例"
+      ],
+      "lineStart": 3465,
+      "lineEnd": 3550,
+      "assetRefs": [
+        "parts/part-0002/images/661f539ca992d4efca7b26d9140bdf0019e945fa297666f9dd8e34f2dae46330.jpg",
+        "parts/part-0002/images/08fdd762c08b6973caef5b732808cd98962ee8aeffaa051d62bd59aa66505a55.jpg",
+        "parts/part-0002/images/c5c6e0992c2af925213c25aeca1dc53d0ac3b000ef27ef91767b8abb81eb3f46.jpg"
+      ],
+      "excerptSha256": "4db75c32034962dc3eb0d18aa7d8f56c1a477b508d866b06bcebf69df592751e"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000270"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "哪些公司在使用 Storm"
+      ],
+      "lineStart": 3551,
+      "lineEnd": 3562,
+      "assetRefs": [
+        "parts/part-0002/images/df4375dbc99179acca49f74e13df3680fe07b7d3044a3cdade7c973dfe617be7.jpg",
+        "parts/part-0002/images/428d1b265e1daee8b6a5c76dee76b49673cc4e2e07b4c09ea1b7e5d2d4205be1.jpg"
+      ],
+      "excerptSha256": "1c187d3469cf6d72cd1164cbcce0eb35082300d957df96ea2d1934bf596d4d02"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000271"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "流计算框架汇总"
+      ],
+      "lineStart": 3563,
+      "lineEnd": 3588,
+      "assetRefs": [],
+      "excerptSha256": "d642d85471fb0dea4823fa2cefc330978a545bd0093001b73e86f3e1afcc7a68"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000272"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 3589,
+      "lineEnd": 3592,
+      "assetRefs": [],
+      "excerptSha256": "fd157bc1bf238ae415e040ed764fbc69b89ebbb0767b8c4fc8fd179feda3d806"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000273"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 3593,
+      "lineEnd": 3602,
+      "assetRefs": [],
+      "excerptSha256": "079b9c21777a0e60cd1beaa96ec36e31de61b16e9433f39349e3ed50634f808b"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    920,
+    1184
+  ],
+  "scale": 1.2
+}

@@ -1,0 +1,602 @@
+{
+  "id": "point-9-4",
+  "title": "Pregel 的 C++ API",
+  "shortSummary": "介绍 Pregel 提供给开发者的编程接口形式，说明如何定义顶点计算与消息处理。",
+  "keyTerms": [
+    "编程接口",
+    "顶点函数",
+    "消息处理"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-9-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "interface-walkthrough-and-extension-choice",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 API 结构、类名与约束，按“入口—读写—通信—优化—改图—存取”的接口链路重排讲解，补充类比、对比与检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-api-structure",
+          "text": "说明 Vertex 基类的三个模板参数以及 Compute() 在每个超步中的调用位置。"
+        },
+        {
+          "id": "implement-vertex",
+          "text": "按顶点值、边值、消息值三类状态写出 Compute() 的读取、修改与消息发送逻辑。"
+        },
+        {
+          "id": "choose-optimization",
+          "text": "判断何时使用 Combiner 或 Aggregator，并说出它们的启用条件和结果可见时机。"
+        },
+        {
+          "id": "extend-graph",
+          "text": "说明拓扑修改与输入输出这两类扩展点的执行顺序和扩展方式。"
+        }
+      ],
+      "misconceptions": [
+        "认为消息只能发给相邻顶点，实际上目标可以是任意已知 ID 的顶点。",
+        "认为 Combiner 默认开启且可以随意使用，实际上它默认关闭且只适用于满足交换律和结合律的操作。",
+        "认为一个顶点能立即看到其他顶点在同一超步中的修改，实际上这种可见性只限于被修改的顶点自身。"
+      ],
+      "modules": [
+        {
+          "id": "vertex-contract",
+          "title": "从 Vertex 基类进入 Pregel 程序",
+          "role": "concept-entry",
+          "outcomeRefs": [
+            "explain-api-structure"
+          ],
+          "order": 0
+        },
+        {
+          "id": "compute-state",
+          "title": "Compute() 的状态读写与可见性",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "implement-vertex",
+            "explain-api-structure"
+          ],
+          "order": 1
+        },
+        {
+          "id": "messaging",
+          "title": "消息发送、接收与求最大值示例",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "implement-vertex"
+          ],
+          "order": 2
+        },
+        {
+          "id": "aggregation",
+          "title": "Combiner 与 Aggregator：两种通信优化",
+          "role": "comparison",
+          "outcomeRefs": [
+            "choose-optimization"
+          ],
+          "order": 3
+        },
+        {
+          "id": "topology-io",
+          "title": "拓扑修改与输入输出扩展点",
+          "role": "procedure",
+          "outcomeRefs": [
+            "extend-graph"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-transfer",
+          "title": "接口能力地图与达成检查",
+          "role": "check",
+          "outcomeRefs": [
+            "explain-api-structure",
+            "implement-vertex",
+            "choose-optimization",
+            "extend-graph"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-api-structure",
+          "implement-vertex",
+          "choose-optimization",
+          "extend-graph"
+        ],
+        "method": "完成一次 API 选型练习：为最短距离计算选择类型参数、合并策略与全局统计方式，并说明依据。",
+        "successCriteria": [
+          "三个模板参数的类型选择正确，且能说明边值保存权重的理由",
+          "Combiner 的使用以交换律和结合律为前提",
+          "Aggregator 的结果在下一超步可见，跨超步累计时选用 sticky aggregator"
+        ],
+        "exerciseBlockId": "model-api-check",
+        "summaryBlockId": "model-api-map",
+        "nextPointId": "point-9-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-vertex-base",
+        "moduleId": "vertex-contract",
+        "depth": "core",
+        "kind": "code",
+        "title": "Vertex 基类与三个类型参数",
+        "markdown": "编写 Pregel 程序时，开发者继承框架预定义好的 `Vertex` 基类，并在模板参数中给出顶点值、边值和消息值三种类型：\n\n```cpp\ntemplate <typename VertexValue, typename EdgeValue, typename MessageValue>\nclass Vertex {\npublic:\n    virtual void Compute(MessageIterator* msgs) = 0;\n    const string& vertex_id() const;\n    int64 superstep() const;\n    const VertexValue& GetValue();\n    VertexValue* MutableValue();\n    OutEdgeIterator GetOutEdgeIterator();\n\n    void SendMessageTo(const string& dest_vertex,\n                       const MessageValue& message);\n    void VoteToHalt();\n};\n```\n\n教材同时指出，这种模板形式看起来限制较多，但用户可以用 protocol buffer 管理额外增加的定义和属性；边和消息类型的行为比较类似。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000287"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Pregel 的 C++ API"
+              ],
+              "lineStart": 3831,
+              "lineEnd": 3857,
+              "assetRefs": [],
+              "excerptSha256": "7b342bf75cd83b120e8254bc26f99041010794e20ba8ced2b15f24d9e08435bd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-template-map",
+        "moduleId": "vertex-contract",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：三个模板参数各管什么",
+        "markdown": "把 `Vertex` 看成一个需要开发者填空的模板，三个参数就对应图数据模型中的三类可修改状态：\n\n- `VertexValue`：每个顶点自己的值，例如当前距离、当前最大值或 PageRank 分值；\n- `EdgeValue`：每条出射边上的值，例如边权；\n- `MessageValue`：顶点之间传递的消息内容。\n\n教材的示例 `Vertex<double, void, double>` 正是这种填法的极端情况：顶点值和消息值都是 `double`，边值用 `void` 表示不携带信息。这个视角也解释了为什么框架要把三类值分开：它们在图中的归属对象不同，持久化和传输的方式也不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vertex-base"
+          ]
+        }
+      },
+      {
+        "id": "tb-compute-state",
+        "moduleId": "compute-state",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Compute() 的调用与状态读写",
+        "markdown": "`Compute()` 是唯一必须由用户覆写的虚函数，计算框架在每一个超步中对每一个顶点调用它一次。预定义的 `Vertex` 方法让 `Compute()` 查询当前顶点及其边的信息并发送消息：`GetValue()` 读取当前顶点的值，`MutableValue()` 修改当前顶点的值，出射边迭代器提供的方法用于查看和修改出射边对应的值。这种状态修改立时可见，但可见性仅限于被修改的那个顶点，所以不同顶点并发进行的数据访问不存在竞争关系。\n\n顶点和其对应边所关联的值，是唯一需要在超步之间持久化的顶点级状态。把由计算框架管理的图状态限制在单一的顶点值或边值上，简化了主计算流程、图的分布以及故障恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000287"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Pregel 的 C++ API"
+              ],
+              "lineStart": 3831,
+              "lineEnd": 3857,
+              "assetRefs": [],
+              "excerptSha256": "7b342bf75cd83b120e8254bc26f99041010794e20ba8ced2b15f24d9e08435bd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-visibility",
+        "moduleId": "compute-state",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么不需要加锁",
+        "markdown": "可以把每个顶点想成一间只有一名工人进入的工作间：`Compute()` 在超步 S 中只会操作本顶点的值和本顶点的出射边，别的顶点同时改的是它们自己的值。因此“立时可见”只在一个顶点内部成立——写入后立刻能读到；跨顶点之间不需要锁，因为根本不存在共享的读写对象。\n\n顶点之间要交换信息，必须走消息通道：本轮写下的值不会直接出现在别的顶点里，只有发出去的消息会在下一超步被对方读到。这条边界也解释了教材为什么强调只持久化顶点值和边值：恢复某个顶点时，只需这两个值就能重新参与计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-compute-state"
+          ]
+        }
+      },
+      {
+        "id": "tb-message-passing",
+        "moduleId": "messaging",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "消息的发送与接收",
+        "markdown": "顶点之间的通信直接通过发送消息实现，每条消息包含消息值和目标顶点的名称，消息值的数据类型由用户通过 `Vertex` 类的模板参数指定。在一个超步中，一个顶点可以发送任意多的消息。当顶点 V 的 `Compute()` 在超步 S+1 中被调用时，所有在超步 S 中发送给 V 的消息都可以通过一个迭代器访问；迭代器不保证消息的顺序，但保证消息一定会被传送且不会重复。\n\n一种通用用法是遍历自身的出射边，向每条出射边的目标顶点发送消息，PageRank 算法就是这样。但消息的目标顶点 `dest_vertex` 不一定是顶点 V 的相邻顶点：顶点可以从之前收到的消息中获得非相邻顶点的标识符，标识符也可能隐式得到，例如图是 clique、顶点按 `V1` 到 `Vn` 命名时，甚至不需要显式保存边信息。当任意一条消息的目标顶点不存在时，便执行用户自定义的 handlers，例如创建一个不存在的顶点，或从源顶点中删除这条边。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000288"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "消息传递机制"
+              ],
+              "lineStart": 3858,
+              "lineEnd": 3890,
+              "assetRefs": [],
+              "excerptSha256": "688e15e3cb1dcea988d09bd2faaa807fe6914c4b465273cb91947b746bdb7936"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-max-example",
+        "moduleId": "messaging",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "读一遍求最大值的 Compute()",
+        "markdown": "教材用 `MaxFindVertex` 演示这套接口，类型参数是 `<double, void, double>`：顶点值和消息值都是 `double`，边值不携带信息。`Compute()` 的执行顺序是：\n\n1. 用 `GetValue()` 取出当前顶点值作为 `currMax`；\n2. 调用 `SendMessageAllNeighbors(currMax)` 向所有邻居广播；\n3. 用 `msgs` 迭代器逐条比较，遇到更大的消息值就更新 `currMax`；\n4. 若 `currMax` 大于本地存储值，通过 `MutableValue()` 写回，否则调用 `VoteToHalt()`。\n\n两个易错点：广播发生在读取消息之前，所以本轮发出的值来自上一轮的顶点值，而不是本轮刚从消息里学到的值；调用 `VoteToHalt()` 表示顶点主动停止参与后续超步，求最大值的算法正是靠所有顶点都不再更新来走向结束。教材的代码清单被拆在两个代码块中，末尾的闭合大括号属于排版截断，补全后才是完整函数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-message-passing"
+          ]
+        }
+      },
+      {
+        "id": "tb-combiner",
+        "moduleId": "aggregation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Combiner：把发往同一顶点的消息合并",
+        "markdown": "发送消息，尤其是目标顶点在另外一台机器上时，会产生一些开销。某些情况可以在用户协助下降低这种开销：例如 `Compute()` 收到许多 `int` 值消息，而它只关心这些值的和，系统就可以把发往同一个顶点的多个消息合并成一个只包含“和值”的消息，从而减少传输和缓存开销。\n\nCombiners 在默认情况下并没有开启，因为要找到一种对所有顶点的 `Compute()` 都合适的 Combiner 是不可能的。用户想开启时，需要继承 `Combiner` 类并覆写其虚函数 `Combine()`。框架不会确保哪些消息会被 Combine、哪些不会，也不确保传给 `Combine()` 的值和合并操作的执行顺序，所以 Combiner 只应该对满足交换律和结合律的操作开启。教材提到，对单源最短路径等算法，使用 Combiner 可以把流量降低 4 倍多。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000289"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Combiner"
+              ],
+              "lineStart": 3891,
+              "lineEnd": 3903,
+              "assetRefs": [
+                "parts/part-0003/images/9648c80785cd5bea67038beee541feb5a5ba9473d52d2f22610eed1dffd30aaf.jpg"
+              ],
+              "excerptSha256": "93bbd8596e991146a9179cd6122fd3afb3ddaf3cf5b9f9710630e9b23bc1b69d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-combiner-choice",
+        "moduleId": "aggregation",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：哪些操作可以交给 Combiner",
+        "markdown": "判断标准可以写成一句可操作的话：如果“先合并再交给目标顶点”和“逐条交给目标顶点”对 `Compute()` 完全等价，就可以启用 Combiner。求和、求最大值满足交换律和结合律，可以合并；求平均值、求中位数或依赖消息顺序的逻辑不能直接合并，因为合并会丢掉元素个数或顺序信息。\n\n教材的图 9-7 例子说明了收益来源：顶点 2 和顶点 3 都需要把消息发到另一台机器上的顶点 6，值分别是 2 和 3，若不合并就是两条跨机消息；用 Max Combiner 先取较大值，只需发送一条。由于框架不保证合并范围与顺序，`Compute()` 的代码本身不能依赖“每条消息都会单独出现”，这也是 Combiner 必须由用户显式开启的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-combiner"
+          ]
+        }
+      },
+      {
+        "id": "tb-aggregator",
+        "moduleId": "aggregation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Aggregator：全局汇总与协同",
+        "markdown": "Pregel 的 Aggregators 是一种提供全局通信、监控和数据查看的机制。在一个超步 S 中，每一个顶点都可以向一个 Aggregator 提供一个数据，系统会使用一种 reduce 操作来聚合这些值，产生的值在超步 S+1 中对所有顶点可见。Pregel 包含一些预定义的 aggregators，例如可以在各种整数和 string 类型上执行的 min、max、sum 操作；更复杂的 reduce 操作还可以产生统计直方图。\n\nAggregators 可以用来做统计：一个 sum aggregator 统计每个顶点的出度，最后相加就是整个图的边的条数。它也可以用来做全局协同：`Compute()` 的某些逻辑分支可能在某些超步中执行，直到 `and` aggregator 表明所有顶点都满足了某条件，才去执行另外的逻辑分支；作用在顶点 ID 上的 min 和 max aggregator 还可以选定某个顶点在计算过程中扮演某种角色。\n\n要定义一个新的 aggregator，用户需要继承预定义的 Aggregator 类，并定义在第一次接收到输入值后如何初始化，以及如何把接收到的多个值最后 reduce 成一个值；Aggregator 操作也应该满足交换律和结合律。默认情况下，一个 aggregator 仅仅聚合来自同一个超步的输入；有时也需要定义一个 sticky aggregator，它可以从所有超步中接收数据，适合维护全局边条数这类只需在增删边时调整的值。\n\n更高级的用法是实现 △-stepping 最短路径算法所需的分布式优先队列：每个顶点根据当前距离分配一个优先级 bucket，每个超步把 indices 汇报给 min aggregator，下一个超步把最小值广播给所有 worker，再让最小 index 的 bucket 中的顶点放松它们的边。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000290"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Aggregator"
+              ],
+              "lineStart": 3904,
+              "lineEnd": 3921,
+              "assetRefs": [],
+              "excerptSha256": "ff5c2e31e4aaea20f76234ad45e180c78e1fac10771e410816a2068729a06001"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-combiner-vs-aggregator",
+        "moduleId": "aggregation",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：Combiner 与 Aggregator 的区别",
+        "markdown": "两者都降低通信成本，但作用方向不同，容易混为一谈：\n\n| 维度 | Combiner | Aggregator |\n|---|---|---|\n| 合并对象 | 发往同一顶点的多条消息 | 每个顶点各提供的一个值 |\n| 作用范围 | 单条消息通道上的流量 | 整个图的全局值 |\n| 结果去向 | 目标顶点的消息迭代器 | 下一超步对所有顶点可见 |\n| 默认状态 | 关闭，需继承并覆写 `Combine()` | 预置 min/max/sum 等可用 |\n| 共同前提 | 操作满足交换律和结合律 | 操作满足交换律和结合律 |\n\n选型时先问要减少什么：跨机消息条数用 Combiner；需要所有顶点共享一个汇总值（例如总边数、是否全部满足条件）用 Aggregator。若汇总值要跨多个超步持续维护，选 sticky aggregator；只需本超步输入时用默认聚合即可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-combiner",
+            "tb-aggregator"
+          ]
+        }
+      },
+      {
+        "id": "tb-topology",
+        "moduleId": "topology-io",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "拓扑修改的执行顺序与冲突处理",
+        "markdown": "有一些图算法可能需要改变图的整个拓扑结构：聚类算法可能把每个聚类替换成一个单一顶点，最小生成树算法会删除除组成树的边之外的其他边。正如用户在自定义 `Compute()` 中能发送消息，同样可以产生在图中增添和删除边或顶点的请求。\n\n多个顶点有可能在同一个超步中产生冲突的请求，例如两个请求都要增加顶点 V 但初始值不一样。Pregel 用两种机制决定如何调用：局部有序和 handlers。\n\n由于是通过消息发送的，拓扑改变在请求发出以后，在超步中可以高效执行。在该超步中，删除会首先被执行，先删除边，后删除顶点，因为顶点的删除通常也意味着删除其所有的出射边；然后执行添加操作，先增加顶点，后增加边；并且所有的拓扑改变都会在 `Compute()` 函数调用前完成。这种局部有序保证了大多数冲突结果的确定性。\n\n剩余的冲突就需要通过用户自定义的 handlers 解决。如果一个超步中有多个请求需要创建同一个顶点，默认情况下系统会随便挑选一个请求，有特殊需求的用户可以定义一个更好的冲突解决策略；同一种 handler 机制也用于多个顶点删除请求或多个边增删请求造成的冲突。Pregel 把这类冲突委托给 handler，使 `Compute()` 变得简单，同时也限制了 handler 与 `Compute()` 的交互。\n\nPregel 的协同机制比较懒：全局的拓扑改变在被 apply 之前不需要协调，只有在请求被接收然后 apply 时才进行控制，这简化了流程并让发送更快，是为优化流式处理做的设计选择——直观地说，顶点 V 的修改引发的冲突由 V 自己处理。Pregel 同样支持纯 local 的拓扑改变，例如一个顶点添加或删除自身的出射边或删除自己；local 改变不会引发冲突，并且能立即生效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000291"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Topology mutation"
+              ],
+              "lineStart": 3922,
+              "lineEnd": 3935,
+              "assetRefs": [],
+              "excerptSha256": "fa49989fa0c0ee4c50e35878ec928cc81bb29c2f3a215759c298dbb985b35db9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-topology-order",
+        "moduleId": "topology-io",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：一图记住增删顺序",
+        "markdown": "把教材的顺序规则整理成表：\n\n| 阶段 | 先做 | 后做 | 完成时机 |\n|---|---|---|---|\n| 删除 | 边 | 顶点 | 添加之前 |\n| 添加 | 顶点 | 边 | 删除之后 |\n| 相对计算 | 本超步全部拓扑改变 | `Compute()` 调用 | 超步内 |\n\n由此可以得到两条实践结论。第一，同一超步内先删后加、先点后边，所以“删除顶点后再加同名顶点”不会复用旧顶点的出射边。第二，handler 只在局部顺序无法消解冲突时介入，此时请求已经过排序；`Compute()` 与 handler 的交互被有意限制，因此不要把计算阶段需要读取的临时状态藏在 handler 里。若一次修改只涉及顶点自身及其出射边，走 local 通道即可，无需跨顶点协调。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-topology"
+          ]
+        }
+      },
+      {
+        "id": "tb-input-output",
+        "moduleId": "topology-io",
+        "depth": "core",
+        "kind": "note",
+        "title": "输入输出：Reader 与 Writer",
+        "markdown": "Pregel 可以采用多种文件格式进行图的保存，例如文本文件、关系数据库或者 Bigtable 中的行。为了避免规定死一种特定文件格式，Pregel 把“从输入中解析出图结构”这个任务从图的计算过程中分离出来；类似地，结果可以以任何一种格式输出，并根据应用程序选择最适合的存储方式。Pregel library 本身提供了很多常用文件格式的 readers 和 writers，用户也可以通过继承 `Reader` 和 `Writer` 类来定义自己的读写方式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000292"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Input and Output"
+              ],
+              "lineStart": 3936,
+              "lineEnd": 3939,
+              "assetRefs": [],
+              "excerptSha256": "246aa6accfb8db5a533662bfad536685be00112de97d8056fb2bd55d1f37f37d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-io-boundary",
+        "moduleId": "topology-io",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么把解析从计算中拆出去",
+        "markdown": "这种分离对写程序的意义是：`Compute()` 只面对已经解析好的顶点、边和值，不关心数据来自文本文件还是数据库表；换存储格式时改的是 reader 或 writer，而不是算法。反过来，如果图结构解析和计算耦合在一起，任何格式变化都会侵入每个顶点的逻辑。\n\n实践上可以把输入输出当成整个 Pregel 作业的边界：入口处由 reader 把外部记录转成顶点和边，计算阶段只做超步迭代，出口处由 writer 决定结果落成什么形态。这类扩展点的做法同样是继承后覆写，与 `Vertex`、`Combiner`、`Aggregator` 的扩展方式一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-input-output"
+          ]
+        }
+      },
+      {
+        "id": "model-api-map",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "接口能力地图",
+        "markdown": "把本节的接口按职责放在一起，可以得到一张能力地图：\n\n| 需求 | 使用的接口 | 关键限制 |\n|---|---|---|\n| 定义顶点计算 | 继承 `Vertex`，覆写 `Compute()` | 每个超步对每个顶点调用一次 |\n| 读写顶点与边 | `GetValue`/`MutableValue`、出射边迭代器 | 修改只对本顶点立即可见 |\n| 向其他顶点通信 | `SendMessageTo`，下一超步用迭代器读取 | 不保证顺序，保证送达且不重复 |\n| 压缩同目标消息 | 继承 `Combiner`，覆写 `Combine()` | 默认关闭，操作需可交换可结合 |\n| 全局汇总与协同 | `Aggregator`，含预置 min/max/sum | 下一超步可见，操作需可交换可结合 |\n| 改变图结构 | 发送增删顶点或边的请求，必要时自定义 handler | 同一超步先删后加，冲突由 handler 兜底 |\n| 适配存储格式 | 继承 `Reader`/`Writer` | 图结构解析与计算分离 |\n\n这张表也解释了本节与前一点的衔接：C++ API 把超步、消息、顶点状态这些模型概念落成了具体的类和方法，开发者只需填充 `Compute()` 和所需的扩展点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vertex-base",
+            "tb-compute-state",
+            "tb-message-passing",
+            "tb-combiner",
+            "tb-aggregator",
+            "tb-topology",
+            "tb-input-output"
+          ]
+        }
+      },
+      {
+        "id": "model-api-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：为最短距离计算选接口",
+        "markdown": "假设要在一个带权有向图上求每个顶点到源点的最短距离，并希望统计最终有多少条边被更新过。请回答：\n\n1. `Vertex` 的三个模板参数分别应该放什么类型？边值为什么需要保存权重？\n2. 若同一超步中多条消息发给同一顶点，能否用 Combiner 只保留最小距离？需要满足什么条件？\n3. “被更新过的边数”应该用哪种 Aggregator？为什么它在下一超步才能读到？\n\n参考要点：边值保存权重，否则无法计算路径长度；`Combine()` 取最小值满足交换律和结合律，因此可以在消息合并时只保留最小距离；边数这类全局计数用 sum aggregator，若要跨超步累计则使用 sticky aggregator，因为默认聚合只覆盖单个超步的输入，而结果要到下一超步才对所有顶点可见。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-api-map"
+          ]
+        }
+      },
+      {
+        "id": "model-next-bridge",
+        "moduleId": "check-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "衔接下一知识点",
+        "markdown": "本节只回答了“开发者写什么”。这些类和扩展点最终要在集群中运行：图如何切分、哪个部件调度超步、消息如何跨机器送达，属于 Pregel 的基本体系结构，也是下一个知识点要讨论的内容。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-api-map"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "api-selection-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-api-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "implement-vertex",
+          "choose-optimization"
+        ],
+        "learningPurpose": "检查学习者能否根据计算任务选择模板参数类型、合并策略与全局统计接口，而不是只记住类名。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-api-map"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "请为带权最短距离计算选择 Vertex 的三个类型参数、判断能否使用 Combiner，并说明统计被更新边数应使用哪种 Aggregator。"
+        }
+      }
+    ]
+  },
+  "subtitle": "图计算",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000287"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Pregel 的 C++ API"
+      ],
+      "lineStart": 3831,
+      "lineEnd": 3857,
+      "assetRefs": [],
+      "excerptSha256": "7b342bf75cd83b120e8254bc26f99041010794e20ba8ced2b15f24d9e08435bd"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000288"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "消息传递机制"
+      ],
+      "lineStart": 3858,
+      "lineEnd": 3890,
+      "assetRefs": [],
+      "excerptSha256": "688e15e3cb1dcea988d09bd2faaa807fe6914c4b465273cb91947b746bdb7936"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000289"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Combiner"
+      ],
+      "lineStart": 3891,
+      "lineEnd": 3903,
+      "assetRefs": [
+        "parts/part-0003/images/9648c80785cd5bea67038beee541feb5a5ba9473d52d2f22610eed1dffd30aaf.jpg"
+      ],
+      "excerptSha256": "93bbd8596e991146a9179cd6122fd3afb3ddaf3cf5b9f9710630e9b23bc1b69d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000290"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Aggregator"
+      ],
+      "lineStart": 3904,
+      "lineEnd": 3921,
+      "assetRefs": [],
+      "excerptSha256": "ff5c2e31e4aaea20f76234ad45e180c78e1fac10771e410816a2068729a06001"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000291"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Topology mutation"
+      ],
+      "lineStart": 3922,
+      "lineEnd": 3935,
+      "assetRefs": [],
+      "excerptSha256": "fa49989fa0c0ee4c50e35878ec928cc81bb29c2f3a215759c298dbb985b35db9"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000292"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Input and Output"
+      ],
+      "lineStart": 3936,
+      "lineEnd": 3939,
+      "assetRefs": [],
+      "excerptSha256": "246aa6accfb8db5a533662bfad536685be00112de97d8056fb2bd55d1f37f37d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2117,
+    1157
+  ],
+  "scale": 0.65
+}

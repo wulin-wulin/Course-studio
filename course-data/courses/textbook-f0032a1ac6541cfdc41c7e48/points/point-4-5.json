@@ -1,0 +1,854 @@
+{
+  "id": "point-4-5",
+  "title": "并行计算的实现",
+  "shortSummary": "说明 MapReduce 如何通过任务分配、数据本地化和失败重试实现可靠并行计算。",
+  "keyTerms": [
+    "任务分配",
+    "数据本地化",
+    "失败重试",
+    "任务粒度",
+    "Partition",
+    "Combine"
+  ],
+  "animationType": "clusterJobScheduling",
+  "animationSuggestion": "用一排节点表示集群，节点内显示它持有的数据块与当前运行的任务。逐步播放：作业提交后任务进入队列，空闲节点发心跳并领走任务、在持有对应数据块的节点上高亮为本地执行，随后让其中一台节点标记为故障、它的任务回到队列并由另一台空闲节点接手重跑，最后显示 R 个 Reduce 完成任务并各写一个结果文件。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-trace-with-tradeoffs",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对数据分布存储、分布式并行计算与本地计算三者的划分，以及 JobClient、JobTracker、TaskTracker 的调用顺序和 Partition、Combine、取中间结果的描述；按作业从提交到产出的时间线重排叙述，补充职责对照、粒度与 Combine 的取舍分析和检查题，不引入教材之外的性能数字。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-three-pillars",
+          "text": "说明数据分布存储、分布式并行计算与本地计算各自解决什么问题，以及三者为什么必须配合才能实现并行计算。"
+        },
+        {
+          "id": "trace-job-lifecycle",
+          "text": "按顺序描述作业从 JobClient 提交、JobTracker 记账与入队、TaskTracker 心跳领取任务到节点故障后换机重跑的完整过程。"
+        },
+        {
+          "id": "justify-locality",
+          "text": "用网络带宽的代价解释本地计算为什么是最有效的节约手段，并说明分片不大于一个 Block 与任务粒度的关系。"
+        },
+        {
+          "id": "reason-shuffle-handoff",
+          "text": "说明 Partition 与 Combine 各自作用在哪个位置、解决什么问题，以及 Reduce 如何取得它负责的那段 key 的中间结果。"
+        }
+      ],
+      "misconceptions": [
+        "认为 JobTracker 把任务直接推给某台机器，节点只是被动接受。",
+        "认为 Partition 是 Map 端把数据直接发送给对应的 Reduce 任务。",
+        "认为本地计算意味着数据完全不在网络上流动。",
+        "认为设置了 Combiner 就不再需要 Reduce 阶段。"
+      ],
+      "modules": [
+        {
+          "id": "overview-three-pillars",
+          "title": "全景：三件事共同完成并行计算",
+          "role": "problem-intro",
+          "description": "从教材对并行计算实现的三分法出发，建立本节的问题地图。",
+          "outcomeRefs": [
+            "explain-three-pillars"
+          ],
+          "order": 0
+        },
+        {
+          "id": "distributed-storage",
+          "title": "数据分布存储：分块与副本",
+          "role": "mechanism",
+          "description": "说明 HDFS 为什么要把文件切成 Block 分散存放，以及 NameNode 记录了什么。",
+          "outcomeRefs": [
+            "explain-three-pillars"
+          ],
+          "order": 1
+        },
+        {
+          "id": "scheduling-and-recovery",
+          "title": "分布式并行计算：主控、心跳与失败重跑",
+          "role": "mechanism",
+          "description": "解释 JobTracker 与 TaskTracker 的分工，以及任务被领走与换机重跑的机制。",
+          "outcomeRefs": [
+            "trace-job-lifecycle"
+          ],
+          "order": 2
+        },
+        {
+          "id": "job-submission-and-queue",
+          "title": "提交与入队：作业怎样变成可分配的任务",
+          "role": "procedure",
+          "description": "按教材顺序走一遍 JobClient 提交、三个上传文件与 JobTracker 建立 JobInProgress 的过程。",
+          "outcomeRefs": [
+            "trace-job-lifecycle"
+          ],
+          "order": 3
+        },
+        {
+          "id": "locality-and-granularity",
+          "title": "本地计算与任务粒度：让计算靠近数据",
+          "role": "tradeoff-analysis",
+          "description": "说明网络带宽为什么成为瓶颈，以及分片不大于一个 Block 这条粒度规则的由来。",
+          "outcomeRefs": [
+            "justify-locality"
+          ],
+          "order": 4
+        },
+        {
+          "id": "shuffle-handoff",
+          "title": "交接：Partition、Combine 与 Reduce 取数",
+          "role": "procedure",
+          "description": "说明中间结果按 key 归属、在 Map 本地先合并，以及 Reduce 跨节点取数的路径。",
+          "outcomeRefs": [
+            "reason-shuffle-handoff"
+          ],
+          "order": 5
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与过渡：把链路串起来",
+          "role": "formative-check",
+          "description": "纠正四处常见误解，用检查题验证迁移能力，并引向 WordCount 实例。",
+          "outcomeRefs": [
+            "explain-three-pillars",
+            "trace-job-lifecycle",
+            "justify-locality",
+            "reason-shuffle-handoff"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-three-pillars",
+          "trace-job-lifecycle",
+          "justify-locality",
+          "reason-shuffle-handoff"
+        ],
+        "method": "完成两道检查题，并为一个给定作业画出从提交到产出 R 个结果文件的链路，标出故障重跑发生的位置。",
+        "successCriteria": [
+          "能说出三件事各自负责的问题与它们的配合关系",
+          "能按顺序复述提交、入队、心跳领取、执行、重跑的环节",
+          "能用网络带宽的代价解释本地计算，并说出粒度规则",
+          "能分清 Partition 决定归属、Combine 在 Map 本地合并、Reduce 跨节点取数三件事"
+        ],
+        "exerciseBlockId": "model-self-check",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-4-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-three-aspects",
+        "moduleId": "overview-three-pillars",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材依据：并行计算实现涉及三个方面",
+        "markdown": "教材在这一节开头先给出前提：MapReduce 计算模型非常适合在大量计算机组成的大规模集群上并行运行，每一个 Map 任务和每一个 Reduce 任务都可以同时运行在一个单独的计算节点上，因此运算效率很高。\n\n接下来的问题是“这样的并行计算是如何做到的”。教材的回答是把实现拆成 **数据分布存储、分布式并行计算和本地计算** 三个方面（图 4-6），由这三者共同合作，完成分布式并行计算的任务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "并行计算的实现"
+              ],
+              "lineStart": 1568,
+              "lineEnd": 1574,
+              "assetRefs": [
+                "parts/part-0001/images/4aa05df4dd4dfb288277ac5ed88733d06fde3e575a810ab5020ca5bade065f1a.jpg"
+              ],
+              "excerptSha256": "8c42f238669c9b3e8b84d7241b9de7a9e3c3799e369b81a26a4e38c26b3e58d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-three-pillars-map",
+        "moduleId": "overview-three-pillars",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三件事分别回答哪个问题",
+        "markdown": "把三个方面换成三个必须回答的问题，这一节的结构就清楚了：\n\n| 必须回答的问题 | 由什么承担 | 教材中的小节 |\n|---|---|---|\n| 数据放在哪里，坏了怎么办 | HDFS 把文件切成 Block 分散存到各 DataNode，并用副本容错 | 4.5.1 数据分布存储 |\n| 谁决定哪个任务去哪台机器 | JobTracker 记住作业与任务，TaskTracker 通过心跳领任务 | 4.5.2 分布式并行计算 |\n| 每个任务实际在哪里算 | 数据在哪台机器，就在那台机器上算 | 4.5.3 本地计算 |\n\n三者缺一不可：只有分布存储而没有统一调度，谁也不知道该跑什么；只有调度而没有本地计算，所有数据都要在网络上搬来搬去；只有本地计算而没有容错存储，一台机器坏掉数据就没了。\n\n**阅读提示**：教材写于 2013 年，这里的 JobTracker、TaskTracker 是当时 Hadoop 的组件名；后续版本用 YARN 的 ResourceManager、NodeManager 承担同类职责，具体差别在 YARN 一节讨论。凡是说“JobTracker 把任务分给 TaskTracker”，指的都是这一套职责分工，而不是某一个具体版本的程序名。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-aspects"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hdfs-blocks",
+        "moduleId": "distributed-storage",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材依据：HDFS 的分块与副本",
+        "markdown": "HDFS 由一个管理节点 NameNode 和 N 个数据节点 DataNode 组成，每个节点都是一台普通的计算机。在使用上和单机文件系统非常类似：一样可以建目录、创建、复制、删除文件、查看文件内容。\n\n差别在底层实现：文件被切割成 Block，这些 Block 分散地存储在不同的 DataNode 上，每个 Block 还可以复制数份存储于不同的 DataNode，达到容错容灾的目的。NameNode 是整个 HDFS 的核心，它通过维护一些数据结构，记录每一个文件被切割成了多少个 Block、这些 Block 可以从哪些 DataNode 中获得、各个 DataNode 的状态等重要信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000118"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "数据分布存储"
+              ],
+              "lineStart": 1575,
+              "lineEnd": 1581,
+              "assetRefs": [
+                "parts/part-0001/images/97b56115c8935972a249b8aabe99de5fdf4d4d06316cb4e95e70d239198f3903.jpg"
+              ],
+              "excerptSha256": "f4056771756a6fef426b2d30ad4e8c03b28a986d74358b1e6e2dc64086a7f602"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-what-block-buys",
+        "moduleId": "distributed-storage",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：分块、副本与元数据各自买到了什么",
+        "markdown": "教材描述的三件事可以分别对应三项能力：\n\n- **分块**：一个文件的不同部分落在不同机器上，这才让“多个 Map 任务同时处理同一个文件的不同部分”成为可能。没有分块，大文件只能待在一台机器上，并行无从谈起。\n- **副本**：同一个 Block 有数份，某台 DataNode 失效后数据仍然读得到。副本是“失败重跑”能成立的前提——任务被搬到新节点，数据还得在。\n- **NameNode 的元数据**：它记的是“哪个文件由哪些 Block 组成、这些 Block 在哪”，不是文件内容本身。调度时回答“这个块在哪台机器上”的正是这份记录，而这个问题恰好也是本地计算能够被安排的前提。\n\n一句话概括：分块提供了并行的单位，副本提供了容错的余地，元数据提供了“把任务放对地方”的依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-hdfs-blocks"
+          ]
+        }
+      },
+      {
+        "id": "textbook-jobtracker-tasktracker",
+        "moduleId": "scheduling-and-recovery",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材依据：JobTracker 主控、TaskTracker 执行与心跳领任务",
+        "markdown": "Hadoop 中有一个作为主控的 JobTracker，用于调度和管理其它的 TaskTracker，它可以运行于集群中任一台计算机上。TaskTracker 负责执行任务，必须运行于 DataNode 上，也就是说 DataNode 既是数据存储节点，也是计算节点。\n\nJobTracker 将 Map 任务和 Reduce 任务分发给空闲的 TaskTracker，让这些任务并行运行，并负责监控任务的运行情况。如果某一个 TaskTracker 出故障了，JobTracker 会将其负责的任务转交给另一个空闲的 TaskTracker 重新运行。\n\n进行 MapReduce 的任务调度时，首先要保证 master 节点的 NameNode、SecondaryNameNode、JobTracker 和 slaves 节点的 DataNode、TaskTracker 都已经启动。作业通常是通过 `JobClient.runJob(job)` 方法向 master 节点的 JobTracker 提交的，JobTracker 接到请求后把作业加入作业队列。JobTracker 一直在等待 JobClient 通过 RPC 向其提交作业，而 TaskTracker 一直通过 RPC 向 JobTracker 发送心跳信号询问有没有任务可做，如果有，则请求 JobTracker 派发任务给它执行。如果作业队列不为空，TaskTracker 发送的心跳就会获得 JobTracker 派发给它的任务。这是一个主动请求：slave 的 TaskTracker 主动向 master 的 JobTracker 请求任务。TaskTracker 接到任务后，通过自身调度在本 slave 建立起 Task 执行任务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000119"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "分布式并行计算"
+              ],
+              "lineStart": 1582,
+              "lineEnd": 1595,
+              "assetRefs": [
+                "parts/part-0001/images/5bfee954f5650d133fe8037a717d78aa9780dc750cdb04e812cc3718e74df986.jpg",
+                "parts/part-0001/images/5343562992ec5b11c54e04eb6de25a595c1ad95c42d916a1baad3136cab45247.jpg"
+              ],
+              "excerptSha256": "026dcc0143f78319915eb308b13ed06def0bbb9b6666cf96e0e368c046864489"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-who-decides",
+        "moduleId": "scheduling-and-recovery",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：决定权在 JobTracker，发起权在 TaskTracker",
+        "markdown": "教材里有两句话看似矛盾：JobTracker“将任务分发给空闲的 TaskTracker”，TaskTracker 又“主动请求”任务。一致的读法是：**JobTracker 决定给谁，TaskTracker 决定什么时候问**。\n\nJobTracker 手里有作业队列和任务列表，但它不会凭空知道哪台机器闲着；TaskTracker 的心跳既报告“我还活着”，也顺便问一句“有没有活干”。这样设计带来两个直接后果：\n\n1. **扩展不需要改调度表**：新加入的节点只要开始发心跳，空闲时就会把任务领走；集群从 10 台扩到 1000 台，不需要手工派活。\n2. **故障有了判定依据**：TaskTracker 与 JobTracker 之间持续的联系就是心跳，某台 TaskTracker 出故障后，它负责的任务停在半途，JobTracker 把这份工作转交给另一个空闲的 TaskTracker 重新运行。\n\n故障重跑之所以“可靠”，还依赖上一条的知识：新节点执行同一个分片时，数据仍能从 HDFS 的副本读到，并且重新计算出来的中间结果和原来完全等价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-jobtracker-tasktracker",
+            "textbook-hdfs-blocks"
+          ]
+        }
+      },
+      {
+        "id": "textbook-jobclient-submit",
+        "moduleId": "job-submission-and-queue",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：（1）JobClient 提交作业",
+        "markdown": "`JobClient.runJob(job)` 静态方法会实例化一个 JobClient 实例，然后用此实例的 `submitJob(job)` 方法向 JobTracker 提交作业。这个方法返回一个 RunningJob 对象，用来跟踪作业的状态；提交完毕后，JobClient 根据此对象开始关注作业的进度，直到作业完成。\n\n`submitJob(job)` 内部通过调用 `submitJobInternal(job)` 完成实质性的作业提交。`submitJobInternal(job)` 首先会向 HDFS 依次上传三个文件：\n\n- `job.jar`：执行此任务需要的各种类，比如 Mapper、Reducer 等实现；\n- `job.split`：文件分块的相关信息，比如数据分多少块、块的大小（默认 64M）等；\n- `job.xml`：有关的作业配置，例如 Mapper、Combiner、Reducer 的类型，输入输出格式的类型等。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000120"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（1）JobClient 提交作业"
+              ],
+              "lineStart": 1596,
+              "lineEnd": 1599,
+              "assetRefs": [],
+              "excerptSha256": "b5614525f745a76276a97074e2d54b352b85171c31ab9bb8a0b63b3809a651b1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-three-uploaded-files",
+        "moduleId": "job-submission-and-queue",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三个上传文件各管一件事",
+        "markdown": "上 HDFS 的三个文件，正好对应并行计算的三个输入：\n\n- `job.jar` 管 **算什么**：Mapper 与 Reducer 的实现，也就是每个任务要执行的代码；\n- `job.split` 管 **切多大**：分片数量与块大小，也就是任务粒度；\n- `job.xml` 管 **怎么串**：用哪个 Combiner、Reducer，输入输出格式是什么。\n\n其中 `job.split` 最容易被忽略：它说明分片不是在节点上临场决定的，而是在作业提交时就作为文件写进了 HDFS。TaskTracker 领到任务后，只需按这份清单去读属于自己的那块数据，不必再和别的节点商量谁处理哪一段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-jobclient-submit"
+          ]
+        }
+      },
+      {
+        "id": "textbook-job-queue",
+        "moduleId": "job-submission-and-queue",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：（2）JobTracker 调度作业",
+        "markdown": "JobTracker 接到 JobClient 提交的作业后，即在 `JobTracker.submitJob(job)` 方法中首先产生一个 JobInProgress 对象。此对象代表一道作业，作用是维护这道作业的所有信息，包括作业相关信息 JobProfile 和最近作业状态 JobStatus，并把作业所有规划的 Task 登记到任务列表中。\n\n随后 JobTracker 将此 JobInProgress 对象通过 `listener.jobAdded(job)` 方法加入到调度队列中，并用一个成员变量 jobs 来维护所有的作业。然后等到有 TaskTracker 空闲，使用 `JobTracker.AssignTask(tasktracker)` 来请求任务；如果调度队列不空，程序便通过调度算法取出一个 task 交给来请求的 TaskTracker 去执行。至此，整个任务分配过程基本完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（2）JobTacker 调度作业"
+              ],
+              "lineStart": 1600,
+              "lineEnd": 1603,
+              "assetRefs": [],
+              "excerptSha256": "5cf8a60520ebf24d30dfc789dcf3807b28d29c2b4dc35b334a6077d6ddf25d37"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-submit-to-assign-chain",
+        "moduleId": "job-submission-and-queue",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：从 runJob 到 AssignTask 的一条链",
+        "markdown": "把两个步骤接起来，一条可复述的链是：\n\n1. 客户端调用 `runJob`，作业被拆成 `job.jar`、`job.split`、`job.xml` 传进 HDFS；\n2. JobTracker 收到作业后建立 JobInProgress，把规划好的 Task 全部登记到任务列表；\n3. 作业被加入调度队列，用 jobs 统一维护；\n4. 某台 TaskTracker 空闲并发心跳请求，`AssignTask` 从队列取一个 task 交给它；\n5. TaskTracker 在本地建立 Task 执行，客户端则通过 RunningJob 观察进度。\n\n注意第 4 步里“空闲”是硬条件：任务不是在等机器变快，而是在等机器腾出来。这也是任务数远大于节点数时作业仍能跑完的原因——任务是一台台空闲节点陆续领走的，不是一次性平均分完的。第 3 步也解释了“失败重跑”为什么便宜：任务本来就登记在任务列表里，某台 TaskTracker 出故障后，它的任务回到可分配状态，由下一台空闲节点领走即可，不需要重新提交整个作业。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-job-queue",
+            "textbook-jobclient-submit",
+            "textbook-jobtracker-tasktracker"
+          ]
+        }
+      },
+      {
+        "id": "textbook-local-computation",
+        "moduleId": "locality-and-granularity",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材依据：本地计算与“移动计算比移动数据更经济”",
+        "markdown": "数据存储在哪一台计算机上，就由这台计算机进行这部分数据的计算。这样可以减少数据在网络上的传输，降低对网络带宽的需求。\n\n教材给出的权衡是：在基于集群的分布式并行系统中，计算节点可以很方便地扩充，能够提供的计算能力近乎无限；但是数据需要在不同的计算机之间流动，网络带宽因此变成瓶颈，是非常宝贵的资源。所以“本地计算”是最有效的一种节约网络带宽的手段，业界把这形容为“移动计算比移动数据更经济”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本地计算"
+              ],
+              "lineStart": 1604,
+              "lineEnd": 1607,
+              "assetRefs": [],
+              "excerptSha256": "9e8857eebc4ee2daf58e9305554c520b47c55a5e7335372cc8d3fa9cc983b612"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-locality-cost",
+        "moduleId": "locality-and-granularity",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：把“更经济”算成网络流量",
+        "markdown": "把这句话拆成两个可比较的量就清楚了：要送到数据所在节点的是**一份任务代码**，规模很小；如果反过来把数据搬到计算节点，走网络的是一整块 64M 甚至更大的数据，还要乘以参与计算的机器数。两者相差几个数量级，所以“移动计算”比“移动数据”便宜。\n\n但要注意本地计算降低的是**跨节点传输**，而不是把它消灭。教材后面的 4.5.7 就写明：Reduce 仍要向许多 Map 节点取中间结果。本地计算的贡献是把 Map 端的输入读取压在本地，让真正需要跨网络流动的数据只剩下中间结果那部分，并且这部分还能被 Combine 进一步压缩。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-local-computation",
+            "textbook-hdfs-blocks"
+          ]
+        }
+      },
+      {
+        "id": "textbook-task-granularity",
+        "moduleId": "locality-and-granularity",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：任务粒度以“一个 Block”为上限",
+        "markdown": "把原始大数据集切割成小数据集时，通常让小数据集小于或等于 HDFS 中一个 Block 的大小（缺省是 64M），这样能够保证一个小数据集位于一台计算机上，便于本地计算。\n\n有 M 个小数据集待处理，就启动 M 个 Map 任务。注意这 M 个 Map 任务分布于 N 台计算机上并行运行，Reduce 任务的数量 R 则由用户指定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000123"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "任务粒度"
+              ],
+              "lineStart": 1608,
+              "lineEnd": 1611,
+              "assetRefs": [],
+              "excerptSha256": "c60b8b2d9a89dedf57d252aee43aa4b1b9d41a61e1fee4278d8d193bbc271c2c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-granularity-tradeoff",
+        "moduleId": "locality-and-granularity",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：粒度粗了和细了各付什么代价",
+        "markdown": "“不大于一个 Block”这条规则的由来，是本地计算的成立条件：一个 Block 保证只落在一台机器上，一份不超过 Block 的分片也就只需读一台机器。两个方向各有代价：\n\n| 分片大小 | 直接后果 | 付出的代价 |\n|---|---|---|\n| 大于一个 Block | 一个任务要读多台机器上的数据 | 本地计算被破坏，跨节点传输重新出现 |\n| 明显小于一个 Block | 同样数据被切成更多份，M 变大 | 每个任务的提交、调度、启动开销被重复付出更多次 |\n| 约等于一个 Block | 一个任务对应一台机器上的一块数据 | 教材采用的做法，粒度与数据布局对齐 |\n\n所以这条规则本质上是把“一台机器上的一块数据”和“一个 Map 任务”对齐。注意 M 与 N 是两个不同的量：M 是任务数，由数据切分决定；N 是机器数，由集群规模决定，两者不必相等。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-task-granularity",
+            "textbook-local-computation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-partition",
+        "moduleId": "shuffle-handoff",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：Partition 指定 key 由哪个 Reduce 处理",
+        "markdown": "Partition 是选择配置，主要作用是在多个 Reduce 的情况下，指定 Map 的结果由某一个 Reduce 处理，每一个 Reduce 都会有单独的输出文件。\n\n做法是把 Map 任务输出的中间结果按 key 的范围划分成 R 份（R 是预先定义的 Reduce 任务个数），划分时通常使用 hash 函数，例如 `hash(key) mod R`。这样可以保证某一段范围内的 key 一定是由一个 Reduce 任务来处理，可以简化 Reduce 的过程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Partition"
+              ],
+              "lineStart": 1612,
+              "lineEnd": 1615,
+              "assetRefs": [],
+              "excerptSha256": "f958a012b47e615805cf9247d341d9b8d40b2822ff238db1885b1b4114ab6195"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-partition-ownership",
+        "moduleId": "shuffle-handoff",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：Partition 分的是“key 的归属”，不是数据块",
+        "markdown": "`hash(key) mod R` 要按“给 key 分配归属”来读，而不是“把数据块分给 Reduce”：\n\n- 哈希是确定的，同一个 key 无论由哪个 Map 产出，算出来都落到同一个 Reduce，因此这个 key 的全部值只需要一个 Reduce 处理；\n- R 事先确定，每个 Reduce 负责一段 key 区间，并各自写出单独的输出文件；\n- 划分动作发生在 Map 端的中间结果上，并且是在 Combine 之后（Combine 排在 partition 之前，见下一条）。\n\n需要注意的边界：这样划分的是“哪个 Reduce 处理哪些 key”，并不表示 Map 会主动把数据推给 Reduce。中间结果先落在 Map 所在节点的本地磁盘，由 Reduce 按 JobTracker 告知的位置去取。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-partition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-combine",
+        "moduleId": "shuffle-handoff",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：Combine 在 Map 本地先合并同 key",
+        "markdown": "在 partition 之前，还可以对中间结果先做 combine，即将中间结果中有相同 key 的 `<key，value>` 对合并成一对。\n\nCombiner 是可选择的，主要作用是在每一个 Map 执行完分析以后，在本地优先做 Reduce 的工作，减少在 Reduce 过程中的数据传输量。combine 的过程与 Reduce 的过程类似，很多情况下可以直接使用 Reduce 函数，但 combine 是作为 Map 任务的一部分，在执行完 Map 函数后紧接着执行的。Combine 能够减少中间结果中 `<key，value>` 对的数目，从而减少网络流量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000125"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Combine"
+              ],
+              "lineStart": 1616,
+              "lineEnd": 1619,
+              "assetRefs": [],
+              "excerptSha256": "c528c6cadc9cfbd188a8aa759ac174ade97edfeca7c77957c4b66e76340d966a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-combine-vs-reduce",
+        "moduleId": "shuffle-handoff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：Combine 与 Reduce 的分工",
+        "markdown": "两者过程相似，位置和作用不同：\n\n| 比较项 | Combine | Reduce |\n|---|---|---|\n| 执行位置 | Map 所在节点，属于 Map 任务的一部分 | Reduce 所在节点 |\n| 处理范围 | 单个 Map 输出内的相同 key | 它负责的那段 key 在全部 Map 上的所有值 |\n| 输入来源 | 本地中间结果 | 从多个 Map 节点取来的中间结果 |\n| 是否必需 | 可选，可以不用 | 必需，数量 R 由用户指定 |\n| 主要作用 | 减少中间结果条目，从而减少网络流量 | 产出最终结果文件 |\n\n因此“配了 Combiner 就不需要 Reduce”是误解：Combiner 只能合并本地产出的同 key 值，跨节点的同 key 合并仍必须由 Reduce 完成。反过来也一样，没有 Combiner 作业照样能跑完，只是 Reduce 阶段要拉取的中间结果更多。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-combine",
+            "textbook-partition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-reduce-fetch",
+        "moduleId": "shuffle-handoff",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材依据：Reduce 到 Map 节点取中间结果",
+        "markdown": "Map 任务的中间结果在做完 Combine 和 Partition 之后，以文件形式存于本地磁盘。中间结果文件的位置会通知主控 JobTracker，JobTracker 再通知 Reduce 任务到哪一个 DataNode 上去取中间结果。\n\n要注意的是：所有的 Map 任务产生的中间结果均按其 key 用同一个 Hash 函数划分成了 R 份，R 个 Reduce 任务各自负责一段 key 区间。每个 Reduce 需要向许多个 Map 任务节点取得落在其负责的 key 区间内的中间结果，然后执行 Reduce 函数，形成一个最终的结果文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Reduce 任务从 Map 任务节点取中间结果"
+              ],
+              "lineStart": 1620,
+              "lineEnd": 1623,
+              "assetRefs": [],
+              "excerptSha256": "14dda9d0ac0c00aad6184cfcb0db2f3192d6e56c1f624034894c283655591eab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-task-pipeline",
+        "moduleId": "shuffle-handoff",
+        "depth": "support",
+        "kind": "application",
+        "title": "教材依据：任务管道",
+        "markdown": "有 R 个 Reduce 任务，就会有 R 个最终结果。很多情况下这 R 个最终结果并不需要合并成一个最终结果，因为这 R 个最终结果又可以作为另一个计算任务的输入，开始另一个并行计算任务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000127"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "任务管道"
+              ],
+              "lineStart": 1624,
+              "lineEnd": 1627,
+              "assetRefs": [],
+              "excerptSha256": "6d673305bc9fd2dd551eab8a458990a0ade03ace5ec0b1b74eff28d8f64a6e92"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "模型补充：四处容易搞错的机制",
+        "markdown": "1. **“JobTracker 把任务推给某台机器，节点被动接受。”** 教材明确这是主动请求：TaskTracker 通过 RPC 发心跳询问有没有任务，JobTracker 从队列取出一个 task 交给来请求的它。\n2. **“Partition 是 Map 把数据直接发送给对应的 Reduce。”** Partition 决定的是归属——哪段 key 由哪个 Reduce 处理。中间结果先落在 Map 端的本地磁盘，由 Reduce 按 JobTracker 告知的位置去取。\n3. **“本地计算意味着数据完全不动。”** 本地计算把 Map 处理放到数据所在节点，减少的是跨节点传输；Reduce 仍要向多个 Map 节点取中间结果。\n4. **“有了 Combiner 就不需要 Reduce。”** Combiner 只合并单个 Map 本地产出的同 key 值，跨节点的同 key 合并仍由 Reduce 完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-jobtracker-tasktracker",
+            "textbook-partition",
+            "textbook-local-computation",
+            "textbook-combine",
+            "textbook-reduce-fetch",
+            "textbook-task-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-self-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：达成检查",
+        "markdown": "**问题一**：一台 TaskTracker 在 Map 任务执行到一半时出故障。按教材的描述，这份工作接下来由谁、在哪台机器上继续？它需要的输入数据从哪里来，中间结果要不要重算？\n\n**问题二**：一个 500MB 的文件按 64MB 的块存进 HDFS。如果直接把整个文件当作一份分片交给一个 Map 任务，会破坏本节哪一条设计？按教材的粒度要求应该切成几份、启动几个 Map 任务（忽略余数不足一块的处理）？\n\n**参考要点**：问题一——JobTracker 在监控中发现该 TaskTracker 出故障，把它负责的任务转交给另一个空闲的 TaskTracker 重新运行；该分片的数据仍在 HDFS 的副本上，新节点从对应 DataNode 读取，中间结果随任务一起重新计算。问题二——整文件作一份分片必然跨多台机器，破坏本地计算，也回到网络带宽瓶颈；500MB 按 64MB 向上取整为 8 份，启动 8 个 Map 任务，Reduce 的数量 R 另行由用户指定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-jobtracker-tasktracker",
+            "textbook-task-granularity",
+            "textbook-local-computation",
+            "textbook-hdfs-blocks",
+            "textbook-task-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：小结与下一步",
+        "markdown": "这一节把“并行计算如何实现”拆成三件事，再沿时间线串成一条链：\n\n- **数据分布存储**：HDFS 把文件切成 Block 分散存放，用副本容错，NameNode 记住每个块在哪；\n- **分布式并行计算**：JobClient 提交作业并把 `job.jar`、`job.split`、`job.xml` 上传到 HDFS，JobTracker 建立 JobInProgress 与任务列表并入队，空闲的 TaskTracker 心跳领任务、本地执行，节点出故障就把任务转给另一个空闲节点重跑；\n- **本地计算**：数据在哪台机器就在哪台机器算，用移动计算换取网络带宽，分片不大于一个 Block 正是为它服务。\n\n中间结果的交接由三个可调环节组成：任务粒度决定任务数 M，Partition 决定哪段 key 归哪个 Reduce，Combine 在 Map 本地先合并同 key 以减少网络流量；Reduce 按 JobTracker 告知的位置跨节点取数，产出 R 个结果文件，还可以作为下一个作业的输入。\n\n下一节的 WordCount 会把这条链走一遍：同样的 key 归并逻辑，在词频统计里变成可以逐个数出来的 Map 输出与 Reduce 结果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-aspects",
+            "model-submit-to-assign-chain",
+            "model-granularity-tradeoff",
+            "model-combine-vs-reduce",
+            "textbook-task-pipeline"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "job-failure-and-granularity-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-self-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "title": "故障重跑与粒度判断",
+        "outcomeRefs": [
+          "trace-job-lifecycle",
+          "justify-locality"
+        ],
+        "learningPurpose": "检查学习者能否把任务分配、失败重跑与任务粒度三条规则迁移到新的具体场景中。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-jobtracker-tasktracker",
+            "textbook-task-granularity"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给出一个作业与集群规模：请写出某个 TaskTracker 出故障后任务的去向与数据来源，并按教材的粒度要求算出应当启动的 Map 任务数。"
+        }
+      }
+    ]
+  },
+  "subtitle": "MapReduce",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000117"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "并行计算的实现"
+      ],
+      "lineStart": 1568,
+      "lineEnd": 1574,
+      "assetRefs": [
+        "parts/part-0001/images/4aa05df4dd4dfb288277ac5ed88733d06fde3e575a810ab5020ca5bade065f1a.jpg"
+      ],
+      "excerptSha256": "8c42f238669c9b3e8b84d7241b9de7a9e3c3799e369b81a26a4e38c26b3e58d9"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000118"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "数据分布存储"
+      ],
+      "lineStart": 1575,
+      "lineEnd": 1581,
+      "assetRefs": [
+        "parts/part-0001/images/97b56115c8935972a249b8aabe99de5fdf4d4d06316cb4e95e70d239198f3903.jpg"
+      ],
+      "excerptSha256": "f4056771756a6fef426b2d30ad4e8c03b28a986d74358b1e6e2dc64086a7f602"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000119"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "分布式并行计算"
+      ],
+      "lineStart": 1582,
+      "lineEnd": 1595,
+      "assetRefs": [
+        "parts/part-0001/images/5bfee954f5650d133fe8037a717d78aa9780dc750cdb04e812cc3718e74df986.jpg",
+        "parts/part-0001/images/5343562992ec5b11c54e04eb6de25a595c1ad95c42d916a1baad3136cab45247.jpg"
+      ],
+      "excerptSha256": "026dcc0143f78319915eb308b13ed06def0bbb9b6666cf96e0e368c046864489"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000120"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（1）JobClient 提交作业"
+      ],
+      "lineStart": 1596,
+      "lineEnd": 1599,
+      "assetRefs": [],
+      "excerptSha256": "b5614525f745a76276a97074e2d54b352b85171c31ab9bb8a0b63b3809a651b1"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000121"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（2）JobTacker 调度作业"
+      ],
+      "lineStart": 1600,
+      "lineEnd": 1603,
+      "assetRefs": [],
+      "excerptSha256": "5cf8a60520ebf24d30dfc789dcf3807b28d29c2b4dc35b334a6077d6ddf25d37"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000122"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本地计算"
+      ],
+      "lineStart": 1604,
+      "lineEnd": 1607,
+      "assetRefs": [],
+      "excerptSha256": "9e8857eebc4ee2daf58e9305554c520b47c55a5e7335372cc8d3fa9cc983b612"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000123"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "任务粒度"
+      ],
+      "lineStart": 1608,
+      "lineEnd": 1611,
+      "assetRefs": [],
+      "excerptSha256": "c60b8b2d9a89dedf57d252aee43aa4b1b9d41a61e1fee4278d8d193bbc271c2c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000124"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Partition"
+      ],
+      "lineStart": 1612,
+      "lineEnd": 1615,
+      "assetRefs": [],
+      "excerptSha256": "f958a012b47e615805cf9247d341d9b8d40b2822ff238db1885b1b4114ab6195"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000125"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Combine"
+      ],
+      "lineStart": 1616,
+      "lineEnd": 1619,
+      "assetRefs": [],
+      "excerptSha256": "c528c6cadc9cfbd188a8aa759ac174ade97edfeca7c77957c4b66e76340d966a"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000126"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Reduce 任务从 Map 任务节点取中间结果"
+      ],
+      "lineStart": 1620,
+      "lineEnd": 1623,
+      "assetRefs": [],
+      "excerptSha256": "14dda9d0ac0c00aad6184cfcb0db2f3192d6e56c1f624034894c283655591eab"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000127"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "任务管道"
+      ],
+      "lineStart": 1624,
+      "lineEnd": 1627,
+      "assetRefs": [],
+      "excerptSha256": "6d673305bc9fd2dd551eab8a458990a0ade03ace5ec0b1b74eff28d8f64a6e92"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3728,
+    2785
+  ],
+  "scale": 0.9
+}
