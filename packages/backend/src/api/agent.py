@@ -1085,17 +1085,17 @@ async def _run_agent_turn_opencode_unlocked(
     course_agent_name: str | None = None
     if creating_course:
         assert review_store is not None
-        resume_course_id = (
+        identity_course_id = (
             str(resume_response["review"].get("course_id") or "")
             if resume_response is not None
             else ""
-        )
+        ) or (textbook_binding.course_id if textbook_binding is not None else "")
         try:
-            if resume_course_id:
+            if identity_course_id:
                 identity_reviewed = await asyncio.to_thread(
                     review_store.has_resolved_knowledge_review,
                     conversation_id,
-                    resume_course_id,
+                    identity_course_id,
                 )
             else:
                 identity_reviewed = (

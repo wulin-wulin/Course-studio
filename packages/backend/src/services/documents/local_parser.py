@@ -18,9 +18,9 @@ from .store import (
 )
 
 
-_TOC_HEADING_RE = re.compile(r"^\s*目\s*录\s*$")
+_TOC_HEADING_RE = re.compile(r"^\s*(?:目\s*录|(?:Table\s+of\s+)?Contents)\s*$", re.IGNORECASE)
 _ENTRY_RE = re.compile(
-    r"^\s*(?P<number>\d+(?:\.\d+)*)\s+"
+    r"^\s*(?P<number>\d+(?:\.\d+)*)\.?\s+"
     r"(?P<title>.*?\S)"
     r"(?P<leader>(?:\s*[.·…]\s*){2,}|\s{2,})"
     r"(?P<page>\d+)\s*$"

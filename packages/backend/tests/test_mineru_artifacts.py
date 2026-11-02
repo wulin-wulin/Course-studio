@@ -12,6 +12,7 @@ from src.services.documents.markdown_parser import build_markdown_artifacts
 from src.services.documents.mineru_artifacts import (
     _find_chapter_sections,
     _is_auxiliary_boundary_title,
+    build_mineru_markdown_artifacts,
 )
 from src.services.documents.store import DocumentStore, DocumentValidationError
 
@@ -20,6 +21,26 @@ FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mineru" / "structure_cases"
 
 
 class MinerUArtifactIntegrationTest(unittest.TestCase):
+    def test_chapter_references_and_repeated_headings_preserve_later_content(self):
+        markdown = "\n".join([
+            "# 教材", "## 第1章 基础", "## 1.1概念", "原文一。",
+            "## 1.1概念", "原文续。", "## 参考文献", "参考一。",
+            "## 第2章 应用", "## 2.1HDFS 方法", "原文二。",
+            "## 参考文献", "参考二。",
+        ])
+        candidate = {"chapters": [
+            {"number": "1", "title": "基础", "page_start": 1},
+            {"number": "2", "title": "应用", "page_start": 4},
+        ]}
+        outline, material = build_mineru_markdown_artifacts(
+            markdown, candidate, document_id="doc-references", filename="book.pdf",
+            sha256="a" * 64, parser_name="mineru-vlm", page_count=6, toc_pages=1,
+        )
+        self.assertEqual([c["title"] for c in outline["chapters"]], ["基础", "应用"])
+        self.assertEqual([[p["number"] for p in c["points"]] for c in outline["chapters"]], [["1.1"], ["2.1"]])
+        first_spans = material["point_sources"][0]["section_ids"]
+        self.assertIn(5, [s["line_start"] for s in material["sections"] if s["id"] in first_spans])
+
     def test_matching_ignores_numbered_cross_reference_before_real_chapter(self):
         markdown = "\n".join(
             [

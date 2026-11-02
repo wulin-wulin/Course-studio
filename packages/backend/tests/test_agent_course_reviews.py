@@ -175,14 +175,24 @@ class AgentCourseReviewTest(unittest.IsolatedAsyncioTestCase):
         course_store.commit_workspace.assert_not_called()
 
     async def test_textbook_document_uses_restricted_outline_agent(self):
+        await self._assert_textbook_agent_selection(identity_reviewed=False)
+
+    async def test_published_textbook_continuation_keeps_reviewed_creator(self):
+        await self._assert_textbook_agent_selection(identity_reviewed=True)
+
+    async def _assert_textbook_agent_selection(self, *, identity_reviewed: bool):
         websocket = _WebSocket()
         conversation_store = Mock()
         conversation_store.get_opencode_session.return_value = "session-textbook-outline"
         review_store = Mock()
         review_store.resolved_knowledge_course_for_conversation.return_value = None
+        review_store.has_resolved_knowledge_review.return_value = identity_reviewed
         course_store = Mock()
         prompt = AsyncMock(return_value=(True, "textbook outline ready"))
-        binding = SimpleNamespace(prompt_context=lambda: "bound textbook context")
+        binding = SimpleNamespace(
+            course_id="textbook-0123456789abcdef01234567",
+            prompt_context=lambda: "bound textbook context",
+        )
         document_id = "doc-0123456789abcdef01234567"
 
         with tempfile.TemporaryDirectory() as directory:
@@ -250,7 +260,10 @@ class AgentCourseReviewTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             prompt.await_args.kwargs["agent_name"],
-            "textbook-outline-creator",
+            "textbook-course-creator" if identity_reviewed else "textbook-outline-creator",
+        )
+        review_store.has_resolved_knowledge_review.assert_called_once_with(
+            "conversation-review", binding.course_id,
         )
         self.assertIn("bound textbook context", prompt.await_args.kwargs["text"])
         course_store.commit_workspace.assert_not_called()

@@ -28,6 +28,21 @@ MARKDOWN_PATH = FIXTURE_ROOT / "seven_chapter_full.md"
 
 
 class StructureCandidateTest(unittest.TestCase):
+    def test_english_toc_with_decimal_chapters_keeps_original_evidence(self):
+        content = [
+            {"type": "text", "page_idx": 0, "text": "Table of Contents"},
+            {"type": "text", "page_idx": 0, "text": "1. Introduction .... 2\n2. Networks .... 5"},
+            {"type": "text", "page_idx": 1, "text": "1. Introduction", "text_level": 2},
+            {"type": "text", "page_idx": 2, "text": "1. Introduction", "text_level": 2},
+            {"type": "text", "page_idx": 3, "text": "99. This is a numbered list"},
+            {"type": "text", "page_idx": 4, "text": "2. Networks", "text_level": 2},
+        ]
+        markdown = "# Book\n## 1. Introduction\n## 1.1 Basics\n## 2. Networks\n## 2.1 Routing\n"
+        candidate = build_mineru_structure_candidate(content, markdown, page_count=6)
+        self.assertEqual([c["number"] for c in candidate["chapters"]], ["1", "2"])
+        self.assertEqual([c["page_start"] for c in candidate["chapters"]], [2, 5])
+        validate_structure_candidate(candidate, content, markdown, page_count=6)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.content = json.loads(CONTENT_LIST_PATH.read_text(encoding="utf-8"))
