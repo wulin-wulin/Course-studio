@@ -29,7 +29,7 @@ export function CourseGroupPage({ groupId, onBack, onOpenCourse }: Props) {
   const [group, setGroup] = useState<CourseCatalogGroup | null>(null);
   const [groups, setGroups] = useState<CourseCatalogGroup[]>([]);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
-  const [view, setView] = useState<"cards" | "graph">("cards");
+  const [view, setView] = useState<"cards" | "graph">("graph");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
