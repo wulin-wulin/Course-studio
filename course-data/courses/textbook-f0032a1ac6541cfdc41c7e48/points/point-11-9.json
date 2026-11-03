@@ -1,0 +1,506 @@
+{
+  "id": "point-11-9",
+  "title": "编程模型",
+  "shortSummary": "说明云数据库提供的编程模型与接口抽象，理解开发者如何组织数据操作。",
+  "keyTerms": [
+    "编程模型",
+    "MapReduce",
+    "映射函数",
+    "归约函数",
+    "联接"
+  ],
+  "animationType": "mapReducePipeline",
+  "animationSuggestion": "逐步展示两关系的元组在 Map 阶段被标上 R 或 S、按哈希值滑入不同 Reduce 分区，并在同一键下配对成 (a,b,c)；允许切换哈希函数观察同一批元组的分区变化，以及某个 B 值只出现在一侧时不被合并的结果。",
+  "difficulty": "中等",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-4-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-worked-example",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材对 MapReduce 与关系联接改写的定义和步骤不变，按「动机—机制—算例—边界」重排讲解顺序，补充直觉、可核对的小算例、版本背景提示和达成检查。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-why",
+          "text": "说明云数据库为什么需要一种机制简单、可扩展性高的编程模型，而不只是把单机程序搬到集群。"
+        },
+        {
+          "id": "explain-mapreduce",
+          "text": "用映射与归约两个阶段解释 MapReduce 的分工，以及它隐藏了哪些执行细节。"
+        },
+        {
+          "id": "trace-join",
+          "text": "追踪两个关系做联接时，每条元组经过 Map、按哈希分组和 Reduce 的具体路径。"
+        },
+        {
+          "id": "judge-boundary",
+          "text": "判断一个任务是否适合用 MapReduce 表达，并指出教材描述的版本背景与适用边界。"
+        }
+      ],
+      "misconceptions": [
+        "把 MapReduce 理解成「在集群上跑普通循环」，忽略它隐藏了并行计算、数据分布和失败处理。",
+        "认为 Reduce 能把任意元组随意配对，忘记只有分组键相同的中间项才会被送到同一个 Reduce 进程。",
+        "把教材描述的产品能力和数据划分方式直接当作当前现状，忽略其 2012 年论文的写作背景。"
+      ],
+      "modules": [
+        {
+          "id": "why-new-model",
+          "title": "为什么需要新的编程模型",
+          "role": "motivation",
+          "description": "从海量数据运算的规模压力引出对可扩展编程模型的需求。",
+          "outcomeRefs": [
+            "explain-why"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mapreduce-core",
+          "title": "MapReduce 的映射与归约",
+          "role": "concept",
+          "description": "按教材定义拆解处理对象、隐藏细节和两个基本步骤。",
+          "outcomeRefs": [
+            "explain-why",
+            "explain-mapreduce"
+          ],
+          "order": 1
+        },
+        {
+          "id": "join-as-mapreduce",
+          "title": "把关系联接改写成 MapReduce",
+          "role": "worked-example",
+          "description": "逐步跟随教材给出的联接操作改写过程，并用小算例核对。",
+          "outcomeRefs": [
+            "explain-mapreduce",
+            "trace-join"
+          ],
+          "order": 2
+        },
+        {
+          "id": "boundaries-and-context",
+          "title": "本章位置、出处与适用边界",
+          "role": "boundary-check",
+          "description": "把编程模型放回本章线索，核对文献出处和版本背景，明确模型代价。",
+          "outcomeRefs": [
+            "judge-boundary"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一议题",
+          "role": "assessment",
+          "description": "通过一个订单联接任务检验迁移能力，并桥接到下一章。",
+          "outcomeRefs": [
+            "trace-join",
+            "judge-boundary"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why",
+          "explain-mapreduce",
+          "trace-join",
+          "judge-boundary"
+        ],
+        "method": "完成订单与客户的联接改写练习，并说明分组键和关系标记的作用。",
+        "successCriteria": [
+          "能写出两侧 Map 发出的 key/value 对并解释关系标记的必要性",
+          "能指出按哪个属性哈希以及为什么同一键必须落到同一个 Reduce",
+          "能说明教材描述的版本背景与一处模型适用边界"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-12-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-why-new-model",
+        "moduleId": "why-new-model",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材提出的问题：传统处理方法不够用了",
+        "markdown": "教材从云数据库的规模出发提出这个问题：云数据库存储了海量数据，涉及大量的数据运算，如果仍然采用传统的数据处理方法，将无法充分发挥云环境的优点。因此需要的是一种**机制简单、又具有高可扩展性**的编程方法，而不是把单机程序直接搬到集群上运行。\n\n教材在本节给出的答案是 Google 提出的一种新的编程模型，称为 MapReduce，用于查询这种大型数据集。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000362"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "编程模型"
+              ],
+              "lineStart": 4802,
+              "lineEnd": 4813,
+              "assetRefs": [],
+              "excerptSha256": "1ef229894147182db8ad2bcf0603400c47893cf95c0d7a703f9825a109fb92cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-motivation-contrast",
+        "moduleId": "why-new-model",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：新模型要替开发者挡掉什么",
+        "markdown": "把单机程序搬到集群上，写业务逻辑的人至少要额外面对三件事：数据分散在哪台机器、并行任务如何切分、某台机器中途失败怎么办。教材强调「机制简单而又具有高可扩展性」，落点正在这里——模型的价值不在于语法新，而在于把与业务无关的复杂性收进框架。\n\n检验一个编程模型是否真的解决了这个问题，可以问一句：写业务逻辑的人还需不需要直接描述「数据放在哪台机器上」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-new-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-mapreduce-definition",
+        "moduleId": "mapreduce-core",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：两个基本步骤与两层函数",
+        "markdown": "教材对 MapReduce 的界定包含三层信息。\n\n1. **处理对象**：跨越成百上千台机器的大规模数据集，一个典型的 MapReduce 计算会在成千上万台机器上处理许多 TB 的数据，并运行在大规模商用服务器簇上。\n2. **隐藏的细节**：该软件架构隐藏了并行计算、数据分布和失败处理。\n3. **两个基本步骤**：在分布式环境下处理数据，总是包括 (1) 映射所需的数据；(2) 对这些数据进行聚集（aggregate）操作。\n\n具体到函数层面：用户定义一个**映射函数**，它把一个 key/value 对的集合转换成一个中间临时的 key/value 对集合；然后使用一个 **reduce 函数**，把所有那些与同一个键相关的中间临时值都合并起来。教材指出，许多现实世界的任务都可以采用这个模型来表达。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000362"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "编程模型"
+              ],
+              "lineStart": 4802,
+              "lineEnd": 4813,
+              "assetRefs": [],
+              "excerptSha256": "1ef229894147182db8ad2bcf0603400c47893cf95c0d7a703f9825a109fb92cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-phase-intuition",
+        "moduleId": "mapreduce-core",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：用整理卡片理解两阶段分工",
+        "markdown": "可以借「整理一批散落卡片」来建立分工直觉：\n\n- 映射阶段只做**贴标签**：每张卡片按内容改写成若干带标签的中间项，此时不做任何汇总。\n- 归约阶段只做**同标签合并**：同一个标签下的所有中间项被放到一起，再按规则合并成一个结果。\n\n类比只用于理解分工，不改变教材的定义：映射函数的输入和输出都是 key/value 对，reduce 的输入是按同一个键聚在一起的中间临时值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mapreduce-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-join-map",
+        "moduleId": "join-as-mapreduce",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材步骤一：Map 阶段给元组贴上关系标记",
+        "markdown": "教材指出，传统关系型数据库和 MapReduce 对数据的处理方式存在很大区别，因此需要把关系数据库中的一些操作转换成 MapReduce 操作，其中一类典型操作就是联接（join）。\n\n设关系 $R(A,B)$ 和 $S(B,C)$ 都存储在一个文件中，联接所用的键就是属性 $B$ 的值。Map 阶段要给每个元组关联上这个键，并标明它来自哪个关系：\n\n- 对 $R$ 的每个元组 $(a,b)$，发出 key/value 对 $(b,(a,R))$；\n- 对 $S$ 的每个元组 $(b,c)$，发出 key/value 对 $(b,(c,S))$。\n\n教材特意说明：把关系名 $R$ 或 $S$ 一起放进 value 中，是为了在 Reduce 阶段能够只把来自 $R$ 的元组和来自 $S$ 的元组进行匹配。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000362"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "编程模型"
+              ],
+              "lineStart": 4802,
+              "lineEnd": 4813,
+              "assetRefs": [],
+              "excerptSha256": "1ef229894147182db8ad2bcf0603400c47893cf95c0d7a703f9825a109fb92cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-join-reduce",
+        "moduleId": "join-as-mapreduce",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材步骤二：按哈希分派到 Reduce 再合并",
+        "markdown": "Reduce 进程的任务，是把来自关系 $R$ 和 $S$、具有共同属性 $B$ 值的元组进行合并，输出联接后的元组 $(a,b,c)$，写到一个单独的输出文件中。\n\n教材给出保证这一步可行的关键约束：所有具有特定 $B$ 值的元组必须被发送到**同一个** Reduce 进程。做法是假设使用 $k$ 个 Reduce 进程，选择一个哈希函数 $h$，它把属性 $B$ 的值映射到 $k$ 个哈希桶，每个哈希值对应一个 Reduce 进程；每个 Map 进程把 key 是 $b$ 的 key/value 对，都发送到与哈希值 $h(b)$ 对应的 Reduce 进程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000362"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "编程模型"
+              ],
+              "lineStart": 4802,
+              "lineEnd": 4813,
+              "assetRefs": [],
+              "excerptSha256": "1ef229894147182db8ad2bcf0603400c47893cf95c0d7a703f9825a109fb92cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-join-trace",
+        "moduleId": "join-as-mapreduce",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一个小算例走完全流程",
+        "markdown": "用一个小例子把上面两步走一遍。设 $R=\\{(1,x),(2,y)\\}$，$S=\\{(1,p),(3,q)\\}$，Reduce 进程数 $k=2$，哈希规则取「$b$ 除以 2 的余数」。\n\n| 阶段 | 处理对象 | 产出 |\n|---|---|---|\n| Map | $(1,x)$ 来自 $R$ | $(1,(x,R))$ |\n| Map | $(2,y)$ 来自 $R$ | $(2,(y,R))$ |\n| Map | $(1,p)$ 来自 $S$ | $(1,(p,S))$ |\n| Map | $(3,q)$ 来自 $S$ | $(3,(q,S))$ |\n\n按哈希分派后，余数为 1 的 Reduce 进程收到键 1 和键 3 的中间项，余数为 0 的进程收到键 2 的中间项。Reduce 阶段逐键合并：键 1 下同时有 $(x,R)$ 和 $(p,S)$，输出 $(1,x,p)$；键 2 和键 3 下只有单边元组，配对不成立，因此不产生联接结果。最终输出中只留下在两个关系里都出现的 $B$ 值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-join-map",
+            "tb-join-reduce"
+          ]
+        }
+      },
+      {
+        "id": "model-why-tag-relation",
+        "moduleId": "join-as-mapreduce",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "模型补充：两个设计决定为什么必要",
+        "markdown": "上面两个步骤里有两处容易照着抄却说不清理由的设计。\n\n**为什么 value 里要带关系名？** 如果只发出 $(b,a)$ 和 $(b,c)$，Reduce 阶段看到的只是一堆同键的元组，无法判断哪两个元组来自不同关系。带上 $R$ 或 $S$ 之后，只要检测到一边来自 $R$、一边来自 $S$ 就能配对，同一关系的两个元组不会被误配成一条结果。\n\n**为什么按 $B$ 的值哈希，而不是按整条元组哈希？** 联接的语义要求同一 $B$ 值的所有元组出现在同一个 Reduce 里；按整条元组哈希会把它们打散到不同进程，每个进程都凑不出完整的一对。这其实是 MapReduce 的一条一般规则：分组键决定中间项的数据去向。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-join-map",
+            "tb-join-reduce"
+          ]
+        }
+      },
+      {
+        "id": "model-boundary-check",
+        "moduleId": "boundaries-and-context",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：什么任务适合交给 MapReduce",
+        "markdown": "判断一个任务能否用 MapReduce 表达，可以对照三条：\n\n- 数据能否切成互不依赖的片段并行处理，这是映射阶段的前提；\n- 结果能否归结为「按某个键把中间项合起来」，这是归约阶段的前提；\n- 是否容忍批处理式的延迟，以及 Map 与 Reduce 之间按哈希重分发数据带来的额外开销。\n\n本章前面也点明了这类存储与关系数据库的差别：整个模式只有一个行键索引，不存在表间的联接操作，因此在 MapReduce 环境下执行联接必须自己完成上面那套标记与重分发。需要低延迟随机查询或复杂事务的场景，更适合交给数据库系统本身，而不是硬套 MapReduce。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-join-map",
+            "tb-join-reduce"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：把订单与客户的联接改写成 MapReduce",
+        "markdown": "**练习**：设有订单关系 $O(orderId, customerId, amount)$ 与客户关系 $C(customerId, city)$，要求输出每位客户所在的城市及其订单金额。\n\n1. 写出两侧 Map 进程分别发出的 key/value 对，并说明 value 中为什么需要关系标记；\n2. 指出分组键应取哪个属性，哈希函数作用在哪一列的取值上；\n3. 说明若某个 $customerId$ 只出现在 $O$ 中，最终输出会怎样。\n\n**参考要点**：$O$ 的元组以 $customerId$ 为 key 发出，value 中同时携带 $amount$ 和标记 $O$；$C$ 的元组同样以 $customerId$ 为 key，value 携带 $city$ 和标记 $C$。分组键是 $customerId$，哈希作用于它的取值。只在 $O$ 中出现的 $customerId$ 缺少 $C$ 侧元组，Reduce 无法配对，因此不会出现在联接结果里。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-join-map",
+            "tb-join-reduce",
+            "model-why-tag-relation"
+          ]
+        }
+      },
+      {
+        "id": "tb-chapter-summary",
+        "moduleId": "boundaries-and-context",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材本章小结：编程模型在整章中的位置",
+        "markdown": "教材本章小结回顾了整章的线索：先介绍云数据库的概念和特性，指出云数据库是海量存储需求的必然选择；接着比较云数据库和传统的分布式数据库，阐述云数据库的影响；然后介绍具有代表性的云数据库产品，包括 Amazon、Google 和 Microsoft 的产品；最后介绍云数据库的数据模型和数据访问方法。\n\n把本节放回这条线索里，编程模型回答的是「怎么算」：它与前面的「怎么存」（数据模型）和「怎么取」（数据访问方法）配套，共同构成云数据库对外提供的能力。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000363"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 4814,
+              "lineEnd": 4817,
+              "assetRefs": [],
+              "excerptSha256": "eea3ed16e45b15beda80b212b6fc71990a4bdba6e34d264a980f4fb8595ad985"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-source-note",
+        "moduleId": "boundaries-and-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材出处：内容来自 2012 年的《云数据库研究》",
+        "markdown": "教材在参考文献处列出：林子雨、赖永炫、林琛、谢怡、邹权，《云数据库研究》，软件学报，2012，23(5)：1148-1166，并注明本章内容全部来自这篇论文。\n\n这条出处信息本身也是一条阅读提示：本节关于 MapReduce 的论述、产品举例和数据划分方式，都以 2012 年前后的云数据库研究为背景。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000364"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 4818,
+              "lineEnd": 4823,
+              "assetRefs": [],
+              "excerptSha256": "27ce912209a9815ccb4c4152432b67d0199ab28d465872bb884d3e0c94648329"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-version-caveat",
+        "moduleId": "boundaries-and-context",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "模型补充：把教材描述当作模型原理而非产品现状",
+        "markdown": "出处提示带来一个容易忽略的边界：教材讲的是论文写作时的通用编程模型，而今天各家云厂商普遍把它封装成托管的大数据服务，接口、调度方式和默认行为都已演进；Hadoop 生态中也出现了把资源管理与计算模型分离的新框架。\n\n因此阅读时应把教材描述当作**模型层面的原理**：两个阶段的划分、按分组键分派中间项、隐藏并行与失败细节，这些判断依然成立；具体的产品名称、版本能力和性能数字则需要按当前资料核对，不能直接当成今天的现状。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-source-note",
+            "tb-mapreduce-definition"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "收束与下一议题",
+        "markdown": "本节把云数据库「怎么算」这一层收束到一点：用少量函数约定换取可扩展的并行执行，代价是数据在阶段之间被重新分发。\n\n沿着同一条思路往下，教材接下来转向 Google Spanner，讨论在全球分布的数据中心之间如何同时保证一致性与可用性。那是把「数据放在哪里、按什么顺序提交」的问题推到分布式系统层面的下一个议题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mapreduce-definition",
+            "model-version-caveat"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "join-rewrite-check",
+        "type": "formative-check",
+        "title": "联接改写自查",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-join",
+          "judge-boundary"
+        ],
+        "learningPurpose": "检查学习者能否把教材的联接改写步骤迁移到新的关系模式上，并独立判断分组键与关系标记的作用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-join-map",
+            "tb-join-reduce"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "checkpoints": [
+            "两侧 Map 的 key/value 对形式正确",
+            "说明了关系标记的必要性",
+            "指出分组键与哈希作用对象",
+            "判断出单边元组不产生联接结果"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "请按教材的联接改写步骤，写出订单关系与客户关系两侧 Map 发出的 key/value 对，并说明分组键与关系标记各自的作用。"
+        }
+      }
+    ]
+  },
+  "subtitle": "云数据库",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000362"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "编程模型"
+      ],
+      "lineStart": 4802,
+      "lineEnd": 4813,
+      "assetRefs": [],
+      "excerptSha256": "1ef229894147182db8ad2bcf0603400c47893cf95c0d7a703f9825a109fb92cd"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000363"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 4814,
+      "lineEnd": 4817,
+      "assetRefs": [],
+      "excerptSha256": "eea3ed16e45b15beda80b212b6fc71990a4bdba6e34d264a980f4fb8595ad985"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000364"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 4818,
+      "lineEnd": 4823,
+      "assetRefs": [],
+      "excerptSha256": "27ce912209a9815ccb4c4152432b67d0199ab28d465872bb884d3e0c94648329"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2725,
+    180
+  ],
+  "scale": 0.59
+}

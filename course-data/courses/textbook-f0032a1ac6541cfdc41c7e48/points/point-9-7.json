@@ -1,0 +1,625 @@
+{
+  "id": "point-9-7",
+  "title": "改进的图计算模型",
+  "shortSummary": "介绍针对 Pregel 同步开销和负载不均等问题的改进思路与替代模型。",
+  "keyTerms": [
+    "改进模型",
+    "同步开销",
+    "负载均衡"
+  ],
+  "animationType": "gasIteration",
+  "animationSuggestion": "逐步演示一轮 GAS：先高亮被收集的邻居边，显示 Apply 更新前后的 rank 与 delta，再显示 Scatter 沿边传出并按阈值点亮邻居；每轮结束暂停，并支持从同一初始图重播。",
+  "difficulty": "进阶",
+  "importance": 0.65,
+  "prerequisites": [
+    "point-9-3",
+    "point-9-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 Pregel 不足和 PowerGraph 各机制的原始表述与先后顺序，补充问题与设计的对应关系、同步方式的取舍规则和公式读法，不改变教材结论。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-pregel-limits",
+          "text": "说明 Pregel 在图划分、checkpoint、BSP 同步和内存占用四方面的不足。"
+        },
+        {
+          "id": "describe-gas",
+          "text": "按 Gather、Apply、Scatter 三个阶段描述 PowerGraph 的 GAS 模型，并用 PageRank 伪代码说明各阶段作用。"
+        },
+        {
+          "id": "explain-vertex-cut",
+          "text": "解释均衡顶点切割为什么能减少跨分区通信并同时考虑负载均衡。"
+        },
+        {
+          "id": "compare-sync-modes",
+          "text": "比较全局同步、全局异步和可串行化异步三种执行方式的取舍。"
+        },
+        {
+          "id": "evaluate-model-choice",
+          "text": "针对给定运行症状，判断它对应 Pregel 的哪条不足以及 PowerGraph 的哪项设计，并说明证据边界。"
+        }
+      ],
+      "misconceptions": [
+        "把 GAS 理解成为了换名字而把一次顶点计算拆成三段，忽略 Scatter 对边的更新和激活邻居的作用。",
+        "认为顶点切割一定比 hash 划分通信少，忽略教材强调的“根据整体分布计算期望值”这一前提。",
+        "把“采用了快照算法”直接等同于“解决了 checkpoint 回滚需要重复计算的问题”。",
+        "认为异步执行一定比全局同步快，忽略教材指出的调试复杂和某些算法可能更慢。"
+      ],
+      "modules": [
+        {
+          "id": "pregel-limits",
+          "title": "问题导入：Pregel 的四处不足",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "explain-pregel-limits"
+          ],
+          "order": 0
+        },
+        {
+          "id": "gas-model",
+          "title": "核心理解一：GAS 三阶段与缓存",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "describe-gas"
+          ],
+          "order": 1
+        },
+        {
+          "id": "vertex-cut",
+          "title": "核心理解二：均衡顶点切割",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-vertex-cut"
+          ],
+          "order": 2
+        },
+        {
+          "id": "execution-modes",
+          "title": "核心理解三：同步方式与差错控制",
+          "role": "comparison",
+          "outcomeRefs": [
+            "compare-sync-modes"
+          ],
+          "order": 3
+        },
+        {
+          "id": "review-transfer",
+          "title": "达成检查与迁移",
+          "role": "transfer-check",
+          "outcomeRefs": [
+            "evaluate-model-choice"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pregel-limits",
+          "describe-gas",
+          "explain-vertex-cut",
+          "compare-sync-modes",
+          "evaluate-model-choice"
+        ],
+        "method": "完成最后的症状诊断练习，并为每个判断引用教材中的对应句子。",
+        "successCriteria": [
+          "能把四条不足与 PowerGraph 的具体设计对应起来",
+          "能说明教材没有宣称哪些问题已被完全解决",
+          "能区分同步方式的选择依据而不是简单排序"
+        ],
+        "exerciseBlockId": "transfer-check",
+        "nextPointId": "point-10-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "section-intro",
+        "moduleId": "pregel-limits",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节的讨论线索",
+        "markdown": "教材在第 9.7 节把讨论从 Pregel 本身转向它的改进方向：先列出 Pregel 在实际系统中暴露的不足，再以 PowerGraph 为例介绍一种改进的图计算框架。下面按这条线索组织：先看清问题，再依次理解 GAS 抽象、均衡划分、执行一致性与差错控制，最后判断每项改进各自对准了哪一个问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000302"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "改进的图计算模型"
+              ],
+              "lineStart": 4114,
+              "lineEnd": 4115,
+              "assetRefs": [],
+              "excerptSha256": "07951bdb63aad5553aa02a2cbcd0563f8f71be7a21046b3318b5af6f0827c292"
+            }
+          ]
+        }
+      },
+      {
+        "id": "pregel-limits",
+        "moduleId": "pregel-limits",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "Pregel 的四条不足",
+        "markdown": "教材指出 Pregel 在四个方面不尽如人意：\n\n1. **图划分方式简单**：采用 hash 方式分配顶点，虽然能实现负载均衡，但不能根据图的连通特性划分，超步之间的消息传递开销可能成为影响性能的最大隐患。\n2. **checkpoint 回滚代价高**：只能把状态恢复到当前超步 $S$ 之前若干个超步，要回到 $S$ 仍需重复计算；如何做到只重算故障 worker 的分区，甚至直接恢复到故障发生前一超步，仍是需要研究的问题。\n3. **BSP 的同步等待**：整体同步并行无法解决计算快的 worker 长期等待慢 worker 的问题。\n4. **状态常驻内存**：计算状态全部放在内存中，图规模继续增大时可能内存不足，如何解决尚待研究。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000303"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Pregel 的不足之处"
+              ],
+              "lineStart": 4116,
+              "lineEnd": 4127,
+              "assetRefs": [],
+              "excerptSha256": "b845c647f30ee680377d45075c68b6ef3b2191bec38083a7875326b456a77532"
+            }
+          ]
+        }
+      },
+      {
+        "id": "why-limits-matter",
+        "moduleId": "pregel-limits",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "理解提示：四条不足可以归成两类代价",
+        "markdown": "把四条不足放在一起看，可以分为两类。\n\n第一类是**划分带来的通信代价**：hash 只保证各分区顶点数量接近，分区边界与图的连通结构无关，一条边两端的顶点很可能落在不同机器上，于是每个超步都要跨网络搬运消息；顶点度数分布越不均匀，开销越集中在少数高度顶点上。\n\n第二类是**同步与状态管理的代价**：全局同步点让快的 worker 等慢的 worker；checkpoint 只能整体回退，故障后要重算若干超步；状态常驻内存又限制了可处理的图规模。\n\n后面的改进分别对准这两类代价：GAS 抽象与缓存减少重复计算，顶点切割减少跨分区消息，多重同步方式与快照算法处理一致性和故障恢复。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "section-intro",
+            "pregel-limits"
+          ]
+        }
+      },
+      {
+        "id": "gas-three-phases",
+        "moduleId": "gas-model",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "PowerGraph 的 GAS 模型",
+        "markdown": "PowerGraph 把基于 vertex 的图计算抽象成一个通用的计算模型，称为 GAS 模型，分为三个阶段：\n\n1. **Gather 阶段**：用户自定义一个 sum 操作，作用于各个顶点，把该顶点的相邻顶点和对应边收集起来。\n2. **Apply 阶段**：各个顶点利用上一阶段的 sum 值进行计算，并更新原始值。\n3. **Scatter 阶段**：利用第二阶段的计算结果，更新与该顶点相连的边的值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "PowerGraph"
+              ],
+              "lineStart": 4128,
+              "lineEnd": 4183,
+              "assetRefs": [
+                "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+              ],
+              "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "gas-pagerank-example",
+        "moduleId": "gas-model",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材示例：PageRank 的 GAS 伪代码",
+        "markdown": "教材用一个 PageRank 的例子演示 GAS 的写法，伪代码节选如下（变量名沿用教材）：\n\n```txt\ngather(Du, D(u,v), Dv): return Dv.rank / #outNbrs(v)\nsum(a, b): return a + b\napply(Du, acc):\n    rnew = 0.15 + 0.85 * acc\n    Du.delta = (rnew - Du.rank) / #outNbrs(u)\n    Du.rank = rnew\nscatter(Du, D(u,v), Dv):\n    if |Du.delta| > 阈值: Activate(v)\n    return Du.delta\n```\n\n其中 Gather 把每个邻居的 rank 按其出度归一化后汇总，Apply 用汇总值按系数 $0.85$ 与常数 $0.15$ 更新顶点 rank，并记下变化量 delta，Scatter 把 delta 沿边传出，在变化足够大时激活邻居。教材还指出：顶点计算会频繁调用 Gather 阶段操作，而大多数相邻顶点的值其实并不会变化，为减少计算量，PowerGraph 提供了 Cache 机制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "PowerGraph"
+              ],
+              "lineStart": 4128,
+              "lineEnd": 4183,
+              "assetRefs": [
+                "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+              ],
+              "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "gas-cache-and-activation",
+        "moduleId": "gas-model",
+        "depth": "support",
+        "kind": "note",
+        "title": "理解提示：缓存与激活怎样省下计算",
+        "markdown": "把三个阶段连成一个循环，就能看出 GAS 在哪些地方可以跳过工作。\n\n- **Scatter 决定谁进入下一轮**：只有当某个顶点的 delta 超过阈值时，才去激活它的邻居；没有被激活的顶点不必重新执行一轮 Gather—Apply—Scatter。\n- **Cache 避免重复收集**：Gather 的输入是邻居的当前值，邻居值没变时，同一顶点上一轮收集到的结果仍然有效，可以直接复用。\n\n这也解释了教材为什么专门提到 Cache：在 PageRank 这类迭代中，每轮只有一部分顶点的 rank 发生明显变化，重复收集全部邻居数据的成本远大于真正需要的计算。需要注意，激活阈值与缓存失效的判断属于实现细节，教材的伪代码只给出结构，没有给出完整参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "gas-three-phases",
+            "gas-pagerank-example"
+          ]
+        }
+      },
+      {
+        "id": "vertex-cut-motivation",
+        "moduleId": "vertex-cut",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "PowerGraph 的均衡划分目标",
+        "markdown": "PowerGraph 提出了一种均衡图划分方案，目标是在减少计算过程中通信量的同时保证负载均衡。与 Pregel 和 GraphLab 均采用的 hash 随机分配方案不同，它使用一种均衡的 $p$-路顶点切割（vertex-cut）分区方案：根据图的整体分布概率密度函数计算顶点切割的期望值，用这个期望值指导对顶点的切割，并相应修改传统的通信过程（教材图 9-12 展示了修改后的通信过程）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "PowerGraph"
+              ],
+              "lineStart": 4128,
+              "lineEnd": 4183,
+              "assetRefs": [
+                "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+              ],
+              "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "vertex-cut-formula",
+        "moduleId": "vertex-cut",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "顶点切割的期望值",
+        "markdown": "教材给出用于指导切割的期望值公式（按原书排版）：\n\n$$\n\\mathbb{E}\\left[\\left(1-\\frac{1}{p}\\right)^{\\mathbf{D}[v]}\\right]=\\frac{1}{\\mathbf{h}_{|V|}(\\alpha)}\\sum_{d=1}^{|V|-1}\\left(1-\\frac{1}{p}\\right)^{d}d^{-\\alpha}\n$$\n\n教材对它的说明是：该期望值根据图的整体分布概率密度函数计算，用来指导对顶点的切割。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "PowerGraph"
+              ],
+              "lineStart": 4128,
+              "lineEnd": 4183,
+              "assetRefs": [
+                "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+              ],
+              "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "vertex-cut-tradeoff",
+        "moduleId": "vertex-cut",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：两种划分方式的取舍",
+        "markdown": "教材没有逐项解释公式中的符号，阅读时先把握两点：这个期望值是从**整体度数分布**算出来的，而不是逐个顶点作局部判断；它被用来指导切割，以便同时压低通信量和维持均衡。\n\n从通用的顶点切割语义看（以下为模型补充，教材未展开）：顶点切割允许把被多条边共享的顶点切开、在多个分区保留副本，使边尽量与顶点留在同一分区；代价是副本之间需要同步。Pregel 的 hash 划分则把整个顶点固定在一个分区，跨分区的边会在超步之间产生消息。\n\n因此两者的分歧不在“谁更均衡”，而在**把通信代价放在哪里**：hash 划分把代价放在跨区边上，顶点切割把代价放在顶点副本的维护上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "vertex-cut-motivation",
+            "vertex-cut-formula"
+          ]
+        }
+      },
+      {
+        "id": "sync-modes",
+        "moduleId": "execution-modes",
+        "depth": "core",
+        "kind": "table",
+        "title": "PowerGraph 的三种执行版本",
+        "markdown": "PowerGraph 按同步方式不同分别实现了三种版本：\n\n| 版本 | 教材描述 | 更新何时生效 |\n|---|---|---|\n| 全局同步 | 与 Pregel 类似，超步之间设置全局同步点，用来同步对所有边以及顶点的修改 | 到达同步点后 |\n| 全局异步 | 类似 GraphLab，所有 Apply 阶段和 Scatter 阶段对边或顶点的修改立即更新到图中 | 修改后立即 |\n| 可串行化异步 | 全局异步加可串行化的结合方式 | 异步更新并受串行化约束 |\n\n教材特别指出：全局异步会使得算法设计和调试变得很复杂，对某些算法效率可能比全局同步还差，因此才有全局异步加可串行化结合的方式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "PowerGraph"
+              ],
+              "lineStart": 4128,
+              "lineEnd": 4183,
+              "assetRefs": [
+                "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+              ],
+              "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "sync-choice",
+        "moduleId": "execution-modes",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：三种同步方式的取舍规则",
+        "markdown": "教材给出的是三者的行为差异，没有给出统一的性能排序。据此可以整理出选择规则：\n\n- **看重可复现和便于调试**：选全局同步。超步边界清楚，出了问题容易定位到某一轮。\n- **看重更新尽快生效、能承担实现复杂度**：选全局异步，但要准备承担调试困难，以及个别算法反而变慢的代价。\n- **两者都想要**：选可串行化异步，用串行化约束换取异步的语义可控。\n\n所以遇到“异步一定更快”的说法应保持怀疑：教材明确写了全局异步对某些算法效率可能比全局同步还差。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pregel-limits",
+            "sync-modes"
+          ]
+        }
+      },
+      {
+        "id": "fault-tolerance",
+        "moduleId": "execution-modes",
+        "depth": "core",
+        "kind": "note",
+        "title": "差错控制：Chandy-Lamport 快照",
+        "markdown": "在差错控制上，PowerGraph 依靠 checkpoint 的实现，采用 GraphLab 中使用的 Chandy-Lamport 快照算法。教材在正文中没有进一步展开该快照算法的步骤或参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "PowerGraph"
+              ],
+              "lineStart": 4128,
+              "lineEnd": 4183,
+              "assetRefs": [
+                "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+              ],
+              "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "checkpoint-caveat",
+        "moduleId": "execution-modes",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "模型补充：不要把“采用快照”读成“问题已解决”",
+        "markdown": "把这一处与 9.7.1 的第 2 条不足对照，需要区分两件事：\n\n- 教材在不足部分提出的**目标**是只重算故障 worker 的 partition，甚至直接恢复到故障发生前一超步 $S$；\n- 教材在 PowerGraph 部分只说明它**采用** Chandy-Lamport 快照算法做差错控制。\n\n教材没有声明该算法已经达到前一个目标，阅读时不应把两者直接等同。这类“提出问题”与“给出部分手段”之间的落差，正是评价一个改进模型时需要核实的证据边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pregel-limits",
+            "fault-tolerance"
+          ]
+        }
+      },
+      {
+        "id": "chapter-summary",
+        "moduleId": "review-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材本章小结对 PowerGraph 的定位",
+        "markdown": "本章小结把 PowerGraph 定位为“一种对 Pregel 改进的图计算框架”，并回顾了本章线索：先介绍图计算中的问题与处理图计算的两种软件，接着比较 Pregel 和 MapReduce 在 PageRank 算法中的实现以说明 Pregel 的优势，然后重点讲解 Pregel 图计算模型及其 C++ API、执行过程和算法实现，最后介绍 PowerGraph。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000305"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 4184,
+              "lineEnd": 4187,
+              "assetRefs": [],
+              "excerptSha256": "2eddc2f1a8984199402e0a5f95b0597d3661c633583b848f12b0438927559676"
+            }
+          ]
+        }
+      },
+      {
+        "id": "references",
+        "moduleId": "review-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "延伸阅读",
+        "markdown": "教材的参考文献列出了本节相关材料的出处，包括：Pregel 大规模图处理系统的中文资料；PowerGraph 的 OSDI'12 论文《PowerGraph: Distributed Graph-Parallel Computation on Natural Graphs》；PageRank 算法在 Pregel 和 MapReduce 两种计算模型中的思路；以及图分析相关的文章。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000306"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 4188,
+              "lineEnd": 4199,
+              "assetRefs": [],
+              "excerptSha256": "a068c661435bbde5201fbe99b813368ac27bd343484a181bc0d097af73b73735"
+            }
+          ]
+        }
+      },
+      {
+        "id": "transfer-check",
+        "moduleId": "review-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：把症状对应到设计与证据",
+        "markdown": "**情境**：某团队的图分析作业在 Pregel 上运行。监控显示两个现象：超步之间的跨机消息量很大；少数 worker 总是先算完，然后在同步点空等。\n\n**任务**：这两个现象分别对应 9.7.1 的哪一条不足？PowerGraph 的哪些设计分别针对它们？教材是否宣称这些问题已被完全解决？\n\n**参考思路**：\n\n- 消息量大主要对应第 1 条：hash 划分不考虑连通特性，边容易跨分区。PowerGraph 的均衡顶点切割按整体度数分布指导切分，目标是在保持负载均衡的同时减少通信，属于针对这一条的设计。\n- 同步等待对应第 3 条：BSP 的整体同步让快 worker 等慢 worker。PowerGraph 提供全局异步与可串行化异步版本，让修改立即生效，属于针对这一条的设计。\n- 证据边界：教材没有承诺这些设计能完全消除开销；选择异步还要承担调试复杂度，个别算法甚至可能比全局同步更慢。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pregel-limits",
+            "vertex-cut-motivation",
+            "sync-modes",
+            "chapter-summary",
+            "references"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "model-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "transfer-check",
+        "moduleId": "review-transfer",
+        "depth": "core",
+        "title": "不足与改进方案配对",
+        "outcomeRefs": [
+          "explain-pregel-limits",
+          "evaluate-model-choice"
+        ],
+        "learningPurpose": "检查学习者能否把 Pregel 的具体不足与 PowerGraph 的对应设计配对，而不是笼统记住“PowerGraph 更好”。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "pregel-limits",
+            "vertex-cut-motivation",
+            "sync-modes"
+          ]
+        },
+        "config": {
+          "prompt": "把左侧不足与右侧设计配对：hash 划分导致跨区消息多、BSP 让快 worker 空等、checkpoint 回滚要重复计算。可选设计：GAS 与缓存、均衡顶点切割、异步执行、Chandy-Lamport 快照。",
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请把“hash 划分导致跨区消息多”“BSP 让快 worker 空等”“checkpoint 回滚要重复计算”分别与 GAS 与缓存、均衡顶点切割、异步执行、Chandy-Lamport 快照中的相应设计配对，并说明教材是否明确宣称该问题已被完全解决。"
+        }
+      }
+    ]
+  },
+  "subtitle": "图计算",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000302"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "改进的图计算模型"
+      ],
+      "lineStart": 4114,
+      "lineEnd": 4115,
+      "assetRefs": [],
+      "excerptSha256": "07951bdb63aad5553aa02a2cbcd0563f8f71be7a21046b3318b5af6f0827c292"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000303"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Pregel 的不足之处"
+      ],
+      "lineStart": 4116,
+      "lineEnd": 4127,
+      "assetRefs": [],
+      "excerptSha256": "b845c647f30ee680377d45075c68b6ef3b2191bec38083a7875326b456a77532"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000304"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "PowerGraph"
+      ],
+      "lineStart": 4128,
+      "lineEnd": 4183,
+      "assetRefs": [
+        "parts/part-0003/images/0c51092ec17d42fb33c218244027066881565355613b7a5879dc0e33d576f1bb.jpg"
+      ],
+      "excerptSha256": "578298a116b8efae2649cfa56c0288c030427e47a2e7b1e441460b75dabcfe62"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000305"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 4184,
+      "lineEnd": 4187,
+      "assetRefs": [],
+      "excerptSha256": "2eddc2f1a8984199402e0a5f95b0597d3661c633583b848f12b0438927559676"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000306"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 4188,
+      "lineEnd": 4199,
+      "assetRefs": [],
+      "excerptSha256": "a068c661435bbde5201fbe99b813368ac27bd343484a181bc0d097af73b73735"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2152,
+    896
+  ],
+  "scale": 1.19
+}

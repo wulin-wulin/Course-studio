@@ -1,0 +1,661 @@
+{
+  "id": "point-6-4",
+  "title": "Zookeeper 的典型应用场景",
+  "shortSummary": "列举配置管理、命名服务、分布式锁和集群管理等 Zookeeper 的典型应用场景。",
+  "keyTerms": [
+    "配置管理",
+    "命名服务",
+    "分布式锁",
+    "集群管理",
+    "队列管理"
+  ],
+  "animationType": "zookeeperEphemeralWatch",
+  "animationSuggestion": "用一棵目录树和三台 Server 演示：删除编号最小的临时节点后 watch 触发、子节点列表刷新、下一编号接替为 Master；重播时恢复到初始的三节点状态，并标出每一步的节点类型与判断条件。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-6-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "scenario-comparison-and-cases",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材五类场景的定义、节点类型与实现步骤，按比较维度重排讲解顺序，补充时间线例子、选型取舍与迁移练习。",
+      "estimatedMinutes": 17,
+      "outcomes": [
+        {
+          "id": "explain-scenario-mechanism",
+          "text": "说明统一命名服务、配置管理、集群管理、共享锁与队列管理各自创建什么节点、依赖哪种节点类型和监听机制。"
+        },
+        {
+          "id": "select-scenario-for-demand",
+          "text": "针对给定的分布式协同需求选择合适的 Zookeeper 场景，并说明取舍依据。"
+        },
+        {
+          "id": "trace-failure-handover",
+          "text": "追踪成员故障时临时节点删除、watch 通知、编号比较与主节点或持锁者接替的完整链条。"
+        }
+      ],
+      "misconceptions": [
+        "认为 Zookeeper 会主动逐台探测服务器是否存活；实际上成员状态靠客户端与服务器之间用长连接和心跳维持的 session 体现，session 失效使临时节点被删除，其他成员通过监听子节点变化间接得知。",
+        "认为选出的 Master 从此固定不变；实际上节点列表一旦变化就重新比较编号，最小编号的在线节点接替为新的 Master。",
+        "认为每种场景都要另外安装插件或独立服务；实际上它们都由同一套目录树节点、节点类型与 watch 机制组合出来，命名服务甚至只需调用现成 API。"
+      ],
+      "modules": [
+        {
+          "id": "overview-and-shared-idea",
+          "title": "本节定位与阅读路线",
+          "role": "overview",
+          "description": "把五类场景看成同一套节点与监听能力的反复组合，先建立统一的分析问题。",
+          "outcomeRefs": [
+            "explain-scenario-mechanism"
+          ],
+          "order": 0
+        },
+        {
+          "id": "naming-and-config",
+          "title": "统一命名服务与配置管理",
+          "role": "case-analysis",
+          "description": "两类只共享数据、不依赖临时节点的场景：树形命名与配置分发。",
+          "outcomeRefs": [
+            "explain-scenario-mechanism",
+            "select-scenario-for-demand"
+          ],
+          "order": 1
+        },
+        {
+          "id": "cluster-membership",
+          "title": "集群管理与动态选主",
+          "role": "case-analysis",
+          "description": "用临时节点表达成员存活，用顺序编号选出 Master。",
+          "outcomeRefs": [
+            "explain-scenario-mechanism",
+            "trace-failure-handover"
+          ],
+          "order": 2
+        },
+        {
+          "id": "shared-lock",
+          "title": "共享锁",
+          "role": "case-analysis",
+          "description": "同一套编号排队用于跨进程互斥，并与选主对照。",
+          "outcomeRefs": [
+            "explain-scenario-mechanism",
+            "trace-failure-handover"
+          ],
+          "order": 3
+        },
+        {
+          "id": "queue-management",
+          "title": "队列管理",
+          "role": "case-analysis",
+          "description": "同步队列与 FIFO 队列的判断依据与适用情境。",
+          "outcomeRefs": [
+            "explain-scenario-mechanism",
+            "select-scenario-for-demand"
+          ],
+          "order": 4
+        },
+        {
+          "id": "comparison-and-transfer",
+          "title": "统一比较与迁移",
+          "role": "synthesis",
+          "description": "用同一组维度比较五类场景，并通过情境判断把方法迁移到新需求。",
+          "outcomeRefs": [
+            "select-scenario-for-demand",
+            "trace-failure-handover"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-scenario-mechanism",
+          "select-scenario-for-demand",
+          "trace-failure-handover"
+        ],
+        "method": "完成三个情境的选型判断，并写出节点类型、监听对象与判断条件三项依据。",
+        "successCriteria": [
+          "三个情境的场景选择正确",
+          "能指出每个场景用到的节点类型与监听对象",
+          "能说明成员故障后编号最小节点接替的过程"
+        ],
+        "exerciseBlockId": "model-transfer-check",
+        "summaryBlockId": "textbook-chapter-summary",
+        "nextPointId": "point-7-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-section-overview",
+        "moduleId": "overview-and-shared-idea",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材对本节的定位",
+        "markdown": "教材以“Zookeeper 的典型应用场景”为题，把 Zookeeper 在分布式系统中的常见用途单独列为一节展开，作为理解前面数据模型与工作原理之后的应用落点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000187"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Zookeeper 的典型应用场景"
+              ],
+              "lineStart": 2297,
+              "lineEnd": 2298,
+              "assetRefs": [],
+              "excerptSha256": "06cc258a9a2e24f5af305410b22a3875fc57a3b1abe08df969dd18f1b4ef9498"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reading-roadmap",
+        "moduleId": "overview-and-shared-idea",
+        "depth": "support",
+        "kind": "note",
+        "title": "本节的阅读路线（模型补充）",
+        "markdown": "教材按统一命名服务、配置管理、集群管理、共享锁、队列管理的顺序展开这五类场景。它们看起来差异很大，但都可以用同一组问题拆解：\n\n- 创建的是普通节点、临时节点，还是临时顺序节点？\n- 谁在哪个路径上设置 watch，监听的是节点数据变化还是子节点列表变化？\n- 判断依据是节点是否存在，还是子节点列表里编号最小的是谁？\n\n带着这三个问题往下读，五种场景会收敛成一套可迁移的分析方法，而不是五段需要分别背诵的清单。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-section-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-naming-service",
+        "moduleId": "naming-and-config",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "统一命名服务",
+        "markdown": "分布式应用中通常需要一套完整的命名规则：既能够产生唯一的名称，又便于人识别和记住。教材认为树形的名称结构是理想选择，因为它是有层次的目录结构，既对人友好又不会重复。\n\nZookeeper 的命名服务（Name Service）与 JNDI 能完成的功能差不多，都是把有层次的目录结构关联到一定资源上；但 Zookeeper 的 Name Service 是更广泛意义上的关联——你可能并不需要把名称关联到特定资源，只需要一个不会重复的名称，就像数据库中产生一个唯一的数字主键。\n\nName Service 已经是 Zookeeper 的内置功能，只要调用 Zookeeper 的 API 就能实现，例如调用 create 接口就可以很容易地创建一个目录节点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000188"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "统一命名服务"
+              ],
+              "lineStart": 2299,
+              "lineEnd": 2304,
+              "assetRefs": [],
+              "excerptSha256": "f839fa775cead452114a27ce9441468024bc361507d988fa915dc5215289cf4d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-naming-service-example",
+        "moduleId": "naming-and-config",
+        "depth": "support",
+        "kind": "example",
+        "title": "例子：把服务实例登记成路径（模型补充）",
+        "markdown": "假设有三个同构的订单服务实例需要被调用方发现。与其把三台机器的地址硬编码进每个调用方的配置，不如按层次把实例登记成路径：服务一级一个目录，实例一级一个子节点。调用方只要知道服务名所在的路径，就能列出当前可用的实例；新增或下线实例时，改动落在目录树上，而不是散落在每个调用方的配置里。\n\n这里正好用上教材强调的两点：路径天然保证唯一，层次结构又让人一眼看懂归属关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-naming-service"
+          ]
+        }
+      },
+      {
+        "id": "textbook-config-management",
+        "moduleId": "naming-and-config",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "配置管理",
+        "markdown": "配置管理在分布式应用环境中很常见。例如同一个应用系统需要多台 PC 服务器运行，而它们某些配置项是相同的；要修改这些相同的配置项，就必须同时修改每台运行该应用的服务器，这样非常麻烦，而且容易出错。\n\n像这样的配置信息完全可以交给 Zookeeper 管理：把配置信息保存在 Zookeeper 的某个目录节点中，让所有需要修改的应用机器监控该配置信息的状态；一旦配置信息发生变化，每台应用机器都会收到 Zookeeper 的通知，然后从 Zookeeper 获取新的配置信息并应用到系统中（对应教材图 6-8 配置管理结构图）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000189"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "配置管理"
+              ],
+              "lineStart": 2305,
+              "lineEnd": 2313,
+              "assetRefs": [
+                "parts/part-0002/images/d05ecc24d3b3b2e269cfb26dc6d01b96877b7f2cd9967877ae16ea8699e9190a.jpg"
+              ],
+              "excerptSha256": "c92d21feb41dcaeb746b71b239e1ad076aecf0f933d4775cccb730887bb87369"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-config-change-flow",
+        "moduleId": "naming-and-config",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "一次配置变更的完整流程（模型补充）",
+        "markdown": "把教材的描述展开成可以照着做的顺序：\n\n1. 运维人员把新版配置写入约定的配置节点。\n2. 该节点的数据发生变化，触发各应用机器事先设置的 watch。\n3. 每台应用机器收到通知，重新从 Zookeeper 读取配置。\n4. 应用让新配置生效，一次变更在全集群范围内完成。\n\n有两个容易忽略的点。第一，机器数量增加不会增加人工操作次数，这正是把它交给 Zookeeper 的收益。第二，通知只告诉应用“配置变了”，具体值仍要重新读取，因此应用侧的读取逻辑必须能处理配置被整体替换的情况。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-config-management"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cluster-management",
+        "moduleId": "cluster-membership",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "集群管理与 Leader Election",
+        "markdown": "多台 Server 组成服务集群时，必须有一个“总管”知道当前集群中每台机器的服务状态：一旦有机器不能提供服务，集群中其他机器必须知道，从而做出调整、重新分配服务策略；增加服务能力时新增的 Server 也同样必须让“总管”知道。\n\nZookeeper 不仅能维护集群中机器的服务状态，还能选出一个“总管”来管理集群，这就是 Leader Election。两者的实现方式都是在 Zookeeper 上创建 EPHEMERAL 类型的目录节点：每台 Server 在父目录节点上调用 `getChildren(String path, boolean watch)` 并把 watch 设为 true。由于是 EPHEMERAL 目录节点，创建它的 Server 死去后该节点也随之被删除，Children 就会变化，getChildren 上的 Watch 被调用，其他 Server 由此知道某台 Server 已经退出；新增 Server 也是同样的原理。\n\nLeader Election 在此基础上把节点改成 EPHEMERAL_SEQUENTIAL：每台 Server 创建带顺序编号的临时节点，选择当前编号最小的 Server 作为 Master；最小编号的 Server 死去后它对应的节点被删除，节点列表里出现新的最小编号节点，就选这个节点作为当前 Master。这样就实现了动态选择 Master，避免了传统单 Master 容易出现的单点故障问题（对应教材图 6-9 集群管理结构图）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000190"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "集群管理"
+              ],
+              "lineStart": 2314,
+              "lineEnd": 2326,
+              "assetRefs": [
+                "parts/part-0002/images/a907a73d0c599e5b09ba3a5cb69895a0e5bec40210afc2834e878933ef9404c9.jpg"
+              ],
+              "excerptSha256": "0954232af5f8bd01094868492ac4db5c3cd831525d99b5a7b854bac935ab22b9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-membership-timeline",
+        "moduleId": "cluster-membership",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "成员出入的时间线（模型补充）",
+        "markdown": "用一个具体时间线看这套机制：\n\n1. 三台 Server 启动，各自在父节点下创建带编号的临时节点，子节点列表为 001、002、003。\n2. 三台 Server 都在父节点上设置了 watch，等待子节点列表变化。\n3. 编号 001 的 Server 宕机，它与 Zookeeper 的连接断开。\n4. 它的临时节点被删除，子节点列表变为 002、003，watch 被触发，存活的两台收到通知。\n5. 重新判断编号后，002 对应的 Server 成为新的 Master。\n\n可以看到，成员“是否存活”被压缩成了“节点是否存在”这一件事：故障发现与主节点接替走的是同一条链路，不需要再另设一套健康检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cluster-management"
+          ]
+        }
+      },
+      {
+        "id": "textbook-shared-lock",
+        "moduleId": "shared-lock",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "共享锁",
+        "markdown": "共享锁在同一个进程中很容易实现，但在跨进程或者不同 Server 之间就不好实现，Zookeeper 却很容易实现这个功能。\n\n实现方式是：需要获得锁的 Server 创建一个 EPHEMERAL_SEQUENTIAL 目录节点，然后调用 getChildren 方法获取当前的目录节点列表，判断其中最小的目录节点是不是自己创建的。如果正是自己创建的，那么它就获得了这个锁；如果不是，就调用 `exists(String path, boolean watch)` 方法并监控目录节点列表的变化，一直等到自己创建的节点成为列表中最小编号的目录节点，从而获得锁。释放锁很简单，只要删除前面它自己所创建的那个目录节点即可（对应教材图 6-10 Zookeeper 实现 Locks 的流程图）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000191"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "共享锁"
+              ],
+              "lineStart": 2327,
+              "lineEnd": 2333,
+              "assetRefs": [
+                "parts/part-0002/images/498357f5d7a43264ecb53a22c650499211e2a2554d7f678d6e9f323bdeeef0f8.jpg"
+              ],
+              "excerptSha256": "f233eb0710473e0bbfc6c59197e3e49ac4066166810cfa504ab9ce93de6172f0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-election-vs-lock",
+        "moduleId": "shared-lock",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "选主与加锁：同一种排队，不同目标（模型补充）",
+        "markdown": "集群管理和共享锁用的是同一套手法：都创建带编号的节点，都比较“谁是最小编号”。差别在于目标不同：\n\n- 集群管理要的是全集群唯一的 Master，编号最小者当选，其余机器只需要知道结果。\n- 共享锁要的是同一时刻只有一个持有者，编号最小者持锁，其余请求者排队等待，释放时删除节点让队列前进。\n\n由此可以提炼出一条迁移规则：需要“唯一角色”时看最小编号归谁；需要“互斥资源”时让持锁者删除自己的节点交棒。教材描述的等待方式是持续监控目录节点列表直到自己成为最小编号；在实际实现中，一种常见优化是只关注排在自己前面的那个节点，减少无效唤醒，这是对教材做法的工程改进，并不改变“编号最小者持锁”的语义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-shared-lock",
+            "textbook-cluster-management"
+          ]
+        }
+      },
+      {
+        "id": "textbook-queue-management",
+        "moduleId": "queue-management",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "队列管理",
+        "markdown": "Zookeeper 可以处理两种类型的队列：\n\n- 同步队列：当一个队列的成员都聚齐时这个队列才可用，否则一直等待所有成员到达。\n- FIFO 队列：队列按先进先出方式进行入队和出队操作，例如实现生产者和消费者模型。\n\n同步队列的实现思路是：创建一个父目录 `/synchronizing`，每个成员都监控标志目录 `/synchronizing/start` 是否存在，然后各自加入这个队列——加入方式就是创建 `/synchronizing/member_i` 这样的临时目录节点；接着每个成员获取 `/synchronizing` 目录下的所有子节点，也就是 member_i，判断 i 的值是否已经是成员的个数：如果小于成员个数，就等待 `/synchronizing/start` 的出现；如果已经相等，就创建 `/synchronizing/start`（对应教材图 6-11 同步队列流程图）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000192"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "队列管理"
+              ],
+              "lineStart": 2334,
+              "lineEnd": 2350,
+              "assetRefs": [
+                "parts/part-0002/images/3671202d66edd738399ab377b13c029b8efa53d4186f9175e74cdf7206fae0ee.jpg"
+              ],
+              "excerptSha256": "f7af85491a56e7271e1f98f80f743089809b8ee9f67ec8af23a713272ea7d6c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-queue-selection",
+        "moduleId": "queue-management",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "两种队列怎么选（模型补充）",
+        "markdown": "用两个情境区分它们：\n\n- 十个并行任务要等全部准备完毕再同时开跑，缺一个都不行——这是同步队列，判断依据是成员节点是否已经凑齐。\n- 任务陆续到达，由空闲的消费者按到达顺序取走处理——这是 FIFO 队列，判断依据是队列头部先入队的节点。\n\n教材给出的同步队列实现要拿 i 与成员个数作比较，因此它更适合成员规模事先已知的批量场景；如果成员是随机加入的长期运行系统，就需要另外确定“够多少人开始”的判定标准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-queue-management"
+          ]
+        }
+      },
+      {
+        "id": "textbook-chapter-summary",
+        "moduleId": "comparison-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材本章小结",
+        "markdown": "Zookeeper 作为 Hadoop 项目中的一个子项目，是 Hadoop 集群管理的一个必不可少的模块，它主要用来控制集群中的数据，比如使用它来管理 Hadoop 集群中的 NameNode，还有 HBase 中 Master Election、Server 之间状态同步等。\n\n教材强调，本章介绍的都是 Zookeeper 的基本功能，最重要的是它提供了一套很好的分布式集群管理机制：基于层次型的目录树数据结构，并对树中的节点进行有效管理，从而可以设计出多种多样的分布式数据管理模型，而不仅仅局限于上面提到的几个常用应用场景。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000193"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 2351,
+              "lineEnd": 2356,
+              "assetRefs": [],
+              "excerptSha256": "427de4e035b717e2bd9960831470c2237ef9ee5a705282732f719d59056763cb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scenario-comparison-table",
+        "moduleId": "comparison-and-transfer",
+        "depth": "core",
+        "kind": "table",
+        "title": "五类场景的统一比较（模型补充）",
+        "markdown": "| 场景 | 关键节点类型 | 依赖的操作与监听 | 判断依据 |\n|---|---|---|---|\n| 统一命名服务 | 普通目录节点 | 调用 create 等 API 创建节点 | 路径唯一、层次清晰 |\n| 配置管理 | 保存配置数据的节点 | 应用机器监控配置节点的数据变化 | 数据是否被修改 |\n| 集群管理 | EPHEMERAL、EPHEMERAL_SEQUENTIAL | 在父节点上 getChildren 并设置 watch | 子节点列表变化，编号最小者为主 |\n| 共享锁 | EPHEMERAL_SEQUENTIAL | getChildren 判断最小，再用 exists 加 watch | 自己是否是最小编号 |\n| 队列管理 | 临时成员节点与标志节点 | 监控 `/synchronizing/start` 是否存在 | 成员是否聚齐、入队先后 |\n\n放到一起看，命名服务与配置管理只用到最普通的节点数据；集群管理、共享锁与队列管理则依赖临时节点随 session 失效而删除这一性质。选择场景时先判断需求是“共享一份数据”还是“感知成员状态”，再决定要不要用临时节点和顺序编号。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-naming-service",
+            "textbook-config-management",
+            "textbook-cluster-management",
+            "textbook-shared-lock",
+            "textbook-queue-management",
+            "textbook-chapter-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "comparison-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：三个情境判断（模型补充）",
+        "markdown": "判断下列需求最适合用哪类场景，并写出依据：\n\n1. 一套线上服务有 20 台机器，运营要一次性推送新的超时时间，并希望所有机器最终都应用到新值。\n2. 一个定时任务在同一时刻只能有一个实例运行，任务结束后下一个实例才能开始。\n3. 三个数据分片都完成加载之后，才允许开始联合查询。\n\n参考答案：第 1 题用配置管理，把超时时间写入配置节点并让各机器监听其变化；第 2 题用共享锁，各实例创建 EPHEMERAL_SEQUENTIAL 节点争抢最小编号，结束后删除自己的节点交棒；第 3 题用同步队列，等成员节点凑齐后创建启动标志。如果每道题你都答出了“节点类型 + 监听对象 + 判断条件”这三项，说明已经掌握本节的迁移方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-scenario-comparison-table"
+          ]
+        }
+      },
+      {
+        "id": "model-next-chapter-bridge",
+        "moduleId": "comparison-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "下一章会再用到这些模式（模型补充）",
+        "markdown": "教材小结已经点明，HBase 中的 Master Election 与 Server 之间的状态同步都依赖 Zookeeper。下一章进入 HBase 时，可以把本节的两个问题带过去：现在编号最小的节点是谁，谁在监听子节点列表的变化。这样分布式协调服务与分布式数据库就不再是两块孤立的知识。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-chapter-summary"
+          ]
+        }
+      },
+      {
+        "id": "textbook-references",
+        "moduleId": "comparison-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材给出的参考文献",
+        "markdown": "教材在本节末尾列出两条进一步阅读的线索：一篇介绍分布式服务框架 Zookeeper、管理分布式环境中数据的文章，以及一篇讨论 Zookeeper 与 Paxos 算法的文章。需要追根溯源时，可以顺着这两条线索核对本节描述的机制在更广泛资料中的定位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000194"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 2357,
+              "lineEnd": 2362,
+              "assetRefs": [],
+              "excerptSha256": "25e7697ae9f9e32e6e2d4c8939d326ea107365156cb31a8f55549796298fb0c4"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "scenario-match-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-transfer-check",
+        "moduleId": "comparison-and-transfer",
+        "depth": "core",
+        "title": "场景与判断条件配对练习",
+        "outcomeRefs": [
+          "select-scenario-for-demand",
+          "explain-scenario-mechanism"
+        ],
+        "learningPurpose": "检查学习者能否把五类场景与其节点类型、监听对象和判断条件正确配对，而不是只记住场景名称。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-scenario-comparison-table"
+          ]
+        },
+        "config": {
+          "format": "matching",
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请为五类场景分别写出：创建什么节点、监听什么变化、用什么条件判断成功，然后与正文中的比较表核对。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Zookeeper",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000187"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Zookeeper 的典型应用场景"
+      ],
+      "lineStart": 2297,
+      "lineEnd": 2298,
+      "assetRefs": [],
+      "excerptSha256": "06cc258a9a2e24f5af305410b22a3875fc57a3b1abe08df969dd18f1b4ef9498"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000188"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "统一命名服务"
+      ],
+      "lineStart": 2299,
+      "lineEnd": 2304,
+      "assetRefs": [],
+      "excerptSha256": "f839fa775cead452114a27ce9441468024bc361507d988fa915dc5215289cf4d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000189"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "配置管理"
+      ],
+      "lineStart": 2305,
+      "lineEnd": 2313,
+      "assetRefs": [
+        "parts/part-0002/images/d05ecc24d3b3b2e269cfb26dc6d01b96877b7f2cd9967877ae16ea8699e9190a.jpg"
+      ],
+      "excerptSha256": "c92d21feb41dcaeb746b71b239e1ad076aecf0f933d4775cccb730887bb87369"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000190"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "集群管理"
+      ],
+      "lineStart": 2314,
+      "lineEnd": 2326,
+      "assetRefs": [
+        "parts/part-0002/images/a907a73d0c599e5b09ba3a5cb69895a0e5bec40210afc2834e878933ef9404c9.jpg"
+      ],
+      "excerptSha256": "0954232af5f8bd01094868492ac4db5c3cd831525d99b5a7b854bac935ab22b9"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000191"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "共享锁"
+      ],
+      "lineStart": 2327,
+      "lineEnd": 2333,
+      "assetRefs": [
+        "parts/part-0002/images/498357f5d7a43264ecb53a22c650499211e2a2554d7f678d6e9f323bdeeef0f8.jpg"
+      ],
+      "excerptSha256": "f233eb0710473e0bbfc6c59197e3e49ac4066166810cfa504ab9ce93de6172f0"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000192"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "队列管理"
+      ],
+      "lineStart": 2334,
+      "lineEnd": 2350,
+      "assetRefs": [
+        "parts/part-0002/images/3671202d66edd738399ab377b13c029b8efa53d4186f9175e74cdf7206fae0ee.jpg"
+      ],
+      "excerptSha256": "f7af85491a56e7271e1f98f80f743089809b8ee9f67ec8af23a713272ea7d6c6"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000193"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 2351,
+      "lineEnd": 2356,
+      "assetRefs": [],
+      "excerptSha256": "427de4e035b717e2bd9960831470c2237ef9ee5a705282732f719d59056763cb"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000194"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 2357,
+      "lineEnd": 2362,
+      "assetRefs": [],
+      "excerptSha256": "25e7697ae9f9e32e6e2d4c8939d326ea107365156cb31a8f55549796298fb0c4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1805,
+    1818
+  ],
+  "scale": 0.94
+}

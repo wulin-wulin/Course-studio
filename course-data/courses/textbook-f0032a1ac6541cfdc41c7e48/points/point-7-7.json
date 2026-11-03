@@ -1,0 +1,851 @@
+{
+  "id": "point-7-7",
+  "title": "HBase 系统架构",
+  "shortSummary": "描述 HBase 主节点、区域服务器和协调组件之间的分工与协作关系。",
+  "keyTerms": [
+    "系统架构",
+    "区域服务器",
+    "主节点"
+  ],
+  "animationType": "regionServerMembership",
+  "animationSuggestion": "按时间步演示 HRegionServer 注册、持锁、失联、锁释放、HRegion 迁移的完整状态链，并用文字标注每一步由哪个组件触发。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-7-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "architecture-roles-and-lifecycle-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 Client、Zookeeper、HMaster、HRegionServer、HStore 的职责划分与上下线流程，按“角色—信息路径—数据路径—生命周期—故障边界”重排讲解顺序，补充对照表与判断清单，不改变教材事实和版本背景。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "o-roles",
+          "text": "说明 Client、Zookeeper、HMaster、HRegionServer、HStore 各自的职责。"
+        },
+        {
+          "id": "o-rpc",
+          "text": "区分管理类请求与数据读写请求各自经过的组件。"
+        },
+        {
+          "id": "o-lifecycle",
+          "text": "描述 HRegion 分配、HRegionServer 上下线与 HMaster 上线的关键步骤。"
+        },
+        {
+          "id": "o-failure",
+          "text": "判断某个组件下线时 HBase 哪些能力受影响、哪些仍可正常进行。"
+        }
+      ],
+      "misconceptions": [
+        "认为所有客户端请求都要经过 HMaster，因而把 HMaster 当成数据读写的必经瓶颈。",
+        "认为 HMaster 一旦下线整个 HBase 集群立刻不可用，忽略了数据读写仍可进行。",
+        "把 HRegionServer 与 Zookeeper 的短暂断网直接等同于服务器宕机，忽略了重连后重新取锁继续服务的可能。"
+      ],
+      "modules": [
+        {
+          "id": "m-role-map",
+          "title": "架构总览与角色分层",
+          "role": "orientation",
+          "description": "先看清图 7-9 中的组件，并按协调层、管理面、数据面建立整体印象。",
+          "outcomeRefs": [
+            "o-roles"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-client-coordination",
+          "title": "客户端与协调层",
+          "role": "role-walkthrough",
+          "description": "说明 Client 的两类 RPC 以及 Zookeeper 承担的公共信息与成员状态职责。",
+          "outcomeRefs": [
+            "o-roles",
+            "o-rpc"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-master",
+          "title": "HMaster 的职责与边界",
+          "role": "role-walkthrough",
+          "description": "梳理 HMaster 的管理工作、长连接后果以及它与 BigTable 主服务器设计的差异。",
+          "outcomeRefs": [
+            "o-roles",
+            "o-rpc"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-regionserver-store",
+          "title": "数据面：HRegionServer 与 HStore",
+          "role": "mechanism",
+          "description": "沿写入与读取两条路径，说明 HRegion、HStore、HMemStore、HStoreFile 与 HLog 的配合。",
+          "outcomeRefs": [
+            "o-roles",
+            "o-rpc"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-lifecycle",
+          "title": "分配与上下线流程",
+          "role": "procedure",
+          "description": "按时间顺序说明 HRegion 分配、HRegionServer 上下线和 HMaster 上线的步骤与分支。",
+          "outcomeRefs": [
+            "o-lifecycle"
+          ],
+          "order": 4
+        },
+        {
+          "id": "m-failure-boundary",
+          "title": "故障边界与判断清单",
+          "role": "transfer-check",
+          "description": "对照各组件失联后的后果，形成可操作的判断清单并衔接到存储格式。",
+          "outcomeRefs": [
+            "o-failure",
+            "o-lifecycle"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-roles",
+          "o-rpc",
+          "o-lifecycle",
+          "o-failure"
+        ],
+        "method": "完成故障判断练习：给出一次组件下线场景，写出仍可进行的操作及其依据。",
+        "successCriteria": [
+          "能正确区分管理类与数据读写类请求的通信对象",
+          "能按步骤复述 HRegionServer 下线后的处理过程",
+          "能依据组件职责说明故障后哪些元数据操作被冻结"
+        ],
+        "nextPointId": "point-7-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-architecture-overview",
+        "moduleId": "m-role-map",
+        "depth": "core",
+        "kind": "figure",
+        "title": "教材中的系统架构图（图 7-9）",
+        "markdown": "教材用图 7-9 给出 HBase 的系统架构，并围绕该图分别介绍 Client、Zookeeper、HMaster、HRegionServer、HStore，以及 HRegion 分配、HRegionServer 上线与下线、HMaster 上线与下线。\n\n理解这套架构的关键不只是记住有哪几个组件，而是看清每个组件承接哪一类工作：谁面向客户端，谁保存集群公共信息，谁做管理决策，谁真正读写数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000225"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HBase 系统架构"
+              ],
+              "lineStart": 2837,
+              "lineEnd": 2843,
+              "assetRefs": [
+                "parts/part-0002/images/e700972c56fd8b6783534a34817205de72b5d5fa087c485ec8b81b3163193312.jpg"
+              ],
+              "excerptSha256": "310ef88be37b5886a27278a34eb32ac905cd44e237910c3d8d6177dfdd97d66f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-role-map-insight",
+        "moduleId": "m-role-map",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：按三层读架构图",
+        "markdown": "可以先把组件分成三层来读这张图：\n\n- 接入层：Client 面向应用，并缓存 HRegion 的位置信息；\n- 协调层：Zookeeper 保存集群公共信息和成员状态；\n- 数据层：HRegionServer 管理 HRegion 并向 HDFS 读写，HStore 是它内部的存储单元。\n\nHMaster 的位置比较特殊：它属于管理面，负责表和 HRegion 的分配决策，但不承载数据读写流量。先建立这个分层印象，后面每个组件的职责都能挂到对应位置上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-architecture-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-client",
+        "moduleId": "m-client-coordination",
+        "depth": "core",
+        "kind": "definition",
+        "title": "Client 的接口与两类 RPC",
+        "markdown": "Client 包含访问 HBase 的接口，并维护一些缓存来加快对 HBase 的访问，例如 HRegion 的位置信息。\n\nHBase Client 使用 HBase 的 RPC 机制与 HMaster 和 HRegionServer 通信：对于管理类操作，Client 与 HMaster 进行 RPC；对于数据读写类操作，Client 与 HRegionServer 进行 RPC。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000226"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Client"
+              ],
+              "lineStart": 2844,
+              "lineEnd": 2849,
+              "assetRefs": [],
+              "excerptSha256": "75bb6bbde7a45672747705866ae958bca48759fd11364b1b9f877a398b83ffaa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-client-rpc",
+        "moduleId": "m-client-coordination",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：把两类 RPC 分开记",
+        "markdown": "把两类 RPC 分成两条线路来记：管理类操作走 HMaster，数据读写类操作走 HRegionServer。\n\n这也解释了 Client 为什么值得缓存 HRegion 的位置信息：数据请求必须送到持有该 HRegion 的那台服务器，缓存命中就能跳过重新定位的开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-client"
+          ]
+        }
+      },
+      {
+        "id": "tb-zookeeper",
+        "moduleId": "m-client-coordination",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "Zookeeper 保存的信息与四项作用",
+        "markdown": "Zookeeper 中存储着 `-ROOT-` 表的地址和 HMaster 的地址；HRegionServer 也会把自己以“Ephemeral”方式注册到 Zookeeper 中，使得 HMaster 可以随时感知各个 HRegionServer 的健康状态。此外，Zookeeper 也避免了 HMaster 的单点问题。\n\n教材把 Zookeeper 的作用总结为四条：\n\n- 保证任何时候，集群中只有一个 HMaster；\n- 存储所有 HRegion 的寻址入口；\n- 实时监控 HRegionServer 的状态，将 HRegionServer 的上线和下线信息实时通知给 HMaster；\n- 存储 HBase 的 schema，包括有哪些表，每个表有哪些列族。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000227"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Zookeeper"
+              ],
+              "lineStart": 2850,
+              "lineEnd": 2861,
+              "assetRefs": [],
+              "excerptSha256": "fee2d962cdc242717c1385fbc9d61dc66fff3b9676f9756de0ffdd98a5c47b59"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-zookeeper-duties",
+        "moduleId": "m-client-coordination",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：四条作用归成三类",
+        "markdown": "这四条作用可以归成三类，便于记忆：\n\n- 目录服务：`-ROOT-` 表地址、HMaster 地址、HRegion 寻址入口和 schema，回答“去哪里找”的问题；\n- 成员与健康监控：Ephemeral 注册让 HMaster 不必自己逐个探测服务器就能得知上下线；\n- 选主仲裁：保证同一时刻只有一个 HMaster 在服务，从而消除 HMaster 的单点。\n\n后面 HRegionServer 上线、下线与 HMaster 上线的流程，本质上都是围绕这三类作用展开的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-zookeeper"
+          ]
+        }
+      },
+      {
+        "id": "tb-master",
+        "moduleId": "m-master",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "HMaster 的管理工作与长连接",
+        "markdown": "HMaster 没有单点问题：HBase 中可以启动多个 HMaster，通过 Zookeeper 的 MasterElection 机制保证总有一个 HMaster 运行。HMaster 在功能上主要负责表和 HRegion 的管理工作：\n\n- 管理用户对表的增、删、改、查操作；\n- 管理 HRegionServer 的负载均衡，调整 HRegion 分布；\n- 在 HRegion 分裂后，负责新 HRegion 的分配；\n- 在 HRegionServer 停机后，负责失效 HRegionServer 上的 HRegion 的迁移。\n\n每个 HRegionServer 都会和 HMaster 服务器通讯，HMaster 的主要任务就是要告诉每个 HRegionServer 它要维护哪些 HRegion。HMaster 会和每个 HRegionServer 保持一个长连接，如果这个连接超时或者断开，会导致两种后果：HRegionServer 自动重启；HMaster 认为该 HRegion 已经死机，同时把它负责的 HRegion 分配到其他 HRegionServer。\n\n教材特别对比了 Google 的 BigTable：BigTable 的 TabletServer 和主服务器通讯中断时仍能提供服务，而 HBase 不能这么做。原因是 HBase 没有 BigTable 那样额外的加锁系统——BigTable 由主服务器管理 TabletServer，同时由加锁服务器提供数据访问，而 HBase 只有唯一一个接入点，就是 HMaster 服务器。\n\n当一个新的 HRegionServer 登录到 HMaster 时，HMaster 会告诉它先等待分配数据；当某个 HRegion 死机时，HMaster 会把它负责的 HRegion 标记为未分配，然后把它们分配到其他 HRegionServer。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000228"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HMaster"
+              ],
+              "lineStart": 2862,
+              "lineEnd": 2885,
+              "assetRefs": [],
+              "excerptSha256": "bf1a22dda113ab2666d3d056fdfd4df56423e68bc2bcdf318d8e5e4458d51cef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-master-boundary",
+        "moduleId": "m-master",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：HMaster 的能力边界",
+        "markdown": "读这一节要抓住 HMaster 的能力边界：它的职责集中在元数据和分配决策上，数据读写并不经过它。由此可以推出三点：\n\n- 长连接的价值，是让 HMaster 掌握“谁在服务、服务哪些 HRegion”；连接断开意味着分配关系不再可信，因此要重启或迁移；\n- “唯一接入点”是 HBase 与 BigTable 的关键差异：HBase 没有独立的加锁系统，HMaster 一侧的判定就直接决定相关 HRegion 能否继续服务；\n- 多个 HMaster 并存的设计，把单点风险交给 Zookeeper 的选主，而不是依赖人工切换。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-master",
+            "model-zookeeper-duties"
+          ]
+        }
+      },
+      {
+        "id": "tb-regionserver-role",
+        "moduleId": "m-regionserver-store",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "HRegionServer 的位置与表的物理切分",
+        "markdown": "HRegionServer 主要负责响应用户 I/O 请求，向 HDFS 文件系统中读写数据，是 HBase 中最核心的模块（图 7-10）。\n\nHRegionServer 内部管理了一系列 HRegion 对象，HRegion 由多个 HStore 组成，每个 HStore 对应表中的一个列族的存储。可以看出，每个列族其实就是一个集中的存储单元，因此最好将具备共同 I/O 特性的列放在一个列族中，这样最高效。\n\nClient 访问 HBase 上数据的过程并不需要 HMaster 参与：寻址访问 Zookeeper 和 HRegionServer，数据读写访问 HRegionServer；HMaster 仅仅维护着表和 HRegion 的元数据信息，负载很低。\n\n对于用户来说，每个表是一堆数据的集合，靠主键来区分。物理上，一张表被拆分成多个块，每一块就称为一个 HRegion，用“表名 + 开始/结束主键”来区分；一个 HRegion 保存表里面某段连续的数据，一张完整的表被分开保存在多个 HRegion 上。\n\n所有 HBase 数据一般保存在 HDFS 上，用户通过一系列 HRegionServer 获取这些数据；一般而言一台机器上运行一个 HRegionServer，而每一个 HRegion 只会被一个 HRegionServer 维护。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000229"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HRegionServer"
+              ],
+              "lineStart": 2886,
+              "lineEnd": 2945,
+              "assetRefs": [
+                "parts/part-0002/images/0e01cf859be615522dfc8eb05131cf7b50a81b5af373483bf4c8c9654545de1f.jpg",
+                "parts/part-0002/images/7f238636e634d55fafd7bc34411db5fced09420909a3131a6c39d8285d60cea8.jpg"
+              ],
+              "excerptSha256": "69fbaddb6a0c757781d908bc6b35f307e12ab2a0d116f23647eb51d36b1293e3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-region-placement",
+        "moduleId": "m-regionserver-store",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：表、HRegion 与服务器的一对一约束",
+        "markdown": "把三层关系连起来看：表靠主键被切成若干 HRegion，HRegion 由 HRegionServer 管理，并且同一时刻只被一个 HRegionServer 维护。\n\n这条唯一性约束正是客户端需要寻址的前提：既然某段连续数据只落在某一台服务器上，Client 就必须先知道目标 HRegion 在谁手里，然后才能把读写请求直接送过去；这也让 Client 的位置缓存变得有意义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-regionserver-role",
+            "tb-client"
+          ]
+        }
+      },
+      {
+        "id": "tb-regionserver-io",
+        "moduleId": "m-regionserver-store",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "更新、读取与缓存刷新",
+        "markdown": "图 7-11 给出了更新和读取数据的过程。当用户需要更新数据时，他会被分配到对应的 HRegionServer 提交修改，这些修改先被写到 HMemStore 缓存和服务器的 HLog 文件里。HMemStore 是内存中的缓存，保存最近更新的数据；HLog 是磁盘上的记录文件，记录着所有的更新操作，当操作写入 HLog 之后，`commit()` 调用才会返回给客户端。\n\n当读取数据时，HRegionServer 会先访问 HMemStore 缓存，如果缓存里没有该数据，才会到 HStore 磁盘上寻找。每一个列族都会有一个 HStore，每个 HStore 包含很多 HStoreFile 具体文件，这些文件都是 B 树结构的，方便快速读取。\n\n系统会定期调用 `HRegion.flushcache()` 把 HMemStore 缓存里的内容写到文件中，一般这样会增加一个新的 HStoreFile 文件，此时高速缓存被清空，并且写入一个标记到 HLog，表示上面的内容已经被写入文件保存。\n\n在启动的时候，每个 HRegionServer 都会检查自己的 HLog 文件，看看最近一次执行 flushcache 之后有没有新的更新写入操作。如果没有更新，就表示所有数据都已经更新到文件中了；如果有更新，服务器会先把这些更新写入高速缓存，然后调用 flushcache 写入到文件，最后删除旧的 HLog 文件，并开始给用户访问数据。\n\n因此，少调用 flushcache 可以节省时间，但会增加内存占用，并且在服务器重启时延长很多时间；定期调用可以把缓存大小控制在较低水平，HLog 文件也会很快地重构，但调用 flushcache 的时候会造成系统负载瞬间增加。\n\nHLog 会被定期回滚，回滚时按照时间备份文件，并删除那些已经被写到文件中的更新；回滚 HLog 只会占用很少的时间，建议经常回滚以减小文件尺寸。\n\n每一次调用 flushcache 会生成一个新的 HStoreFile 文件，而从一个 HStore 里获取一个值都需要访问所有的 HStoreFile 文件，这样十分耗时，所以要定期用 `HStore.compact()` 把这些分散的文件合并到一个大文件里。这样的合并工作十分占用资源，当 HStoreFile 文件的数量超过一个设定值的时候才会触发。\n\n教材还提醒与 BigTable 的差别，并归结为两点：flushcache 会建立一个新的 HStoreFile 文件，并把缓存中所有需要更新的数据写到文件里，flushcache 之后 HLog 的重建次数会清零；compact 会把所有 HStoreFile 文件合并成一个大文件。和 BigTable 不同的是，HBase 每个更新如果被正确提交并且没有返回错误，就一定已经被写到记录文件里，不会造成数据丢失。\n\n两个 HRegion 可以通过调用 `HRegion.closeAndMerge()` 合并成一个新的 HRegion，当前版本这个操作需要两台 HRegion 都停机。当一个 HRegion 变得太过巨大、超过设定的阈值时，HRegionServer 会调用 `HRegion.closeAndSplit()`，这个 HRegion 会被拆分为两个，并且报告给主服务器，让它决定由哪个 HRegionServer 来存放新的 HRegion。拆分过程十分迅速，因为两个新的 HRegion 最初只是保留原来 HRegionFile 文件的引用；此时旧的 HRegion 处于停止服务的状态，当新的 HRegion 构建完成并且把引用删除了以后，旧的 HRegion 才会删除。\n\n最后教材总结四点：客户端以表的形式读取数据；一张表被划分成多个 HRegion 区域；HRegion 被 HRegionServer 管理，客户端访问某行数据时需要访问对应的 HRegionServer；HRegionServer 里有三种方式保存数据——HMemStore 高速缓存保留最新写入的数据，HLog 记录文件保留的是提交成功了但未被写入文件的数据，HStore 文件是数据的物理存放形式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000229"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HRegionServer"
+              ],
+              "lineStart": 2886,
+              "lineEnd": 2945,
+              "assetRefs": [
+                "parts/part-0002/images/0e01cf859be615522dfc8eb05131cf7b50a81b5af373483bf4c8c9654545de1f.jpg",
+                "parts/part-0002/images/7f238636e634d55fafd7bc34411db5fced09420909a3131a6c39d8285d60cea8.jpg"
+              ],
+              "excerptSha256": "69fbaddb6a0c757781d908bc6b35f307e12ab2a0d116f23647eb51d36b1293e3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-write-read-path",
+        "moduleId": "m-regionserver-store",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：写入与读取路径对照",
+        "markdown": "把教材的流程拆成两条路径对照，更容易看出三种存储方式的分工：\n\n| 环节 | 写入更新 | 读取数据 |\n|---|---|---|\n| 入口 | 请求被分配到持有目标 HRegion 的 HRegionServer | 请求同样到达对应的 HRegionServer |\n| 第一步 | 修改写入 HMemStore，同时写一份到 HLog | 先查 HMemStore 缓存 |\n| 第二步 | 写入 HLog 后 `commit()` 才返回客户端 | 缓存未命中才到 HStore 的 HStoreFile 中查找 |\n| 返回条件 | 记录文件写入完成即返回，不等磁盘文件合并 | 命中缓存或读到磁盘文件后返回 |\n\n三个层级各管一段：HMemStore 保证写入快，HLog 保证已提交的更新不丢，HStoreFile 承担最终物理存放。删除和版本清理被推迟到 compact 阶段，是这套写路径能够快速返回的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-regionserver-io"
+          ]
+        }
+      },
+      {
+        "id": "tb-hstore",
+        "moduleId": "m-regionserver-store",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "HStore 的组成与合并分裂",
+        "markdown": "HStore 是 HBase 存储的核心，由两部分组成：一部分是 HMemStore，一部分是 HStoreFile。HMemStore 是排序的内存缓冲区，用户写入的数据首先放入 HMemStore；当 HMemStore 满了以后会 Flush 成一个 HStoreFile（底层实现是 HFile）。当 HStoreFile 文件数量增长到一定阈值，会触发合并操作，将多个 HStoreFile 合并成一个，合并过程中会进行版本合并和数据删除。\n\n因此可以看出，HBase 其实只有增加数据，所有的更新和删除操作都是在后续的 compact 过程中进行的，这使得用户的写操作只要进入内存中就可以立即返回，保证了 HBase I/O 的高性能。\n\n当 HStoreFile 合并后，会逐步形成越来越大的 HStoreFile；当单个 HStoreFile 大小超过一定阈值后，会触发分裂操作，同时把当前 HRegion 分裂成 2 个 HRegion。父 HRegion 会下线，新分裂出的 2 个孩子 HRegion 会被 HMaster 分配到相应的 HRegionServer 上，使原先 1 个 HRegion 的压力得以分流到 2 个 HRegion 上（图 7-12）。\n\n在正常工作的前提下，上述 HStore 机制没有问题；但在分布式系统环境中无法避免出错或者宕机，一旦 HRegionServer 意外退出，HMemStore 中的内存数据将会丢失，这就需要引入 HLog。每个 HRegionServer 中都有一个 HLog 对象，HLog 是一个实现写前日志（Write Ahead Log）的类，在每次用户操作写入 HMemStore 的同时，也会写一份数据到 HLog 文件中；HLog 文件定期会滚动出新的，并删除旧的文件（已持久化到 HStoreFile 中的数据）。\n\n当 HRegionServer 意外终止后，HMaster 会通过 Zookeeper 感知到，首先处理遗留的 HLog 文件，将其中不同 HRegion 的 HLog 数据进行拆分，分别放到相应 HRegion 的目录下，然后再将失效的 HRegion 重新分配；领取到这些 HRegion 的 HRegionServer 在加载 HRegion 的过程中会发现有历史 HLog 需要处理，因此会 Replay HLog 中的数据到 HMemStore 中，然后刷新到 HStoreFiles，完成数据恢复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000230"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HStore"
+              ],
+              "lineStart": 2946,
+              "lineEnd": 2956,
+              "assetRefs": [
+                "parts/part-0002/images/b6ff34eda201fbc7ffb6c1694be59d9f134aa4f62c270ad7f161e8fed16fc4f7.jpg"
+              ],
+              "excerptSha256": "c2780a0ad63607cacd0112e9ffbb637e491f707c5d12d87db6ccd51f8650b362"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-store-lifecycle",
+        "moduleId": "m-regionserver-store",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：flush、compact、split 的触发链",
+        "markdown": "把 HStore 一节压缩成一条触发链：HMemStore 写满 → Flush 成新的 HStoreFile → 文件数超过阈值触发 compact 合并并清理版本与删除标记 → 单个 HStoreFile 超过阈值触发 split，当前 HRegion 裂成两个，父 HRegion 下线、子 HRegion 由 HMaster 重新分配。\n\n这条链条解释了 HBase 的性能取向：写入只碰内存和日志，代价被推迟到后台合并；而合并与分裂都需要额外资源，所以教材强调这些操作都有触发阈值，不是每次写入都发生。\n\nHLog 则补上内存不可靠的缺口：它是写前日志，与 HMemStore 同步写入；HRegionServer 意外终止后，HMaster 拆分遗留 HLog、重新分配 HRegion，接收方 Replay 日志到 HMemStore 再刷新到 HStoreFile，才完成恢复。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hstore",
+            "tb-regionserver-io"
+          ]
+        }
+      },
+      {
+        "id": "tb-region-assignment",
+        "moduleId": "m-lifecycle",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "HRegion 分配的前提与动作",
+        "markdown": "任何时刻，一个 HRegion 只能分配给一个 HRegionServer。HMaster 记录了当前有哪些可用的 HRegionServer、当前哪些 HRegion 分配给了哪些 HRegionServer、哪些 HRegion 还没有分配。\n\n当存在未分配的 HRegion，并且有一个 HRegionServer 上有可用空间时，HMaster 就给这个 HRegionServer 发送一个装载请求，把 HRegion 分配给这个 HRegionServer；HRegionServer 得到请求后，就开始对此 HRegion 提供服务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000231"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HRegion 分配"
+              ],
+              "lineStart": 2957,
+              "lineEnd": 2960,
+              "assetRefs": [],
+              "excerptSha256": "bb4ba1ced967bf6712e3fda42dcdfa9182f89ee3cdbc17762480f520a35e4075"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-regionserver-online",
+        "moduleId": "m-lifecycle",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "HRegionServer 上线：建文件并取独占锁",
+        "markdown": "HMaster 使用 Zookeeper 来跟踪 HRegionServer 的状态。当某个 HRegionServer 启动时，会首先在 Zookeeper 上的 server 目录下建立代表自己的文件，并获得该文件的独占锁。\n\n由于 HMaster 订阅了 server 目录上的变更消息，当 server 目录下的文件出现新增或删除操作时，HMaster 可以得到来自 Zookeeper 的实时通知。因此，一旦 HRegionServer 上线，HMaster 能马上得到消息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000232"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HRegionServer 上线"
+              ],
+              "lineStart": 2961,
+              "lineEnd": 2964,
+              "assetRefs": [],
+              "excerptSha256": "0eb5ba2c15970f4466f2395650b29612dae1def27620036dd2ece04ffeb50944"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-regionserver-offline",
+        "moduleId": "m-lifecycle",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "HRegionServer 下线：锁释放与 HRegion 迁移",
+        "markdown": "当 HRegionServer 下线时，它和 Zookeeper 的会话断开，Zookeeper 会自动释放代表这台服务器文件上的独占锁。而 HMaster 不断轮询 server 目录下文件的锁状态，如果发现某个 HRegionServer 丢失了它自己的独占锁（或者 HMaster 连续几次和 HRegionServer 通信都无法成功），HMaster 就尝试去获取代表这个 HRegionServer 的读写锁；一旦获取成功，就可以确定下面两种情形中的一种发生了：\n\n- HRegionServer 和 Zookeeper 之间的网络断开了；\n- HRegionServer 挂了。\n\n无论哪种情况，HRegionServer 都无法继续为它的 HRegion 提供服务了。此时 HMaster 会删除 server 目录下代表这台 HRegionServer 的文件，并将这台 HRegionServer 的 HRegion 分配给其它还活着的 HRegionServer。\n\n如果网络短暂出现问题导致 HRegionServer 丢失了它的锁，那么 HRegionServer 重新连接到 Zookeeper 之后，只要代表它的文件还在，它就会不断尝试获取这个文件上的锁，一旦获取到了，就可以继续提供服务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000233"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HRegionServer 下线"
+              ],
+              "lineStart": 2965,
+              "lineEnd": 2976,
+              "assetRefs": [],
+              "excerptSha256": "35d62147d76240d9f672b7228340cc17a2f5fdeae677a070ebe59a03a604dd79"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-master-online",
+        "moduleId": "m-lifecycle",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "HMaster 上线的四个步骤",
+        "markdown": "HMaster 启动时，需要执行以下步骤：\n\n- 第一步：从 Zookeeper 上获取唯一一个代表该 HMaster 的锁，用来阻止其它 HMaster 成为主服务器；\n- 第二步：扫描 Zookeeper 上的 server 目录，获得当前可用的 HRegionServer 列表；\n- 第三步：和第二步中的每个 HRegionServer 通信，获得当前已分配的 HRegion 和 HRegionServer 的对应关系；\n- 第四步：扫描 `.META.` 中 HRegion 的集合，计算得到当前还未分配的 HRegion，将它们放入待分配 HRegion 列表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000234"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HMaster 上线"
+              ],
+              "lineStart": 2977,
+              "lineEnd": 2988,
+              "assetRefs": [],
+              "excerptSha256": "50213db6079729767d916e891610754925115cef0f2065fdff7cf2a2fe7eb98d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lifecycle-compare",
+        "moduleId": "m-lifecycle",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：三个上下线过程对照",
+        "markdown": "把三段流程放进同一张表，能看清它们共享同一套“文件 + 锁 + 通知”的机制：\n\n| 过程 | 触发 | Zookeeper 侧的变化 | HMaster 的动作 |\n|---|---|---|---|\n| HRegionServer 上线 | 服务器启动 | 在 server 目录建立代表自己的文件并取得独占锁 | 订阅到目录变更，立即得到通知 |\n| HRegionServer 下线 | 与 Zookeeper 会话断开 | 自动释放该文件上的独占锁 | 轮询发现锁丢失或连续通信失败后尝试取读写锁，确认后删除文件并把 HRegion 分给存活服务器 |\n| HMaster 上线 | HMaster 启动 | 取到唯一代表该 HMaster 的锁 | 扫描 server 目录取服务器列表，逐个通信取分配关系，再扫 `.META.` 计算未分配 HRegion |\n\n三者的共同点是：状态变化先写在 Zookeeper 上，再通过通知或轮询被 HMaster 感知；区别在于锁的持有者不同——HRegionServer 持有自己文件上的锁，HMaster 持有代表主服务器身份的锁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-region-assignment",
+            "tb-regionserver-online",
+            "tb-regionserver-offline",
+            "tb-master-online"
+          ]
+        }
+      },
+      {
+        "id": "model-master-online-steps",
+        "moduleId": "m-lifecycle",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：四步本质上是状态重建",
+        "markdown": "四个步骤可以理解为一次状态重建：先抢锁确定自己是唯一的主服务器，再发现当前有哪些 HRegionServer，然后询问它们各自持有哪些 HRegion，最后用 `.META.` 中记录的 HRegion 集合做差，得到还未分配的 HRegion。\n\n这也解释了教材为什么说 HMaster 保存的信息都是可以冗余的：它的状态都能从 Zookeeper 目录、HRegionServer 的回答和 `.META.` 中重新收集或计算出来，所以主服务器可以替换。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-master-online",
+            "tb-master"
+          ]
+        }
+      },
+      {
+        "id": "tb-master-offline",
+        "moduleId": "m-failure-boundary",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "HMaster 下线的影响范围",
+        "markdown": "由于 HMaster 只维护表和 HRegion 的元数据，而不参与表数据 I/O 的过程，HMaster 下线仅导致所有元数据的修改被冻结：无法创建删除表，无法修改表的 schema，无法进行 HRegion 的负载均衡，无法处理 HRegion 上下线，无法进行 HRegion 的合并；唯一的例外是 HRegion 的分裂可以正常进行，因为只有 HRegionServer 参与。表的数据读写还可以正常进行。\n\n因此，HMaster 下线短时间内对整个 HBase 集群没有影响。从上线过程可以看到，HMaster 保存的信息全都是可以冗余的信息，都可以从系统其它地方收集到或者计算出来，因此一般 HBase 集群中总是有一个 HMaster 在提供服务，还有一个以上的 HMaster 在等待时机抢占它的位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000235"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HMaster 下线"
+              ],
+              "lineStart": 2989,
+              "lineEnd": 2992,
+              "assetRefs": [],
+              "excerptSha256": "2856388e81937a2fb040913f1b453dc96b5382ef360e908c9e113cbe33070420"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-checklist",
+        "moduleId": "m-failure-boundary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "补充：故障判断清单",
+        "markdown": "把两种失效放在一起，可以形成一张判断清单：\n\n- HMaster 下线：只冻结元数据修改——不能创建或删除表、不能修改表 schema、不能做 HRegion 负载均衡、不能处理 HRegion 上下线、不能合并 HRegion；例外是 HRegion 分裂仍可进行，因为只有 HRegionServer 参与。数据读写照常，短时间对整个集群没有影响。\n- HRegionServer 失联：HMaster 取得读写锁后确认是网络断开还是服务器宕机；两种情况它都无法继续为 HRegion 提供服务，于是删除该服务器文件并把 HRegion 分配给其他存活服务器。\n- 短暂网络故障：只要代表服务器的文件还在，重连 Zookeeper 后它就能不断尝试重新取锁，成功即可继续服务。\n\n所以“HBase 离不开 HMaster”和“数据读写离不开 HMaster”是两件事：前者针对元数据管理，后者并不成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-master-offline",
+            "tb-master",
+            "tb-regionserver-offline"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "m-failure-boundary",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：三条主线与下一点衔接",
+        "markdown": "本点的架构可以压缩成三条主线：\n\n1. 请求路径：Client 的管理类操作找 HMaster，数据读写找 HRegionServer，寻址信息来自缓存与 Zookeeper；\n2. 信息路径：Zookeeper 保存 `-ROOT-` 地址、HMaster 地址、HRegion 寻址入口和 schema，并通过 Ephemeral 节点与锁反映成员状态；\n3. 决策路径：HMaster 负责表和 HRegion 的分配、均衡与迁移，HRegionServer 负责真正向 HDFS 读写。\n\n下一个知识点转向 HBase 存储格式，进一步看这些数据在底层文件中如何组织。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-master",
+            "tb-zookeeper",
+            "tb-master-offline",
+            "tb-regionserver-role"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "failover-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-failure-checklist",
+        "moduleId": "m-failure-boundary",
+        "depth": "core",
+        "title": "判断故障影响",
+        "outcomeRefs": [
+          "o-failure",
+          "o-lifecycle"
+        ],
+        "learningPurpose": "检查学习者能否依据组件职责，判断一次组件下线会影响哪些能力。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-master-offline",
+            "model-failure-checklist"
+          ]
+        },
+        "config": {
+          "scenario": "集群中唯一在服务的 HMaster 进程被终止，所有 HRegionServer 均正常。",
+          "question": "此刻哪些操作还能正常进行，哪些会被冻结？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "场景：集群中唯一在服务的 HMaster 进程被终止，所有 HRegionServer 均正常。请列出此时仍可进行的操作与被冻结的操作，并说明依据来自 HMaster 的哪项职责。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HBase",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000225"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HBase 系统架构"
+      ],
+      "lineStart": 2837,
+      "lineEnd": 2843,
+      "assetRefs": [
+        "parts/part-0002/images/e700972c56fd8b6783534a34817205de72b5d5fa087c485ec8b81b3163193312.jpg"
+      ],
+      "excerptSha256": "310ef88be37b5886a27278a34eb32ac905cd44e237910c3d8d6177dfdd97d66f"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000226"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Client"
+      ],
+      "lineStart": 2844,
+      "lineEnd": 2849,
+      "assetRefs": [],
+      "excerptSha256": "75bb6bbde7a45672747705866ae958bca48759fd11364b1b9f877a398b83ffaa"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000227"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Zookeeper"
+      ],
+      "lineStart": 2850,
+      "lineEnd": 2861,
+      "assetRefs": [],
+      "excerptSha256": "fee2d962cdc242717c1385fbc9d61dc66fff3b9676f9756de0ffdd98a5c47b59"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000228"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HMaster"
+      ],
+      "lineStart": 2862,
+      "lineEnd": 2885,
+      "assetRefs": [],
+      "excerptSha256": "bf1a22dda113ab2666d3d056fdfd4df56423e68bc2bcdf318d8e5e4458d51cef"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000229"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HRegionServer"
+      ],
+      "lineStart": 2886,
+      "lineEnd": 2945,
+      "assetRefs": [
+        "parts/part-0002/images/0e01cf859be615522dfc8eb05131cf7b50a81b5af373483bf4c8c9654545de1f.jpg",
+        "parts/part-0002/images/7f238636e634d55fafd7bc34411db5fced09420909a3131a6c39d8285d60cea8.jpg"
+      ],
+      "excerptSha256": "69fbaddb6a0c757781d908bc6b35f307e12ab2a0d116f23647eb51d36b1293e3"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000230"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HStore"
+      ],
+      "lineStart": 2946,
+      "lineEnd": 2956,
+      "assetRefs": [
+        "parts/part-0002/images/b6ff34eda201fbc7ffb6c1694be59d9f134aa4f62c270ad7f161e8fed16fc4f7.jpg"
+      ],
+      "excerptSha256": "c2780a0ad63607cacd0112e9ffbb637e491f707c5d12d87db6ccd51f8650b362"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000231"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HRegion 分配"
+      ],
+      "lineStart": 2957,
+      "lineEnd": 2960,
+      "assetRefs": [],
+      "excerptSha256": "bb4ba1ced967bf6712e3fda42dcdfa9182f89ee3cdbc17762480f520a35e4075"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000232"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HRegionServer 上线"
+      ],
+      "lineStart": 2961,
+      "lineEnd": 2964,
+      "assetRefs": [],
+      "excerptSha256": "0eb5ba2c15970f4466f2395650b29612dae1def27620036dd2ece04ffeb50944"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000233"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HRegionServer 下线"
+      ],
+      "lineStart": 2965,
+      "lineEnd": 2976,
+      "assetRefs": [],
+      "excerptSha256": "35d62147d76240d9f672b7228340cc17a2f5fdeae677a070ebe59a03a604dd79"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000234"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HMaster 上线"
+      ],
+      "lineStart": 2977,
+      "lineEnd": 2988,
+      "assetRefs": [],
+      "excerptSha256": "50213db6079729767d916e891610754925115cef0f2065fdff7cf2a2fe7eb98d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000235"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HMaster 下线"
+      ],
+      "lineStart": 2989,
+      "lineEnd": 2992,
+      "assetRefs": [],
+      "excerptSha256": "2856388e81937a2fb040913f1b453dc96b5382ef360e908c9e113cbe33070420"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1477,
+    1833
+  ],
+  "scale": 1.24
+}

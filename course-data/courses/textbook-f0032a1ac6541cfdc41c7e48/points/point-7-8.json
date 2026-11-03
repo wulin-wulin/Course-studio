@@ -1,0 +1,466 @@
+{
+  "id": "point-7-8",
+  "title": "HBase 存储格式",
+  "shortSummary": "介绍 HBase 在底层文件中的键值存储格式，理解其按列族组织数据的方式。",
+  "keyTerms": [
+    "存储格式",
+    "列族存储",
+    "键值结构"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-7-5",
+    "point-7-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 HFile 与 HLog 的事实描述和字段顺序，按“两类文件—HFile 分段—KeyValue 字节结构—HLog 恢复”重排讲解顺序，并补充查找与恢复的走查和检查题。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "describe-two-file-types",
+          "text": "说明 HBase 在 HDFS 上使用的 HFile 与 HLog File 两类文件及各自的分工。"
+        },
+        {
+          "id": "explain-hfile-layout",
+          "text": "列出 HFile 的六个组成部分，并解释 Trailer、索引与 Data Block 如何支持按 key 定位。"
+        },
+        {
+          "id": "explain-keyvalue-structure",
+          "text": "按字节顺序拆解 HFile 中一个 KeyValue 的字段结构。"
+        },
+        {
+          "id": "explain-hlog-recovery",
+          "text": "说明 HLog 作为预写日志的作用、每个 HRegionServer 一个 HLog 的取舍以及故障后的拆分恢复。"
+        }
+      ],
+      "misconceptions": [
+        "把 HStoreFile 当成与 HFile 并列的另一种底层文件格式。",
+        "认为读取 HFile 时必须从文件开头扫描到目标 key。",
+        "以为每个 HRegion 都单独维护一个 HLog。",
+        "认为 HFile 是定长文件，各部分长度都相同。"
+      ],
+      "modules": [
+        {
+          "id": "file-types",
+          "title": "两类底层文件与分工",
+          "role": "concept-frame",
+          "description": "先建立 HFile 与 HLog File 的角色区分，避免后文把数据文件与日志文件混为一谈。",
+          "outcomeRefs": [
+            "describe-two-file-types"
+          ],
+          "order": 0
+        },
+        {
+          "id": "hfile-layout",
+          "title": "HFile 的分段结构与读取路径",
+          "role": "mechanism-walkthrough",
+          "description": "按六个组成部分和一次 key 查找的路径讲解 HFile 的内部组织。",
+          "outcomeRefs": [
+            "explain-hfile-layout"
+          ],
+          "order": 1
+        },
+        {
+          "id": "keyvalue-anatomy",
+          "title": "KeyValue 的字节结构",
+          "role": "mechanism-walkthrough",
+          "description": "拆开一个 KeyValue 字节数组，把各字段与 HBase 数据模型要素对应起来。",
+          "outcomeRefs": [
+            "explain-keyvalue-structure"
+          ],
+          "order": 2
+        },
+        {
+          "id": "hlog-wal",
+          "title": "HLog 与预写日志恢复",
+          "role": "mechanism-walkthrough",
+          "description": "从记录变更到拆分回放，说明 HLog 的组织方式和恢复代价。",
+          "outcomeRefs": [
+            "explain-hlog-recovery"
+          ],
+          "order": 3
+        },
+        {
+          "id": "tradeoffs-and-check",
+          "title": "取舍对照与达成检查",
+          "role": "synthesis-check",
+          "description": "用对照表收束两类文件，并用判断题检查是否真正理解结构与恢复逻辑。",
+          "outcomeRefs": [
+            "describe-two-file-types",
+            "explain-hfile-layout",
+            "explain-keyvalue-structure",
+            "explain-hlog-recovery"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-two-file-types",
+          "explain-hfile-layout",
+          "explain-keyvalue-structure",
+          "explain-hlog-recovery"
+        ],
+        "method": "完成对照表复述与三道判断题，说明每一步的结构依据。",
+        "successCriteria": [
+          "能说清 HFile 与 HLog File 分别承载什么",
+          "能按顺序列出 HFile 六个部分并解释 Trailer 的作用",
+          "能按字节顺序拆解一个 KeyValue",
+          "能说明 HLog 为什么需要拆分后再恢复"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-synthesis-table",
+        "nextPointId": "point-7-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-file-types",
+        "moduleId": "file-types",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：两类底层文件",
+        "markdown": "HBase 的所有数据文件都存放在 HDFS 上，教材把其中的文件分为两类：\n\n- **HFile**：HBase 中 KeyValue 数据的存储格式，是 Hadoop 的二进制格式文件。HStoreFile 只是对 HFile 做的轻量级包装，底层仍然是 HFile。\n- **HLog File**：HBase 中 WAL（Write Ahead Log，预写日志）的存储格式，物理上是一个 Hadoop 顺序文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000236"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HBase 存储格式"
+              ],
+              "lineStart": 2993,
+              "lineEnd": 3000,
+              "assetRefs": [],
+              "excerptSha256": "7aaeba3a240ca9589564313f3f37ed4cb4210c479301def870b106db0e326a12"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-file-roles",
+        "moduleId": "file-types",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：两类文件各自回答什么问题",
+        "markdown": "把两类文件放回写入过程看，分工很清楚：\n\n- HFile 回答“表里最终存了什么”，它承载键值数据落盘后的形态。\n- HLogFile 回答“数据落盘之前发生过哪些变更”，它按顺序追加变更记录。\n\n因此二者不是同一份数据的两种写法，而是数据与变更日志的互补关系：HFile 供读取，HLogFile 供故障恢复。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-file-types"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hfile-sections",
+        "moduleId": "hfile-layout",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：HFile 的六个组成部分",
+        "markdown": "教材把 HFile 分为六个部分：\n\n| 部分 | 作用 |\n|---|---|\n| Data Block | 保存表中的数据，可以被压缩 |\n| Meta Block（可选） | 保存用户自定义的 key/value 对，可以被压缩 |\n| File Info | HFile 的元信息，不被压缩，用户也可以在这一部分添加自己的元信息 |\n| Data Block Index | Data Block 的索引，每条索引的 key 是被索引 block 的第一条记录的 key |\n| Meta Block Index（可选） | Meta Block 的索引 |\n| Trailer | 定长，保存了每一段的偏移量 |\n\n读取一个 HFile 时先读定长的 Trailer，取得每个段的起始位置（段中的 Magic Number 用来做安全校验），然后把 Data Block Index 读入内存。检索某个 key 时不需要扫描整个 HFile，只需从内存中找到 key 所在的 block，通过一次磁盘 IO 把整个 block 读入内存，再找到需要的 key。Data Block Index 采用 LRU 机制淘汰。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000237"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HFile"
+              ],
+              "lineStart": 3001,
+              "lineEnd": 3034,
+              "assetRefs": [
+                "parts/part-0002/images/97fe4322c0fc78ed302cea7428f8769b66c465b37006d0050836e4b1c04807eb.jpg",
+                "parts/part-0002/images/181d062b6a52cd8c8c089b7bea2c735d0c5637e8feb26ea97b27ff65dd498c94.jpg"
+              ],
+              "excerptSha256": "4c44c8f8751b4acce934eaad660c53767dc2b432dbc3641d2c1d2819579adb8a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hfile-read-path",
+        "moduleId": "hfile-layout",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：一次 key 查找的走查",
+        "markdown": "把上面的结构串成一次查找：\n\n1. 打开 HFile，读取定长的 Trailer，得到各段的偏移量。\n2. 把 Data Block Index 读入内存。\n3. 在内存索引中比较 key，确定目标所在的 Data Block。\n4. 用一次磁盘 IO 读入该 block，在 block 内继续定位目标 key。\n\n关键在第一步和第二步：定位信息不在文件开头，而已读入内存的索引承担了“查表”，所以文件本身不定长也能高效随机定位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-hfile-sections"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hfile-compression",
+        "moduleId": "hfile-layout",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：压缩、定长部分与 Data Block",
+        "markdown": "教材对 HFile 的存储特性还有几点说明：\n\n- Data Block 和 Meta Block 通常采用压缩方式存储，压缩之后可以大大减少网络 IO 和磁盘 IO，代价是需要花费 CPU 做压缩和解压缩；教材提到的压缩方式为 Gzip 和 LZO。\n- HFile 文件是不定长的，长度固定的只有 Trailer 和 File Info 两块。Trailer 中用指针指向其他数据块的起始点；File Info 记录 AVG_KEY_LEN、AVG_VALUE_LEN、LAST_KEY、COMPARATOR、MAX_SEQ_ID_KEY 等元信息；Data Index 和 Meta Index 记录每个 Data 块和 Meta 块的起始点。\n- Data Block 是 HBase I/O 的基本单元，HRegionServer 中有基于 LRU 的 Block Cache。每个 Data 块的大小可以在建表时通过参数指定：大号 Block 有利于顺序扫描，小号 Block 有利于随机查询。\n- 每个 Data 块开头的 Magic 是一些随机数字，用来防止数据损坏；其后是一个个 KeyValue 对拼接而成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000237"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HFile"
+              ],
+              "lineStart": 3001,
+              "lineEnd": 3034,
+              "assetRefs": [
+                "parts/part-0002/images/97fe4322c0fc78ed302cea7428f8769b66c465b37006d0050836e4b1c04807eb.jpg",
+                "parts/part-0002/images/181d062b6a52cd8c8c089b7bea2c735d0c5637e8feb26ea97b27ff65dd498c94.jpg"
+              ],
+              "excerptSha256": "4c44c8f8751b4acce934eaad660c53767dc2b432dbc3641d2c1d2819579adb8a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compression-tradeoff",
+        "moduleId": "hfile-layout",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：压缩与块大小的取舍",
+        "markdown": "这两组参数都不是“越省越好”或“越大越好”，可以用一张表看清代价：\n\n| 选择 | 收益 | 代价 |\n|---|---|---|\n| 压缩 Data/Meta Block | 减少磁盘与网络 IO | 读写时多花 CPU 做压缩解压 |\n| 调大 Data Block | 顺序扫描更连续 | 单次随机查询会读入更多无关数据 |\n| 调小 Data Block | 随机查询更精准 | 索引项变多，顺序扫描切换更频繁 |\n\n选择依据是访问模式：以顺序扫描为主时偏向大块，以随机查询为主时偏向小块。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-hfile-compression"
+          ]
+        }
+      },
+      {
+        "id": "textbook-keyvalue",
+        "moduleId": "keyvalue-anatomy",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：一个 KeyValue 的字节结构",
+        "markdown": "HFile 里面的每个 Key/Value 对就是一个简单的 byte 数组，但这个数组内部有固定结构（教材图 7-14）：\n\n1. 两个固定长度的数值，分别表示 Key 的长度和 Value 的长度；\n2. Key 部分：先是一个固定长度的数值，表示 RowKey 的长度，紧接着是 RowKey；\n3. 然后是一个固定长度的数值，表示 Family 的长度，紧接着是 Family；\n4. 接着是 Qualifier；\n5. 然后是两个固定长度的数值，分别表示 Time Stamp 和 Key Type（Put/Delete）；\n6. Value 部分没有复杂结构，就是纯粹的二进制数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000237"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HFile"
+              ],
+              "lineStart": 3001,
+              "lineEnd": 3034,
+              "assetRefs": [
+                "parts/part-0002/images/97fe4322c0fc78ed302cea7428f8769b66c465b37006d0050836e4b1c04807eb.jpg",
+                "parts/part-0002/images/181d062b6a52cd8c8c089b7bea2c735d0c5637e8feb26ea97b27ff65dd498c94.jpg"
+              ],
+              "excerptSha256": "4c44c8f8751b4acce934eaad660c53767dc2b432dbc3641d2c1d2819579adb8a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-keyvalue-example",
+        "moduleId": "keyvalue-anatomy",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：把字段顺序对应到数据模型",
+        "markdown": "以一次写入 `(row001, info, name, t1, Put) -> Ada` 为例，各字段在字节流中的排列是：\n\n```\n[Key 长度][Value 长度][RowKey 长度][row001][Family 长度][info][Qualifier: name][Time Stamp: t1][Key Type: Put][Value: Ada]\n```\n\n把每一项和 HBase 数据模型对上：RowKey、列族 Family、列限定符 Qualifier、时间戳和操作类型都编码在 Key 里，Value 才是真正的数据。这也说明列族信息不是可选的注解，而是 Key 结构中的固定一段：RowKey 和 Qualifier 相同、Family 不同，就是两个不同的 Key。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-keyvalue"
+          ]
+        }
+      },
+      {
+        "id": "textbook-hlog",
+        "moduleId": "hlog-wal",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：HLog 的定位与组织",
+        "markdown": "HLog 又称 WAL（Write Ahead Log，预写日志），类似 MySQL 中的 binlog，用来做灾难恢复：HLog 记录数据的所有变更，一旦数据被修改，就可以从 HLog 中进行恢复。\n\n- 每个 HRegionServer 维护一个 HLog，而不是每个 HRegion 一个。不同 HRegion（来自不同表）的日志会混在一起。\n- 这样做是为了不断追加单个文件，相对于同时写多个文件可以减少磁盘寻址次数，因此可以提高对表的写性能。\n- 代价是：如果一台 HRegionServer 下线，为了恢复其上的 HRegion，需要把该 HRegionServer 上的 HLog 进行拆分，再分发到其他 HRegionServer 上进行恢复。\n- HLog 文件就是一个普通的 Hadoop 顺序文件（Sequence File）：Key 是 HLogKey 对象，记录写入数据的归属信息，除表和 HRegion 名字外，还包括顺序号和时间戳；顺序号的起始值为 0，或者是最近一次存入文件系统中的顺序号；Value 是 HBase 的 Key/Value 对象，即对应 HFile 中的 Key/Value。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000238"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HLogFile"
+              ],
+              "lineStart": 3035,
+              "lineEnd": 3047,
+              "assetRefs": [
+                "parts/part-0002/images/f2caf10e010512b72316c9ddf43c303c59921a29b019551fcb94254b31e7e3a4.jpg"
+              ],
+              "excerptSha256": "8c2d627da232647b0ef6cc402e3734c57fb724aa163c837458e6fd00ccd748a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hlog-recovery",
+        "moduleId": "hlog-wal",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：一次故障恢复的步骤",
+        "markdown": "把教材的描述展开成恢复过程：\n\n1. 检测到某台 HRegionServer 下线，其他服务器接手它原来负责的 HRegion。\n2. 由于这些 HRegion 的日志混在同一个 HLog 里，先依据 HLogKey 中的表和 HRegion 归属信息，把日志拆分成对应该 HRegion 的片段。\n3. 把拆分后的片段分发到接管相应 HRegion 的服务器。\n4. 各服务器按顺序号和时间戳回放日志中的变更，恢复尚未落盘的修改。\n\n这正好解释了“每个 HRegionServer 一个 HLog”的两面性：写入时少写多个文件、减少寻址，恢复时则要先付出拆分日志的成本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-hlog"
+          ]
+        }
+      },
+      {
+        "id": "model-synthesis-table",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "对照：HFile 与 HLogFile",
+        "markdown": "| 维度 | HFile | HLogFile |\n|---|---|---|\n| 承载内容 | 表中的 KeyValue 数据 | 数据的所有变更记录 |\n| 在体系中的角色 | 数据文件，供读取 | WAL，供灾难恢复 |\n| 物理形态 | Hadoop 二进制格式，不定长 | Hadoop 顺序文件（Sequence File） |\n| 结构要点 | 六个部分；Trailer 存偏移量，索引定位 block | Key 为 HLogKey（含归属、顺序号、时间戳），Value 为 KeyValue |\n| 组织粒度 | 由 HStoreFile 轻量级包装 | 每个 HRegionServer 一个 |\n| 主要权衡 | 压缩与块大小影响 IO 和 CPU | 单文件追加提升写性能，恢复时需拆分 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-file-types",
+            "textbook-hfile-sections",
+            "textbook-hlog"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：三个判断",
+        "markdown": "1. HStoreFile 和 HFile 是两种并列的底层文件格式吗？为什么？\n2. 读取一个 HFile 时，为什么不需要扫描整个文件就能找到某个 key？\n3. 某台 HRegionServer 下线后，为什么必须先拆分它的 HLog，而不能直接交给其他服务器回放？\n\n参考要点：HStoreFile 只是对 HFile 的轻量级包装；先读定长 Trailer，再把 Data Block Index 读入内存，只需一次磁盘 IO 读入目标 block；因为每个 HRegionServer 只有一个 HLog，多个 HRegion（可能来自不同表）的日志混在一起，必须按归属拆分后才能分发恢复。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-synthesis-table"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "hfile-locate-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-hfile-read-path",
+        "moduleId": "hfile-layout",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-hfile-layout"
+        ],
+        "learningPurpose": "检查能否依据 HFile 的分段结构说明一次 key 查找的路径。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-hfile-sections"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "从打开 HFile 到读出目标 key，依次要用到哪些结构？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出从打开 HFile 到读出目标 key 的步骤，并说明每一步用到 Trailer、Data Block Index 还是 Data Block。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HBase",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000236"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HBase 存储格式"
+      ],
+      "lineStart": 2993,
+      "lineEnd": 3000,
+      "assetRefs": [],
+      "excerptSha256": "7aaeba3a240ca9589564313f3f37ed4cb4210c479301def870b106db0e326a12"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000237"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HFile"
+      ],
+      "lineStart": 3001,
+      "lineEnd": 3034,
+      "assetRefs": [
+        "parts/part-0002/images/97fe4322c0fc78ed302cea7428f8769b66c465b37006d0050836e4b1c04807eb.jpg",
+        "parts/part-0002/images/181d062b6a52cd8c8c089b7bea2c735d0c5637e8feb26ea97b27ff65dd498c94.jpg"
+      ],
+      "excerptSha256": "4c44c8f8751b4acce934eaad660c53767dc2b432dbc3641d2c1d2819579adb8a"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000238"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HLogFile"
+      ],
+      "lineStart": 3035,
+      "lineEnd": 3047,
+      "assetRefs": [
+        "parts/part-0002/images/f2caf10e010512b72316c9ddf43c303c59921a29b019551fcb94254b31e7e3a4.jpg"
+      ],
+      "excerptSha256": "8c2d627da232647b0ef6cc402e3734c57fb724aa163c837458e6fd00ccd748a6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1367,
+    1733
+  ],
+  "scale": 0.92
+}

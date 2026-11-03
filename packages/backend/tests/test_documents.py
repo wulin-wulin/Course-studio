@@ -59,6 +59,11 @@ def _outline(document_id: str, filename: str, sha256: str) -> dict:
 
 
 class DocumentServiceTest(unittest.TestCase):
+    def test_english_toc_accepts_trailing_number_periods(self):
+        chapters = parse_toc_text("Table of Contents\n1. Introduction .... 3\n1.1. Basics .... 4\n2. Networks .... 10\n2.1. Routing .... 11")
+        self.assertEqual([c["number"] for c in chapters], ["1", "2"])
+        self.assertEqual(chapters[0]["points"][0]["number"], "1.1")
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)

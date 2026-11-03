@@ -1,0 +1,401 @@
+{
+  "id": "point-12-8",
+  "title": "TrueTime",
+  "shortSummary": "解释 TrueTime 基于时间不确定性区间提供时钟保证的思想及其对事务的意义。",
+  "keyTerms": [
+    "TrueTime",
+    "时钟不确定性",
+    "时间区间"
+  ],
+  "animationType": "trueTimeInterval",
+  "animationSuggestion": "以时间轴显示 TTinterval 的下界和上界两条曲线，区间随时间线性张开，每到 30 秒投票时刻迅速收拢，并在旁侧同步显示当前 ε 数值与 1 到 7 毫秒的参考区间；可标注一次故障导致的异常增大，并允许切换到更短的投票间隔观察峰值变化。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 TrueTime API、时间源与误差预算的原始结论和数值，围绕“区间而非时间点”的学习目标重排讲解，补充区间读法、误差复算和检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "truetime-interval-guarantee",
+          "text": "说明 TrueTime 返回时间区间而不是单一时刻，并解释 TT.after 与 TT.before 给出的确定性保证。"
+        },
+        {
+          "id": "clock-source-failures",
+          "text": "解释 TrueTime 同时使用 GPS 和原子钟的原因，以及 time master 与 daemon 如何投票和剔除异常源。"
+        },
+        {
+          "id": "uncertainty-budget",
+          "text": "根据时钟漂移率、投票间隔和通讯延迟解释误差 ε 的来源，并说明它为何呈锯齿形。"
+        }
+      ],
+      "misconceptions": [
+        "把 TT.now() 当成一个精确的时间点，忽略它返回的是包含真实时间的区间。",
+        "认为同时使用 GPS 和原子钟只是简单冗余，没有意识到两者失败模式不相关才是关键。",
+        "把 ε 当成固定常数，忽略它在每个投票间隔内按漂移率增长、投票时回落，并在故障时可能突破正常边界。"
+      ],
+      "modules": [
+        {
+          "id": "api-and-interval",
+          "title": "三个接口与时间区间",
+          "role": "concept-introduction",
+          "description": "从 TrueTime API 出发，建立“时间是不确定区间”的基本认识。",
+          "outcomeRefs": [
+            "truetime-interval-guarantee"
+          ],
+          "order": 0
+        },
+        {
+          "id": "clock-sources",
+          "title": "两类时间源与失败模式",
+          "role": "mechanism-explanation",
+          "description": "解释 GPS 与原子钟互补的工程理由。",
+          "outcomeRefs": [
+            "clock-source-failures"
+          ],
+          "order": 1
+        },
+        {
+          "id": "masters-and-votes",
+          "title": "time master 与投票纠偏",
+          "role": "mechanism-explanation",
+          "description": "说明 master 的部署方式、互相校对和 daemon 的投票剔除机制。",
+          "outcomeRefs": [
+            "clock-source-failures"
+          ],
+          "order": 2
+        },
+        {
+          "id": "uncertainty-budget",
+          "title": "误差 ε 的构成与锯齿形",
+          "role": "quantitative-derivation",
+          "description": "用教材参数复算 6 ms 漂移上界与约 1 ms 通讯延迟。",
+          "outcomeRefs": [
+            "uncertainty-budget"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "确定性判断检查与下一节衔接",
+          "role": "formative-check",
+          "description": "用区间读法判断事件先后，并引出并发控制的作用。",
+          "outcomeRefs": [
+            "truetime-interval-guarantee",
+            "uncertainty-budget"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "truetime-interval-guarantee",
+          "clock-source-failures",
+          "uncertainty-budget"
+        ],
+        "method": "完成两道判断检查，说明区间内部时刻为何无法判定先后，并复算 ε 的正常峰值。",
+        "successCriteria": [
+          "能指出真实时间必落在 TTinterval 内，并据此判断 TT.after/TT.before 的返回条件",
+          "能说明 GPS 与原子钟的失败模式不相关，以及投票与自驱逐的作用",
+          "能由 30 秒投票间隔和 200 微秒/秒漂移率算出 6 ms 上界，并说明 1 ms 通讯延迟的来源"
+        ],
+        "exerciseBlockId": "model-order-check",
+        "summaryBlockId": "model-bridge-to-concurrency",
+        "nextPointId": "point-12-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "truetime-api-interval",
+        "moduleId": "api-and-interval",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：TrueTime API 与区间返回值",
+        "markdown": "TrueTime 对外提供三个接口（教材表 12-1）：`TT.now()` 返回一个时间区间 `TTinterval: [earliest, latest]`；`TT.after(t)` 在 $t$ 确定已经过去时返回 true；`TT.before(t)` 在 $t$ 确定尚未到达时返回 true。`TT.now()` 得到的绝对值与 UnixTime 相同，同时给出一个误差 $\\varepsilon$，`TT.after(t)` 和 `TT.before(t)` 都基于 `TT.now()` 实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000375"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TrueTime"
+              ],
+              "lineStart": 4998,
+              "lineEnd": 5013,
+              "assetRefs": [],
+              "excerptSha256": "f51516774acc2fbc336dc1337d1fc9387f8a26b216a95cc47b90c612946e64ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-interval-reading",
+        "moduleId": "api-and-interval",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：怎样读这三个返回值",
+        "markdown": "把返回值读成区间比读成一个点更准确：真实时间一定落在 $[earliest, latest]$ 之内。`TT.after(t)` 为真对应 $latest < t$，`TT.before(t)` 为真对应 $earliest > t$。当 $t$ 落在区间内部（$earliest \\le t \\le latest$）时，两个判断都不为真，此时系统只能承认“无法确定 $t$ 是否已经发生”。这种三态（确定已过、确定未到、无法确定）正是后续用时间戳判断事件先后的基础，而不是假设时钟绝对准确。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "truetime-api-interval"
+          ]
+        }
+      },
+      {
+        "id": "textbook-two-clocks",
+        "moduleId": "clock-sources",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：GPS 与原子钟的不同失败模式",
+        "markdown": "TrueTime 底层同时使用 GPS 和原子钟两类时间源，原因是它们的失败模式不同。GPS 参考时间的弱点是天线和接收器失效、局部电磁干扰，以及闰秒处理缺陷、电子欺骗和 GPS 系统运行中断这一类相关失败；原子钟也会失效，但失效方式与 GPS 无关，不同原子钟之间的失效也不存在彼此相关性。由于存在频率误差，原子钟经过很长时间后也会产生明显误差。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000375"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TrueTime"
+              ],
+              "lineStart": 4998,
+              "lineEnd": 5013,
+              "assetRefs": [],
+              "excerptSha256": "f51516774acc2fbc336dc1337d1fc9387f8a26b216a95cc47b90c612946e64ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-uncorrelated-failures",
+        "moduleId": "clock-sources",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么“失败不相关”比“更多的钟”更重要",
+        "markdown": "两类时间源的价值不只是数量上的冗余，而是让故障不相关：一次电磁干扰或欺骗可以同时压垮多台 GPS 接收器，却解释不了所有原子钟同时失效；反过来，原子钟的长期频率漂移也不会被 GPS 的短时故障掩盖。这种互补关系意味着，只要两类来源不一起失效，仍然可以给出可信的时间区间；如果只用同一种来源，相关性故障会让区间迅速失去意义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-two-clocks"
+          ]
+        }
+      },
+      {
+        "id": "textbook-time-masters",
+        "moduleId": "masters-and-votes",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：time master 的部署与自我驱逐",
+        "markdown": "TrueTime 由每个数据中心的多台 time master 机器和每台机器上的一个 timeslave daemon 共同实现。多数 master 配有专用天线的 GPS 接收器，并在物理上相互隔离，以减少天线失效、电磁干扰和电子欺骗的影响；其余被称为 Armageddon master 的机器配备原子钟，其成本与 GPS master 处于同一数量级。所有 master 的时间参考值彼此校对，每台 master 还会交叉检查参考值与本地时间的比值，差别太大就自我驱逐。同步期间，Armageddon master 表现出逐渐增大的时间不确定性，这来自保守应用的最差时钟漂移；GPS master 表现出的不确定性则几乎为 0。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000375"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TrueTime"
+              ],
+              "lineStart": 4998,
+              "lineEnd": 5013,
+              "assetRefs": [],
+              "excerptSha256": "f51516774acc2fbc336dc1337d1fc9387f8a26b216a95cc47b90c612946e64ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-marzullo-vote",
+        "moduleId": "masters-and-votes",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：daemon 投票与剔除撒谎者",
+        "markdown": "每个 daemon 从多台 master 收集投票获得时间参考值，从而减小误差：投票的 master 中既有附近数据中心的 GPS master，也有远处数据中心的 GPS master，还有 Armageddon master。daemon 使用 Marzullo 算法的一个变种来探测并拒绝欺骗，把本地时钟同步到未撒谎 master 的参考值。为防止本地时钟本身太差，Spanner 会根据组件规范和运行环境确定一个误差界限，本地时钟误差频繁超出这个界限的机器会被驱逐出去。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000375"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TrueTime"
+              ],
+              "lineStart": 4998,
+              "lineEnd": 5013,
+              "assetRefs": [],
+              "excerptSha256": "f51516774acc2fbc336dc1337d1fc9387f8a26b216a95cc47b90c612946e64ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vote-example",
+        "moduleId": "masters-and-votes",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：一次投票如何剔除偏离者",
+        "markdown": "设想 daemon 收到 5 个参考区间，其中 4 个在 $[t_1, t_2]$ 上互相重叠，第 5 个区间整体远离它们。Marzullo 变种的做法是寻找被最多区间共同覆盖的那一段，于是把本地时间校准到 $[t_1, t_2]$，第 5 个区间被排除。需要注意的是，被排除不代表它一定是恶意的：它也可能只是一台时钟漂移过大或通讯延迟异常的 master；教材中的“欺骗探测”和本地时钟越界驱逐，正是为了在这类情况下保护结果不被单个异常源带偏。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-marzullo-vote"
+          ]
+        }
+      },
+      {
+        "id": "textbook-epsilon-sawtooth",
+        "moduleId": "uncertainty-budget",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：ε 的来源与锯齿形变化",
+        "markdown": "同步期间，daemon 的时间不确定性会逐渐增大。$\\varepsilon$ 由保守应用的最差时钟漂移决定，也取决于 time master 的不确定性和与 time master 之间的通讯延迟。在 Google 的线上应用环境中，$\\varepsilon$ 通常是关于时间的锯齿形函数，在每个投票间隔内于 1 到 7 ms 之间变化，平均值约为 4 ms。当前 daemon 的投票间隔是 30 秒，当前使用的时钟漂移比率是 200 微秒/秒，二者一起意味着 0 到 6 ms 的锯齿形边界，剩余的 1 ms 主要来自到 time master 的通讯延迟。失败时超过这条边界也是可能的：偶发的 time master 不确定性可能引起整个数据中心范围内的 $\\varepsilon$ 增加，过载的机器或网络连接也会导致 $\\varepsilon$ 偶尔局部增大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000375"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "TrueTime"
+              ],
+              "lineStart": 4998,
+              "lineEnd": 5013,
+              "assetRefs": [],
+              "excerptSha256": "f51516774acc2fbc336dc1337d1fc9387f8a26b216a95cc47b90c612946e64ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-epsilon-derivation",
+        "moduleId": "uncertainty-budget",
+        "depth": "core",
+        "kind": "formula",
+        "title": "模型补充：复算误差预算",
+        "markdown": "用教材给出的参数可以把这条预算算清楚：\n\n$$30\\ \\text{s} \\times 200\\ \\mu\\text{s/s} = 6000\\ \\mu\\text{s} = 6\\ \\text{ms}$$\n\n这 6 ms 是两次投票之间由最差漂移累积出的不确定性上界，再加上约 1 ms 的通讯延迟，就得到 7 ms 的峰值。区间从投票时刻起随时间线性增长，因此在 $[0, 6]$ ms 上均匀变化时平均值约为 3 ms；加上通讯延迟约 1 ms，正好对应教材给出的平均 4 ms。由此也能看出一个取舍：缩短投票间隔可以压低 $\\varepsilon$ 的峰值，代价是更频繁的投票通讯；而故障情形下的误差不再受这条锯齿边界约束。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-epsilon-sawtooth"
+          ]
+        }
+      },
+      {
+        "id": "model-order-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：两道判断检查",
+        "markdown": "判断下面两个结论是否成立，并写出依据。\n\n1. 某次 `TT.now()` 返回 $[100, 108]$ ms，另一个事件的时间戳 $t = 105$ ms，此时 `TT.after(t)` 与 `TT.before(t)` 都不会返回 true。\n2. 只要把投票间隔从 30 秒缩短，$\\varepsilon$ 的峰值就一定不超过 7 ms。\n\n参考思路：第 1 题要看 $t$ 是否落在区间内部，落在内部就意味着“无法确定是否已经发生”；第 2 题要注意教材明确说明故障时误差可能超过锯齿边界，缩短间隔只影响正常情况下的漂移累积部分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-interval-reading",
+            "textbook-epsilon-sawtooth"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-to-concurrency",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：要点回顾与衔接",
+        "markdown": "要点回顾：TrueTime 不承诺一个精确的“当前时刻”，而是承诺真实时间落在 `TT.now()` 给出的区间内，并用 `TT.after`/`TT.before` 把不确定性变成“确定已过、确定未到、无法确定”三种判断；区间半宽（时间误差上界）$\\varepsilon$ 由时钟漂移、master 不确定性和通讯延迟共同决定，正常情况下呈 1–7 ms 的锯齿形，故障时可能超出。下一节讨论 Spanner 的并发控制，也就是如何使用这种带误差的时间判断来安排事务。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-interval-reading",
+            "textbook-epsilon-sawtooth"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "truetime-order-check",
+        "type": "formative-check",
+        "title": "用时间区间判断事件先后",
+        "anchorBlockId": "model-order-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "truetime-interval-guarantee",
+          "uncertainty-budget"
+        ],
+        "learningPurpose": "检查学习者能否把区间读法用于判断事件先后，并区分正常锯齿边界与故障时的误差。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "truetime-api-interval",
+            "model-interval-reading",
+            "textbook-epsilon-sawtooth"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若交互不可用：已知 `TT.now()` 返回 $[100, 108]$ ms，判断 $t = 105$ ms 时 `TT.after(t)` 与 `TT.before(t)` 的返回值，并说明 30 秒投票间隔与 200 微秒/秒漂移率如何给出 6 ms 上界。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Google Spanner",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000375"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "TrueTime"
+      ],
+      "lineStart": 4998,
+      "lineEnd": 5013,
+      "assetRefs": [],
+      "excerptSha256": "f51516774acc2fbc336dc1337d1fc9387f8a26b216a95cc47b90c612946e64ab"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1854,
+    19
+  ],
+  "scale": 1.2
+}

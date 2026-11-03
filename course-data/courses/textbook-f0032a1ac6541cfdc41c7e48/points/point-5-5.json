@@ -1,0 +1,614 @@
+{
+  "id": "point-5-5",
+  "title": "HDFS 存储原理",
+  "shortSummary": "解释 HDFS 如何分块存储文件、复制副本并在集群中分布数据以实现可靠存储。",
+  "keyTerms": [
+    "分块存储",
+    "副本机制",
+    "数据分布"
+  ],
+  "animationType": "hdfsWritePipeline",
+  "animationSuggestion": "用一条横向流水线展示单个数据块从客户端经三台数据节点完成 3 副本复制的过程，标注每台数据节点所在机柜，并实时显示副本数从 0 增加到 3；支持重播回到同一初始状态。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-5-2",
+    "point-5-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于冗余保存、机柜存放、读取与流水线复制的事实和数字，围绕“为什么这样存”重排讲解顺序，补充动机解释、机制对照表与情境检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-block-replica",
+          "text": "说明 HDFS 为什么把文件切成数据块并保存多份副本，以及块大小和冗余参数的可配置性。"
+        },
+        {
+          "id": "apply-rack-placement",
+          "text": "解释基于机柜的数据存放策略，说明默认 3 副本的分布规则及其可靠性与带宽依据。"
+        },
+        {
+          "id": "explain-read-pipeline",
+          "text": "描述读取时就近选择数据节点的规则，以及写入时流水线复制的完整过程。"
+        },
+        {
+          "id": "evaluate-version-context",
+          "text": "辨析教材中的默认参数与当前版本实现的差异，避免把旧版数字当作通用默认值。"
+        }
+      ],
+      "misconceptions": [
+        "把冗余复制因子 3 当成不可修改的固定值，忽略教材所说的“冗余参数可在创建后改变”。",
+        "认为副本是随机分散到各台机器，忽略存放策略以机柜为单位。",
+        "认为客户端要先把整块数据完整上传，再由某台节点复制三份。",
+        "认为 HDFS 中的文件可以随时追加修改。"
+      ],
+      "modules": [
+        {
+          "id": "block-and-replica",
+          "title": "分块与多副本：可靠存储的基础",
+          "role": "concept",
+          "description": "先建立数据块与副本这两个存储单位，再解释容错动机与副本状态上报。",
+          "outcomeRefs": [
+            "explain-block-replica"
+          ],
+          "order": 0
+        },
+        {
+          "id": "rack-placement",
+          "title": "机柜感知的数据存放",
+          "role": "mechanism",
+          "description": "从“存几份”转到“放在哪里”，解释机柜策略的收益与代价以及默认 3 副本规则。",
+          "outcomeRefs": [
+            "apply-rack-placement"
+          ],
+          "order": 1
+        },
+        {
+          "id": "read-and-pipeline",
+          "title": "就近读取与流水线复制",
+          "role": "mechanism",
+          "description": "解释读取时的机柜匹配规则与写入时的流水线复制过程。",
+          "outcomeRefs": [
+            "explain-read-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "tradeoffs-and-check",
+          "title": "取舍辨析与达成检查",
+          "role": "synthesis",
+          "description": "用对照表串联三个机制，澄清常见误解并完成情境判断。",
+          "outcomeRefs": [
+            "evaluate-version-context"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-block-replica",
+          "apply-rack-placement",
+          "explain-read-pipeline",
+          "evaluate-version-context"
+        ],
+        "method": "完成机柜断电情境下的可读性判断，并说明目录节点据以恢复副本的信息来源。",
+        "successCriteria": [
+          "能说出默认 3 副本在两个机柜间的分布",
+          "能说明流水线复制中数据包如何逐级转发",
+          "能指出教材描述与当前默认配置的差异"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-5-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-storage-scope",
+        "moduleId": "block-and-replica",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材本节的讨论范围",
+        "markdown": "教材第 5.5 节的标题是「HDFS 存储原理」，其下依次讨论冗余数据保存、数据存取策略（含数据存放与数据读取）以及数据复制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000147"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "HDFS 存储原理"
+              ],
+              "lineStart": 1948,
+              "lineEnd": 1949,
+              "assetRefs": [],
+              "excerptSha256": "edf3638362ec44c23edb4798d99b4d85c9437246084991b5597361269cb67b4d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-redundancy",
+        "moduleId": "block-and-replica",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "冗余数据保存",
+        "markdown": "HDFS 是为大文件的可靠保存而设计的：一个文件被划分成一连串数据块，除最后一块以外，所有数据块都是固定大小的。为了数据容错，每一个数据块都会被冗余存储，即保存多个副本；文件块大小和冗余参数都是可以设置的，冗余参数既可以在创建文件时指定，也可以在之后改变。HDFS 中文件只会被写入一次，并且任何时间只有一个程序在写入这个文件。\n\n目录节点根据数据块的冗余状况作出处理决策：数据节点会定期向目录节点发送存在信号（Heartbeat）和数据块列表。存在信号让目录节点认为该数据节点仍然有效，数据块列表则包含该节点上所有数据块的编号。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000148"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "冗余数据保存"
+              ],
+              "lineStart": 1950,
+              "lineEnd": 1955,
+              "assetRefs": [],
+              "excerptSha256": "e889d0e23df58c2db815e037968b7affd239c68c9db5e95e1f3588235bcbc2c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-storage",
+        "moduleId": "block-and-replica",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：分块与副本为何是同一套设计",
+        "markdown": "把“分块”和“多副本”放在一起看，才能理解 HDFS 的容错方式：数据块是存储与复制的最小单位，副本是容错手段。\n\n块大小决定单个存储单元的上限和可并行处理的粒度，副本数决定能同时容忍多少个副本失效。两者都是可配置参数，因此同一集群可以按文件在可靠性与空间开销之间调平衡。教材强调“文件只写一次、同一时间只有一个写入程序”，意味着副本维护主要发生在写入和恢复阶段，而不是日常随机改写。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-storage-scope",
+            "textbook-redundancy"
+          ]
+        }
+      },
+      {
+        "id": "model-heartbeat-role",
+        "moduleId": "block-and-replica",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：心跳与数据块列表的作用",
+        "markdown": "存在信号和数据块列表合起来构成一份“副本账本”：目录节点不必主动轮询每台机器，只靠数据节点定期上报，就能知道哪些副本仍然有效、哪些数据块的副本数已低于冗余因子，从而决定是否再复制。这套上报机制把“副本数是否达标”从静态配置变成了可持续检查的运行状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-redundancy"
+          ]
+        }
+      },
+      {
+        "id": "textbook-access-strategy",
+        "moduleId": "rack-placement",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "数据存取策略：复制策略是核心",
+        "markdown": "复制策略是 HDFS 最核心的部分，对读写性能影响很大。教材指出，HDFS 与其他分布式文件系统的一个最大区别是可以调整冗余数据的位置；这项特性需要大量时间去优化和调整，当前实现只是该方向上的尝试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000149"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "数据存取策略"
+              ],
+              "lineStart": 1956,
+              "lineEnd": 1959,
+              "assetRefs": [],
+              "excerptSha256": "110bd5c769d4cdc7a4566340936e6591876718749ca30e2325378a8905695f21"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-placement-tradeoff",
+        "moduleId": "rack-placement",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：存放位置权衡的是什么",
+        "markdown": "存放策略回答的是“副本放在哪里”。同一份数据放得越分散，抗故障能力越强，但读取时跨机柜流量越大；放得越集中，写入时越能利用同一机柜内的高带宽，但一次机柜故障可能同时带走多个副本。因此复制策略既是可靠性问题，也是性能问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-access-strategy"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rack-motivation",
+        "moduleId": "rack-placement",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "数据存放：以机柜为基础",
+        "markdown": "HDFS 采用以机柜为基础的数据存放策略，目的是提高数据可靠性并充分利用网络带宽。一个大的集群经常横跨多个机柜，不同机柜之间的数据通信需要经过交换机或者路由，所以同一机柜中不同机器之间的通信带宽，要比不同机柜之间机器的通信带宽大。\n\nHDFS 提供 API 来决定数据节点所属的机柜 ID：文件系统启动时，数据节点把自己所属的机柜 ID 发给目录节点，目录节点管理这些分组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000150"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 数据存放"
+              ],
+              "lineStart": 1960,
+              "lineEnd": 1981,
+              "assetRefs": [],
+              "excerptSha256": "95007fc96b662cd521165419d9591c932ac9dae7b4d142e2c3a92a1971517aff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-rack-spread",
+        "moduleId": "rack-placement",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "数据存放：每个节点单独一个机柜的假设",
+        "markdown": "教材描述了一种默认做法：Hadoop 默认是每个数据节点都在不同的机柜上。这种方法没有做额外的性能优化，但优点不少：数据可靠性最高，因为可以防止机柜出错时数据丢失；读取数据时能充分利用不同机柜之间的带宽；并且很容易完成负载平衡和错误处理。缺点则是写入数据时不能完全利用同一机柜内机器的带宽。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000150"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 数据存放"
+              ],
+              "lineStart": 1960,
+              "lineEnd": 1981,
+              "assetRefs": [],
+              "excerptSha256": "95007fc96b662cd521165419d9591c932ac9dae7b4d142e2c3a92a1971517aff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-replica-three",
+        "moduleId": "rack-placement",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "默认 3 副本的跨机柜分布",
+        "markdown": "在默认配置下，HDFS 的冗余复制因子是 3，意思是每一块文件数据一共有 3 个地方存放。教材给出的具体存放策略是：其中两份放在同一个 rack id 的不同机器上，另外一份放在不同 rack id 的机器上。简单来说，就是 1/3 的冗余数据在一个机柜里，2/3 的冗余数据在另一个机柜里；这样既可以防止机柜异常时的数据丢失，又可以提高读写性能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000150"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 数据存放"
+              ],
+              "lineStart": 1960,
+              "lineEnd": 1981,
+              "assetRefs": [],
+              "excerptSha256": "95007fc96b662cd521165419d9591c932ac9dae7b4d142e2c3a92a1971517aff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rack-reading",
+        "moduleId": "rack-placement",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：两段描述的差异与阅读方式",
+        "markdown": "教材在同一小节里先描述“每个数据节点在不同机柜”的默认做法，随后又给出“两份在同一 rack id、一份在另一 rack id”的具体规则，两段并不完全一致。阅读时应把前一段理解为理想化的讨论，把后一段的具体分布当作本节要掌握的策略；实际部署时还要以所用 Hadoop 版本的机柜感知配置为准，不能把教材数字直接当作当前默认值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rack-spread",
+            "textbook-replica-three"
+          ]
+        }
+      },
+      {
+        "id": "textbook-read-policy",
+        "moduleId": "read-and-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "数据读取：优先同机柜",
+        "markdown": "数据读取策略与数据存放策略配套：客户端也有 API 来确定自己的机柜 ID。读取时，如果有数据块所在的数据节点与客户端的机柜 ID 相同，就优先选择该数据节点，客户端直接与该数据节点建立连接读取数据；如果没有同机柜的副本，就随机选取一个数据节点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000151"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 数据读取"
+              ],
+              "lineStart": 1982,
+              "lineEnd": 1985,
+              "assetRefs": [],
+              "excerptSha256": "dee4413add472585303e6ac081e9ee9abdb4ab2682d370b2465a9f750a4261e2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-locality",
+        "moduleId": "read-and-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么就近读取能省带宽",
+        "markdown": "优先同机柜读取的依据是网络拓扑：跨机柜流量要经过交换机或路由器，同机柜内带宽更大、往返更短，所以能本地读就不跨机柜。没有同机柜副本时随机选一个节点，是在“不保证最优”与“保证可读”之间选择后者，避免因为拓扑不匹配而拒绝请求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-read-policy"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pipeline",
+        "moduleId": "read-and-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "数据复制：流水线写入",
+        "markdown": "数据复制主要发生在数据写入和数据恢复的时候，采用的是流水线复制策略。当客户端要在 HDFS 上写一个文件时，它先把文件写在本地，然后对文件进行分块，教材给出的默认值是一块 64MB；每块数据都向目录服务器发起写入请求，目录服务器选择一个数据节点列表返回给客户端。客户端把数据写入第一台数据节点，并把列表一起传给该节点；数据节点每收到 4KB 数据，就写入本地，同时发起连接到下一台数据节点，把这 4KB 数据传过去，从而形成一条流水线。文件写完的时候，数据复制也同时完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000152"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 数据复制"
+              ],
+              "lineStart": 1986,
+              "lineEnd": 1989,
+              "assetRefs": [],
+              "excerptSha256": "ea1a6ef8361c9c2df9c1d7619954968dcfa330dd18f49261260c0d0f83097987"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-benefit",
+        "moduleId": "read-and-pipeline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：流水线复制的收益与代价",
+        "markdown": "流水线的价值在于把“传输”和“落盘”重叠起来：客户端不必等整个块传完才开始复制，第一台数据节点收到一小段数据就可以写本地并转发。这样客户端只需上传一份数据，链路上的每台节点同时承担接收与转发，副本数沿链增长，缩短了总的复制时间。代价是链路中任一节点变慢都会拖住整条流水线。\n\n教材给出的 64MB 是成书时期的默认块大小，实际集群应以所用版本的配置为准，不要把它当作不变常量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-table",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "support",
+        "kind": "table",
+        "title": "三个机制的对照",
+        "markdown": "| 机制 | 触发时机 | 主要目标 |\n|---|---|---|\n| 分块与多副本 | 文件写入、冗余参数调整 | 让大文件可管理，并做到块级容错 |\n| 机柜感知存放 | 目录节点为数据块选择位置 | 兼顾机柜级故障容错与网络带宽 |\n| 就近读取 | 客户端读取数据块 | 减少跨机柜流量 |\n| 流水线复制 | 数据写入与故障恢复 | 边传边存，缩短复制总时间 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-redundancy",
+            "textbook-replica-three",
+            "textbook-read-policy",
+            "textbook-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解",
+        "markdown": "- 误以为副本因子固定为 3、不能修改。教材明确块大小与冗余参数都可设置，冗余参数还能在创建后改变，3 只是默认配置。\n- 误以为副本随机撒在不同机器上。教材的存放策略以机柜为单位，默认规则是同一机柜两台机器加另一机柜一台。\n- 误以为客户端要先把整块数据完整上传再开始复制。流水线复制是边转发边写本地，数据包（教材举例 4KB）沿链条传递。\n- 误以为 HDFS 文件可以随时追加改写。教材说明文件只写一次，且同一时间只有一个程序在写。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-redundancy",
+            "textbook-replica-three",
+            "textbook-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "情境检查",
+        "markdown": "一个 3 副本的 HDFS 集群横跨机柜 A 和机柜 B。某文件的一个数据块目前有两份副本在机柜 A 的两台机器上，另一份在机柜 B。请判断：若机柜 A 整体断电，这个数据块是否仍然可读？副本如何恢复到 3 份，目录节点依据什么信息作出决定？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison-table"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "三个机制扣在一起：分块与副本把可靠存储拆成可管理的单元，机柜感知的存放决定副本放在哪里，就近读取与流水线复制决定这些副本怎样被高效读写。理解它们的关键不是背下某个数字，而是看清可靠性、带宽与实现复杂度之间的取舍，以及块大小、副本因子、机柜布局这些参数如何改变取舍结果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison-table",
+            "model-misconceptions",
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "storage-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "title": "机柜故障后的副本恢复判断",
+        "outcomeRefs": [
+          "apply-rack-placement",
+          "explain-read-pipeline",
+          "evaluate-version-context"
+        ],
+        "learningPurpose": "检查学习者能否把 3 副本跨机柜规则与心跳上报机制结合，判断故障后的可读性并说明恢复依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-comparison-table"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "机柜 A 断电后，机柜 B 上的那份副本仍可提供服务，因此数据块可读；但由于副本数降为 1，低于冗余因子 3，目录节点会根据数据节点上报的存在信号与数据块列表发现冗余不足，并安排再复制。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HDFS",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000147"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "HDFS 存储原理"
+      ],
+      "lineStart": 1948,
+      "lineEnd": 1949,
+      "assetRefs": [],
+      "excerptSha256": "edf3638362ec44c23edb4798d99b4d85c9437246084991b5597361269cb67b4d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000148"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "冗余数据保存"
+      ],
+      "lineStart": 1950,
+      "lineEnd": 1955,
+      "assetRefs": [],
+      "excerptSha256": "e889d0e23df58c2db815e037968b7affd239c68c9db5e95e1f3588235bcbc2c6"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000149"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "数据存取策略"
+      ],
+      "lineStart": 1956,
+      "lineEnd": 1959,
+      "assetRefs": [],
+      "excerptSha256": "110bd5c769d4cdc7a4566340936e6591876718749ca30e2325378a8905695f21"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000150"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 数据存放"
+      ],
+      "lineStart": 1960,
+      "lineEnd": 1981,
+      "assetRefs": [],
+      "excerptSha256": "95007fc96b662cd521165419d9591c932ac9dae7b4d142e2c3a92a1971517aff"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000151"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 数据读取"
+      ],
+      "lineStart": 1982,
+      "lineEnd": 1985,
+      "assetRefs": [],
+      "excerptSha256": "dee4413add472585303e6ac081e9ee9abdb4ab2682d370b2465a9f750a4261e2"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000152"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 数据复制"
+      ],
+      "lineStart": 1986,
+      "lineEnd": 1989,
+      "assetRefs": [],
+      "excerptSha256": "ea1a6ef8361c9c2df9c1d7619954968dcfa330dd18f49261260c0d0f83097987"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2669,
+    1985
+  ],
+  "scale": 0.98
+}

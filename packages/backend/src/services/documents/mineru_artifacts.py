@@ -192,7 +192,8 @@ def _is_auxiliary_boundary_title(title: str) -> bool:
 
     Main-text headings such as ``习题（答案见附录 D）`` mention an answer but
     are still part of the chapter. Only a heading that starts an auxiliary
-    section may terminate the chapter search window.
+    section may terminate the chapter search window. Chapter-end reference
+    lists do not terminate the whole book.
     """
 
     compact = _compact(title)
@@ -208,7 +209,6 @@ def _is_auxiliary_boundary_title(title: str) -> bool:
             "附录",
             "习题答案",
             "自测题答案",
-            "参考文献",
             "常用逻辑门",
             "芯片型号",
         )
@@ -251,6 +251,10 @@ def build_mineru_markdown_artifacts(
         int(heading.line)
         for heading in headings
         if _is_auxiliary_boundary_title(str(getattr(heading, "title", "")))
+        or (
+            heading.line > matched[-1][1].line
+            and _compact(heading.title) == "参考文献"
+        )
     ]
     main_section_end = len(sections)
     if auxiliary_lines:
@@ -302,6 +306,14 @@ def build_mineru_markdown_artifacts(
                 and len(number) == 2
                 and str(number[0]) == chapter_number
             ):
+                if any(
+                    getattr(headings_by_line[int(previous["line_start"])], "number", None) == number
+                    and _compact(previous["title"]) == _compact(section["title"])
+                    for previous in numbered_points
+                ):
+                    # Repeated running headings remain in the source evidence
+                    # but must not create a second point with the same identity.
+                    continue
                 numbered_points.append(section)
         points_sections = numbered_points
         if not points_sections:
