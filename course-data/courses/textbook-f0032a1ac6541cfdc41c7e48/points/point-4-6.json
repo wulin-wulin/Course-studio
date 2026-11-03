@@ -1,0 +1,544 @@
+{
+  "id": "point-4-6",
+  "title": "实例分析：WordCount",
+  "shortSummary": "以词频统计为例演示 Map 与 Reduce 的配合过程，帮助理解分布式计数任务。",
+  "keyTerms": [
+    "WordCount",
+    "词频统计",
+    "实例分析"
+  ],
+  "animationType": "mapReducePipeline",
+  "animationSuggestion": "用固定的三行输入分阶段播放：先显示每行被切分并逐条产出 (word,1)；再显示 combine 把同一 map 内的相同单词合并；然后显示 shuffle 按分区聚集、按 key 排序分组；最后显示 reduce 逐组求和并列出与输入对应的频数表，同时提供重播回到同一组初始输入。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-4-2",
+    "point-4-3",
+    "point-4-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的问题引入顺序、样例与代码骨架，围绕数据流轨迹补充可检验的算例、combiner 的使用前提与迁移提醒。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-wordcount-pipeline",
+          "text": "说明 WordCount 中 map、shuffle 与 reduce 各自负责什么，以及键值形式为何这样设计。"
+        },
+        {
+          "id": "trace-wordcount-data",
+          "text": "给定一段输入文本，写出 map 的中间记录、combine 后的部分和与最终频数输出。"
+        },
+        {
+          "id": "evaluate-design-tradeoff",
+          "text": "比较单机程序、多线程程序、多机手工部署与 MapReduce 方案，说明框架承担了哪些工程负担。"
+        }
+      ],
+      "misconceptions": [
+        "认为 combiner 在任何场景下都能安全地替代部分 reduce 工作，忽略它只适用于满足结合律与交换律的归约。",
+        "把 key 设置成整行或其他粒度，导致 reduce 统计的是行数而不是词频。"
+      ],
+      "modules": [
+        {
+          "id": "scenario-and-methods",
+          "title": "情境与四种解法",
+          "role": "case-context",
+          "description": "从论文词频统计的需求出发，比较单机、多线程、多机手工部署与 MapReduce 四种做法。",
+          "outcomeRefs": [
+            "evaluate-design-tradeoff"
+          ],
+          "order": 0
+        },
+        {
+          "id": "design-decisions",
+          "title": "设计决策：拆分与键值形式",
+          "role": "case-decision",
+          "description": "确定 map、shuffle、reduce 的分工，并把 map 输出设计成以单词为 key、1 为 value。",
+          "outcomeRefs": [
+            "explain-wordcount-pipeline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "code-evidence",
+          "title": "代码证据",
+          "role": "case-evidence",
+          "description": "阅读教材给出的 mapper、reducer 与作业配置，确认设计与代码一致。",
+          "outcomeRefs": [
+            "explain-wordcount-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "execution-trace",
+          "title": "执行轨迹：从中间记录到频数",
+          "role": "case-result",
+          "description": "按执行顺序走完分片、map、刷盘、分区、排序、reduce 的全过程，并核对 partition 与 combine 的作用。",
+          "outcomeRefs": [
+            "trace-wordcount-data"
+          ],
+          "order": 3
+        },
+        {
+          "id": "reflection-and-transfer",
+          "title": "反思与迁移",
+          "role": "case-reflection",
+          "description": "用新任务检查所学，回顾 WordCount 的设计要点与可调环节。",
+          "outcomeRefs": [
+            "trace-wordcount-data",
+            "evaluate-design-tradeoff"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-wordcount-pipeline",
+          "trace-wordcount-data",
+          "evaluate-design-tradeoff"
+        ],
+        "method": "完成三道输入轨迹练习，并用自己的话说明框架代劳了哪些工程工作。",
+        "successCriteria": [
+          "中间记录与最终频数完全正确",
+          "能指出 key 的粒度与统计对象的关系",
+          "能说明 combiner 成立的前提条件"
+        ],
+        "exerciseBlockId": "model-check-prompt",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-4-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-motivation",
+        "moduleId": "scenario-and-methods",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材的引入：为什么需要 MapReduce",
+        "markdown": "教材用“统计过去 10 年计算机论文中出现次数最多的单词”引入本章实例，并列出四种做法：单机程序按顺序遍历论文；多线程并发遍历；把程序人工部署到 N 台机器、切分论文集后各跑一份再合并结果；以及把任务交给 MapReduce。\n\n前三种方法的代价各不相同：单机实现最简单，但算力受限于一台机器；多线程要自己同步共享数据，比如防止两个线程重复统计同一个文件；多机手工部署虽然跑得足够快，但复制程序、切分论文集、整合 N 个运行结果都要人工完成。教材据此把 MapReduce 定位为第四种方法：本质上仍是多机分工，只是拆分文件集、复制分发程序、整合结果都由框架定义好，用户只需定义这个任务本身。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000128"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "实例分析：WordCount"
+              ],
+              "lineStart": 1628,
+              "lineEnd": 1639,
+              "assetRefs": [],
+              "excerptSha256": "c5c16fb031235367213837ef80d50b24cce0963e577d834255449765eb60f7d1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-method-comparison",
+        "moduleId": "scenario-and-methods",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充对比：四种解法的代价",
+        "markdown": "把教材的四种做法放在同一组维度上比较，可以看清 MapReduce 到底省掉了什么：\n\n| 方案 | 如何获得并行性 | 需要自己承担的工作 |\n|---|---|---|\n| 单机顺序程序 | 无并行 | 只需遍历与计数 |\n| 多线程程序 | 多核或多处理器上并发处理不同文件 | 同步共享计数，避免重复统计 |\n| 多机手工部署 | N 台机器各跑一份 | 复制分发程序、切分论文集、整合 N 份结果 |\n| MapReduce | 框架把输入分成多份并行处理 | 只定义 map 与 reduce 任务 |\n\n可见 WordCount 要解决的不只是“怎么计数”，还有“谁来切分、分发和汇总”。后者正是框架的价值所在，而计数逻辑本身在四种方案里几乎是一样的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-motivation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-design",
+        "moduleId": "design-decisions",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材的设计思路：三步分工与键值形式",
+        "markdown": "教材的输入样例是三行文本，输出要求按单词字母顺序排列，每个单词和它的频数占一行：\n\n```txt\n输入：\nhello world\nhello hadoop\nhello mapreduce\n\n输出：\nhadoop 1\nhello 3\nmapreduce 1\nworld 1\n```\n\n设计思路是把整个过程拆成三步：切分单词与数据内容无关，可以并行，放在 map 阶段；相同单词的频数计算彼此不相关，可以把同一个单词交给一台机器算，放在 reduce 阶段；把中间结果按单词分组再分发，正好是 MapReduce 的 shuffle 能完成的默认过程，不需要另外配置。\n\n键值形式也随之确定：map 的输入沿用 Hadoop 默认输入方式，一行内容作为 value、行号作为 key；map 输出设计成以单词为 key、1 为 value，表示这个词出现了一次；reduce 的输入是聚集后的结果，即 `<word, {1,1,1,...}>`；reduce 的输出与 map 输出同形，只是数值换成算出的频数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000129"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "WordCount 设计思路"
+              ],
+              "lineStart": 1640,
+              "lineEnd": 1656,
+              "assetRefs": [],
+              "excerptSha256": "76557c216f0c538f25adabecac55731af08301f11a142866679532b7438a2e95"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-key-value-design",
+        "moduleId": "design-decisions",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：为什么 value 取 1",
+        "markdown": "把 value 取成常数 1 并不是随手写法，而是把“这个词出现了一次”编码成一个可以反复相加的单元。这样一来，无论某个单词的中间记录被分成几组、在哪台机器上聚合，把全部 1 相加都得到同一个频数，reduce 端不需要知道记录来自哪一行。\n\nkey 的选择则决定了分组单位：shuffle 按 key 排序并聚集，把 key 设为单词，reduce 拿到的就是同一个单词的全部计数；如果把 key 设为整行内容，reduce 只能算出“这一行出现了几次”，得不到词频。这也解释了为什么“设计 map 输出的键”等价于“设计 reduce 的输入单位”。\n\n教材样例的输出按字母顺序排列，这与 shuffle 按 key 排序一致。需要补充一个教材没有展开的细节：当 Reduce 任务多于一个时，各分区内部有序，但整体顺序取决于分区规则，未必全局按字母序排列。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-design"
+          ]
+        }
+      },
+      {
+        "id": "textbook-code",
+        "moduleId": "code-evidence",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：mapper、reducer 与作业配置",
+        "markdown": "教材给出的程序由 `TokenizerMapper`、`IntSumReducer` 与 `main` 入口三部分组成。\n\n```java\npublic static class TokenizerMapper extends Mapper<Object, Text, Text, IntWritable> {\n    private final static IntWritable one = new IntWritable(1);\n    private Text word = new Text();\n    public void map(Object key, Text value, Context context) {\n        StringTokenizer itr = new StringTokenizer(value.toString());\n        while (itr.hasMoreTokens()) {\n            word.set(itr.nextToken());\n            context.write(word, one);\n        }\n    }\n}\n```\n\n```java\npublic static class IntSumReducer extends Reducer<Text, IntWritable, Text, IntWritable> {\n    private IntWritable result = new IntWritable();\n    public void reduce(Text key, Iterable<IntWritable> values, Context context) {\n        int sum = 0;\n        for (IntWritable val : values) {\n            sum += val.get();\n        }\n        result.set(sum);\n        context.write(key, result);\n    }\n}\n```\n\n作业配置部分是：\n\n```java\nJob job = new Job(conf, \"word count\");\njob.setJarByClass(WordCount.class);\njob.setMapperClass(TokenizerMapper.class);\njob.setCombinerClass(IntSumReducer.class);\njob.setReducerClass(IntSumReducer.class);\njob.setOutputKeyClass(Text.class);\njob.setOutputValueClass(IntWritable.class);\n```\n\n教材这段代码在排版上出现了两处乱码（`addInputPath` 与 `setOutputPath` 所在的两行），原意是为作业设置输入路径和输出路径，最后用 `job.waitForCompletion(true)` 等待作业结束并按成功与否设置退出码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000130"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "WordCount 代码"
+              ],
+              "lineStart": 1657,
+              "lineEnd": 1719,
+              "assetRefs": [],
+              "excerptSha256": "1bb7c345bda1d9a70f7afe0eff743101ac4cea071b249dc4ae6f9014c3ce0731"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-driver-settings",
+        "moduleId": "code-evidence",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：一行配置复用了 reducer",
+        "markdown": "`job.setCombinerClass(IntSumReducer.class)` 说明教材让 combiner 直接复用 reduce 的实现。这在词频统计里成立，因为这里的归约就是求和，而求和满足结合律和交换律：先把一部分计数加起来，再把部分和加起来，结果与一次加完相同。\n\n教材同时指出 combiner 是可选择的，它作为 Map 任务的一部分，在 map 函数执行完之后紧接着运行，用来在本地先做一部分 reduce 的工作。复用同一份代码省去了再写一个类的麻烦，但前提是这个归约操作必须满足上述性质；换成不满足条件的操作就不能直接复用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-code"
+          ]
+        }
+      },
+      {
+        "id": "textbook-map-reduce-io",
+        "moduleId": "execution-trace",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材的过程解释：map 与 reduce 的输入输出",
+        "markdown": "map 操作的输入是 `<key, value>` 形式，其中 key 是文档中某行的行号，value 是该行的内容；map 会把输入文档中每一个单词的输出写到中间文件里去（教材图 4-10）。\n\nreduce 操作的输入是单词和出现次数的序列（教材图 4-11），以上面的例子来说就是 `<“Hello”, [1,1,1]>`、`<“World”, [1,1]>`、`<“Bye”, [1,1,1]>`、`<“Hadoop”, [1,1,1,1]>` 等，然后根据每个单词算出总的出现次数。最后输出排序后的结果是：`<“Bye”, 3>`、`<“Hadoop”, 4>`、`<“Hello”, 3>`、`<“World”, 2>`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "过程解释"
+              ],
+              "lineStart": 1720,
+              "lineEnd": 1760,
+              "assetRefs": [
+                "parts/part-0001/images/b7138ed97b6e4f92f8a0f68475312d193ccba61198f5e6cb46ee4698e52abdac.jpg",
+                "parts/part-0001/images/793a5db328d6a8cbd7aca49784a15cdc560d3cad5028f5ad00b1bb748551e993.jpg",
+                "parts/part-0002/images/6fc02ad87d307dd325f61cccf3e1ab1dd25c515edd3bb02e8eba95eed91a5984.jpg",
+                "parts/part-0002/images/dfbbeef48e8a82a796b1aaac2700c0879bdd29569852bea33c0c00253dc3026b.jpg"
+              ],
+              "excerptSha256": "eba7828c110313a9aed73cb50dc7fbd3701fade9ac0c3c480314b8d61e96f2fa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-execution-steps",
+        "moduleId": "execution-trace",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材给出的执行顺序",
+        "markdown": "教材把整个 MapReduce 过程实际的执行顺序总结为七步：\n\n1. MapReduce Library 把输入分成 M 份，负责切分的 Input Splitter 也可以在多台机器上并行工作。\n2. Master 把这 M 份作业分配给空闲的 M 个 worker。\n3. 对输入中的每一个 `<key, value>` 执行 map 操作，中间结果先缓冲在内存里。\n4. 定期地或根据内存状态，把缓冲区中的中间信息刷写到本地磁盘，并把文件信息传回 Master，由 Master 转告 Reduce worker。写磁盘时要按 R 个分区做 Partition，保证相同的 key 落在同一个分区。\n5. R 个 Reduce worker 从不同 Map worker 的分区那里取数据，按 key 排序；内存放不下时使用外部排序。排序（分组）是执行 reduce 函数之前必须完成的一步。\n6. Reduce worker 遍历中间数据，对每一个唯一的 key 执行 reduce 函数，参数是这个 key 以及相对应的一系列 value。\n7. 全部执行完毕后唤醒用户程序并返回结果，最终得到 R 份输出，每个 Reduce worker 一份。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "过程解释"
+              ],
+              "lineStart": 1720,
+              "lineEnd": 1760,
+              "assetRefs": [
+                "parts/part-0001/images/b7138ed97b6e4f92f8a0f68475312d193ccba61198f5e6cb46ee4698e52abdac.jpg",
+                "parts/part-0001/images/793a5db328d6a8cbd7aca49784a15cdc560d3cad5028f5ad00b1bb748551e993.jpg",
+                "parts/part-0002/images/6fc02ad87d307dd325f61cccf3e1ab1dd25c515edd3bb02e8eba95eed91a5984.jpg",
+                "parts/part-0002/images/dfbbeef48e8a82a796b1aaac2700c0879bdd29569852bea33c0c00253dc3026b.jpg"
+              ],
+              "excerptSha256": "eba7828c110313a9aed73cb50dc7fbd3701fade9ac0c3c480314b8d61e96f2fa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-partition-combine",
+        "moduleId": "execution-trace",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "教材的两处“分”与 combine 的位置",
+        "markdown": "教材强调这里的“分”体现在两步：把输入分成 M 份，以及把 Map 的中间结果分成 R 份。将输入分开通常很简单；把中间结果分成 R 份则以 `hash(key) mod R` 作为标准，保证相同的 key 出现在同一个分区里。使用者也可以指定自己的分区函数，例如对 URL 这类 key，如果希望同一个 Host 的 URL 出现在同一个分区，可以用 `hash(Hostname(urlkey)) mod R`。\n\nCombine 发生在 partition 之前，把中间结果中相同 key 的 `<key, value>` 对合并成一对。教材提醒，每个文档中都可能出现成千上万条 `<“the”, 1>` 这样的中间结果，琐碎的中间文件必然带来传输开销；combiner 通常与 Reduce 函数有相同的实现，不同点在于 Reduce 的输出是最终结果，而 Combiner 的输出是 Reduce 函数的输入（图 4-12、图 4-13）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "过程解释"
+              ],
+              "lineStart": 1720,
+              "lineEnd": 1760,
+              "assetRefs": [
+                "parts/part-0001/images/b7138ed97b6e4f92f8a0f68475312d193ccba61198f5e6cb46ee4698e52abdac.jpg",
+                "parts/part-0001/images/793a5db328d6a8cbd7aca49784a15cdc560d3cad5028f5ad00b1bb748551e993.jpg",
+                "parts/part-0002/images/6fc02ad87d307dd325f61cccf3e1ab1dd25c515edd3bb02e8eba95eed91a5984.jpg",
+                "parts/part-0002/images/dfbbeef48e8a82a796b1aaac2700c0879bdd29569852bea33c0c00253dc3026b.jpg"
+              ],
+              "excerptSha256": "eba7828c110313a9aed73cb50dc7fbd3701fade9ac0c3c480314b8d61e96f2fa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-combiner-caution",
+        "moduleId": "execution-trace",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充辨析：combiner 不是无条件可用的",
+        "markdown": "一个常见的错误推论是：既然 combiner 与 reduce 共用实现，它在任何场景下都应该既加速又保持结果正确。实际上 combiner 是可选优化，框架可能执行 0 次、1 次或多次；只有满足结合律和交换律的归约才能安全地部分合并。词频统计的求和正好满足这个条件，所以 `IntSumReducer` 可以直接当 combiner 用。\n\n反过来，如果把求平均值直接当成 combiner 就会出错：先对各组求平均、再对平均求平均，与对全部数值求平均不是同一个结果。教材所说“很多情况下就可以直接使用 Reduce 函数”，前提正是这类可结合、可交换的归约，而不是任意函数都能照搬。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-partition-combine",
+            "textbook-code"
+          ]
+        }
+      },
+      {
+        "id": "model-worked-example",
+        "moduleId": "execution-trace",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "完整算例：三行文本的频数从哪来",
+        "markdown": "以三行输入为例，把数据流走完一遍：\n\n```txt\napple banana\napple cherry\nbanana apple\n```\n\nmap 逐行切分并输出中间记录：`(apple,1)`、`(banana,1)`、`(apple,1)`、`(cherry,1)`、`(banana,1)`、`(apple,1)`。\n\nshuffle 按 key 聚集后，reduce 的输入是 `(apple,[1,1,1])`、`(banana,[1,1])`、`(cherry,[1])`，分别求和得到 3、2、1，最终输出为：\n\n```txt\napple 3\nbanana 2\ncherry 1\n```\n\n如果这三行被切成两个输入分片（第一片只有第一行，第二片含后两行），两个 map 各自先做一次 combine，会分别得到 `(apple,1)`、`(banana,1)` 与 `(apple,2)`、`(banana,1)`、`(cherry,1)`；reduce 端再把这些部分和相加，结果仍是 `apple 3`、`banana 2`、`cherry 1`。可见 combiner 只改变传输的中间记录条数，不改变最终频数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-design",
+            "textbook-map-reduce-io",
+            "model-combiner-caution"
+          ]
+        }
+      },
+      {
+        "id": "model-migration",
+        "moduleId": "reflection-and-transfer",
+        "depth": "support",
+        "kind": "application",
+        "title": "迁移练习：统计访问日志中的 URL 次数",
+        "markdown": "把词频统计迁移到新任务时，通常只需改 key 的抽取规则和分区方式，map、shuffle、reduce 的骨架保持不变。例如统计访问日志中每个 URL 的访问次数：map 从每行日志里抽出 URL，输出 `(url,1)`；如果还需要按网站聚合，可以让分区函数对主机名取哈希，使同一网站的 URL 进入同一个 Reduce。\n\n迁移时值得检查两件事：一是 key 的粒度是否与想要的统计单位一致，避免像把整行当 key 那样统计错对象；二是是否存在数据倾斜，某个高频 key 会让一个 Reduce 的负载远高于其他 Reduce，这时需要重新考虑 key 设计或分区函数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-worked-example",
+            "textbook-execution-steps"
+          ]
+        }
+      },
+      {
+        "id": "model-check-prompt",
+        "moduleId": "reflection-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：你来走一遍数据流",
+        "markdown": "给定下面的输入，请依次写出：map 阶段输出的全部中间记录；假设 combine 生效后每个 map 交给 reduce 的部分和；最终的频数输出。并说明如果把 combiner 换成求平均值的函数会出现什么问题。\n\n```txt\nred blue\nred red\nblue green\n```\n\n提示：map 与 reduce 的分工不变，只需改变聚合对象；判断平均值的组合是否与一次算完的结果相同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-worked-example",
+            "model-migration"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "reflection-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：三个环节与两个可调项",
+        "markdown": "WordCount 把分布式计数拆成三个可并行的环节：map 负责切分并产出 `(word,1)`，shuffle 负责按 key 聚合并分发，reduce 负责对每组计数求和。框架替用户完成了输入切分、任务分发、中间结果分区和结果汇总这些工程工作，用户只写 map 与 reduce 两个函数。\n\n两个可选环节决定运行效率：combiner 在 map 本地先合并相同 key，减少网络传输，但只对满足结合律与交换律的归约安全；partition 决定中间结果落到哪个 Reduce，默认用 key 的哈希对 R 取模，必要时可按业务规则自定义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-motivation",
+            "textbook-design",
+            "textbook-execution-steps",
+            "model-combiner-caution",
+            "model-check-prompt"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "wordcount-trace-check",
+        "type": "formative-check",
+        "title": "词频统计轨迹自检",
+        "anchorBlockId": "model-check-prompt",
+        "moduleId": "reflection-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-wordcount-data"
+        ],
+        "learningPurpose": "检查学习者能否独立把一段新输入推演成中间记录、部分和与最终频数，并识别 combiner 的适用前提。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-worked-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "input": [
+            "red blue",
+            "red red",
+            "blue green"
+          ],
+          "expectedMapOutput": [
+            "red:1",
+            "blue:1",
+            "red:1",
+            "red:1",
+            "blue:1",
+            "green:1"
+          ],
+          "expectedFinal": [
+            "blue 2",
+            "green 1",
+            "red 3"
+          ],
+          "pitfall": "求平均值不满足结合律，部分平均再平均与整体平均不同"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "按行切分得到 6 条中间记录；combine 后两个分片分别得到 `(red,2)、(blue,1)` 与 `(red,1)、(blue,1)、(green,1)`；reduce 求和后输出 `blue 2`、`green 1`、`red 3`。求平均值不能这样部分合并。"
+        }
+      }
+    ]
+  },
+  "subtitle": "MapReduce",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000128"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "实例分析：WordCount"
+      ],
+      "lineStart": 1628,
+      "lineEnd": 1639,
+      "assetRefs": [],
+      "excerptSha256": "c5c16fb031235367213837ef80d50b24cce0963e577d834255449765eb60f7d1"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000129"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "WordCount 设计思路"
+      ],
+      "lineStart": 1640,
+      "lineEnd": 1656,
+      "assetRefs": [],
+      "excerptSha256": "76557c216f0c538f25adabecac55731af08301f11a142866679532b7438a2e95"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000130"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "WordCount 代码"
+      ],
+      "lineStart": 1657,
+      "lineEnd": 1719,
+      "assetRefs": [],
+      "excerptSha256": "1bb7c345bda1d9a70f7afe0eff743101ac4cea071b249dc4ae6f9014c3ce0731"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000131"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "过程解释"
+      ],
+      "lineStart": 1720,
+      "lineEnd": 1760,
+      "assetRefs": [
+        "parts/part-0001/images/b7138ed97b6e4f92f8a0f68475312d193ccba61198f5e6cb46ee4698e52abdac.jpg",
+        "parts/part-0001/images/793a5db328d6a8cbd7aca49784a15cdc560d3cad5028f5ad00b1bb748551e993.jpg",
+        "parts/part-0002/images/6fc02ad87d307dd325f61cccf3e1ab1dd25c515edd3bb02e8eba95eed91a5984.jpg",
+        "parts/part-0002/images/dfbbeef48e8a82a796b1aaac2700c0879bdd29569852bea33c0c00253dc3026b.jpg"
+      ],
+      "excerptSha256": "eba7828c110313a9aed73cb50dc7fbd3701fade9ac0c3c480314b8d61e96f2fa"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3716,
+    2658
+  ],
+  "scale": 0.97
+}

@@ -26,9 +26,10 @@ __all__ = [
     "validate_structure_candidate",
 ]
 
-_TOC_RE = re.compile(r"^\s*目\s*录\s*$")
+_TOC_RE = re.compile(r"^\s*(?:目\s*录|(?:Table\s+of\s+)?Contents)\s*$", re.IGNORECASE)
 _CHAPTER_RE = re.compile(
-    r"(?<![\w\d])(?:第\s*)?(?P<number>\d{1,3}|[〇零一二三四五六七八九十百千万]+)\s*章"
+    r"(?<![\w.])(?:第\s*)?(?P<number>\d{1,3}|[〇零一二三四五六七八九十百千万]+)"
+    r"(?:\s*章|\.(?=[ \t]+\D))"
 )
 _AUXILIARY_RE = re.compile(
     r"(?P<title>附\s*录\s*[A-Za-zＡ-Ｚａ-ｚ0-9０-９]*[^\n]*|"
@@ -416,6 +417,10 @@ def _infer_toc_bounds_without_label(
 def _chapter_occurrences(
     blocks: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int | None, int | None]:
+    decimal_chapters = any(
+        re.fullmatch(r"(?:Table\s+of\s+)?Contents", line, re.IGNORECASE)
+        for block in blocks for line in block["normalized"].splitlines()
+    )
     toc_pages = sorted(
         block["page_idx"]
         for block in blocks
@@ -454,6 +459,13 @@ def _chapter_occurrences(
         for line, source_marker_count in _split_candidate_lines_with_context(text):
             matches = list(_CHAPTER_RE.finditer(line))
             for match_index, match in enumerate(matches):
+                # A bare numbered list is not chapter evidence. Decimal
+                # chapter markers need a TOC row or a detected title block.
+                if "章" not in match.group(0) and (
+                    not decimal_chapters or match.start() != 0
+                    or (kind != "toc" and block["text_level"] not in (1, 2))
+                ):
+                    continue
                 number = _number_value(match.group("number"))
                 if number is None:
                     continue

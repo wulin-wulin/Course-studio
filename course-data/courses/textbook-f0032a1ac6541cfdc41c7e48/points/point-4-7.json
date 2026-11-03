@@ -1,0 +1,637 @@
+{
+  "id": "point-4-7",
+  "title": "新 MapReduce 框架 Yarn",
+  "shortSummary": "介绍 YARN 把资源管理与计算模型分离的设计，说明其对多计算框架的支持。",
+  "keyTerms": [
+    "YARN",
+    "资源管理",
+    "计算框架"
+  ],
+  "animationType": "yarnScheduling",
+  "animationSuggestion": "分步播放：先显示作业提交与队列资源，再显示为 ApplicationMaster 分配第一个容器，随后 ApplicationMaster 按任务需求批量申请容器并分散到多台 NodeManager，最后任务完成、容器释放回队列；用标签同时标出旧框架中由 JobTracker 集中承担的资源分配与任务监控，在新框架里分别落在哪个组件上。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "architecture-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材对旧框架问题与 YARN 组件职责的原始陈述，按问题、机制、对比、边界的顺序重排讲解，补充类比与对照表，并把教材的版本限定语显式标出。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-legacy-limits",
+          "text": "说明旧 MapReduce 框架集中式架构的主要问题及其成因。"
+        },
+        {
+          "id": "explain-yarn-architecture",
+          "text": "解释 ResourceManager、ApplicationMaster 与 NodeManager 的职责划分。"
+        },
+        {
+          "id": "compare-old-new",
+          "text": "按统一维度比较新旧框架，并说明 YARN 的优势对应哪些设计变化。"
+        },
+        {
+          "id": "judge-boundaries",
+          "text": "判断关于兼容性、资源单位与版本状态的常见说法是否成立。"
+        }
+      ],
+      "misconceptions": [
+        "把“客户端 API 基本兼容”理解成升级只需替换程序包，忽略配置文件、启停脚本与全局变量的变化。",
+        "认为 JobTracker 消失后集群不再有集中式组件，从而不再存在单点风险。",
+        "把教材写作时“资源只按内存计量、Container 仅做 Java 虚拟机内存隔离”当作 YARN 至今不变的资源模型。"
+      ],
+      "modules": [
+        {
+          "id": "legacy-limits",
+          "title": "旧框架为什么不够用",
+          "role": "problem-intro",
+          "description": "从 JobTracker/TaskTracker 的职责出发，归纳集中式架构在可靠性、资源表示与可维护性上的问题。",
+          "outcomeRefs": [
+            "explain-legacy-limits"
+          ],
+          "order": 0
+        },
+        {
+          "id": "yarn-roles",
+          "title": "职责分离与三个组件",
+          "role": "mechanism",
+          "description": "说明 YARN 把资源管理与任务调度/监控拆开之后，三个组件各自负责什么、不负责什么。",
+          "outcomeRefs": [
+            "explain-yarn-architecture"
+          ],
+          "order": 1
+        },
+        {
+          "id": "framework-diff",
+          "title": "新旧框架按统一维度对比",
+          "role": "comparison",
+          "description": "用中心组件、单机代理、资源表示、编程模型等维度对照新旧框架，并解释优势来自哪些变化。",
+          "outcomeRefs": [
+            "compare-old-new",
+            "explain-legacy-limits"
+          ],
+          "order": 2
+        },
+        {
+          "id": "version-boundary",
+          "title": "兼容性与版本边界",
+          "role": "boundary-check",
+          "description": "区分接口兼容与内部机制不变，识别教材写作时的资源模型与隔离能力边界。",
+          "outcomeRefs": [
+            "judge-boundaries",
+            "compare-old-new"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与过渡",
+          "role": "practice-and-bridge",
+          "description": "用情景判断检验理解，并把计算层的讨论过渡到存储层。",
+          "outcomeRefs": [
+            "explain-legacy-limits",
+            "explain-yarn-architecture",
+            "compare-old-new",
+            "judge-boundaries"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-legacy-limits",
+          "explain-yarn-architecture",
+          "compare-old-new",
+          "judge-boundaries"
+        ],
+        "method": "完成情景判断题，并用组件职责划分与教材的版本限定语说明理由。",
+        "successCriteria": [
+          "能说出三个组件各自的职责与明确不负责的事项",
+          "能把每条优势对应到具体的设计变化",
+          "能识别哪些结论必须附带版本语境"
+        ],
+        "exerciseBlockId": "check-scenario",
+        "summaryBlockId": "chapter-recap",
+        "nextPointId": "point-5-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-yarn-overview",
+        "moduleId": "legacy-limits",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "YARN 带来的改变",
+        "markdown": "教材把 YARN 视为 Hadoop 计算组件的一次结构性改变：它改变了 MapReduce 切分和重新组织处理任务的方式，因为 YARN 把 MapReduce 的追踪组件切分成两个不同部分——资源管理器和应用调度。\n\n拆分之后，同一个集群可以同时运行 MapReduce 作业、Storm 这样的流式任务，以及 HBase 这类服务，资源可以动态分享并设置优先级。教材引用 Hadoop 共同创始人 Doug Cutting 的说法，强调非 MapReduce 的工作负载此后可以更有效地与 MapReduce 共用资源。\n\n教材还交代了这一设计的来源：Apache 的 Mesos 集群管理系统，以及 Google 的 Borg 和 Omega 项目。由此 YARN 被定位为“针对数据中心的操作系统”，即由它统一管理集群资源，再向上支持广泛的应用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "新 MapReduce 框架 Yarn"
+              ],
+              "lineStart": 1761,
+              "lineEnd": 1768,
+              "assetRefs": [],
+              "excerptSha256": "dff31d6a7127bbed3c9f187b90e029fd45e7c28f495241db214a51f3e1fde9eb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-os-analogy",
+        "moduleId": "legacy-limits",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充类比：集群内核与租户",
+        "markdown": "可以借操作系统做类比：操作系统不允许每个程序自己抢占 CPU 和内存，而由内核统一分配，程序按需申请。YARN 把同样的分工搬到集群上——ResourceManager 相当于面对整台集群的“内核”，只决定资源切给谁；作业具体要做什么、做得怎么样，交给作业自己的 ApplicationMaster。\n\n类比只解释职责分离的方向，不代表 YARN 已经像操作系统一样管理文件或进程：教材强调的是集群计算资源的统一分配与多应用共享。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-yarn-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-legacy-problems",
+        "moduleId": "legacy-limits",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "原 MapReduce 框架的流程与问题",
+        "markdown": "教材先用一幅架构图交代旧框架的流程：用户程序（JobClient）提交 job，job 信息送到 JobTracker；JobTracker 是框架中心，需要与集群机器定时心跳、决定哪些程序跑在哪些机器上、管理所有 job 的失败与重启。每台机器上都有 TaskTracker，它监视本机的资源情况和任务运行状况，并通过心跳把信息发给 JobTracker，JobTracker 据此决定新提交的 job 分配到哪些机器。\n\n在原框架取得成功的几年之后，规模与负荷增长让问题逐渐暴露，教材把它们归纳为六条：\n\n- JobTracker 是集中处理点，存在单点故障。\n- JobTracker 承担的任务太多，资源消耗大；job 一多就带来很大内存开销，也提高 JobTracker 失败的风险。教材据此给出业界常引用的结论：老 Hadoop 的 MapReduce 只能支持约 4000 台节点主机。\n- 在 TaskTracker 端，以 MapReduce 任务数目表示资源过于简单，没有考虑 CPU 和内存占用，两个大内存任务被调度到一起就容易 OOM。\n- TaskTracker 把资源强制划分为 map task slot 和 reduce task slot，当系统只有一类任务时，另一类槽位就闲置，造成集群资源浪费。\n- 源码层面，一个类做了太多事情，代码量达 3000 多行，任务不清晰，增加修 bug 和版本维护的难度。\n- 运维层面，任何重要或不重要的变化都会强制系统级升级，并要求每个客户端同时更新，用户还要花大量时间验证原有程序是否适用于新版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000133"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "原 Hadoop MapReduce 框架的问题"
+              ],
+              "lineStart": 1769,
+              "lineEnd": 1799,
+              "assetRefs": [
+                "parts/part-0002/images/eb9866718380226261473eb0d4b75f4e47bfd5d72b15a31f1547fc0e562a6dc9.jpg"
+              ],
+              "excerptSha256": "e5c09813d3ca003f1739ea32b1e55d2e27122f439873bf3052c8bb90123e7724"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-problem-groups",
+        "moduleId": "legacy-limits",
+        "depth": "support",
+        "kind": "table",
+        "title": "把六条问题按性质归并",
+        "markdown": "教材逐条陈述问题，按性质归并后可以看清它们落在三个层面：\n\n| 层面 | 教材描述的问题 | 直接后果 |\n|---|---|---|\n| 可靠性 | JobTracker 是集中处理点 | 单点故障 |\n| 规模与资源表示 | JobTracker 任务过多；以任务数代表资源；map/reduce slot 固定划分 | 内存开销大、约 4000 节点上限、OOM 与资源闲置 |\n| 可维护性 | 单个类 3000 多行；任何变化强制全集群升级 | 维护困难、升级成本高 |\n\n归并是为了对照后续的设计变化，教材本身是按架构流程逐条陈述的，没有使用这张表格。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-legacy-problems"
+          ]
+        }
+      },
+      {
+        "id": "tb-yarn-architecture",
+        "moduleId": "yarn-roles",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "YARN 的原理与运作机制",
+        "markdown": "教材指出，JobTracker/TaskTracker 机制在可扩展性、内存消耗、线程模型、可靠性和性能上的缺陷需要大规模调整，零散修复的成本越来越高。因此从 Hadoop 0.23.0 版本开始，MapReduce 框架被完全重构，新框架称为 MapReduceV2 或 YARN。\n\n重构的根本思想，是把 JobTracker 的两项主要功能分离成单独的组件：资源管理，以及任务调度与监控。\n\n- **ResourceManager** 全局管理所有应用程序的计算资源分配，支持分层级的应用队列，每个队列享有集群一定比例的资源。它在执行过程中不对应用进行监控和状态跟踪，也不能重启因应用失败或硬件错误而失败的任务，某种意义上就是一个纯粹的调度器。它基于应用对资源的需求进行调度，资源包括内存、CPU、磁盘、网络等；调度策略以插件形式提供，可以基于容量调度和公平调度模型。\n- **ApplicationMaster** 每个应用一个，负责相应的调度和协调。它向调度器索要资源容器，运行任务，跟踪应用状态、监控进程、处理任务失败原因，并与 NodeManager 协同工作。\n- **NodeManager** 是每台机器上的框架代理，是执行应用程序的容器，监控应用对 CPU、内存、硬盘、网络的使用情况，并向调度器汇报。\n\n教材还说明，一个应用可以是一个单独的传统 MapReduce 任务，也可以是一个 DAG（有向无环图）任务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000134"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "新 Hadoop Yarn 框架原理及运作机制"
+              ],
+              "lineStart": 1800,
+              "lineEnd": 1820,
+              "assetRefs": [
+                "parts/part-0002/images/100005b41e5cac073b406c7f3314c588f2e7678fa6c6c14c22c4bfcdd5d9b3da.jpg"
+              ],
+              "excerptSha256": "25b792ac6bfdacc0492d42f0a69af0cc35fa74f139373c703e052b3b82426e1c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-role-table",
+        "moduleId": "yarn-roles",
+        "depth": "core",
+        "kind": "table",
+        "title": "三个组件的职责与边界",
+        "markdown": "把教材的职责描述并排放在一起，重点是看清每个组件“不做什么”：\n\n| 组件 | 作用范围 | 教材描述的职责 | 职责边界 |\n|---|---|---|---|\n| ResourceManager | 整个集群 | 分配资源、维护分层队列、按需求调用调度插件 | 不监控应用状态、不跟踪应用、不重启失败任务 |\n| ApplicationMaster | 单个应用（作业） | 申请容器、运行任务、跟踪状态、监控进程、处理失败原因 | 教材未赋予它管理其他应用资源的职责 |\n| NodeManager | 单台机器 | 启动并执行容器、监控本机资源使用、向调度器汇报 | 教材未说明它参与跨节点的调度决策 |\n\n需要区分来源：ResourceManager 一行的“不做什么”是教材原文明确强调的；ApplicationMaster 与 NodeManager 两行的边界是根据教材给出的职责推导出来的，教材没有直接写否定表述。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-yarn-architecture"
+          ]
+        }
+      },
+      {
+        "id": "model-job-flow",
+        "moduleId": "yarn-roles",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "把三个组件串成一条执行链",
+        "markdown": "按教材的职责划分，一个作业在 YARN 上的执行可以读成下面这条链：\n\n1. 客户端提交应用，ResourceManager 接收作业与资源调度请求。\n2. ResourceManager 按作业上下文与 NodeManager 汇报的状态信息启动调度过程，分配一个 Container 作为该应用的 ApplicationMaster。\n3. ApplicationMaster 向调度器索要运行任务所需的资源容器。\n4. NodeManager 在各自机器上启动并监控这些容器中的任务，同时持续汇报资源使用情况。\n5. ApplicationMaster 跟踪应用状态、处理任务失败原因。\n\n教材强调的是这条链上的职责归属，并没有给出具体的调用协议与时序细节，所以这里只保留角色关系，不补充协议层面的内容。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-yarn-architecture",
+            "model-role-table"
+          ]
+        }
+      },
+      {
+        "id": "tb-comparison-intro",
+        "moduleId": "framework-diff",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材的对比顺序",
+        "markdown": "教材在讲完旧架构的问题和新架构的原理之后，单列一节做新旧框架比对，顺序是先说明框架组成与配置层面的变化，再总结 YARN 相对旧框架的优势。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "新旧 Hadoop MapReduce 框架比对"
+              ],
+              "lineStart": 1821,
+              "lineEnd": 1822,
+              "assetRefs": [],
+              "excerptSha256": "1db546c69805f7215e8dfcc8363aac812874f0854043ad5bf6068e424744766c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "old-new-table",
+        "moduleId": "framework-diff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "按统一维度对照新旧框架",
+        "markdown": "把前面的问题清单与新框架的职责描述对齐，可以得到一张对照表：\n\n| 维度 | 旧框架 | 新框架 YARN |\n|---|---|---|\n| 中心组件 | JobTracker 同时承担资源管理与任务监控 | ResourceManager 只负责调度；监控交给每个应用的 ApplicationMaster |\n| 单机代理 | TaskTracker，监视本机资源与任务 | NodeManager，维护 Container 状态并保持心跳 |\n| 资源表示 | 以任务数目和 map/reduce slot 表示 | 以内存为单位申请 Container（教材写作时的版本） |\n| 支持的编程模型 | MapReduce | 可在 MapReduce 之外承载其他框架，并可自定义 ApplicationMaster |\n| 任务监控与失败处理 | JobTracker 负责 job 的失败与重启 | ApplicationMaster 处理任务失败；另有模块监控 ApplicationMaster 并在其出问题时于其他机器重启 |\n| 规模约束 | 教材给出约 4000 节点主机上限 | 教材未给出新上限，只说明职责分散缓解了集中点的资源消耗 |\n\n这张表把散落在教材三节里的信息按维度对齐，其中“规模约束”一行只按教材表述填写，不对未来版本作推断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-legacy-problems",
+            "tb-yarn-architecture",
+            "tb-comparison-intro"
+          ]
+        }
+      },
+      {
+        "id": "tb-framework-changes",
+        "moduleId": "framework-diff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "框架组成与配置层面的变化",
+        "markdown": "教材指出，YARN 相对旧框架，配置文件、启停脚本及全局变量等发生了一些变化；而客户端没有变化，调用 API 及接口大部分保持兼容，目的是对开发者透明，使其不必对原有代码做大的改变。\n\n原框架中核心的 JobTracker 和 TaskTracker 不再存在，取而代之的是三个部分：\n\n- **ResourceManager**：一个中心的服务，负责调度、启动每一个 Job 所属的 ApplicationMaster，并监控 ApplicationMaster 的存在情况。它接收 JobSubmitter 提交的作业，按照作业上下文信息以及从 NodeManager 收集的状态信息启动调度过程，分配一个 Container 作为 ApplicationMaster。教材特别点出：Job 里 task 的监控、重启等内容在这里不见了，这正是 ApplicationMaster 存在的原因。\n- **NodeManager**：功能比较专一，负责 Container 状态的维护，并向 ResourceManager 保持心跳。\n- **ApplicationMaster**：负责一个 Job 生命周期内的所有工作，类似老框架中的 JobTracker；区别在于每一个 Job（不是每一种）都有一个 ApplicationMaster，且它可以运行在 ResourceManager 以外的机器上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000136"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（1）新旧 MapReduce 框架的变化"
+              ],
+              "lineStart": 1823,
+              "lineEnd": 1834,
+              "assetRefs": [],
+              "excerptSha256": "b549504ab7688b50b4e0a1bdf39814609a246a9e9b17f948af0b5cdee0b6e570"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-migration-checklist",
+        "moduleId": "framework-diff",
+        "depth": "support",
+        "kind": "note",
+        "title": "升级时的检查顺序",
+        "markdown": "从教材的变化描述可以推出一条升级时的检查顺序：先核对配置文件中的资源与队列相关项，再检查启停脚本与全局变量，最后用原有程序在新集群上跑一遍验证。\n\n依据是教材同时说了两件事：配置与脚本确实变了；客户端 API 只是“大部分”兼容。既然不是全部兼容，“代码不用改”就不能当作默认结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-framework-changes"
+          ]
+        }
+      },
+      {
+        "id": "check-scenario",
+        "moduleId": "framework-diff",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "情景判断：两句运维说法是否成立",
+        "markdown": "某集群从旧 MapReduce 升级到 YARN。运维同学 A 说：“客户端 API 基本兼容，所以直接替换程序包就行，配置不用看。”同学 B 说：“JobTracker 没了，集群就不再有单点问题。”请分别判断并说明理由。\n\n**参考判断**\n\nA 的说法不成立。教材明确说配置文件、启停脚本及全局变量发生了变化，而且客户端 API 只是“大部分”保持兼容；升级至少要核对配置与脚本，并验证原有程序。\n\nB 的说法也不成立。教材只说明 JobTracker 的职责被拆给 ResourceManager 和 ApplicationMaster，其中 ResourceManager 仍是“一个中心的服务”。JobTracker 的消失减轻了集中点的负担，但教材没有讨论新的中心服务是否构成单点，不能把“JobTracker 消失”等同于“单点问题消失”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-framework-changes",
+            "tb-yarn-architecture",
+            "old-new-table",
+            "model-migration-checklist"
+          ]
+        }
+      },
+      {
+        "id": "tb-yarn-advantages",
+        "moduleId": "framework-diff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "YARN 相对旧框架的优势",
+        "markdown": "教材把优势归纳为以下几点：\n\n- 新设计大大减小了 JobTracker（也就是现在的 ResourceManager）的资源消耗，并让监测每个 Job 子任务状态的程序分布式化，更安全、更优雅。\n- ApplicationMaster 是一个可变更的部分，用户可以为不同的编程模型编写自己的 ApplicationMaster，让更多类型的编程模型跑在 Hadoop 集群中，教材提示可参考 Hadoop YARN 官方配置模板中的 mapred-site.xml。\n- 资源的表示以内存为单位（教材注明：在当时的版本中还没有考虑 CPU 占用），比之前以剩余 slot 数目表示更合理。\n- 老框架中 JobTracker 的一大负担是监控 job 下各 task 的运行状况，现在这部分交给 ApplicationMaster；而 ResourceManager 中有一个名为 ApplicationsMasters（注意不是 ApplicationMaster）的模块，负责监测 ApplicationMaster 的运行状况，出问题时会将其在其他机器上重启。\n- Container 是 YARN 为将来做资源隔离而提出的框架，教材认为这一点借鉴了 Mesos 的工作；当时它只提供 Java 虚拟机内存的隔离，Hadoop 团队的设计思路是后续支持更多资源调度与控制。既然资源表示成内存量，map slot 与 reduce slot 分开造成集群资源闲置的问题也就不存在了。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000137"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（2）Yarn框架相对于老的 MapReduce框架的优势"
+              ],
+              "lineStart": 1835,
+              "lineEnd": 1848,
+              "assetRefs": [],
+              "excerptSha256": "4248968850efdb6e06a2a22a3234474403b591339e845e5041eac3be3c604f84"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-advantage-lines",
+        "moduleId": "framework-diff",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "优势背后的两条主线",
+        "markdown": "教材列出的优势可以归到两条主线：\n\n**第一条：管资源与管任务分开。** 集中点只剩下调度，监控随作业分散到各自的 ApplicationMaster，监控压力不再压在一个进程上；ApplicationMaster 自身再由 ResourceManager 中的模块监控并在故障时重启，形成两级分工。\n\n**第二条：作业怎么跑变成可替换的部分。** ApplicationMaster 可变更，意味着换一种编程模型不必再改中心调度器，这也是 Hadoop 能承载 MapReduce 之外应用的直接原因。\n\n资源以内存计量、用 Container 取代固定 slot，解决的是旧框架“按任务数分配、按类型切槽”与真实资源消耗脱节的问题——它属于第一条主线的配套改动。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-yarn-advantages",
+            "tb-yarn-architecture"
+          ]
+        }
+      },
+      {
+        "id": "model-version-boundary",
+        "moduleId": "version-boundary",
+        "depth": "support",
+        "kind": "warning",
+        "title": "读这些结论时要带上版本语境",
+        "markdown": "教材写的是 Hadoop 0.23.0 之后的第一代 YARN，若干结论都有明确的时间限定：\n\n- 资源只按内存计量，当时的版本还没有考虑 CPU 占用；\n- Container 当时只是一个框架，仅提供 Java 虚拟机内存层面的隔离；\n- “约 4000 节点上限”是对旧框架的业界结论，教材没有给出新框架的上限。\n\n教材自己使用了“目前”“后续能支持”这样的措辞，说明这些是当时的实现状态，不是 YARN 的永久边界。引用时把版本背景一并说明，才能避免把阶段性描述当成定论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-yarn-advantages",
+            "tb-legacy-problems",
+            "tb-yarn-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-chapter-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材本章小结",
+        "markdown": "教材本章小结回顾了四件事：MapReduce 计算模型的基本原理与工作流程，Hadoop 中实现并行计算的相关机制，MapReduce 的任务调度过程，以及以一个实例演示的详细执行过程；最后落在新 MapReduce 框架 YARN 的原理及运作机制上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000138"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 1849,
+              "lineEnd": 1852,
+              "assetRefs": [],
+              "excerptSha256": "b408dcc5a79b564fa8fe4e2e1cd27c02e105d71aaadb92c34109f41929363d8b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "chapter-recap",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "把本章与 YARN 的关系压缩成三句话",
+        "markdown": "1. MapReduce 回答“怎么算”，YARN 回答“在哪算、用多少资源算”。\n2. 旧框架把这两件事压在一个 JobTracker 里；新框架把它们拆给 ResourceManager 与 ApplicationMaster，NodeManager 负责单机执行与汇报。\n3. 拆分之后，Hadoop 从只能运行 MapReduce 的框架，变成可以承载多种应用的资源平台。\n\n计算层讲完之后，下一个问题是数据存放在哪里。后续将进入 HDFS，看分布式文件系统如何在普通硬件上组织海量数据的存储。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-chapter-summary",
+            "tb-yarn-architecture",
+            "tb-yarn-advantages"
+          ]
+        }
+      },
+      {
+        "id": "tb-references",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材列出的参考文献",
+        "markdown": "教材在本章末尾列出参考文献，包括 MapReduce 的百科条目、分布式计算开源框架 Hadoop 的入门实践资料、Dean 与 Ghemawat 在 2004 年发表的 MapReduce 论文、陆嘉恒《Hadoop 实战》（机械工业出版社，2011 年），以及若干网络来源。这些条目是教材叙述的出处线索，具体内容与版本仍需回到原始文献核对。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000139"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 1853,
+              "lineEnd": 1864,
+              "assetRefs": [],
+              "excerptSha256": "8a1b9370d5a974eae6227af6ba546ba8324ad5f5c22f3483e4c086cdedeebaac"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "subtitle": "MapReduce",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [
+    "point-3-8"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000132"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "新 MapReduce 框架 Yarn"
+      ],
+      "lineStart": 1761,
+      "lineEnd": 1768,
+      "assetRefs": [],
+      "excerptSha256": "dff31d6a7127bbed3c9f187b90e029fd45e7c28f495241db214a51f3e1fde9eb"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000133"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "原 Hadoop MapReduce 框架的问题"
+      ],
+      "lineStart": 1769,
+      "lineEnd": 1799,
+      "assetRefs": [
+        "parts/part-0002/images/eb9866718380226261473eb0d4b75f4e47bfd5d72b15a31f1547fc0e562a6dc9.jpg"
+      ],
+      "excerptSha256": "e5c09813d3ca003f1739ea32b1e55d2e27122f439873bf3052c8bb90123e7724"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000134"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "新 Hadoop Yarn 框架原理及运作机制"
+      ],
+      "lineStart": 1800,
+      "lineEnd": 1820,
+      "assetRefs": [
+        "parts/part-0002/images/100005b41e5cac073b406c7f3314c588f2e7678fa6c6c14c22c4bfcdd5d9b3da.jpg"
+      ],
+      "excerptSha256": "25b792ac6bfdacc0492d42f0a69af0cc35fa74f139373c703e052b3b82426e1c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000135"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "新旧 Hadoop MapReduce 框架比对"
+      ],
+      "lineStart": 1821,
+      "lineEnd": 1822,
+      "assetRefs": [],
+      "excerptSha256": "1db546c69805f7215e8dfcc8363aac812874f0854043ad5bf6068e424744766c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000136"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（1）新旧 MapReduce 框架的变化"
+      ],
+      "lineStart": 1823,
+      "lineEnd": 1834,
+      "assetRefs": [],
+      "excerptSha256": "b549504ab7688b50b4e0a1bdf39814609a246a9e9b17f948af0b5cdee0b6e570"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000137"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（2）Yarn框架相对于老的 MapReduce框架的优势"
+      ],
+      "lineStart": 1835,
+      "lineEnd": 1848,
+      "assetRefs": [],
+      "excerptSha256": "4248968850efdb6e06a2a22a3234474403b591339e845e5041eac3be3c604f84"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000138"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 1849,
+      "lineEnd": 1852,
+      "assetRefs": [],
+      "excerptSha256": "b408dcc5a79b564fa8fe4e2e1cd27c02e105d71aaadb92c34109f41929363d8b"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000139"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 1853,
+      "lineEnd": 1864,
+      "assetRefs": [],
+      "excerptSha256": "8a1b9370d5a974eae6227af6ba546ba8324ad5f5c22f3483e4c086cdedeebaac"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3655,
+    2545
+  ],
+  "scale": 0.92
+}

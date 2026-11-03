@@ -1,0 +1,830 @@
+{
+  "id": "point-5-8",
+  "title": "从 HDFS看分布式文件系统的设计需求",
+  "shortSummary": "从 HDFS 的设计取舍归纳分布式文件系统在一致性、可用性和扩展性上的普遍需求。",
+  "keyTerms": [
+    "分布式文件系统",
+    "透明性",
+    "并发控制",
+    "复制因子",
+    "容错能力",
+    "一次写入多次读取"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-5-1",
+    "point-5-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "沿用教材从设计目标逐项观察 HDFS 的分析顺序，把每一项需求补成可判断的取舍标准，并在小结处转成适用性检查清单。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-requirements",
+          "text": "说出分布式文件系统的主要设计需求，并解释每一项要解决什么问题。"
+        },
+        {
+          "id": "analyze-hdfs-tradeoffs",
+          "text": "以 HDFS 的透明性、并发控制、复制和容错设计为例，说明它为满足某项需求付出了什么代价。"
+        },
+        {
+          "id": "judge-scenario-fit",
+          "text": "依据文件规模、读写模式和吞吐要求，判断某类应用是否适合使用 HDFS 并说明边界。"
+        }
+      ],
+      "misconceptions": [
+        "认为 HDFS 已经实现了完整的八种透明性，实际上教材只强调分布式文件系统最需要其中五种，而 HDFS 的访问透明性并不完全。",
+        "把“一次写入多次读取”当成实现上的偷懒，它其实是针对大文件顺序扫描场景做出的明确取舍，用放弃就地更新换来简单的并发控制和天然一致的副本。",
+        "以为配好复制因子就万无一失，目录节点在 HDFS 中仍是单点，其所在机器故障必须靠人工干预。"
+      ],
+      "modules": [
+        {
+          "id": "design-goals",
+          "title": "设计目标总览",
+          "role": "framing",
+          "description": "先建立透明性、并发控制、可伸缩性、容错与安全这组观察维度，并点出目标之间的拉扯。",
+          "outcomeRefs": [
+            "explain-requirements"
+          ],
+          "order": 0
+        },
+        {
+          "id": "transparency",
+          "title": "透明性：五种要求与 HDFS 的达成程度",
+          "role": "evidence-analysis",
+          "description": "逐条辨析访问、位置、移动、性能与伸缩透明性，区分“改路径”与“改接口”两类问题。",
+          "outcomeRefs": [
+            "explain-requirements",
+            "analyze-hdfs-tradeoffs"
+          ],
+          "order": 1
+        },
+        {
+          "id": "concurrency-and-replication",
+          "title": "并发控制与文件复制",
+          "role": "tradeoff-analysis",
+          "description": "把一次写入多次读取语义和副本策略放在一起看：一个换来简单，一个换来可用。",
+          "outcomeRefs": [
+            "explain-requirements",
+            "analyze-hdfs-tradeoffs",
+            "judge-scenario-fit"
+          ],
+          "order": 2
+        },
+        {
+          "id": "heterogeneity-and-fault-tolerance",
+          "title": "异构性与容错能力",
+          "role": "mechanism-analysis",
+          "description": "整理心跳、校验和、负载均衡、元数据多副本和回收站五种手段，指出单点边界。",
+          "outcomeRefs": [
+            "explain-requirements",
+            "analyze-hdfs-tradeoffs"
+          ],
+          "order": 3
+        },
+        {
+          "id": "security-and-boundary",
+          "title": "安全性、评价边界与结论",
+          "role": "conclusion-and-transfer",
+          "description": "区分教材时点与作者规划，用本章小结的判断收束，并转成可操作的适用性清单。",
+          "outcomeRefs": [
+            "analyze-hdfs-tradeoffs",
+            "judge-scenario-fit"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-requirements",
+          "analyze-hdfs-tradeoffs",
+          "judge-scenario-fit"
+        ],
+        "method": "用适用性清单判断一个给定场景，并指出它命中了 HDFS 的哪个设计目标、绕开了哪个限制。",
+        "successCriteria": [
+          "能列出五类设计需求并各举一条 HDFS 中的对应设计",
+          "能说出访问透明性为何“不完全”",
+          "能依据文件大小与读写模式给出是否采用 HDFS 的结论并说明理由"
+        ],
+        "summaryBlockId": "textbook-chapter-summary",
+        "nextPointId": "point-6-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-design-goals",
+        "moduleId": "design-goals",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材给出的设计目标",
+        "markdown": "教材把分布式文件系统的设计目标归纳为透明性、并发控制、可伸缩性、容错以及安全需求等几大类，并主张从这几个角度去观察 HDFS 的设计和实现，才能更清楚地看出它的应用场景与设计理念。\n\n也就是说，HDFS 不是追求“什么都能干”的通用文件系统，而是在这组目标之间做出明确取舍后的产物。评价它任何一处简化，都要回到对应的目标和场景。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000158"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "从 HDFS看分布式文件系统的设计需求"
+              ],
+              "lineStart": 2012,
+              "lineEnd": 2017,
+              "assetRefs": [],
+              "excerptSha256": "44707a8a2dcc94d9f38dc2c7e682de95bfa78d880508180506203d67e7bd0c77"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-requirement-tensions",
+        "moduleId": "design-goals",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：目标之间为什么会互相拉扯",
+        "markdown": "这几类目标并不总能同时最大化，工程上常见三组拉扯：\n\n- **容错与成本**：提高副本数能缩短故障后的恢复窗口，但存储和网络带宽要成倍付出。\n- **并发语义与实现复杂度**：要做到接近本地文件系统的多写者语义，需要时间戳、回调承诺之类的复杂交互；放弃它则可以大幅简化。\n- **透明性与客户端优化空间**：位置和移动的透明让客户端不必关心数据在哪，但客户端也就无法针对数据布局做专门优化。\n\n所以后面每讲一个 HDFS 特性，都值得追问：它服务了哪个目标，又放弃了哪个目标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-design-goals"
+          ]
+        }
+      },
+      {
+        "id": "textbook-transparency-taxonomy",
+        "moduleId": "transparency",
+        "depth": "core",
+        "kind": "definition",
+        "title": "透明性的八种分类与五种重点",
+        "markdown": "按照开放分布式处理的标准，透明性一般包括八种：访问的透明性、位置的透明性、并发透明性、复制透明性、故障透明性、移动透明性、性能透明性和伸缩透明性。\n\n教材认为，对分布式文件系统而言最重要的是其中五种透明性要求，本节随后逐条展开。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000159"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 透明性"
+              ],
+              "lineStart": 2018,
+              "lineEnd": 2021,
+              "assetRefs": [],
+              "excerptSha256": "d0b494b199a5b9e980f8ec3769e283d8466fbe94911ebe80ae577b8bc20d1202"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-access-transparency",
+        "moduleId": "transparency",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "访问的透明性及其限度",
+        "markdown": "访问的透明性指用户能通过相同的操作访问本地文件和远程文件资源。HDFS 可以做到这一点：如果把 HDFS 配置成本地文件系统而不是分布式文件系统，那么读写分布式 HDFS 的程序可以不加修改地读写本地文件，需要改的只是配置文件。\n\n但教材同时指出，HDFS 提供的访问透明性是不完全的——它构建在 Java 之上，不能像 NFS 或 AFS 那样去修改 Unix 内核，把本地文件和远程文件以一致的方式处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000160"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（1）访问的透明性"
+              ],
+              "lineStart": 2022,
+              "lineEnd": 2025,
+              "assetRefs": [],
+              "excerptSha256": "9783a66a8b48bbe2632431ae3ced3dc58b8ac72d30967e591f1b81f27c0fba4a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-access-vs-location",
+        "moduleId": "transparency",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：用“改动对象”区分访问透明与位置透明",
+        "markdown": "初学者容易把访问透明和位置透明混为一谈，可以用“到底改了什么”来区分：\n\n- **访问透明**关心用什么方式打开和读写，改的是程序与文件系统之间的接口；\n- **位置透明**关心数据究竟落在哪个节点上，改的是数据的位置，而程序看到的路径不变。\n\nHDFS 的访问透明只做到“改配置即可”，并受 Java 平台限制而不完全；位置透明则做得更彻底：块可以重新分布、增删副本、跨机架存放，客户端始终只面对同一个命名空间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-transparency-taxonomy",
+            "textbook-access-transparency"
+          ]
+        }
+      },
+      {
+        "id": "textbook-location-transparency",
+        "moduleId": "transparency",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "位置的透明性",
+        "markdown": "位置的透明性指使用单一的文件命名空间，在不改变路径名的前提下，文件或者文件集合可以被重定位。\n\nHDFS 集群只有一个目录节点负责文件系统命名空间的管理，文件的块可以重新分布复制，块可以增加或者减少副本，副本可以跨机架存储，而这一切对客户端都是透明的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000161"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（2）位置的透明性"
+              ],
+              "lineStart": 2026,
+              "lineEnd": 2029,
+              "assetRefs": [],
+              "excerptSha256": "3cb51ea56f793718c44e10e5848868a88877092d9be9b20d2fe682c37d6f6c9c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-move-transparency",
+        "moduleId": "transparency",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "移动的透明性",
+        "markdown": "移动的透明性与位置的透明性类似。HDFS 中的文件经常由于节点的失效、增加，或者复制因子的改变、重新均衡等原因而进行复制或移动，而客户端和客户端程序并不需要改变什么，目录节点的日志文件记录着这些变更。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000162"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（3）移动的透明性"
+              ],
+              "lineStart": 2030,
+              "lineEnd": 2033,
+              "assetRefs": [],
+              "excerptSha256": "0f5709060bd58d3b9d5332bd793544d6f681e6249a5b6c46302336158ae1454c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-location-vs-move",
+        "moduleId": "transparency",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：位置透明是布局自由，移动透明是迁移自由",
+        "markdown": "教材把这两条并列，是因为它们回答的问题不同：\n\n- **位置透明**回答“数据放在哪里由谁决定”——由系统决定，客户端不感知也不参与；\n- **移动透明**回答“数据在运行中换了地方怎么办”——系统负责搬运，客户端继续用原路径访问。\n\n前者是静态的布局自由，后者是动态的迁移自由。HDFS 用目录节点的日志记录这些变更，等于把“搬动发生过”留在系统的可追溯记录里，而不是让客户端自己去感知。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-location-transparency",
+            "textbook-move-transparency"
+          ]
+        }
+      },
+      {
+        "id": "textbook-performance-scalability",
+        "moduleId": "transparency",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "性能的透明性与伸缩的透明性",
+        "markdown": "HDFS 的目标就是构建在大规模廉价机器上的分布式文件系统集群，所以可伸缩性毋庸置疑；至于性能，教材建议参考它首页上的一些测试基准（benchmark）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000163"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（4）性能的透明性和伸缩的透明性"
+              ],
+              "lineStart": 2034,
+              "lineEnd": 2037,
+              "assetRefs": [],
+              "excerptSha256": "8b76076993702bad9d230cd673f4c35c28284b51037c9158ab2407f8f9f57566"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-concurrency-control",
+        "moduleId": "concurrency-and-replication",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "并发控制：一次写入多次读取",
+        "markdown": "并发控制的要求是：客户端对文件的读写不应该影响其他客户端对同一个文件的读写。要实现近似原生文件系统的单个文件拷贝语义，分布式文件系统需要做复杂的交互，例如采用时间戳，或者类似回调承诺的机制（类似服务器到客户端的 RPC 回调，在文件更新时触发；回调有有效或取消两种状态，客户端通过检查它的状态来判断服务器上的文件是否被更新过）。\n\nHDFS 并没有这样做，它的机制非常简单：任何时间都只会有一个程序在写入某个文件，这个文件经创建并写入之后不再改变，它的模型是“一次写入多次读取”。这与它的应用场合一致——HDFS 的文件大小通常是 MB 至 TB 级，这些数据不会经常修改，最经常的是被顺序读取并处理，随机读很少，因此 HDFS 非常适合 MapReduce 框架或者网页爬虫应用。文件之大也决定了它的客户端不能像某些分布式文件系统那样缓存常用到的几百个文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000164"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 并发控制"
+              ],
+              "lineStart": 2038,
+              "lineEnd": 2041,
+              "assetRefs": [],
+              "excerptSha256": "ba1b32b3f1fe0d241c5d4e59b677a89817dcb5a0886c419a456b81e3bdc51870"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-worm-tradeoff",
+        "moduleId": "concurrency-and-replication",
+        "depth": "core",
+        "kind": "note",
+        "title": "模型补充：这笔交换换来什么、付出什么",
+        "markdown": "把“一次写入多次读取”理解成省事并不够，它是一笔清晰的交换：\n\n- **换来的**：不必维护多写者之间的冲突检测、时间戳比较和回调承诺，客户端与元数据状态都简单；文件不可变还使各副本天然一致，校验和只需在写入时记录。\n- **付出的**：不能就地覆盖更新，任何修改都要重写文件；需要频繁随机写、就地更新的场景会非常别扭；小文件多时，每个文件的元数据与块开销也会被放大。\n\n所以判断是否合用，先问两件事：数据是否“写一次就不再改”？访问是否以整文件顺序扫描为主？两个都是“是”，简化就是优点；有一个是“否”，简化就变成限制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-concurrency-control"
+          ]
+        }
+      },
+      {
+        "id": "textbook-replication",
+        "moduleId": "concurrency-and-replication",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "文件复制功能与副本策略",
+        "markdown": "一个文件可以表示为其内容在不同位置的多个拷贝，这样做带来两个好处：一是访问同一个文件时可以从多个服务器中获取，从而改善服务的伸缩性；二是提高了容错能力，某个副本损坏了，仍然可以从其他服务器节点获取该文件。\n\nHDFS 文件的块为了容错都会被备份，并且可以配置复制因子，默认是 3。副本的存放策略也很有讲究：一个放在本地机架的节点，另一个放在同一机架的另一节点，还有一个放在其他机架上，这样可以最大限度地防止因故障导致的副本丢失。不仅如此，HDFS 读文件的时候也会优先选择从同一机架乃至同一数据中心的节点上读取块。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000165"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 文件复制功能"
+              ],
+              "lineStart": 2042,
+              "lineEnd": 2045,
+              "assetRefs": [],
+              "excerptSha256": "dba4276dba4c4b859273894aa548fda9aa2460d3ae05f80f97be03274ffc3ade"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-heterogeneity",
+        "moduleId": "heterogeneity-and-fault-tolerance",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "硬件和操作系统的异构性",
+        "markdown": "由于构建在 Java 平台上，HDFS 的跨平台能力毋庸置疑。得益于 Java 平台已经封装好的文件 I/O 系统，HDFS 可以在不同的操作系统和计算机上实现同样的客户端和服务端程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000166"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 硬件和操作系统的异构性"
+              ],
+              "lineStart": 2046,
+              "lineEnd": 2049,
+              "assetRefs": [],
+              "excerptSha256": "5aa18587c82e78f2c66c5d09bfbd88004be0dfb83963074ab0443eb16a894dfd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-fault-tolerance",
+        "moduleId": "heterogeneity-and-fault-tolerance",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "容错能力：五个手段与单点边界",
+        "markdown": "在分布式文件系统中，尽量保证文件服务在客户端或服务端出问题时仍能正常使用非常重要。HDFS 的容错可分为文件系统自身的容错和 Hadoop 本身的容错两方面，前者主要借助以下手段：\n\n1. **心跳检测**：目录节点与数据节点之间维持心跳。由于网络故障等原因，数据节点发出的心跳包没有被目录节点正常收到时，目录节点不会再向该数据节点派发任何新的 I/O 操作，其上的数据被视为无效；目录节点会检查是否有文件块的副本数目小于设置值，小于就自动开始复制新副本并分发到其他数据节点。\n2. **检测文件块的完整性**：HDFS 记录每个新创建文件所有块的校验和。检索文件时，从某个节点取得块后首先确认校验和是否一致，不一致就改从其他数据节点获取副本。\n3. **集群的负载均衡**：节点失效或增加可能导致数据分布不均匀，当某个数据节点的空闲空间大于一个临界值时，HDFS 会自动从其他数据节点迁移数据过来。\n4. **维护多个 FsImage 和 Editlog 拷贝**：这两者是目录节点上的核心数据结构，损坏则 HDFS 失效。目录节点可以配置成维护多份拷贝，任何修改都同步到副本，并总是选取最近一致的 FsImage 和 Editlog 使用。但目录节点在 HDFS 中是单点存在的，如果它所在的机器出错，手工干预是必须的。\n5. **文件的删除**：文件被删除时并不马上从目录节点移除命名空间，而是放在 /trash 目录下，随时可恢复，直到超过设置时间才被正式移除。\n\n再说 Hadoop 本身的容错性：Hadoop 支持升级和回滚，升级软件时出现 bug 或不兼容现象，可以通过回滚恢复到老的 Hadoop 版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000167"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 容错能力"
+              ],
+              "lineStart": 2050,
+              "lineEnd": 2065,
+              "assetRefs": [],
+              "excerptSha256": "734197d75d3e7dd700c15d51926d4960723d0170630b657ebd7e99ad79e1c339"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fault-tolerance-map",
+        "moduleId": "heterogeneity-and-fault-tolerance",
+        "depth": "core",
+        "kind": "table",
+        "title": "模型补充：按“防哪种失效”重新归类",
+        "markdown": "这五个手段不是并列的清单，按“防的是哪种失效”重新归类，记忆和排查都会更清楚：\n\n| 失效来源 | 对应手段 | 恢复动作 |\n|---|---|---|\n| 节点宕机、网络不通 | 心跳检测 | 剔除节点、补齐副本 |\n| 数据在传输或磁盘上损坏 | 校验和 | 换节点重读、重新复制 |\n| 数据分布不均 | 负载均衡 | 自动迁移数据 |\n| 元数据文件损坏 | 多份 FsImage 与 Editlog | 切换到最近一致副本 |\n| 误删文件 | /trash | 在保留期内恢复 |\n\n这张表也把边界暴露出来：目录节点仍是单点，前面几种手段都保护不了它所在机器的物理故障，只能靠人工干预——这正是教材强调“手工的干预是必须的”的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fault-tolerance"
+          ]
+        }
+      },
+      {
+        "id": "textbook-security",
+        "moduleId": "security-and-boundary",
+        "depth": "support",
+        "kind": "warning",
+        "title": "安全性问题：教材指出的短板",
+        "markdown": "教材认为 HDFS 的安全性是比较弱的，只有简单的、与 Unix 文件系统类似的文件许可控制，并说明未来版本会实现类似 NFS 的 Kerberos 验证系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000168"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 安全性问题"
+              ],
+              "lineStart": 2066,
+              "lineEnd": 2069,
+              "assetRefs": [],
+              "excerptSha256": "f1ebee585d8d511bc361b1a486c698ca47c5244a6f026c9f0c3e5c9b626c0b4f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-security-time",
+        "moduleId": "security-and-boundary",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：分清教材时点与作者规划",
+        "markdown": "这里要区分“教材描述的状态”和“作者的规划”：\n\n- “只有简单许可控制”是对教材写作时期 HDFS 的判断；\n- “未来版本会实现 Kerberos”是作者的预判，不是已经具备的能力。\n\n阅读旧版教材时，凡是遇到“未来将支持”“尚未实现”这类表述，都应先确认它描述的是哪个时间点，再判断当前产品是否仍然如此，避免把当年的规划当成现状，也避免把当年的短板当成今天的错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-security"
+          ]
+        }
+      },
+      {
+        "id": "textbook-chapter-summary",
+        "moduleId": "security-and-boundary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本章小结的总体判断",
+        "markdown": "本章小结回顾了块、目录节点、数据节点等概念，以及 HDFS 的体系结构、命名空间、存储原理、通讯协议、数据错误和异常、尚未实现的功能，最后回到从 HDFS 看分布式文件系统的设计需求。\n\n总体而言，HDFS 作为通用的分布式文件系统并不适合，它在并发控制、缓存一致性以及小文件读写的效率上比较弱。但它有自己明确的设计目标：支持大的数据文件（TB 级），这些文件以顺序读为主，以文件读的高吞吐量为目标，并且与 MapReduce 框架紧密结合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000169"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 2070,
+              "lineEnd": 2075,
+              "assetRefs": [],
+              "excerptSha256": "7367fb31693af0d8b6f2bb95b9d4e0221fd248240a2652239e7b3829c96926f2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scenario-checklist",
+        "moduleId": "security-and-boundary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：把结论反用成适用性清单",
+        "markdown": "把小结的判断反过来用，就得到一份可操作的清单。给定一个应用，依次问：\n\n1. 单个文件是否达到 MB 到 TB 级，而不是大量 KB 级小文件？\n2. 写入是否集中在文件创建阶段，之后基本不再修改？\n3. 访问是否以整文件顺序扫描为主，随机读取很少？\n4. 主要指标是否是吞吐量，而不是单次访问的低延迟？\n5. 计算是否与 MapReduce 一类批处理框架配合？\n\n前四问都是“是”、第五问也成立时，HDFS 的取舍基本都站在你这边；如果“大量小文件”“频繁就地更新”“低延迟随机读”占了上风，应优先考虑别的存储系统，而不是指望 HDFS 改变自己的假设。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-concurrency-control",
+            "textbook-chapter-summary"
+          ]
+        }
+      },
+      {
+        "id": "textbook-further-reading",
+        "moduleId": "security-and-boundary",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材列出的延伸阅读",
+        "markdown": "本节末尾，教材列出了一条参考文献《HDFS 详解》，原出处是一篇发布在博客园上的网络文章，作为进一步了解 HDFS 的延伸阅读。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000170"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "参考文献"
+              ],
+              "lineStart": 2076,
+              "lineEnd": 2079,
+              "assetRefs": [],
+              "excerptSha256": "ec04632eb58bc014ec4edcc386fda1d2cd7edf52f0078afeb09d9533808bf384"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "hdfs-fit-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-scenario-checklist",
+        "moduleId": "security-and-boundary",
+        "depth": "core",
+        "title": "判断这些场景是否适合 HDFS",
+        "outcomeRefs": [
+          "judge-scenario-fit"
+        ],
+        "learningPurpose": "检验学习者能否把“一次写入多次读取”和小结判断迁移到具体场景，而不是只背出需求名称。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-concurrency-control",
+            "textbook-chapter-summary"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "scenario": "每天新增的 TB 级访问日志，只写入一次，之后由批处理任务整文件顺序扫描做统计。",
+              "fit": "适合",
+              "reason": "文件大、写一次不再改、以顺序扫描和吞吐为主，正好命中 HDFS 的设计目标。"
+            },
+            {
+              "scenario": "几十万个 KB 级配置文件，需要被应用随机读取并小范围就地更新。",
+              "fit": "不适合",
+              "reason": "小文件多、随机读、就地更新，正是教材指出的 HDFS 弱项（小文件效率与并发控制）。"
+            },
+            {
+              "scenario": "一批归档影像，写入后不再修改，偶尔需要从不同机架并发读取。",
+              "fit": "适合",
+              "reason": "副本与就近读取提高了伸缩性和容错，符合一次写入多次读取的模型。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请对下面三个场景分别判断是否适合 HDFS，并写出依据：\n\n1. 每天新增的 TB 级访问日志，写一次后由批处理整文件顺序扫描；\n2. 几十万个 KB 级配置文件，需要随机读取并小范围就地更新；\n3. 一批写入后不再修改的归档影像，需要从不同机架并发读取。\n\n判断时请引用“一次写入多次读取”和本章小结中的弱项。"
+        }
+      }
+    ]
+  },
+  "subtitle": "HDFS",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000158"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "从 HDFS看分布式文件系统的设计需求"
+      ],
+      "lineStart": 2012,
+      "lineEnd": 2017,
+      "assetRefs": [],
+      "excerptSha256": "44707a8a2dcc94d9f38dc2c7e682de95bfa78d880508180506203d67e7bd0c77"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000159"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 透明性"
+      ],
+      "lineStart": 2018,
+      "lineEnd": 2021,
+      "assetRefs": [],
+      "excerptSha256": "d0b494b199a5b9e980f8ec3769e283d8466fbe94911ebe80ae577b8bc20d1202"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000160"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（1）访问的透明性"
+      ],
+      "lineStart": 2022,
+      "lineEnd": 2025,
+      "assetRefs": [],
+      "excerptSha256": "9783a66a8b48bbe2632431ae3ced3dc58b8ac72d30967e591f1b81f27c0fba4a"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000161"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（2）位置的透明性"
+      ],
+      "lineStart": 2026,
+      "lineEnd": 2029,
+      "assetRefs": [],
+      "excerptSha256": "3cb51ea56f793718c44e10e5848868a88877092d9be9b20d2fe682c37d6f6c9c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000162"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（3）移动的透明性"
+      ],
+      "lineStart": 2030,
+      "lineEnd": 2033,
+      "assetRefs": [],
+      "excerptSha256": "0f5709060bd58d3b9d5332bd793544d6f681e6249a5b6c46302336158ae1454c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000163"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（4）性能的透明性和伸缩的透明性"
+      ],
+      "lineStart": 2034,
+      "lineEnd": 2037,
+      "assetRefs": [],
+      "excerptSha256": "8b76076993702bad9d230cd673f4c35c28284b51037c9158ab2407f8f9f57566"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000164"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 并发控制"
+      ],
+      "lineStart": 2038,
+      "lineEnd": 2041,
+      "assetRefs": [],
+      "excerptSha256": "ba1b32b3f1fe0d241c5d4e59b677a89817dcb5a0886c419a456b81e3bdc51870"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000165"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 文件复制功能"
+      ],
+      "lineStart": 2042,
+      "lineEnd": 2045,
+      "assetRefs": [],
+      "excerptSha256": "dba4276dba4c4b859273894aa548fda9aa2460d3ae05f80f97be03274ffc3ade"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000166"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 硬件和操作系统的异构性"
+      ],
+      "lineStart": 2046,
+      "lineEnd": 2049,
+      "assetRefs": [],
+      "excerptSha256": "5aa18587c82e78f2c66c5d09bfbd88004be0dfb83963074ab0443eb16a894dfd"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000167"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 容错能力"
+      ],
+      "lineStart": 2050,
+      "lineEnd": 2065,
+      "assetRefs": [],
+      "excerptSha256": "734197d75d3e7dd700c15d51926d4960723d0170630b657ebd7e99ad79e1c339"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000168"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 安全性问题"
+      ],
+      "lineStart": 2066,
+      "lineEnd": 2069,
+      "assetRefs": [],
+      "excerptSha256": "f1ebee585d8d511bc361b1a486c698ca47c5244a6f026c9f0c3e5c9b626c0b4f"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000169"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 2070,
+      "lineEnd": 2075,
+      "assetRefs": [],
+      "excerptSha256": "7367fb31693af0d8b6f2bb95b9d4e0221fd248240a2652239e7b3829c96926f2"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000170"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "参考文献"
+      ],
+      "lineStart": 2076,
+      "lineEnd": 2079,
+      "assetRefs": [],
+      "excerptSha256": "ec04632eb58bc014ec4edcc386fda1d2cd7edf52f0078afeb09d9533808bf384"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2783,
+    1678
+  ],
+  "scale": 0.89
+}

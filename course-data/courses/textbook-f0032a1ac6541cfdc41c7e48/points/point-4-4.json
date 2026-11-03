@@ -1,0 +1,1066 @@
+{
+  "id": "point-4-4",
+  "title": "MapReduce 工作流程",
+  "shortSummary": "梳理作业从输入分片、映射、洗牌分组到归约输出的完整执行流程。",
+  "keyTerms": [
+    "作业流程",
+    "输入分片",
+    "洗牌",
+    "输出"
+  ],
+  "animationType": "mapReducePipeline",
+  "animationSuggestion": "按阶段展示一条记录从输入分片经 map、分区、缓冲区、溢写、合并到 reduce 输出的移动路径，同时显示缓冲区占用条与 80MB 溢写阈值线，标出每条记录被送往哪个 partition，支持单步推进和重播。",
+  "difficulty": "中等",
+  "importance": 0.95,
+  "prerequisites": [
+    "point-4-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "process-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的阶段划分、参数默认值与示例数据，围绕执行顺序、产物归属和故障定位重排讲解，并补充阶段对照表、数值推算与检查清单。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-end-to-end-flow",
+          "text": "按顺序说明一个 MapReduce 作业从提交、输入准备、映射与分区、shuffle、归约到输出各阶段的职责与产物。"
+        },
+        {
+          "id": "trace-record-lifecycle",
+          "text": "追踪一条输入记录从文件、输入分片、记录读取器、Mapper、Partitioner 到 Reducer 和输出文件的形态变化。"
+        },
+        {
+          "id": "explain-shuffle-both-ends",
+          "text": "解释 map 端与 reduce 端 shuffle 各自的动作、缓冲区阈值与 merge 的作用。"
+        },
+        {
+          "id": "diagnose-stage-failure",
+          "text": "依据现象定位问题出现在哪个阶段，并说明修复方向。"
+        }
+      ],
+      "misconceptions": [
+        "把输入分片（InputSplit）等同于 HDFS 的数据块（Block）。",
+        "认为 shuffle 只是 reduce 端拉取数据的动作，忽略 map 端的划分、排序、溢写与合并。",
+        "认为 Combiner 可以在任何场景下随意使用，忽视它对最终结果的影响。",
+        "认为作业可以直接把结果输出到一个已经存在的目录。"
+      ],
+      "modules": [
+        {
+          "id": "pipeline-overview",
+          "title": "全流程与阶段分工",
+          "role": "orientation",
+          "description": "先建立整条流水线的骨架：谁负责哪一步、每一步产出什么。",
+          "outcomeRefs": [
+            "explain-end-to-end-flow",
+            "trace-record-lifecycle"
+          ],
+          "order": 0
+        },
+        {
+          "id": "input-preparation",
+          "title": "输入准备：文件、格式、分片与记录读取",
+          "role": "procedure",
+          "description": "从 HDFS 文件到 map 任务可消费的键值对，交代切分规则与读取方式。",
+          "outcomeRefs": [
+            "explain-end-to-end-flow",
+            "trace-record-lifecycle"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mapping-and-partitioning",
+          "title": "映射与分区",
+          "role": "procedure",
+          "description": "map 阶段产出中间键值对，Partitioner 决定每条键值对发往哪个 reduce。",
+          "outcomeRefs": [
+            "trace-record-lifecycle",
+            "explain-end-to-end-flow"
+          ],
+          "order": 2
+        },
+        {
+          "id": "reduction-and-output",
+          "title": "归约与输出",
+          "role": "procedure",
+          "description": "reducer 按键归约，OutputFormat 校验并写出 part 文件。",
+          "outcomeRefs": [
+            "explain-end-to-end-flow",
+            "trace-record-lifecycle"
+          ],
+          "order": 3
+        },
+        {
+          "id": "shuffle-deep-dive",
+          "title": "shuffle 两端详解",
+          "role": "mechanism",
+          "description": "放大 map 端缓冲区、溢写、合并与 reduce 端复制、合并的细节。",
+          "outcomeRefs": [
+            "explain-shuffle-both-ends",
+            "explain-end-to-end-flow"
+          ],
+          "order": 4
+        },
+        {
+          "id": "stage-diagnosis",
+          "title": "阶段自检与故障定位",
+          "role": "check",
+          "description": "把阶段知识转成可操作的自检清单和症状到修复的对应关系。",
+          "outcomeRefs": [
+            "diagnose-stage-failure",
+            "explain-end-to-end-flow"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-end-to-end-flow",
+          "trace-record-lifecycle",
+          "explain-shuffle-both-ends",
+          "diagnose-stage-failure"
+        ],
+        "method": "先完成阶段排序与产物对应练习，再给出三个故障现象各自所属的阶段和修复方向。",
+        "successCriteria": [
+          "能按教材步骤复述流程并说出每一步的产物",
+          "能说明 reduce 数量如何同时影响分区、shuffle 与输出文件个数",
+          "能指出 Combiner 的使用条件并给出一个不适用的反例",
+          "能根据现象把问题定位到输入、map、shuffle 或输出阶段"
+        ],
+        "summaryBlockId": "model-stage-checklist",
+        "nextPointId": "point-4-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview-flow",
+        "moduleId": "pipeline-overview",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材总览：分解、就地处理、再合并",
+        "markdown": "教材用图 4-1 概览 MapReduce 处理大数据集的过程：把大数据集分解为成百上千个小数据集，每个（或若干个）数据集分别由集群中的一个节点（一般就是一台普通计算机）处理并生成中间结果，然后这些中间结果又由大量节点进行合并，形成最终结果。\n\nMapReduce 的输入一般来自 HDFS 中的文件，这些文件分布存储在集群内的节点上。运行一个 MapReduce 程序会在集群的许多节点甚至所有节点上运行 mapping 任务；每一个 mapping 任务都是平等的，mappers 没有特定“标识物”与其关联，因此任意的 mapper 都可以处理任意的输入文件。每个 mapper 会加载一些存储在运行节点本地的文件集来处理，教材注明这是“移动计算”：把计算移动到数据所在节点，避免额外的数据传输开销。\n\n当 mapping 阶段完成后，这一阶段生成的中间“键值对”数据必须在节点间交换，把具有相同键的数值发送到同一个 reducer 那里。教材强调这是 MapReduce 中唯一的任务节点间通信过程：map 任务之间不交换信息，也不关心其他 map 任务的存在；不同的 reduce 任务之间同样不通信。用户不能显式地从一台机器发送信息到另一台机器，所有数据传送都由 Hadoop MapReduce 平台根据关联到数值上的不同键隐式引导。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "MapReduce 工作流程"
+              ],
+              "lineStart": 1417,
+              "lineEnd": 1418,
+              "assetRefs": [],
+              "excerptSha256": "8051453598109c5c57be0fce3f120c7b8a0a125b851d8fbe78ffe627aacad3a5"
+            },
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "工作流程概述"
+              ],
+              "lineStart": 1419,
+              "lineEnd": 1429,
+              "assetRefs": [
+                "parts/part-0001/images/ed19c4c1b1d1ead4b4bb29d8a96b521482e82dc2a046e6b60bee4ba27000a073.jpg"
+              ],
+              "excerptSha256": "dcf60eb006802aa2efd314df19180c79e64b7d634d2578a606cb0fe41f98786a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-key-routing",
+        "moduleId": "pipeline-overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：键是唯一的路由依据",
+        "markdown": "把整条流水线看成一次“按键重排数据”的过程会更清楚：mapper 只决定每条记录映射成什么键值对，真正决定数据去哪台机器的只有键。用户不能显式地在机器之间发消息，平台按键完成全部投递。\n\n这条约束有两个直接后果。第一，任一任务失败都可以只重启该任务，因为任务之间没有互相约定的共享状态；第二，不能靠共享变量在任务之间传递汇总信息，需要跨任务汇总的量必须写进键值对，交给 reduce 阶段按同一个键汇总。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview-flow"
+          ]
+        }
+      },
+      {
+        "id": "tb-exec-stages",
+        "moduleId": "pipeline-overview",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材给出的七个执行阶段",
+        "markdown": "Hadoop 的一个简单 MapReduce 任务执行流程（图 4-2）如下，以下按教材原顺序与原始编号记录：\n\n1) JobTracker 负责在分布式环境中接收客户端创建并提交的任务；\n2) InputFormat 模块负责做 Map 前的预处理：验证输入的格式是否符合作业配置的输入定义（可以是专门定义，或者是 Writable 的子类）；把输入文件切分为逻辑上的输入 InputSplit，因为分布式文件系统中 blocksize 有大小限制，大文件会被划分为多个较小的 block；再通过 RecordReader 处理经过切分为 InputSplit 的一组 records，输出给 Map。InputSplit 是逻辑切分的第一步，具体如何根据文件信息切分还需要 RecordReader 完成；\n3) RecordReader 处理后的结果作为 Map 的输入，Map 执行定义的 Map 逻辑，输出处理后的 `<key,value>` 对到临时中间文件；\n4) Shuffle 与 Partitioner：为了让 reduce 可以并行处理 map 结果，必须对 map 的输出进行一定的排序和分割，然后再交给对应的 reduce；Partitioner 是选择配置，主要作用是在多个 Reduce 的情况下指定 Map 的结果由某一个 Reduce 处理，每一个 Reduce 都会有单独的输出文件；\n6) Reduce 执行具体的业务逻辑，即用户编写的处理数据得到结果的业务，并且将处理结果输出给 OutputFormat；\n7) OutputFormat 验证输出目录是否已经存在以及输出结果类型是否符合 Config 中配置的类型，如果都成立，则输出 Reduce 汇总后的结果。\n\n教材在这一步序中没有第 5 步，编号由 4 直接跳到 6；此处按原文保留，不影响流程内容。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000103"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "MapReduce 各个执行阶段"
+              ],
+              "lineStart": 1430,
+              "lineEnd": 1452,
+              "assetRefs": [
+                "parts/part-0001/images/02b20f423e6dc87d4e4d0c910db8a14b145b918ec52ad29ec64da3aecb281da6.jpg"
+              ],
+              "excerptSha256": "1a12756c935cff597c3ed3028e4dbe1f3c03656dc14dbe133b3aea7fbebbccae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stage-contract-table",
+        "moduleId": "pipeline-overview",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：阶段、责任组件与产物对照",
+        "markdown": "把上面的步骤整理成一张对照表，便于在执行时快速确认“现在处于哪一步、这一步应该产出什么”。\n\n| 阶段 | 责任组件 | 主要产物 |\n|---|---|---|\n| 作业提交 | 客户端与 JobTracker | 作业配置、可执行程序 |\n| 输入准备 | InputFormat、RecordReader | InputSplit、record 键值对 |\n| 映射 | Mapper | 中间 `<key,value>` 对 |\n| 分区与洗牌 | Partitioner、缓冲与溢写机制 | 按分区组织的溢写文件、最终 map 输出文件 |\n| 归约 | Reducer | 每个键的汇总结果 |\n| 输出 | OutputFormat、RecordWriter | part-nnnnn 输出文件 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exec-stages"
+          ]
+        }
+      },
+      {
+        "id": "tb-input-files",
+        "moduleId": "input-preparation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "输入文件：数据的初始存储地",
+        "markdown": "文件是 MapReduce 任务数据的初始存储地。正常情况下，输入文件一般存放在 HDFS 里。这些文件的格式可以是任意的：可以使用基于行的日志文件，也可以使用二进制格式、多行输入记录或其他格式。教材特别提示这些文件会很大——数十 GB 或更大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000104"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 输入文件"
+              ],
+              "lineStart": 1453,
+              "lineEnd": 1456,
+              "assetRefs": [],
+              "excerptSha256": "923f72baf6809e2ec78532f36fd251d21c6f91c4c14ff9ab8f338b145dc8d533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-input-format",
+        "moduleId": "input-preparation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "输入格式：分割、读取与工厂方法",
+        "markdown": "InputFormat 类定义了如何分割和读取输入文件，它提供以下功能：\n\n（1）选择作为输入的文件或对象；\n（2）定义把文件划分到任务的 InputSplits；\n（3）为 RecordReader 读取文件提供一个工厂方法。\n\nHadoop 自带了好几个输入格式。其中有一个抽象类叫 FileInputFormat，所有操作文件的 InputFormat 类都从它那里继承功能和属性。开启 Hadoop 作业时，FileInputFormat 会得到一个路径参数，这个路径内包含需要处理的文件；FileInputFormat 会读取这个文件夹内的所有文件（默认不包括子文件夹内的），然后把这些文件拆分成一个或多个 InputSplit。可以通过 JobConf 对象的 `setInputFormat()` 方法设定应用到作业输入文件上的输入格式。\n\n表 4-2 给出 MapReduce 提供的输入格式：\n\n| 输入格式 | 描述 | 键 | 值 |\n|---|---|---|---|\n| TextInputFormat | 默认格式，读取文件的行 | 行的字节偏移量 | 行的内容 |\n| KeyValueInputFormat | 把行解析为键值对 | 第一个 tab 字符前的所有字符 | 行剩下的内容 |\n| SequenceFileInputFormat | Hadoop 定义的高性能二进制格式 | 用户自定义 | 用户自定义 |\n\n默认的输入格式是 TextInputFormat，它把输入文件的每一行作为单独的一个记录，但不做解析处理，对未被格式化的数据或基于行的记录（例如日志文件）很有用。KeyValueInputFormat 同样把每一行作为一个记录，不同的是它通过搜寻 tab 字符把行拆分为“键值对”；这在把一个 MapReduce 作业的输出作为下一个作业的输入时特别有用，因为默认的 map 输出格式正是按键值对输出数据。SequenceFileInputFormat 用于读取特定于 Hadoop 的二进制文件，这类文件包含许多能让 mapper 快速读取数据的特性；Sequence 文件是块压缩的，并提供了对几种数据类型直接的序列化与反序列化操作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000105"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 输入格式"
+              ],
+              "lineStart": 1457,
+              "lineEnd": 1464,
+              "assetRefs": [],
+              "excerptSha256": "3220475d8d2add17a3849d360781b0ee9b7f7a51fbfc9598f582298efcebff3d"
+            },
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000106"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "（3） 为RecordReader读取文件提供了一个工厂方法。"
+              ],
+              "lineStart": 1465,
+              "lineEnd": 1474,
+              "assetRefs": [],
+              "excerptSha256": "7280c08781e69bb9b74b4e6420600504591bc6bca9e3abcd9ea2ea58ea5dc162"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-format-choice",
+        "moduleId": "input-preparation",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：三种输入格式怎么选",
+        "markdown": "教材给出的三种格式对应三种不同的上下游关系，可按下面的判据选择：\n\n- 输入是普通文本日志、只需要按行处理：用默认的 TextInputFormat，键是行的字节偏移量，值是整行内容。\n- 输入是上一个 MapReduce 作业的输出：优先用 KeyValueInputFormat，正好与默认的 map 输出格式对接，省掉一次解析。\n- 输入需要在作业之间高效传递、且不只是文本类型：用 SequenceFileInputFormat 配合 SequenceFileOutputFormat，利用块压缩与序列化减少读写开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-input-format"
+          ]
+        }
+      },
+      {
+        "id": "tb-input-split",
+        "moduleId": "input-preparation",
+        "depth": "core",
+        "kind": "definition",
+        "title": "输入块（InputSplit）：一个 map 任务的单位",
+        "markdown": "一个输入块描述了构成 MapReduce 程序中单个 map 任务的一个单元。把一个 MapReduce 程序应用到一个数据集上，即是一个作业，会由几个（也可能几百个）任务组成。Map 任务可能会读取整个文件，但一般是读取文件的一部分。\n\n默认情况下，FileInputFormat 及其子类会以 64MB 为基数来拆分文件（与 HDFS 的 Block 默认大小相同，Hadoop 建议 Split 大小与此相同）。可以在 hadoop-site.xml（教材注明 0.20.* 以后是在 mapred-default.xml 里）中设定 `mapred.min.split.size` 参数控制具体划分大小，或者在具体作业的 JobConf 对象中重写这个参数。通过以块形式处理文件，可以让多个 map 任务并行地操作一个文件；如果文件非常大，这个特性可以通过并行处理大幅提升性能。更重要的是，因为多个块组成的文件可能分散在集群内的好几个节点上，这样就可以把任务调度到不同节点上，所有单个块都是本地处理的，而不是把数据从一个节点传输到另一个节点。当然，有些文件格式不支持块处理方式，针对这种情况可以写一个自定义的 InputFormat 来控制文件如何被拆分（或不拆分）成文件块。\n\n输入格式定义了组成 mapping 阶段的 map 任务列表，每一个任务对应一个输入块。接下来根据输入文件块所在的物理地址，这些任务会被分派到对应的系统节点上，可能会有多个 map 任务被分派到同一个节点上。任务分派好后，节点开始运行任务，尝试最大并行化执行；节点上的最大任务并行数由 `mapred.tasktracker.map.tasks.maximum` 参数控制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000107"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 输入块（InputSplit）"
+              ],
+              "lineStart": 1475,
+              "lineEnd": 1480,
+              "assetRefs": [],
+              "excerptSha256": "5bd26456bdd50e1d26e63dc49d1f4f3abca318c318b9d849be352ade225bf291"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-split-vs-block",
+        "moduleId": "input-preparation",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：分片是逻辑切分，数据块是物理存储",
+        "markdown": "教材说 Split 与 Block 默认大小相同、建议保持一致，但两者不是同一个概念：\n\n- Block 是 HDFS 在磁盘上的物理存储单位；\n- InputSplit 是给某个 map 任务处理的逻辑数据范围，它本身不存数据，只描述从哪里读到哪里的信息。\n\n两者的对应关系可以是多对一，默认是一对一。因此分片大小实际决定了两件事：map 任务的数量（进而决定并行度和单任务的启动开销），以及任务能否被调度到数据所在节点上。分片切得太细，任务数增多、启动与调度开销占比上升；切得太粗，并行度不足，跨节点读取的可能性也变大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-input-split"
+          ]
+        }
+      },
+      {
+        "id": "tb-record-reader",
+        "moduleId": "input-preparation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "记录读取器（RecordReader）：把分片变成键值对",
+        "markdown": "InputSplit 定义了如何切分工作，但是没有描述如何去访问它。RecordReader 类则是实际用来加载数据、并把数据转换为适合 mapper 读取的键值对的。\n\nRecordReader 实例由输入格式定义：默认的输入格式 TextInputFormat 提供了一个 LineRecordReader，它把输入文件的每一行作为一个新的值，关联到该行的键则是该行在文件中的字节偏移量。RecordReader 会在输入块上被重复调用，直到整个输入块被处理完毕；每一次调用 RecordReader 都会调用 Mapper 的 `map()` 方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 记录读取器（RecordReader）"
+              ],
+              "lineStart": 1481,
+              "lineEnd": 1484,
+              "assetRefs": [],
+              "excerptSha256": "49828c3a07bea42688a76cbde20785972a600e50ca6c3bb905928a805e38ae55"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-mapper",
+        "moduleId": "mapping-and-partitioning",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Mapper：用户定义的第一阶段",
+        "markdown": "Mapper 执行了 MapReduce 程序第一阶段中用户定义的工作。给定一个键值对，`map()` 方法会生成一个或多个键值对，这些键值对会被送到 Reducer 那里。\n\n对于整个作业输入部分的每一个 map 任务（输入块），每一个新的 Mapper 实例都会在单独的 Java 进程中被初始化，mapper 之间不能进行通信。这就使得每一个 map 任务的可靠性不受其他 map 任务影响，只由本地机器的可靠性决定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000109"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "<sup></sup> Mapper"
+              ],
+              "lineStart": 1485,
+              "lineEnd": 1488,
+              "assetRefs": [],
+              "excerptSha256": "42e7d1c1321b6983cc3329202bba0589213523c4e35679e6b64ec8234edf9032"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mapper-isolation",
+        "moduleId": "mapping-and-partitioning",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：进程隔离对写代码意味着什么",
+        "markdown": "“每个 Mapper 在单独的 Java 进程中初始化、彼此不能通信”不是实现细节，而是会直接影响写法的约束：\n\n- 不能靠在 map 里累加一个内存计数器再统一读出，因为不同 map 任务看到的是各自进程里的副本；需要全局汇总的量必须作为键值对输出，交给 reduce 阶段按同一个键汇总。\n- 单个 map 任务失败时，只需重算它负责的那个输入分片，其他分片的结果不受影响，这也是教材强调“可靠性只由本地机器决定”的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mapper"
+          ]
+        }
+      },
+      {
+        "id": "tb-partition",
+        "moduleId": "mapping-and-partitioning",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Partition 与 shuffle：把中间数据送对地方",
+        "markdown": "当第一个 map 任务完成后，节点可能还要继续执行更多的 map 任务，但这时候也开始把 map 任务的中间输出交换到需要它们的 reducer 那里去，这个把“map 输出”移动到 reducer 那里去的过程就叫做 shuffle。\n\n每一个 reduce 节点会被分配得到“map 输出的键集合”中的一个不同子集合，这些子集合（被称为“partitions”）是 reduce 任务的输入数据。每一个 map 任务生成的键值对，可能会隶属于任意的 partition；有着相同键的数值总是在一起被 reduce，不管它来自哪个 mapper。因此，所有的 map 节点必须就不同的中间数据发往何处达成一致。Partitioner 类就是用来决定给定键值对去向的：默认的分类器（partitioner）会计算键的哈希值，并基于这个结果把键赋到相应的 partition 上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "<sup></sup> Partition & Shuffle"
+              ],
+              "lineStart": 1489,
+              "lineEnd": 1492,
+              "assetRefs": [],
+              "excerptSha256": "740300648432eddf2705648312e6dcbb5ca65f62df063831383e24ef290d9fc0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-partition-example",
+        "moduleId": "mapping-and-partitioning",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：默认分区器如何定位一个键",
+        "markdown": "设作业有 3 个 reduce 任务（即 R = 3），使用默认分区规则 `hash(key) mod R`：\n\n1. 某个 mapper 输出键值对 `(\"aaa\", 1)`；\n2. 平台计算 key 的哈希值，再对 3 取模，假设结果为 0；\n3. 这条键值对就被标记为 0 号 partition，交给处理 0 号 partition 的 reduce 任务；\n4. 其他 mapper 输出的 `(\"aaa\", 1)` 同样得到 0，也进入同一个 reduce 任务，因此这个单词的所有计数最终汇到同一处累加。\n\n反过来看，如果某些键的哈希值集中在少数分区，对应的 reduce 任务就会收到远多于其他任务的数据，成为整个作业的瓶颈。这时可以按教材的说法自行订制 Partitioner 并设置到作业上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-partition"
+          ]
+        }
+      },
+      {
+        "id": "tb-reducer",
+        "moduleId": "reduction-and-output",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Reducer：按键归约",
+        "markdown": "每一个 reduce 任务负责对那些关联到相同键上的所有数值进行归约（reducing）。每一个节点收到的中间键集合，在被送到具体的 reducer 那里前就已经自动被 Hadoop 排序过了。\n\n每个 reduce 任务都会创建一个 Reducer 实例，这是一个用户自定义代码的实例，负责执行特定作业的第二个重要阶段。对于每一个已被赋予到 reducer 的 partition 内的键来说，reducer 的 `reduce()` 方法只会调用一次，它会接收一个键和关联到该键的所有值的一个迭代器，迭代器会以一个未定义的顺序返回关联到同一个键的值。reducer 也要接收 OutputCollector 和 Reporter 对象，它们像在 `map()` 方法中那样被使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000111"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "<sup></sup> Reducer"
+              ],
+              "lineStart": 1493,
+              "lineEnd": 1496,
+              "assetRefs": [],
+              "excerptSha256": "947264e914b76c90b2fc64bb42d46517a3c5e1dd15b7fb92a273952477509d05"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-output-format",
+        "moduleId": "reduction-and-output",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "输出格式（OutputFormat）与 RecordWriter",
+        "markdown": "提供给 OutputCollector 的键值对会被写到输出文件中，写入的方式由输出格式控制。OutputFormat 的功能跟前面描述的 InputFormat 类很像：Hadoop 提供的 OutputFormat 实例会把文件写在本地磁盘或 HDFS 上。每一个 reducer 会把结果输出写在公共文件夹中一个单独的文件内，这些文件的命名一般是 part-nnnnn，其中 nnnnn 是关联到某个 reduce 任务的 partition 的 id；输出文件夹通过 `FileOutputFormat.setOutputPath()` 来设置，可以通过 JobConf 对象的 `setOutputFormat()` 方法设置具体用到的输出格式。\n\n表 4-3 给出 Hadoop 已提供的输出格式：\n\n| 输出格式 | 描述 |\n|---|---|\n| TextOutputFormat | 默认输出格式，以“键 + 制表符 + 值”的方式输出行 |\n| SequenceFileOutputFormat | 输出二进制文件，适合作为下一个 MapReduce 作业的输入 |\n| NullOutputFormat | 忽略收到的数据，即不做输出 |\n\n默认的 TextOutputFormat 会以一行一个键值对的方式把数据写入文本文件，后面的 MapReduce 任务可以通过 KeyValueInputFormat 简单地重新读取所需数据，也适合人的阅读。SequenceFileOutputFormat 更适合在作业之间使用，它可以快速序列化任意数据类型，而对应的 SequenceFileInputFormat 会把文件反序列化为相同类型并提交为下一个 Mapper 的输入。NullOutputFormat 不会生成输出文件并丢弃任何通过 OutputCollector 传递给它的键值对，如果在 `reduce()` 方法中显式地写自己的输出文件、又不想框架输出额外的空文件，这个类很有用。\n\nRecordWriter 与 InputFormat 中通过 RecordReader 读取单个记录的实现很相似：OutputFormat 类是 RecordWriter 对象的工厂方法，用来把单个记录写到文件中。Reducer 输出的文件会留在 HDFS 上供其他应用使用，例如另一个 MapReduce 作业，或者一个给人工检查的单独程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 输出格式"
+              ],
+              "lineStart": 1497,
+              "lineEnd": 1508,
+              "assetRefs": [],
+              "excerptSha256": "9816893af5ad78b670bdb59e1e61b54f1c2364349ae2c9942ecbd9324b699063"
+            },
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000113"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "<sup></sup> RecordWriter"
+              ],
+              "lineStart": 1509,
+              "lineEnd": 1514,
+              "assetRefs": [],
+              "excerptSha256": "a4aa55d2cd223a64bb23aab8bc1bf7c70c1f73e56dd11f04853500959fecc6ae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-output-directory",
+        "moduleId": "reduction-and-output",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：输出阶段的两个易错点",
+        "markdown": "- **输出目录必须不存在。** OutputFormat 的第一步就是校验输出目录是否已经存在，存在则校验不成立，作业不会产出结果。重复运行同一作业前，要先换一个输出路径或清理旧目录。\n- **输出文件个数由 reduce 数量决定。** 每个 reducer 写自己的 part-nnnnn 文件，所以 R 个 reduce 会得到 R 个输出文件，而不是一个汇总文件。下游作业读取时要把整个输出目录作为输入，而不是只取其中一个 part 文件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-output-format"
+          ]
+        }
+      },
+      {
+        "id": "tb-shuffle-overview",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "core",
+        "kind": "definition",
+        "title": "shuffle 的教材定义与两端分工",
+        "markdown": "在 MapReduce 流程中，为了让 reduce 可以并行处理 map 结果，必须对 map 的输出进行一定的排序和分割，然后再交给对应的 reduce，而这个将 map 输出进一步整理并交给 reduce 的过程，就称为 shuffle。教材称 shuffle 过程是 MapReduce 工作流程的核心，也被称为“奇迹发生的地方”，要想理解 MapReduce，shuffle 是必须要了解的。\n\n从图 4-3 可以看出，shuffle 过程包含在 map 和 reduce 两端中，描述着数据从 map task 输出到 reduce task 输入的这段过程。在 map 端的 shuffle 过程是对 map 的结果进行划分（partition）、排序（sort）和 spill（溢写），然后，将属于同一个划分的输出合并在一起，并写到磁盘上，同时按照不同的划分将结果发送给对应的 reduce（map 输出的划分与 reduce 的对应关系由 JobTracker 确定）。reduce 端又会将各个 map 送来的属于同一个划分的输出进行合并（merge），然后对合并的结果进行排序，最后交给 reduce 处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Shuffle 过程详解"
+              ],
+              "lineStart": 1515,
+              "lineEnd": 1523,
+              "assetRefs": [
+                "parts/part-0001/images/870e11a2a42fcd26677bff7715d9d0260e494a15e03a1f9d2e84d3fffec4177a.jpg"
+              ],
+              "excerptSha256": "caea0f78fbe6aa12f6c29fc603079057b684604979d4ccdc7639aa34c66906f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shuffle-position",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：shuffle 不是第三个独立阶段",
+        "markdown": "把 shuffle 理解成一个“横跨两端”的过程，比把它当成 map 之后、reduce 之前的独立阶段更准确：\n\n- 它的起点是 map 任务产出的中间键值对，终点是 reduce 任务拿到的、已按分区归并并排序好的输入；\n- 前面 4.4.2 里的 Partition & Shuffle 讲的是这一步在整体流程中的位置和 Partitioner 的职责，4.4.3 的详解讲的是同一段过程的内部机制（缓冲区、溢写阈值、合并）；两者描述的是同一件事的不同粒度，不是两个阶段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-shuffle-overview",
+            "tb-partition"
+          ]
+        }
+      },
+      {
+        "id": "tb-map-shuffle",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "map 端的 shuffle：缓冲、溢写、排序与合并",
+        "markdown": "图 4-4 展示某个假想 map task 的运行情况，说明划分（partition）、排序（sort）与合并（combiner）作用在哪个阶段。整个流程可以包含四步：每个 map task 都有一个内存缓冲区，存储着 map 的输出结果；当缓冲区快满时，需要将缓冲区的数据以一个临时文件的方式存放到磁盘；当整个 map task 结束后，再对磁盘中这个 map task 产生的所有临时文件做合并，生成最终的正式输出文件，然后等待 reduce task 来拉数据。\n\n第 1 步：map task 的输入数据来源于 HDFS 的 block，但在 MapReduce 概念中 map task 只读取 split；split 与 block 的对应关系可能是多对一，默认是一对一。在 WordCount 例子里，假设 map 的输入数据都是像“aaa”这样的字符串。\n\n第 2 步：经过 mapper 运行后，mapper 的输出是这样的键值对：key 是“aaa”，value 是数值 1；map 端只做加 1 的操作，在 reduce task 里才去合并结果集。假设这个 job 有 3 个 reduce task，当前“aaa”应该交给哪个 reduce，需要现在决定。MapReduce 提供 Partitioner 接口，其作用是根据 key 或 value 及 reducer 的数量决定当前键值对最终应交由哪个 reduce task 处理；默认对 key 进行哈希后再用 reduce task 数量取模，即 `hash(key) mod R`，其中 R 表示 reducer 的数量。默认的取模方式只是为了平均 reduce 的处理能力，用户有需求可以订制 Partitioner 并设置到 job 上。假设“aaa”经过 Partitioner 后返回 0，这个键值对就交由第一个 reducer 处理。接下来把数据写入内存缓冲区，缓冲区的作用是批量收集 map 结果、减少磁盘 IO 的影响；key/value 对以及 Partition 的结果都会被写入缓冲区，写入之前 key 与 value 会被序列化成字节数组，整个内存缓冲区就是一个字节数组。\n\n第 3 步：内存缓冲区有大小限制，默认是 100MB。当 map task 的输出结果很多时可能撑爆内存，所以需要在一定条件下把缓冲区中的数据临时写入磁盘，再重新利用这块缓冲区；这个从内存往磁盘写数据的过程被称为 Spill（溢写）。溢写由单独线程完成，不影响往缓冲区写 map 结果的线程；溢写线程启动时不应阻止 map 结果输出，所以整个缓冲区有个溢写比例 spill.percent，默认 0.8，即当缓冲区数据达到阈值（buffer size × spill percent = 100MB × 0.8 = 80MB）时溢写线程启动，锁定这 80MB 内存执行溢写，map task 的输出结果还可以往剩下的 20MB 内存中写，互不影响。溢写线程启动后，需要对这 80MB 空间内的 key 做排序（Sort）；排序是 MapReduce 模型默认的行为，这里的排序也是对序列化的字节做的排序。\n\n此外，为了进一步减少从 map 端到 reduce 端需要传输的数据量，还可以在 map 端执行 combine 操作。对于 WordCount 例子，如果在同一个 map task 的结果中有很多个像“aaa”一样出现多次的 key，就应该把它们的值合并到一块，这个过程叫 reduce，也叫 combine：例如 `(\"aaa\", 1)`、`(\"aaa\", 1)` 经过 combine 后得到 `(\"aaa\", 2)`。教材强调，在 MapReduce 术语中，reduce 单纯指 reduce 端执行从多个 map task 取数据做计算的过程，除此之外非正式地合并数据只能算 combine；实际上 MapReduce 中将 Combiner 等同于 Reducer。如果 client 设置过 Combiner，那么现在就是使用 Combiner 的时候：将有相同 key 的键值对的 value 加起来，减少溢写到磁盘的数据量。Combiner 会优化 MapReduce 的中间结果，所以在整个模型中会多次使用。教材特别提醒：Combiner 的输出是 Reducer 的输入，Combiner 绝不能改变最终的计算结果，所以一般而言只应该用于 Reduce 的输入 key/value 与输出 key/value 类型完全一致、且不影响最终结果的场景，比如累加、最大值等；使用 Combiner 一定得慎重，用得好对 job 执行效率有帮助，反之会影响 reduce 的最终结果。\n\n第 4 步：每次溢写会在磁盘上生成一个溢写文件；如果 map 的输出结果真的很大、有多次溢写发生，磁盘上就会有多个溢写文件存在。当 map task 真正完成时，内存缓冲区中的数据也全部溢写到磁盘中形成一个溢写文件；最终磁盘中至少有一个这样的溢写文件（如果 map 输出结果很少，map 执行完成时只会产生一个溢写文件）。因为最终的文件只允许有一个，所以需要把这些溢写文件归并到一起，这个过程叫做 Merge：例如“aaa”从某个 map task 读取过来时值是 5，从另外一个 map 读取时值是 8，因为它们有相同的 key，就得 merge 成 group，对“aaa”而言 merge 后得到的 group 就是类似 `(\"aaa\", {5, 8, 2})` 的形式，数组中的值来自不同溢写文件，然后再把这些值合并起来。注意 merge 是将多个溢写文件合并到一个文件，过程中可能仍有相同的 key，如果 client 设置过 Combiner，merge 时也会使用 Combiner 合并相同的 key。\n\n至此 map 端的所有工作都已结束，最终生成的文件存放在 TaskTracker 够得着的某个本地目录内。每个 reduce task 不断地通过 RPC 从 JobTracker 那里获取 map task 是否完成的信息；如果 reduce task 得到通知，获知某台 TaskTracker 上的 map task 执行完成，shuffle 的后半段过程开始启动。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "map 端的 shuffle 过程"
+              ],
+              "lineStart": 1524,
+              "lineEnd": 1552,
+              "assetRefs": [
+                "parts/part-0001/images/6bdaf7db15642d955092cb25b29e0a41357e0c4aaf5d569d8373b5d2f48bf894.jpg"
+              ],
+              "excerptSha256": "abc6800033f98eb4c032bd9e6595122370a3ba7917e74cfd8e00413ad62b4e9f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spill-arithmetic",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充推算：80MB 阈值与溢写文件个数",
+        "markdown": "教材给的默认值可以直接算出来：缓冲区 100MB，spill.percent 为 0.8，所以触发溢写的阈值是 100 × 0.8 = 80MB；触发后这 80MB 被锁定用于溢写，剩余 20MB 仍可接收新的 map 输出，这就是“写入不阻塞”的含义。\n\n溢写文件个数取决于 map 输出的总量和写入节奏：假设某个 map 任务的输出总量约为 400MB，按 80MB 的阈值大约会溢写 5 次，结束时再把缓冲区剩余数据写出一次，磁盘上就会有 5 到 6 个溢写文件；最终还要通过 Merge 把它们并成一个正式输出文件。教材只给出了阈值，没有规定固定文件数，数量随实际数据量变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-map-shuffle"
+          ]
+        }
+      },
+      {
+        "id": "model-combiner-boundary",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "补充反例：什么时候不能用 Combiner",
+        "markdown": "教材要求 Combiner 绝不能改变最终结果，可以用一个反例看清边界。若任务要统计平均值，两个 mapper 分别输出键 k 的值 10 与 20，另一个 mapper 输出 30：\n\n- 正确的最终结果是 (10 + 20 + 30) / 3 = 20；\n- 如果在 map 端先算出平均值，第一个 mapper 得到 15，再与 30 求平均得到 22.5，结果被改变。\n\n因此平均值不能直接作为 Combiner；要保留可合并的结构，例如让 map 输出 (sum, count)，Combiner 只做分量相加，最后在 reduce 端再相除。判断标准和教材一致：Reduce 的输入 key/value 与输出 key/value 类型是否完全一致、运算是否满足结合律且不依赖全局信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-map-shuffle"
+          ]
+        }
+      },
+      {
+        "id": "tb-reduce-shuffle",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "reduce 端的 shuffle：复制、合并与最终文件",
+        "markdown": "简单地说，reduce task 在执行之前的工作就是不断地拉取当前 job 里每个 map task 的最终结果，然后对从不同地方拉取过来的数据不断地做 merge，也最终形成一个文件作为 reduce task 的输入文件（图 4-5）。reduce 端的过程同样可以概括为三个步骤；当前 reduce 拉取数据的前提是它要从 JobTracker 那里获知有哪些 map task 已执行结束，Reducer 真正运行之前，所有时间都是在拉取数据、做 merge，且不断重复。\n\n第 1 步：复制过程，简单地拉取数据。Reduce 进程启动一些数据复制线程（Fetcher），通过 HTTP 方式请求 map task 所在的 TaskTracker 获取 map task 的输出文件；因为 map task 早已结束，这些文件就归 TaskTracker 管理在本地磁盘中。\n\n第 2 步：Merge 阶段。这里的 merge 如 map 端的 merge 动作，只是数组中存放的是不同 map 端复制来的数值。复制过来的数据会先放入内存缓冲区，这里的缓冲区大小比 map 端更灵活，因为 shuffle 阶段 Reducer 不运行，所以应该把绝大部分内存都给 shuffle 用。教材强调 merge 有三种形式：内存到内存、内存到磁盘、磁盘到磁盘；默认情况下第一种形式不启用。当内存中的数据量到达一定阈值，就启动内存到磁盘的 merge，与 map 端类似，这也是溢写的过程，过程中如果设置有 Combiner 也会启用，然后在磁盘中生成了众多的溢写文件。第二种 merge 方式一直在运行，直到没有 map 端的数据时才结束，然后启动第三种磁盘到磁盘的 merge 方式生成最终的那个文件。\n\n第 3 步：Reducer 的输入文件。不断地 merge 后，最后会生成一个“最终文件”；加引号是因为这个文件可能存在于磁盘上，也可能存在于内存中。对使用者来说当然希望它存放于内存中、直接作为 Reducer 的输入，但默认情况下这个文件是存放于磁盘中的。当 Reducer 的输入文件已定，整个 shuffle 才最终结束；然后就是 Reducer 执行，把结果放到 HDFS 上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000116"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "reduce 端的 shuffle 过程"
+              ],
+              "lineStart": 1553,
+              "lineEnd": 1567,
+              "assetRefs": [
+                "parts/part-0001/images/9661e4bbe30f2a82099b0ac533d6073c71f01c4237fd7c6ed511ac48970f8043.jpg"
+              ],
+              "excerptSha256": "8bf413025a87f4b00754d8ae410c7dbc782082c7b6b0d0db29ced989294737d4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shuffle-compare",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充对照：shuffle 两端各自在做什么",
+        "markdown": "| 对比项 | map 端 shuffle | reduce 端 shuffle |\n|---|---|---|\n| 主要动作 | 分区、写入缓冲区、溢写、排序、可选 combine、merge | 复制拉取、merge（可能含溢写）、生成最终输入文件 |\n| 数据落点 | 本地磁盘上的溢写文件与最终输出文件 | reducer 本地的最终文件（默认在磁盘） |\n| 缓冲区用途 | 批量收集 map 输出，阈值默认 80MB 时触发溢写 | 暂存复制来的数据，内存可给得更多 |\n| 触发条件 | map 任务产出中间数据即开始 | 获知某个 map 任务完成后开始拉取 |\n| 结束标志 | 溢写文件合并为一个正式输出文件 | 最终输入文件确定，交给 Reducer |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-reduce-shuffle",
+            "tb-map-shuffle"
+          ]
+        }
+      },
+      {
+        "id": "model-stage-checklist",
+        "moduleId": "stage-diagnosis",
+        "depth": "core",
+        "kind": "summary",
+        "title": "按阶段自检：每一步该确认什么",
+        "markdown": "执行或排查一个作业时，可以按下面的清单逐段确认，每一问都对应教材中的一个环节：\n\n1. **输入**：输入路径下的文件是否为预期格式？默认 TextInputFormat 是否把整行当值，而作业其实需要按 tab 拆键值？\n2. **分片**：map 任务数是否与数据量相称？分片大小设置是否让任务过碎或过少？\n3. **映射**：`map()` 输出的键是否就是后续汇总的依据？有没有试图用进程内变量跨任务汇总？\n4. **分区**：reduce 数量 R 是多少？键的哈希是否集中在少数分区？\n5. **洗牌（map 端）**：缓冲区与溢写比例是否被调整过？Combiner 是否满足类型一致且不改变结果的约束？\n6. **洗牌（reduce 端）**：复制与 merge 是否在反复溢写？默认的磁盘到磁盘合并是否已经产出最终输入文件？\n7. **归约**：`reduce()` 是否对每个键只处理一批值，而非假设值的顺序？\n8. **输出**：输出目录是否已存在？下游是否按整个目录读取全部 part 文件？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview-flow",
+            "tb-exec-stages",
+            "tb-input-split",
+            "tb-partition",
+            "tb-output-format",
+            "tb-shuffle-overview",
+            "tb-map-shuffle",
+            "tb-reduce-shuffle"
+          ]
+        }
+      },
+      {
+        "id": "model-diagnosis-cases",
+        "moduleId": "stage-diagnosis",
+        "depth": "support",
+        "kind": "example",
+        "title": "症状到定位：常见问题的排查路径",
+        "markdown": "- **症状：作业启动后立刻失败，提示输出相关错误。** 定位到输出阶段——OutputFormat 会先验证输出目录是否已存在；修复方式是更换一个不存在的输出路径。\n- **症状：map 任务数量异常多，单个任务几秒就结束，调度开销占比很高。** 定位到输入准备阶段的分片设置；修复方式是调整 `mapred.min.split.size`，或检查是否用了产生过多小分片的输入格式。\n- **症状：reduce 阶段个别任务明显慢于其他任务。** 定位到分区阶段：默认按哈希取模，某些键过于集中；修复方式是订制 Partitioner 重新分配键，或先对键做加盐处理（这会改变结果结构，需要谨慎评估）。\n- **症状：平均值或比例类指标的最终结果与串行计算不符。** 定位到 map 端 combine；修复方式是移除 Combiner，或改成可合并的 `(sum, count)` 中间结构。\n- **症状：reduce 任务长时间停在拉取与合并数据上，迟迟不开始 `reduce()`。** 定位到 reduce 端 shuffle：Reducer 真正运行前所有时间都用于复制与 merge，最终输入文件确定后才进入归约；修复方向是减少 map 输出量（例如启用合适的 Combiner），并检查 map 输出文件所在 TaskTracker 的磁盘与网络负载。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-input-split",
+            "tb-partition",
+            "tb-output-format",
+            "tb-map-shuffle",
+            "tb-reduce-shuffle"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "stage-ordering-check",
+        "type": "ordering",
+        "title": "阶段排序与产物配对",
+        "anchorBlockId": "model-stage-contract-table",
+        "moduleId": "pipeline-overview",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-end-to-end-flow"
+        ],
+        "learningPurpose": "检查学习者能否把作业提交、输入准备、映射、分区与洗牌、归约、输出排成正确顺序，并为每个阶段配出产物。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-exec-stages",
+            "model-stage-contract-table"
+          ]
+        },
+        "config": {
+          "prompt": "把下列阶段排成执行顺序，并写出每个阶段的产物。",
+          "items": [
+            "输出：OutputFormat 校验并写出 part 文件",
+            "作业提交：客户端把作业交给 JobTracker",
+            "归约：Reducer 对每个键调用一次 reduce()",
+            "映射：Mapper 输出中间键值对",
+            "输入准备：切分 InputSplit 并由 RecordReader 读取记录",
+            "分区与洗牌：按哈希取模把键值对送往对应 partition"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出教材七步执行流程的顺序，并在每一步后面标注该步的产物（InputSplit、中间键值对、溢写文件、part 文件等）。"
+        }
+      },
+      {
+        "id": "spill-threshold-check",
+        "type": "formative-check",
+        "title": "溢写阈值换算检查",
+        "anchorBlockId": "model-spill-arithmetic",
+        "moduleId": "shuffle-deep-dive",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-shuffle-both-ends"
+        ],
+        "learningPurpose": "检查学习者能否用 spill.percent 算出溢写阈值，并解释剩余缓冲区与多文件 merge 的作用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-map-shuffle",
+            "model-spill-arithmetic"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "缓冲区默认 100MB、spill.percent 为 0.8 时，溢写在什么条件下触发？触发之后剩余的 20MB 还能做什么？",
+          "expectedPoints": [
+            "阈值是 80MB",
+            "溢写由单独线程完成，不阻塞新的 map 输出",
+            "多个溢写文件最终要经过 Merge 合成一个正式输出文件"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用 100MB × 0.8 算出溢写阈值，并说明溢写期间剩余缓冲区仍可接收 map 输出，以及多次溢写后需要 Merge 的原因。"
+        }
+      }
+    ]
+  },
+  "subtitle": "MapReduce",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000101"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "MapReduce 工作流程"
+      ],
+      "lineStart": 1417,
+      "lineEnd": 1418,
+      "assetRefs": [],
+      "excerptSha256": "8051453598109c5c57be0fce3f120c7b8a0a125b851d8fbe78ffe627aacad3a5"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000102"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "工作流程概述"
+      ],
+      "lineStart": 1419,
+      "lineEnd": 1429,
+      "assetRefs": [
+        "parts/part-0001/images/ed19c4c1b1d1ead4b4bb29d8a96b521482e82dc2a046e6b60bee4ba27000a073.jpg"
+      ],
+      "excerptSha256": "dcf60eb006802aa2efd314df19180c79e64b7d634d2578a606cb0fe41f98786a"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000103"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "MapReduce 各个执行阶段"
+      ],
+      "lineStart": 1430,
+      "lineEnd": 1452,
+      "assetRefs": [
+        "parts/part-0001/images/02b20f423e6dc87d4e4d0c910db8a14b145b918ec52ad29ec64da3aecb281da6.jpg"
+      ],
+      "excerptSha256": "1a12756c935cff597c3ed3028e4dbe1f3c03656dc14dbe133b3aea7fbebbccae"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000104"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 输入文件"
+      ],
+      "lineStart": 1453,
+      "lineEnd": 1456,
+      "assetRefs": [],
+      "excerptSha256": "923f72baf6809e2ec78532f36fd251d21c6f91c4c14ff9ab8f338b145dc8d533"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000105"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 输入格式"
+      ],
+      "lineStart": 1457,
+      "lineEnd": 1464,
+      "assetRefs": [],
+      "excerptSha256": "3220475d8d2add17a3849d360781b0ee9b7f7a51fbfc9598f582298efcebff3d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000106"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "（3） 为RecordReader读取文件提供了一个工厂方法。"
+      ],
+      "lineStart": 1465,
+      "lineEnd": 1474,
+      "assetRefs": [],
+      "excerptSha256": "7280c08781e69bb9b74b4e6420600504591bc6bca9e3abcd9ea2ea58ea5dc162"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000107"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 输入块（InputSplit）"
+      ],
+      "lineStart": 1475,
+      "lineEnd": 1480,
+      "assetRefs": [],
+      "excerptSha256": "5bd26456bdd50e1d26e63dc49d1f4f3abca318c318b9d849be352ade225bf291"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000108"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 记录读取器（RecordReader）"
+      ],
+      "lineStart": 1481,
+      "lineEnd": 1484,
+      "assetRefs": [],
+      "excerptSha256": "49828c3a07bea42688a76cbde20785972a600e50ca6c3bb905928a805e38ae55"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000109"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "<sup></sup> Mapper"
+      ],
+      "lineStart": 1485,
+      "lineEnd": 1488,
+      "assetRefs": [],
+      "excerptSha256": "42e7d1c1321b6983cc3329202bba0589213523c4e35679e6b64ec8234edf9032"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000110"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "<sup></sup> Partition & Shuffle"
+      ],
+      "lineStart": 1489,
+      "lineEnd": 1492,
+      "assetRefs": [],
+      "excerptSha256": "740300648432eddf2705648312e6dcbb5ca65f62df063831383e24ef290d9fc0"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000111"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "<sup></sup> Reducer"
+      ],
+      "lineStart": 1493,
+      "lineEnd": 1496,
+      "assetRefs": [],
+      "excerptSha256": "947264e914b76c90b2fc64bb42d46517a3c5e1dd15b7fb92a273952477509d05"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000112"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 输出格式"
+      ],
+      "lineStart": 1497,
+      "lineEnd": 1508,
+      "assetRefs": [],
+      "excerptSha256": "9816893af5ad78b670bdb59e1e61b54f1c2364349ae2c9942ecbd9324b699063"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000113"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "<sup></sup> RecordWriter"
+      ],
+      "lineStart": 1509,
+      "lineEnd": 1514,
+      "assetRefs": [],
+      "excerptSha256": "a4aa55d2cd223a64bb23aab8bc1bf7c70c1f73e56dd11f04853500959fecc6ae"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000114"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Shuffle 过程详解"
+      ],
+      "lineStart": 1515,
+      "lineEnd": 1523,
+      "assetRefs": [
+        "parts/part-0001/images/870e11a2a42fcd26677bff7715d9d0260e494a15e03a1f9d2e84d3fffec4177a.jpg"
+      ],
+      "excerptSha256": "caea0f78fbe6aa12f6c29fc603079057b684604979d4ccdc7639aa34c66906f6"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000115"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "map 端的 shuffle 过程"
+      ],
+      "lineStart": 1524,
+      "lineEnd": 1552,
+      "assetRefs": [
+        "parts/part-0001/images/6bdaf7db15642d955092cb25b29e0a41357e0c4aaf5d569d8373b5d2f48bf894.jpg"
+      ],
+      "excerptSha256": "abc6800033f98eb4c032bd9e6595122370a3ba7917e74cfd8e00413ad62b4e9f"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000116"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "reduce 端的 shuffle 过程"
+      ],
+      "lineStart": 1553,
+      "lineEnd": 1567,
+      "assetRefs": [
+        "parts/part-0001/images/9661e4bbe30f2a82099b0ac533d6073c71f01c4237fd7c6ed511ac48970f8043.jpg"
+      ],
+      "excerptSha256": "8bf413025a87f4b00754d8ae410c7dbc782082c7b6b0d0db29ced989294737d4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3643,
+    2876
+  ],
+  "scale": 0.94
+}

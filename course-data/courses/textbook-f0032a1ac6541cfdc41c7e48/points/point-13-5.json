@@ -1,0 +1,480 @@
+{
+  "id": "point-13-5",
+  "title": "查询的执行",
+  "shortSummary": "说明 Dremel 如何把查询分解到多级执行树并行处理，并逐层汇总结果。",
+  "keyTerms": [
+    "查询执行",
+    "执行树",
+    "并行汇总"
+  ],
+  "animationType": "queryTreeExecution",
+  "animationSuggestion": "自上而下逐层展开子查询节点，叶子节点按 tablet 逐个点亮扫描进度并向上冒泡局部计数，中间节点在收到同组结果时合并并显示合并后的值，最后根节点输出结果；提供重播按钮回到同一条查询的初始状态，并标注扫描百分比参数对返回时机的截断位置。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于服务树、逐层重写和查询分发器的原始结论与边界，按“总览—分层职责—重写实例—调度容错—边界检查”的学习顺序重排，补充可推演的合并理由与估算练习，不改变教材数据与适用条件。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-serving-tree",
+          "text": "解释服务树如何把一条查询分解为多级子任务，并在返回时逐层汇总。"
+        },
+        {
+          "id": "trace-aggregate-rewrite",
+          "text": "追踪一次聚合查询从根节点重写、叶子扫描到中间层聚合的完整过程，并说明合并为什么正确。"
+        },
+        {
+          "id": "apply-dispatcher-controls",
+          "text": "说明查询分发器如何调度任务、处理慢节点与备份失效，并判断扫描百分比参数的取舍。"
+        }
+      ],
+      "misconceptions": [
+        "以为树中每一层都要把原始数据完整读一遍；实际上真正扫描 tablet 的是叶子服务器，中间层只对子查询结果做聚合。",
+        "以为把 COUNT 重写成 SUM 只是形式变换；它成立的前提是分组键不变且计数可按分区相加。",
+        "以为返回结果前必须扫完 100% 的 tablet 才算正确；教材指出可把该参数设得略小以换取更快的执行速度。"
+      ],
+      "modules": [
+        {
+          "id": "intro-and-position",
+          "title": "为什么要把查询变成一棵树",
+          "role": "concept-frame",
+          "description": "从任务分解与调度的角度建立服务树的整体图景。",
+          "outcomeRefs": [
+            "explain-serving-tree"
+          ],
+          "order": 0
+        },
+        {
+          "id": "tree-structure",
+          "title": "各层节点的职责",
+          "role": "mechanism",
+          "description": "区分根节点的路由职责与叶子服务器的取数职责。",
+          "outcomeRefs": [
+            "explain-serving-tree"
+          ],
+          "order": 1
+        },
+        {
+          "id": "aggregation-rewrite",
+          "title": "聚合查询的逐层重写与向上汇总",
+          "role": "worked-example",
+          "description": "跟着教材例子走一遍重写链，并推演合并成立的条件。",
+          "outcomeRefs": [
+            "trace-aggregate-rewrite"
+          ],
+          "order": 2
+        },
+        {
+          "id": "dispatcher",
+          "title": "查询分发器：调度、容错与返回时机",
+          "role": "procedure",
+          "description": "理解 slot 划分、tablet 重调度、副本改读与扫描百分比参数。",
+          "outcomeRefs": [
+            "apply-dispatcher-controls"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundary-and-check",
+          "title": "适用边界与达成检查",
+          "role": "check",
+          "description": "对照教材给出的边界判断场景是否适合该执行模型，并完成自检。",
+          "outcomeRefs": [
+            "explain-serving-tree",
+            "trace-aggregate-rewrite",
+            "apply-dispatcher-controls"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-serving-tree",
+          "trace-aggregate-rewrite",
+          "apply-dispatcher-controls"
+        ],
+        "method": "完成正文末尾的三问自检，按“分解—扫描—聚合—调度”的顺序复述一次聚合查询的执行。",
+        "successCriteria": [
+          "能指出取数只发生在叶子服务器，中间层只做聚合",
+          "能说明 COUNT 改写为 SUM 的成立条件",
+          "能说出分发器在慢节点、备份失效和返回时机上的具体动作"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "textbook-dremel-summary"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-serving-tree",
+        "moduleId": "intro-and-position",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：服务树",
+        "markdown": "教材把 Dremel 查询执行的核心概括为**服务树（serving-tree）**结构：把服务器分配为树中的逻辑节点，每个层次的节点履行不同的职责，最终完成整个查询。\n\n整个过程可以理解成一个任务分解和调度的过程：查询被分解成多个子任务，子任务调度到某个节点上执行；该节点既可以执行任务并返回结果给上层的父节点，也可以继续拆解成更小的任务、调度到下层的子节点。教材用图 13-8 同时给出了系统架构和单个服务器节点内部的执行位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000394"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "查询的执行"
+              ],
+              "lineStart": 5276,
+              "lineEnd": 5282,
+              "assetRefs": [
+                "parts/part-0003/images/02da1c85db6d15bb8e98d553a61578408858cd18ad6894b5d8eba3693dd8da55.jpg"
+              ],
+              "excerptSha256": "012b40d6b32ff220b6f0134bdf6e3fe3e08b47f451ec4b55dd99feed92c02b97"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-serving-tree-analogy",
+        "moduleId": "intro-and-position",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：逐级分包、逐级汇报",
+        "markdown": "可以把服务树想成一个逐级分包的工程队：总包只判断这项工作应该切成几份、分别派给谁；分包继续往下切，直到最底层的班组真正动手干活；结果再沿原路一层层汇总上报。\n\n用这个比喻要注意两点：\n\n- **动手取数的只有最低一层**，越往上越偏向“派活”和“合并”；\n- 一条结果最终能拼对，靠的是每一层都清楚自己拿到的是哪一段数据的中间结果。\n\n所以判断某个节点在树里的角色，只问两个问题：它下面还有没有节点可以派活，以及它需不需要把下层结果合并后再上报。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-serving-tree"
+          ]
+        }
+      },
+      {
+        "id": "textbook-tree-layers",
+        "moduleId": "tree-structure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材原文要点：根节点与叶子服务器分工",
+        "markdown": "Dremel 使用一个多层次的服务树来执行查询（见图 13-8）。教材明确了两类关键角色：\n\n- **根节点服务器**接收入来的查询，从表中读取元数据，将查询路由到下一层；\n- **叶子服务器**负责与存储层通讯，或者直接在本地磁盘访问数据。\n\n换言之，根节点掌握元数据并负责路由，叶子节点负责真正接触数据；介于两者之间的节点既要接住上层派下来的子查询，又要把任务继续往下分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000395"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 树结构"
+              ],
+              "lineStart": 5283,
+              "lineEnd": 5306,
+              "assetRefs": [],
+              "excerptSha256": "5232013c98686502c2a8b8a66f73907c2e45f81f3b9411d61320696a95ddb55f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-root-reads-metadata",
+        "moduleId": "tree-structure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：根节点为什么先读元数据",
+        "markdown": "根节点必须先读元数据，才能知道表被切成了哪些分区、这些分区落在哪些服务器上；没有这份信息，它无法决定把查询路由给谁，也无法为每一个分区生成子查询。\n\n这也解释了后文的重写顺序：先确定分区，再改写查询，最后才往下派活。元数据读取是一次性的轻量操作，真正的开销留在叶子节点的扫描上，这正是服务树能保持交互式响应速度的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-tree-layers"
+          ]
+        }
+      },
+      {
+        "id": "textbook-aggregate-query-rewrite",
+        "moduleId": "aggregation-rewrite",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材例子：一条聚合查询的重写",
+        "markdown": "教材给出的简单聚合查询是：\n\n```sql\nSELECT A, COUNT(B) FROM T GROUP BY A\n```\n\n根节点服务器收到这条查询后，先确定出所有 tablet（tablet 相当于对表 T 做的水平拆分，是它的一个分区），然后把查询重写为：\n\n```sql\nSELECT A, SUM(c)\nFROM (R_1^1 UNION ALL ... UNION ALL R_n^1)\nGROUP BY A\n```\n\n其中 $R_1^1$ 到 $R_n^1$ 是树中第 1 层的第 1 到 n 个节点返回的子查询结果，每个结果由该层服务器按下面的形式算出：\n\n```sql\nR_i^1 = SELECT A, COUNT(B) AS c FROM T_i^1 GROUP BY A\n```\n\n这里的 $T_i^1$ 就是 T 在第 1 层服务器 i 上被处理时的一个水平分区（tablet）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000395"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 树结构"
+              ],
+              "lineStart": 5283,
+              "lineEnd": 5306,
+              "assetRefs": [],
+              "excerptSha256": "5232013c98686502c2a8b8a66f73907c2e45f81f3b9411d61320696a95ddb55f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-layer-aggregation",
+        "moduleId": "aggregation-rewrite",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材原文要点：逐层下沉、向上聚合与适用边界",
+        "markdown": "每一层的节点所做的都是与此相似的重写（rewrite）过程：查询任务被一级级地分解成更小的子任务，最终落实到叶子节点，并行地对 T 的 tablet 进行扫描。在向上返回结果的过程中，中间层的服务器担任了对子查询结果进行聚合的角色。\n\n教材同时给出了适用边界：此计算模型非常适用于**返回较小结果的聚合查询**，这也是交互式应用中最常见的场景；而大型的聚合或者其他类型的查询，可能更适合使用并行 DBMS 和 MapReduce 来解决。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000395"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 树结构"
+              ],
+              "lineStart": 5283,
+              "lineEnd": 5306,
+              "assetRefs": [],
+              "excerptSha256": "5232013c98686502c2a8b8a66f73907c2e45f81f3b9411d61320696a95ddb55f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rewrite-walkthrough",
+        "moduleId": "aggregation-rewrite",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充推演：把 COUNT 换成 SUM 为什么仍然正确",
+        "markdown": "把两次计数换成一次求和，成立的前提是分组键 A 在重写前后保持一致。按执行顺序看：\n\n1. 叶子节点只在本地分区 $T_i^1$ 上按 A 分组，算出局部计数 $c_i$，即本分区内该 A 值对应的 B 条数；\n2. 同一个 A 值可能分布在多个分区里，所以第 1 层的各个结果 $R_i^1$ 要在外层按 A 再合并一次；\n3. 计数对分区是可加的——各分区的计数相加恰好等于全体计数——所以 $\\mathrm{SUM}(c)$ 与直接在整张表上 $\\mathrm{COUNT}(B)$ 得到相同的结果。\n\n由此也能读出这套重写的代价：只有可加的聚合才能“先局部算、再合并”。如果聚合结果依赖于跨分组的全局信息（例如需要全局排序或跨组去重），这种逐层求和就不再等价，教材也正是因此指出大型聚合更适合并行 DBMS 或 MapReduce。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aggregate-query-rewrite",
+            "textbook-layer-aggregation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-query-dispatcher",
+        "moduleId": "dispatcher",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材原文要点：查询分发器",
+        "markdown": "Dremel 是一个多用户系统，多个查询通常会被同时执行。一个**查询分发器**会基于查询任务的优先等级和负载均衡对查询任务进行调度；它还能帮助实现容错机制：当一个服务器变得很慢、或者一个 tablet 备份不可访问时，任务可以被重新调度。\n\n关于调度粒度与执行细节，教材给出以下事实：\n\n- 每个查询任务的数据处理量通常比可执行的处理单元（slot）的数量要多，一个 slot 对应一个叶子服务器上的一个执行线程。以 3000 个叶子服务器、每台 8 个线程为例，系统共有 24000 个 slot；若一个表分解为 100000 个 tablet，则大约每个 slot 分到 5 个 tablet。\n- 查询执行时分发器会统计各 tablet 的处理耗时；耗时较长或不成比例的 tablet 会被重新调度到另一台服务器，某些 tablet 可能需要被重新分发多次。\n- 叶子服务器读取列式结构数据中的 stripe，每个 stripe 的块被异步预取，教材给出的预读缓存命中率通常为 95%。tablet 一般复制三份，读取其中一个备份失败时就改读另一个备份。\n- 分发器还有一个重要参数，表示返回结果之前一定要扫描百分之多少的 tablet；把它设成较小的值（例如 98% 而不是 100%），通常能显著提升执行速度，特别是复制系数较小时。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000396"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                " 查询分发器"
+              ],
+              "lineStart": 5307,
+              "lineEnd": 5316,
+              "assetRefs": [],
+              "excerptSha256": "475f38bc29775be482fbc999cae428abde68658c625b19742974b5f9b8505152"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-slot-budget",
+        "moduleId": "dispatcher",
+        "depth": "support",
+        "kind": "application",
+        "title": "补充应用：用 slot 粗估并行粒度",
+        "markdown": "slot 的数量决定了同一时刻能有多少个执行线程在扫 tablet，因此可以用一个比值粗估并行粒度是否合适：\n\n- 每个 slot 的 tablet 数 ≈ tablet 总数 ÷ slot 总数。教材例子中 100000 ÷ 24000 ≈ 4.2，与教材所说的“大约 5 个”一致。\n- 这个比值过大，说明单个 slot 要排队扫很多 tablet，慢 tablet 造成的长尾更明显；比值过小，调度与预取的固定开销占比就会上升。\n\n教材提到的“扫描百分比”参数则是另一种取舍：把它设得略小于 100%，等价于允许极少数 tablet 未扫完就返回结果，以换取更短的响应时间。因此它属于精度与延迟之间的调节旋钮，需要结合结果精度要求来决定，而不能一律调低。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-query-dispatcher"
+          ]
+        }
+      },
+      {
+        "id": "textbook-dremel-summary",
+        "moduleId": "boundary-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材本章小结对 Dremel 的定位",
+        "markdown": "教材在本章小结中把 Dremel 概括为：一种能对大数据进行交互式分析的分布式系统；它由几个简单的组件组成，是一种通用的、管理可扩展数据的解决方案，能在短时间内完成对大规模数据的交互式查询与分析。同时，它具有很强的可扩展性和稳定性，实现了对 MapReduce 的一种互补。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000397"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本章小结"
+              ],
+              "lineStart": 5317,
+              "lineEnd": 5320,
+              "assetRefs": [],
+              "excerptSha256": "80b5cb82159722cfbd81ed0f75d3278cb84976f16740c95ee62a105782c7d858"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundary-and-choosing",
+        "moduleId": "boundary-and-check",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充归纳：这套执行模型的取舍与边界",
+        "markdown": "把教材各处给出的约束放在一起，可以在不同情境下做出判断：\n\n| 情境 | 结论 | 教材依据 |\n|---|---|---|\n| 聚合结果小、查询是交互式的 | 适合服务树逐层聚合 | 中间层只搬运和合并较小的子结果 |\n| 聚合规模很大，或查询类型不适合逐层合并 | 改考虑并行 DBMS 或 MapReduce | 教材明确写出该边界 |\n| 需要更短的响应时间 | 可把扫描百分比参数设得略小于 100% | 以极少数 tablet 未扫完为代价 |\n| 节点变慢或某个备份不可访问 | 依赖分发器重新调度、改读其他副本 | 容错由调度层与副本承担 |\n\n用一句话概括这套模型的分工：树状分解负责“并行”，逐层聚合负责“算对”，查询分发器负责“又快又稳”。三者中任何一环不成立，整体收益都会打折——例如聚合不可加时，前两者都无从谈起。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-layer-aggregation",
+            "textbook-query-dispatcher",
+            "textbook-dremel-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "boundary-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：三步说清一次查询的执行",
+        "markdown": "针对“统计每个 A 值对应的 B 条数”这一需求，按顺序回答：\n\n1. 根节点拿到查询后，先做什么、再做什么？\n2. 叶子节点扫描后返回什么？中间层对这些返回值做什么运算，为什么这样合并仍然正确？\n3. 如果某个 tablet 的处理耗时明显偏长，分发器会怎么处理？如果只关心响应速度而不要求严格完整，还有哪个参数可以调节？\n\n对照要点自检：第 1 问应出现“读元数据、确定 tablet、重写查询、路由到下一层”；第 2 问应出现“局部计数、按 A 求和、计数可按分区相加”；第 3 问应出现“重新调度到另一台服务器”“把扫描百分比参数设得略小”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aggregate-query-rewrite",
+            "textbook-query-dispatcher",
+            "model-boundary-and-choosing"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "serving-tree-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "boundary-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-serving-tree",
+          "trace-aggregate-rewrite",
+          "apply-dispatcher-controls"
+        ],
+        "learningPurpose": "检查学习者能否独立复述一次聚合查询的分解、扫描、聚合与调度过程，而不是只记住术语。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-serving-tree",
+            "textbook-aggregate-query-rewrite",
+            "textbook-query-dispatcher"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出一次聚合查询的执行链路：根节点读元数据并重写查询 → 逐层下派 → 叶子节点并行扫描 tablet 并返回局部结果 → 中间层按分组键聚合 → 根节点返回最终结果。再补充两点：计数可按分区相加，因此 COUNT 可改写为 SUM；慢 tablet 与备份失效由查询分发器重新调度处理。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Google Dremel",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [
+    "point-13-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000394"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "查询的执行"
+      ],
+      "lineStart": 5276,
+      "lineEnd": 5282,
+      "assetRefs": [
+        "parts/part-0003/images/02da1c85db6d15bb8e98d553a61578408858cd18ad6894b5d8eba3693dd8da55.jpg"
+      ],
+      "excerptSha256": "012b40d6b32ff220b6f0134bdf6e3fe3e08b47f451ec4b55dd99feed92c02b97"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000395"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 树结构"
+      ],
+      "lineStart": 5283,
+      "lineEnd": 5306,
+      "assetRefs": [],
+      "excerptSha256": "5232013c98686502c2a8b8a66f73907c2e45f81f3b9411d61320696a95ddb55f"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000396"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        " 查询分发器"
+      ],
+      "lineStart": 5307,
+      "lineEnd": 5316,
+      "assetRefs": [],
+      "excerptSha256": "475f38bc29775be482fbc999cae428abde68658c625b19742974b5f9b8505152"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000397"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本章小结"
+      ],
+      "lineStart": 5317,
+      "lineEnd": 5320,
+      "assetRefs": [],
+      "excerptSha256": "80b5cb82159722cfbd81ed0f75d3278cb84976f16740c95ee62a105782c7d858"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1035,
+    69
+  ],
+  "scale": 0.88
+}

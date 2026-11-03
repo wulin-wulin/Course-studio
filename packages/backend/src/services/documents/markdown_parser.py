@@ -26,11 +26,11 @@ _FENCE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})")
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)")
 _NUMBER_PREFIX_RE = re.compile(
     r"^(?:第\s*[0-9一二三四五六七八九十百千]+\s*[章节篇部]\s*|"
-    r"[0-9]+(?:\.[0-9]+)*[.、)）:\s-]+)"
+    r"[0-9]+(?:\.[0-9]+)*(?!\d|\.\d)(?:[.、)）:\s-]+|(?=[A-Za-z\u3400-\u9fff])))"
 )
 _ARABIC_HEADING_NUMBER_RE = re.compile(
-    r"^\s*(?P<number>[0-9]+(?:\.[0-9]+)*)"
-    r"(?:(?:[.、)）:：-]+[ \t]*)|[ \t]+)(?P<title>.+?)\s*$"
+    r"^\s*(?P<number>[0-9]+(?:\.[0-9]+)*)(?!\d|\.\d)"
+    r"(?:(?:[.、)）:：-]+[ \t]*)|[ \t]+|(?=[A-Za-z\u3400-\u9fff]))(?P<title>.+?)\s*$"
 )
 _CHINESE_CHAPTER_NUMBER_RE = re.compile(
     r"^\s*第\s*(?P<number>[0-9一二三四五六七八九十百千]+)"

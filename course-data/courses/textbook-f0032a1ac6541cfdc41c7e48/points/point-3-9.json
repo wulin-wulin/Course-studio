@@ -1,0 +1,779 @@
+{
+  "id": "point-3-9",
+  "title": "Hadoop 与分布式开发",
+  "shortSummary": "解释 Hadoop 如何把分布式编程的复杂性封装起来，使开发者能专注业务逻辑。",
+  "keyTerms": [
+    "分布式开发",
+    "编程抽象",
+    "任务并行"
+  ],
+  "animationType": "mapReducePipeline",
+  "animationSuggestion": "按“数据块分布 → map → Combine → Partition → shuffle 拉取 → reduce → R 个结果”的顺序显示数据块与键值对在节点间的移动，用数字标注每步之后的键值对条数，允许调节 R 观察分区归属与拉取次数的变化，并高亮 map 任务失败后由其他节点重跑的那份数据块。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-3-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-trace-with-parameter-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的分层定位与执行流程术语，按“一次作业如何从数据分布走到结果输出”重排讲解顺序，并在每段机制后补足参数取舍与版本背景，教材事实不作改动。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-abstraction",
+          "text": "说明 Hadoop 相对分布式软件系统其他层次的位置，并解释它替开发者封装了哪些分布式细节。"
+        },
+        {
+          "id": "trace-execution",
+          "text": "按顺序解释一次 MapReduce 作业从数据分布存储到 reduce 输出的关键环节及其作用。"
+        },
+        {
+          "id": "justify-parameters",
+          "text": "依据任务粒度、分区函数和合并安全性，判断 map 任务数、reduce 数与 Combine 使用是否合理。"
+        }
+      ],
+      "misconceptions": [
+        "认为 map 任务数可以随意设定，与 HDFS 的块大小无关。",
+        "认为 Combine 总是等价于 reduce，任何 reduce 函数都能直接拿来当 Combine 用。",
+        "认为 reduce 会直接读取 map 任务的输出，不经过本地磁盘落盘和网络拉取。",
+        "认为“本地计算”意味着数据在任何情况下都不会跨机器传输。",
+        "把教材中的 JobTracker、TaskTracker 和 64MB 默认块大小当成当前版本的规范。"
+      ],
+      "modules": [
+        {
+          "id": "programming-abstraction",
+          "title": "Hadoop 站在这套分层的哪一层",
+          "role": "concept-model",
+          "description": "先确定 Hadoop 在分布式软件系统中的层次，再用键值对模型说明开发者实际要交付的内容。",
+          "outcomeRefs": [
+            "explain-abstraction"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-and-execution",
+          "title": "数据怎样分布，任务在哪里执行",
+          "role": "mechanism-trace",
+          "description": "沿数据分布存储、主从调度、本地计算三个环节展开一次作业的执行底座。",
+          "outcomeRefs": [
+            "explain-abstraction",
+            "trace-execution"
+          ],
+          "order": 1
+        },
+        {
+          "id": "task-granularity",
+          "title": "任务粒度：M 由数据决定",
+          "role": "parameter-analysis",
+          "description": "说明任务切分与块大小的关系，并辨析 map 数与 reduce 数的不同来源。",
+          "outcomeRefs": [
+            "trace-execution",
+            "justify-parameters"
+          ],
+          "order": 2
+        },
+        {
+          "id": "version-boundary",
+          "title": "区分稳定机制与版本相关的组件名",
+          "role": "boundary-check",
+          "description": "把教材写作时期的组件与默认值同长期成立的角色分工分开，避免把旧描述当现行规范。",
+          "outcomeRefs": [
+            "explain-abstraction"
+          ],
+          "order": 3
+        },
+        {
+          "id": "shuffle-and-reduce",
+          "title": "中间结果的划分、合并与归约",
+          "role": "mechanism-trace",
+          "description": "按 Partition、Combine、Reduce、任务管道的顺序走完中间结果的处理链路，并指出主要开销位置。",
+          "outcomeRefs": [
+            "trace-execution",
+            "justify-parameters"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-summary",
+          "title": "参数判断与整体回顾",
+          "role": "assessment",
+          "description": "用一组给定参数的自检题检验能否定位问题，并用一条链路收束全部环节。",
+          "outcomeRefs": [
+            "justify-parameters",
+            "trace-execution"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-abstraction",
+          "trace-execution",
+          "justify-parameters"
+        ],
+        "method": "完成参数自检题，并为每个判断写出所依据的环节名称。",
+        "successCriteria": [
+          "能按“数据分布—任务切分—本地计算—Combine—Partition—Reduce—任务管道”的顺序复述流程",
+          "能指出给定参数设置中的具体问题及其后果",
+          "能区分教材写作时期的组件名与稳定的角色分工"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-3-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-layer-positioning",
+        "moduleId": "programming-abstraction",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材对 Hadoop 的层次定位",
+        "markdown": "教材把通常所说的分布式系统界定为**分布式软件系统**：它是在通信网络互联的多处理机体系结构上执行任务的软件系统，涵盖分布式操作系统、分布式程序设计语言及其编译（解释）系统、分布式文件系统和分布式数据库系统等。\n\n按这个分层看，Hadoop 站在文件系统这一层：它实现了分布式文件系统，同时承担了一部分分布式数据库的功能。先记住这个定位，后面读 HDFS 与 MapReduce 时才能分清哪些能力由谁提供。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000085"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Hadoop 与分布式开发"
+              ],
+              "lineStart": 1286,
+              "lineEnd": 1302,
+              "assetRefs": [
+                "parts/part-0001/images/114ab7ccff47b4557f460ab8d86b00cc567ee6d2edf3905261eeb45a726aa38d.jpg"
+              ],
+              "excerptSha256": "72400e9754a7275f7cf5c6a9f3c2ed4950428410f0663111b6dc67facd97036d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-abstraction",
+        "moduleId": "programming-abstraction",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "封装的价值：需要人做的决定变少了",
+        "markdown": "把 Hadoop 放回这一层，就能看出它在分布式开发中的实际卖点：**它减少的不是能力，而是必要决策**。\n\n如果从零写一个分布式程序，开发者至少要自己决定：数据放在哪几台机器上、怎样把任务分出去、某个节点中途失败后由谁重跑、中间结果怎样跨机器搬运。Hadoop 把这些收进框架，开发者面对的只剩一件局部的事——写一个 map 函数和一个 reduce 函数。教材因此用两句话概括分工：HDFS 在集群上实现分布式文件系统，实现数据在计算机集群组成的云上的高效存储和管理；MapReduce 让用户编写的并行应用程序运行得更加简化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-layer-positioning"
+          ]
+        }
+      },
+      {
+        "id": "tb-key-value-model",
+        "moduleId": "programming-abstraction",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材给出的 MapReduce 计算形式",
+        "markdown": "教材用键值对集合来描述这门计算：输入是一个 key/value 对集合，输出也是一个 key/value 对集合，用户用两个函数表达计算。\n\n- **map**：接收一个输入 key/value 对，产生一批中间 key/value 对；\n- 框架把所有 key 相同的 value 归到一起，再交给 reduce；\n- **reduce**：接收一个 key 和与之相关的 value 集合，把这些 value 合并成一个更小的集合，一般每次调用只产生 0 或 1 个输出 value。\n\nvalue 集合是通过迭代器逐个送进 reduce 的，因此即使某个 key 对应的 value 多到放不进内存，也仍然能处理。教材图 3-4 把这一过程画成数据流：大数据集被拆成成百上千个小数据集，分别由集群中的节点处理并产生中间结果，中间结果再由大量节点合并成最终结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000085"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Hadoop 与分布式开发"
+              ],
+              "lineStart": 1286,
+              "lineEnd": 1302,
+              "assetRefs": [
+                "parts/part-0001/images/114ab7ccff47b4557f460ab8d86b00cc567ee6d2edf3905261eeb45a726aa38d.jpg"
+              ],
+              "excerptSha256": "72400e9754a7275f7cf5c6a9f3c2ed4950428410f0663111b6dc67facd97036d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-iterator-stream",
+        "moduleId": "programming-abstraction",
+        "depth": "support",
+        "kind": "note",
+        "title": "迭代器这一句为什么值得停留",
+        "markdown": "迭代器这个细节容易被跳过，但它回答了“value 集合大到放不进内存时怎么办”：reduce 拿到的是同一 key 下 value 的**流**，一次只处理一个，并不要求这些 value 同时驻留内存。这正是“按 key 统计海量记录”能够成立的前提。\n\n反过来看边界：如果业务逻辑需要把同一 key 的全部 value 排序后再处理，内存压力就回到应用侧，需要开发者自己权衡，框架不会替你解决。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-key-value-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-distributed-storage",
+        "moduleId": "data-and-execution",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "数据分布存储：Block、副本与 NameNode",
+        "markdown": "并行计算的前提是数据已经被摊开存放。教材说明 HDFS 由一个 NameNode 和 N 个 DataNode 组成，每个节点都是一台普通计算机。使用方式上与单机文件系统很接近：可以建目录，可以创建、复制、删除文件，也可以查看文件内容。\n\n差别在底层：HDFS 把文件切成 Block，分散存到不同的 DataNode 上；每个 Block 还可以复制若干份放在不同 DataNode 上，用于容错容灾。NameNode 是整个 HDFS 的核心，它维护一组数据结构，记录每个文件被切成多少个 Block、这些 Block 能从哪些 DataNode 取得，以及各个 DataNode 的状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000086"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "数据分布存储"
+              ],
+              "lineStart": 1303,
+              "lineEnd": 1306,
+              "assetRefs": [],
+              "excerptSha256": "15a73641efaf2c592942b708adac6bcde2d7fbf1fd788202ebe8e480ba885fde"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-block-consequences",
+        "moduleId": "data-and-execution",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "这条设计带来两个直接后果",
+        "markdown": "第一，**副本换容错**：某块数据所在节点失效时仍可从其他副本读取，代价是存储放大和写路径上的复制开销。第二，**块成为任务划分的天然标尺**：既然数据以 Block 为单位落盘并分布，让一个计算任务恰好处理一个 Block，就既能避免跨机搬运数据，又能让任务数量与数据量成比例。\n\n后文“任务粒度”里那个“小数据集不超过一个 Block”的上限，正是从这条标尺直接推出来的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-distributed-storage"
+          ]
+        }
+      },
+      {
+        "id": "tb-parallel-scheduling",
+        "moduleId": "data-and-execution",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "分布式并行计算：JobTracker 与 TaskTracker",
+        "markdown": "调度层面，教材描述了一个主控加一批执行者的结构。JobTracker 作为主控，负责调度和管理其他 TaskTracker，可以运行在集群中的任意一台计算机上；TaskTracker 负责执行任务，必须运行在 DataNode 上——也就是说同一台机器既是数据存储节点，也是计算节点。\n\nJobTracker 把 map 任务和 reduce 任务分发给空闲的 TaskTracker，让它们并行运行，并监控运行情况。如果某个 TaskTracker 出了故障，JobTracker 会把它负责的任务转交给另一个空闲的 TaskTracker 重新运行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000087"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "分布式并行计算"
+              ],
+              "lineStart": 1307,
+              "lineEnd": 1310,
+              "assetRefs": [],
+              "excerptSha256": "0f57b7ad271c6545b4d63895ff9e5a896aa0a97eb752689001d3078bbc563bf0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-task-as-failure-unit",
+        "moduleId": "data-and-execution",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "容错的单位是任务，不是作业",
+        "markdown": "把上一段和后文的任务粒度连起来读，会得到一个不太起眼但很关键的结论：**重跑的最小单位是任务**。\n\n这同时解释了任务为什么不能切得太大——任务越大，一次失败要重算的工作越多；也解释了为什么不能切得太碎——任务数越多，调度、启动和中间结果管理的固定开销越大。粒度是在这两端之间取平衡，而不是越细越好。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parallel-scheduling"
+          ]
+        }
+      },
+      {
+        "id": "tb-local-computation",
+        "moduleId": "data-and-execution",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本地计算：移动计算比移动数据更经济",
+        "markdown": "教材接着给出降低网络压力的基本手段：数据存储在哪一台计算机上，就由哪一台计算机计算这部分数据，这样可以减少数据在网络上的传输，降低对网络带宽的需求。\n\n教材对此的判断很直接：在基于集群的分布式并行系统中，计算节点的扩充很方便，能提供的计算能力近乎无限；但数据需要在不同计算机之间流动，网络带宽反而成了瓶颈。因此本地计算被视为节约带宽最有效的手段，业界把它概括为“移动计算比移动数据更经济”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "本地计算"
+              ],
+              "lineStart": 1311,
+              "lineEnd": 1314,
+              "assetRefs": [],
+              "excerptSha256": "5c77782b71e055735e7f4d37e76feb3dd40217c751cd8161c99194193390109c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-locality-boundary",
+        "moduleId": "data-and-execution",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "本地计算是优先策略，不是绝对约束",
+        "markdown": "把“移动计算比移动数据更经济”读成“数据永不过网”就过头了。本地计算描述的是**任务放置的优先策略**：调度时尽量把任务放到持有对应 Block 副本的节点上。若该节点繁忙、副本尚未就绪，或数据确实落在别处，读取仍会跨网络发生，此时退化为远程读取。\n\n所以带宽收益是统计意义上的，不是硬性保证。真正硬性的只有一条推论：既然数据在哪里就在哪里计算，任务划分就必须让一个任务只对应落在一台机器上的数据范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-local-computation"
+          ]
+        }
+      },
+      {
+        "id": "tb-task-granularity",
+        "moduleId": "task-granularity",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "任务粒度：M 个小数据集对应 M 个 map 任务",
+        "markdown": "教材给出切分的具体做法：把原始大数据集切成小数据集时，通常让小数据集小于或等于 HDFS 中一个 Block 的大小（教材写作时的默认值是 64MB），这样能保证一个小数据集位于一台计算机上，便于本地计算。\n\n有 M 个小数据集待处理，就启动 M 个 map 任务。注意这 M 个 map 任务分布在 N 台计算机上、并行运行；而 reduce 任务的数量 R 则由用户指定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000089"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "任务粒度"
+              ],
+              "lineStart": 1315,
+              "lineEnd": 1318,
+              "assetRefs": [],
+              "excerptSha256": "6eadbc1a17a2469bbb1fcecfd7193c02d0940af7bf2768a7b166058bc1a82a0b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parameter-sources",
+        "moduleId": "task-granularity",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "M 由数据决定，R 由人决定",
+        "markdown": "这一段最值得记住的是两个参数的来源不同：**M 基本由“数据量 ÷ 块大小”决定，R 是使用者显式给出的**。\n\n- M 偏大（相对块更小）：任务数膨胀，调度与中间结果元数据开销上升，与数据所在位置的对应关系也被破坏；\n- R 偏小：单个 reduce 负责的 key 区间太大，并行度不足，容易成为整个作业的尾部瓶颈；\n- R 偏大：最终结果文件更多，跨节点拉取次数更多，若下游还要合并，代价又会回来。\n\n因此调参的顺序应当是先问“最终结果要分成几份、交给谁用”，再反推 R，而不是先追求更高的并行度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-granularity"
+          ]
+        }
+      },
+      {
+        "id": "model-version-boundary",
+        "moduleId": "version-boundary",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "版本背景：哪些名词属于教材写作时期",
+        "markdown": "教材第一版写于 2013 年，描述的是 Hadoop 1.x 时代的实现。读到这里出现的组件名与默认参数时，要把两类信息分开：\n\n- **角色分工是稳定的**：主控负责调度与容错、从节点既存数据又跑计算、reduce 数由用户指定，这些概念今天依然成立；\n- **组件名与默认值是会变的**：JobTracker 与 TaskTracker 后来被 YARN 的 ResourceManager、ApplicationMaster、NodeManager 取代，资源管理与计算模型被拆开；块大小的默认值也从教材所写的 64MB 调整过（常见默认值为 128MB，且可按集群配置修改）。\n\n所以不要把教材里的组件名和数值当成当前版本的规范，把它们当作理解机制的历史参照；涉及具体配置时以所用版本的官方文档为准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parallel-scheduling",
+            "tb-task-granularity"
+          ]
+        }
+      },
+      {
+        "id": "tb-partition",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "数据分割：按 key 范围分给 R 个 reduce",
+        "markdown": "map 任务输出的中间结果要交给 reduce，就需要一个稳定的归属规则。教材的说明是：把中间结果按 key 的范围划分成 R 份，R 是预先定义的 reduce 任务个数；划分时通常使用 hash 函数，例如 $\\mathrm{hash}(key) \\bmod R$。\n\n这样做的目的是保证某一范围内的 key 一定由同一个 reduce 任务处理，从而简化 Reduce 的过程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000090"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "数据分割（Partition）"
+              ],
+              "lineStart": 1319,
+              "lineEnd": 1322,
+              "assetRefs": [],
+              "excerptSha256": "6802541cf7a0d6a19fbb70d1c87dc28dd58514810392bb1aa119b5ffa24c3ec9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-partition-contract",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "core",
+        "kind": "warning",
+        "title": "分区函数一旦固定，就成了作业的契约",
+        "markdown": "用 hash 取模分区有一个隐含要求：**所有 map 任务必须使用同一个分区函数**。只有这样，同一个 key 无论由哪个 map 产生，都会落到同一个 reduce 上；否则同一 key 被拆到两个 reduce，各自算出半个结果，全局统计就错了。\n\n这也解释了教材为什么要强调 R 是“预先定义”的：R 决定了分区函数，作业运行中不能再改。若需要改变输出的划分方式，通常是在作业之外再做一次合并，而不是在运行中调整 R。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-partition"
+          ]
+        }
+      },
+      {
+        "id": "tb-combine",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "数据合并：在 map 端先压一次",
+        "markdown": "在数据分割之前，还可以先对中间结果做一次数据合并：把中间结果中相同 key 的 `<key, value>` 对合并成一对。教材说明 Combine 的过程与 reduce 的过程类似，很多情况下可以直接使用 reduce 函数；但 Combine 是作为 map 任务的一部分，在执行完 map 函数之后紧接着执行的。\n\n它的收益直接体现在结果上：减少中间结果中 `<key, value>` 对的数目，从而降低网络流量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "数据合并（Combine）"
+              ],
+              "lineStart": 1323,
+              "lineEnd": 1326,
+              "assetRefs": [],
+              "excerptSha256": "9a68163d029a289fb8c9cd16ba3df74d1b8b21a619f1bd13446e75597fdaee66"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-combine-conditions",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "advanced",
+        "kind": "misconception",
+        "title": "“很多情况下可以直接用”的边界在哪里",
+        "markdown": "Combine 把同一 map 内同 key 的多个 value 先合成一个，只有在**合并结果与逐个合并一致**时才不影响最终答案：求和、计数、取最大值都满足这一点。\n\n反例是求平均值。若 map 端先把 value 求平均再交出去，reduce 端只剩平均值，无法还原各分组的样本数，结果会偏。可行的做法是让 map 输出“和与个数”这样的复合值，而不是直接复用求平均的 reduce 函数。判断标准可以这样说：Combine 是一次提前执行的局部归约，它必须与最终归约同构；不同构时不能复用 reduce 函数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-combine"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：这组参数的问题出在哪里",
+        "markdown": "某文本统计作业运行在一次 MapReduce 计算上：输入约 1TB，块大小取默认值，map 任务数由数据量自动决定；用户把 R 设为 1；map 端还自行实现了一个“先求平均再输出”的 Combine。\n\n请依次回答：\n\n1. 这个作业的并行度主要受哪个参数限制？\n2. R 取 1 会带来什么后果？如果结果还要供下游按 key 分区使用，这个取值是否合适？\n3. 这个 Combine 会不会改变最终结果？应当如何修改？\n4. 如果某个 TaskTracker 在运行中宕机，受影响的工作范围是整份数据还是若干任务？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-parameter-sources",
+            "model-combine-conditions",
+            "model-task-as-failure-unit"
+          ]
+        }
+      },
+      {
+        "id": "tb-reduce",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Reduce：中间结果落盘，再按 key 区间拉取",
+        "markdown": "map 任务的中间结果在做完 Combine 和 Partition 之后，以文件形式存放在本地磁盘上。中间结果文件的位置会通知主控 JobTracker，JobTracker 再通知 reduce 任务到哪一个 DataNode 上去取中间结果。\n\n由于所有 map 任务产生的中间结果都按 key 值用同一个 hash 函数划分成了 R 份，R 个 reduce 任务各自负责一段 key 区间。每个 reduce 需要向许多 map 任务节点取得落在其负责区间内的中间结果，然后执行 reduce 函数，形成一个最终结果文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000092"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "Reduce"
+              ],
+              "lineStart": 1327,
+              "lineEnd": 1330,
+              "assetRefs": [],
+              "excerptSha256": "917873a7ddc4dfa324cc2cf3e2c31941e6d4258fdf6193facff371cc00893814"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shuffle-cost",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "看清开销发生在哪一段",
+        "markdown": "把这段流程画成时间线，会发现一个作业的主要代价集中在 map 与 reduce 之间：中间结果必须先落本地磁盘，再通过网络被 R 个 reduce 拉取。\n\n这条通道同时解释了三件事：为什么 Combine 要在 map 端尽量把数据压小（压的正是这条通道的流量）、为什么 R 偏大会放大拉取次数、以及为什么 map 任务全部结束并不等于作业结束——reduce 侧还要等齐它负责区间的数据才能开始计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-reduce",
+            "tb-combine"
+          ]
+        }
+      },
+      {
+        "id": "tb-pipeline",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "任务管道：R 个结果可以是下一环的输入",
+        "markdown": "有 R 个 reduce 任务，就会有 R 个最终结果。教材指出，很多情况下这 R 个最终结果并不需要合并成一个最终结果，因为它们又可以作为另一个计算任务的输入，开始另一个并行计算任务，这也就形成了任务管道。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+              "blockIds": [
+                "block-000093"
+              ],
+              "headingPath": [
+                "（版本号：2013年 12 月 13日第一版）",
+                "任务管道"
+              ],
+              "lineStart": 1331,
+              "lineEnd": 1334,
+              "assetRefs": [],
+              "excerptSha256": "c14e19e4608439288253760ac6527fccc722914a52f3774f4e07a4a0b6b64c8c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-scope",
+        "moduleId": "shuffle-and-reduce",
+        "depth": "support",
+        "kind": "note",
+        "title": "管道串联的是作业，不是自动优化",
+        "markdown": "这里的“管道”指**多个作业按数据依赖串起来**：上一个作业的输出直接作为下一个作业的输入，整体处理被拆成一串可以分别调度、分别重跑的作业。\n\n要区分清楚的是：教材描述的是作业之间的衔接方式，它并不承诺框架会自动合并相邻作业、消除中间落盘。因此管道越长，中间结果落盘的次数越多，端到端时延也越难压缩；反过来，拆成多个作业的好处是每一步都能单独调试和重跑。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：封装的是“怎么分布”，不是“算什么”",
+        "markdown": "Hadoop 在分布式开发中的位置可以概括成一条链：数据先按 Block 分布存储并保留副本；任务按块大小切分，尽量放到持有数据的节点上执行；map 端先用 Combine 压缩中间结果，再按分区函数归入 R 份；reduce 拉取自己负责的 key 区间并归约，产出 R 个结果；这些结果又能作为下一个作业的输入，串成任务管道。\n\n开发者只需要给出 map 与 reduce 两个函数的逻辑，链路上的分布、调度、重跑与搬运由框架完成——这就是“把分布式编程的复杂性封装起来”的具体含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-granularity",
+            "tb-partition",
+            "tb-combine",
+            "tb-reduce",
+            "tb-pipeline"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "parameter-diagnosis-check",
+        "type": "formative-check",
+        "title": "参数诊断",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "outcomeRefs": [
+          "justify-parameters"
+        ],
+        "learningPurpose": "检验学习者能否把任务粒度、分区与合并安全性三条判据用于诊断一组具体参数设置。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-task-granularity",
+            "tb-partition",
+            "tb-combine"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questionCount": 4
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若无交互环境：请针对输入 1TB、R=1、map 端求平均 Combine 这三个条件，分别写出“问题—依据—改法”三列，并说明 TaskTracker 故障时重跑的单位。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Hadoop",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000085"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Hadoop 与分布式开发"
+      ],
+      "lineStart": 1286,
+      "lineEnd": 1302,
+      "assetRefs": [
+        "parts/part-0001/images/114ab7ccff47b4557f460ab8d86b00cc567ee6d2edf3905261eeb45a726aa38d.jpg"
+      ],
+      "excerptSha256": "72400e9754a7275f7cf5c6a9f3c2ed4950428410f0663111b6dc67facd97036d"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000086"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "数据分布存储"
+      ],
+      "lineStart": 1303,
+      "lineEnd": 1306,
+      "assetRefs": [],
+      "excerptSha256": "15a73641efaf2c592942b708adac6bcde2d7fbf1fd788202ebe8e480ba885fde"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000087"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "分布式并行计算"
+      ],
+      "lineStart": 1307,
+      "lineEnd": 1310,
+      "assetRefs": [],
+      "excerptSha256": "0f57b7ad271c6545b4d63895ff9e5a896aa0a97eb752689001d3078bbc563bf0"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000088"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "本地计算"
+      ],
+      "lineStart": 1311,
+      "lineEnd": 1314,
+      "assetRefs": [],
+      "excerptSha256": "5c77782b71e055735e7f4d37e76feb3dd40217c751cd8161c99194193390109c"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000089"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "任务粒度"
+      ],
+      "lineStart": 1315,
+      "lineEnd": 1318,
+      "assetRefs": [],
+      "excerptSha256": "6eadbc1a17a2469bbb1fcecfd7193c02d0940af7bf2768a7b166058bc1a82a0b"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000090"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "数据分割（Partition）"
+      ],
+      "lineStart": 1319,
+      "lineEnd": 1322,
+      "assetRefs": [],
+      "excerptSha256": "6802541cf7a0d6a19fbb70d1c87dc28dd58514810392bb1aa119b5ffa24c3ec9"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000091"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "数据合并（Combine）"
+      ],
+      "lineStart": 1323,
+      "lineEnd": 1326,
+      "assetRefs": [],
+      "excerptSha256": "9a68163d029a289fb8c9cd16ba3df74d1b8b21a619f1bd13446e75597fdaee66"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000092"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "Reduce"
+      ],
+      "lineStart": 1327,
+      "lineEnd": 1330,
+      "assetRefs": [],
+      "excerptSha256": "917873a7ddc4dfa324cc2cf3e2c31941e6d4258fdf6193facff371cc00893814"
+    },
+    {
+      "materialId": "doc-f0032a1ac6541cfdc41c7e48",
+      "blockIds": [
+        "block-000093"
+      ],
+      "headingPath": [
+        "（版本号：2013年 12 月 13日第一版）",
+        "任务管道"
+      ],
+      "lineStart": 1331,
+      "lineEnd": 1334,
+      "assetRefs": [],
+      "excerptSha256": "c14e19e4608439288253760ac6527fccc722914a52f3774f4e07a4a0b6b64c8c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2596,
+    2841
+  ],
+  "scale": 0.92
+}
