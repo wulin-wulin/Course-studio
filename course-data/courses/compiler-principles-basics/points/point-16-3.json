@@ -1,0 +1,429 @@
+{
+  "id": "point-16-3",
+  "title": "Implementation of symbol files",
+  "shortSummary": "介绍符号文件的格式与内容，说明如何保存模块接口供后续编译读取、校验和复用。",
+  "keyTerms": [
+    "符号文件",
+    "symbol file",
+    "模块接口",
+    "编译单元",
+    "接口校验",
+    "分别编译"
+  ],
+  "animationType": "symbolFileTypeRefs",
+  "animationSuggestion": "按扫描顺序逐步显示符号表元素、输出流中的类型描述与正负引用号，以及读取端类型表的填充过程，并提供重播回到同一初始状态。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-9-1",
+    "point-9-2",
+    "point-16-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于符号文件读写与类型引用号的全部结论和示例，围绕写出与读取两条流程重排讲解，并补足检查表与迁移问题。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-symbol-file-role",
+          "text": "说明符号文件保存什么内容，以及为什么要把符号表顺序化成可重新读取的形式。"
+        },
+        {
+          "id": "describe-write-steps",
+          "text": "描述生成模块符号文件的遍历、导出筛选与类型前缀编码步骤。"
+        },
+        {
+          "id": "interpret-reference-numbers",
+          "text": "解释正负引用号的含义，并说明读取时如何据此构造类型表 T。"
+        },
+        {
+          "id": "handle-module-anchors",
+          "text": "说明再导出类型为何需要模块锚点，以及加载时如何保证类型描述唯一。"
+        },
+        {
+          "id": "apply-symbol-file-check",
+          "text": "在给定导入导出情境中列出需要的符号文件，并检查类型一致性。"
+        }
+      ],
+      "misconceptions": [
+        "把符号文件理解为符号表的内存转储，忽略顺序化和类型引用号处理。",
+        "认为可以直接把类型指针写入文件，忽略地址不可移植的问题。",
+        "认为只需读取显式导入模块的符号文件，忽略被间接引用类型的模块。",
+        "认为符号文件可以像源文件一样用文本编辑器修改。"
+      ],
+      "modules": [
+        {
+          "id": "why-symbol-file",
+          "title": "符号文件的角色",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-symbol-file-role"
+          ],
+          "order": 0
+        },
+        {
+          "id": "emit-symbol-file",
+          "title": "写出符号文件",
+          "role": "procedure",
+          "outcomeRefs": [
+            "describe-write-steps"
+          ],
+          "order": 1
+        },
+        {
+          "id": "type-reference-encoding",
+          "title": "类型描述与引用号",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "describe-write-steps",
+            "interpret-reference-numbers"
+          ],
+          "order": 2
+        },
+        {
+          "id": "module-anchors",
+          "title": "模块锚点与再导出",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "handle-module-anchors"
+          ],
+          "order": 3
+        },
+        {
+          "id": "load-and-check",
+          "title": "读取与一致性检查",
+          "role": "procedure",
+          "outcomeRefs": [
+            "interpret-reference-numbers",
+            "handle-module-anchors",
+            "apply-symbol-file-check"
+          ],
+          "order": 4
+        },
+        {
+          "id": "transfer-and-summary",
+          "title": "迁移与小结",
+          "role": "summary",
+          "outcomeRefs": [
+            "explain-symbol-file-role",
+            "apply-symbol-file-check"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-symbol-file-role",
+          "describe-write-steps",
+          "interpret-reference-numbers",
+          "handle-module-anchors",
+          "apply-symbol-file-check"
+        ],
+        "method": "给出一个含导入列表和导出类型的模块，推演其符号文件的写出与读取过程，并指出需要额外读取哪些符号文件。",
+        "successCriteria": [
+          "能区分导出元素与内部元素，只把导出元素写入符号文件",
+          "能按正负引用号正确更新类型表 T",
+          "能说明模块锚点在再导出类型中的作用",
+          "能列出保证类型描述唯一的检查点"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-16-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-symbol-file-flow",
+        "moduleId": "why-symbol-file",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "符号文件的读取与写出位置",
+        "markdown": "编译一个带导入列表的模块时，编译器先为导入列表中的每个模块标识读取一个符号文件，用这些导入符号初始化本模块的符号表。编译结束时，再遍历新的符号表，把每个标记为导出的符号表元素写成一条记录，输出本模块的符号文件。以模块 A 导入模块 B 为例，若 B 中的 `T` 和 `f` 带有导出标记，它们就会进入 B 的符号文件，供 A 编译时读取。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "15. Modules and Separate Compilation",
+                "Implementation of symbol files"
+              ],
+              "lineStart": 626,
+              "lineEnd": 639,
+              "assetRefs": [],
+              "excerptSha256": "9b8fa18b27e6056717ac2d337ff6936a701335d35fb1284534afebcd56fef133"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-sequential",
+        "moduleId": "why-symbol-file",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么需要顺序化",
+        "markdown": "符号文件不是把内存中的符号表原样转储，而是一份能被其他编译过程重新读取的接口快照。它只收录被标记为导出的元素，并按稳定顺序把表项与类型结构写成线性形式；否则不同时间编译的客户端无法可靠地重建同一份接口信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-symbol-file-flow"
+          ]
+        }
+      },
+      {
+        "id": "textbook-emit-symbol-file",
+        "moduleId": "emit-symbol-file",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "生成 M.sym：遍历与顺序化",
+        "markdown": "生成模块 M 的符号文件，表面上是遍历符号表并为每个标记元素输出一条记录。符号表本质上是对象列表，每个对象带有指向类型结构的指针，而类型结构是树。把树状结构顺序化时，较合适的做法是给每个元素一个特征前缀，例如把数组类型写成前缀形式 `ARRAY 10 OF INTEGER`，再按遍历顺序写出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "15. Modules and Separate Compilation",
+                "Implementation of symbol files"
+              ],
+              "lineStart": 626,
+              "lineEnd": 639,
+              "assetRefs": [],
+              "excerptSha256": "9b8fa18b27e6056717ac2d337ff6936a701335d35fb1284534afebcd56fef133"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-emit-checklist",
+        "moduleId": "emit-symbol-file",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "写出阶段的操作清单",
+        "markdown": "写出一个模块的符号文件可以按以下顺序执行：\n\n1. 从导入列表出发，逐个读取依赖模块的符号文件，初始化本模块的符号表。\n2. 完成本模块编译后，遍历新的符号表。\n3. 只对带有导出标记的元素生成记录。\n4. 对每个元素的类型结构使用固定前缀写法，使树状结构变成可顺序读写的文本或编码。\n5. 在写出过程中记录类型是否已经输出，为后续引用号做准备。\n\n清单中的第 5 步不是额外装饰，而是下一节处理类型共享与递归引用所必需的状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-symbol-file-flow",
+            "textbook-emit-symbol-file"
+          ]
+        }
+      },
+      {
+        "id": "textbook-type-references",
+        "moduleId": "type-reference-encoding",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "类型描述与引用号",
+        "markdown": "每个对象至少含一个指向其类型的指针，直接把指针值写入文件并不可行。解决办法是：扫描符号表时，第一次遇到某个类型就把类型描述写入文件，并给该类型登记一个唯一引用号，引用号保存在 `ObjectDesc` 的附加记录字段中；以后再遇到同一类型，只写引用号而不重复写结构。这既避免了重复描述，也解决了递归引用的问题。\n\n引用号的约定是：正数表示该类型已经写过，读取时类型表 `T[r]` 就是所需指针；负数表示首次出现，其后紧跟类型描述，读取后把新建描述符的指针放进 `T[-r]`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "15. Modules and Separate Compilation",
+                "Implementation of symbol files"
+              ],
+              "lineStart": 626,
+              "lineEnd": 639,
+              "assetRefs": [],
+              "excerptSha256": "9b8fa18b27e6056717ac2d337ff6936a701335d35fb1284534afebcd56fef133"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reference-example",
+        "moduleId": "type-reference-encoding",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "引用号正负的读法示例",
+        "markdown": "设某个类型第一次出现时被分配的引用号为 2，写出端会先写 `-2`，紧接着写该类型的描述；同一类型再次出现时则只写 `2`。读取端的处理正好相反：看到 `-2` 时读取后续类型数据，构造描述符并令 `T[2]` 指向它；看到 `2` 时直接取 `T[2]`，不再读取结构。引用号的绝对值由实现分配，但正负号的含义必须与这一约定一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-references"
+          ]
+        }
+      },
+      {
+        "id": "textbook-module-anchors",
+        "moduleId": "module-anchors",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模块锚点与再导出类型",
+        "markdown": "类型信息可以随导入再导出，因此必须说明导出类型来自哪个模块。每个符号文件的头部维护一个锚点对象列表，每个被再导出的导入模块对应一个锚点，也就是该模块含有被导出对象引用的类型。判断 `y := x` 这类赋值是否类型兼容，依赖 `x` 与 `y` 的类型指针指向同一个类型描述符；若指向不同描述符，就应报告错误。由此可见，编译模块 M 时不仅要读取显式导入模块的符号表，还要读取被直接或间接引用类型的模块的符号文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "15. Modules and Separate Compilation",
+                "Implementation of symbol files"
+              ],
+              "lineStart": 626,
+              "lineEnd": 639,
+              "assetRefs": [],
+              "excerptSha256": "9b8fa18b27e6056717ac2d337ff6936a701335d35fb1284534afebcd56fef133"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-anchor-scenario",
+        "moduleId": "module-anchors",
+        "depth": "support",
+        "kind": "example",
+        "title": "C 导入 A 与 B 的情形",
+        "markdown": "设模块 C 导入 A 和 B，其中从 B 导入的变量 `x` 的类型定义在 A。此时 B 的符号文件头部需要一个指向 A 的锚点，因为 B 再导出了源自 A 的类型。编译 C 时，除了读取 B 的符号文件，还要读取 A 的符号文件，才能让 `x` 的类型指针落到 A 的类型描述符上，并与 `y` 的类型指针比较。加载阶段还应检查读到的类型是否已经存在，避免为同一类型生成两个描述符。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-references",
+            "textbook-module-anchors"
+          ]
+        }
+      },
+      {
+        "id": "textbook-load-symbol-file",
+        "moduleId": "load-and-check",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "读取符号文件与别名处理",
+        "markdown": "读取符号文件时构造类型表 `T`：正引用号取 `T[r]`，负引用号读取后续类型数据并把新描述符指针放入 `T[-r]`。若为了避免读取整个模块层次而把被导入类型的完整描述直接放进 M 的符号文件，加载时还必须检查读到的类型是否已经存在，避免生成重复描述符。类型还可能以别名出现：加载 B 的符号文件时，如果 `B.T1` 与 `A.T0` 都指向同一个类型对象，就要判断舍弃哪个描述符、保留哪个，因此类型结构节点带有指回原始类型对象的反向指针。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000072"
+              ],
+              "headingPath": [
+                "15. Modules and Separate Compilation",
+                "Implementation of symbol files"
+              ],
+              "lineStart": 626,
+              "lineEnd": 639,
+              "assetRefs": [],
+              "excerptSha256": "9b8fa18b27e6056717ac2d337ff6936a701335d35fb1284534afebcd56fef133"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-load-checklist",
+        "moduleId": "load-and-check",
+        "depth": "support",
+        "kind": "table",
+        "title": "读取与校验检查表",
+        "markdown": "| 环节 | 检查点 |\n|---|---|\n| 文件头部 | 模块名与锚点列表是否齐全 |\n| 类型引用 | 正引用号是否命中已建 `T[r]`；负引用号是否完成描述构造并写入 `T[-r]` |\n| 再导出 | 锚点模块的符号文件是否可读，目标类型是否已经存在 |\n| 别名 | 指向同一类型对象的两个描述符是否已合并 |\n| 一致性 | `x` 与 `y` 的类型指针是否指向同一描述符，否则报错 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-references",
+            "textbook-module-anchors",
+            "textbook-load-symbol-file"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "transfer-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "把符号文件当作可复现的接口快照",
+        "markdown": "符号文件只保存模块接口中需要导出的元素，并把类型结构顺序化。写出端的关键动作是：遍历符号表、只输出导出元素、类型首次出现写描述并记负引用号、再次出现写正引用号、为再导出类型登记模块锚点。读取端则按正负引用号重建类型表 `T`，并在类型已经存在时合并描述符。这样，分别编译的客户端不必读取源文本，也能在类型层面校验跨模块引用。下一步，这些接口信息还要与外部对象的地址解析配合，才能完成链接与运行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-symbol-file-flow",
+            "textbook-emit-symbol-file",
+            "textbook-type-references",
+            "textbook-module-anchors",
+            "textbook-load-symbol-file"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-reference-sign",
+        "type": "formative-check",
+        "anchorBlockId": "model-reference-example",
+        "moduleId": "type-reference-encoding",
+        "depth": "core",
+        "outcomeRefs": [
+          "interpret-reference-numbers"
+        ],
+        "learningPurpose": "检查学习者能否按正负引用号在读取时正确更新类型表。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-type-references",
+            "model-reference-example"
+          ]
+        },
+        "config": {
+          "question": "读取序列 `-2`、`<REAL 的描述>`、`2` 时，类型表 T 的哪些位置被写入或被读取？",
+          "hint": "先看引用号的符号，再决定是否需要读取后续类型数据。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "读取序列 `-2`、`<REAL 的描述>`、`2` 时，请说明类型表 `T` 在每一步发生的变化；最后一步是否还需要读取类型结构？"
+        }
+      }
+    ]
+  },
+  "subtitle": "15. Modules and Separate Compilation",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000072"
+      ],
+      "headingPath": [
+        "15. Modules and Separate Compilation",
+        "Implementation of symbol files"
+      ],
+      "lineStart": 626,
+      "lineEnd": 639,
+      "assetRefs": [],
+      "excerptSha256": "9b8fa18b27e6056717ac2d337ff6936a701335d35fb1284534afebcd56fef133"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2243,
+    8
+  ],
+  "scale": 0.92
+}

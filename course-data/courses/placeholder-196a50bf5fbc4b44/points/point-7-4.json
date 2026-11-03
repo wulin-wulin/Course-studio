@@ -1,0 +1,431 @@
+{
+  "id": "point-7-4",
+  "title": "flash 消息",
+  "shortSummary": "使用 flash 在请求之间传递一次性提示消息，并在模板中展示给用户。",
+  "keyTerms": [
+    "flash",
+    "消息",
+    "session"
+  ],
+  "animationType": "flashMessageFlow",
+  "animationSuggestion": "用两次请求的时序展示：左侧视图函数触发 flash，中间 session 与 Cookie 携带消息，右侧模板读取并显示提示，读取后消息从 session 中消失；重播可回到同一初始状态。",
+  "difficulty": "中等",
+  "importance": 0.5,
+  "prerequisites": [
+    "point-7-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 flash 与 get_flashed_messages 分工、session 存储与签名密钥、基模板展示以及校验结果决定消息内容的原有表述，按两次请求的执行顺序重排讲解，并补充消息生命周期与可运行示例。",
+      "estimatedMinutes": 8,
+      "outcomes": [
+        {
+          "id": "explain-flash-purpose",
+          "text": "说明 flash() 与 get_flashed_messages() 各自的职责，以及提示消息为什么要在两次请求之间传递。"
+        },
+        {
+          "id": "trace-message-flow",
+          "text": "按顺序描述消息从视图函数写入 session、随响应签名写入 Cookie、在下一次请求中被模板读取后清除的完整路径。"
+        },
+        {
+          "id": "configure-secret-key",
+          "text": "说明 session 为什么需要签名密钥，并区分开发与部署阶段对密钥的要求。"
+        },
+        {
+          "id": "integrate-feedback",
+          "text": "在表单提交场景中根据服务端校验结果选择不同提示消息，并在模板中显示出来。"
+        }
+      ],
+      "misconceptions": [
+        "把 flash 当成普通模板变量，以为在同一请求内直接渲染就能显示消息。",
+        "以为浏览器端 required 属性已经足够，忽略服务器端仍需追加校验并据此决定提示内容。",
+        "把密钥当成可以随手写死在源码里的常量，忽略部署时应使用随机字符且不明文保存。"
+      ],
+      "modules": [
+        {
+          "id": "flash-purpose",
+          "title": "问题导入与两个函数的分工",
+          "role": "concept-intuition",
+          "description": "从页面需要提示消息的需求出发，区分写入端 flash 与读取端 get_flashed_messages。",
+          "outcomeRefs": [
+            "explain-flash-purpose",
+            "trace-message-flow"
+          ],
+          "order": 0
+        },
+        {
+          "id": "session-storage",
+          "title": "消息存在哪里：session 与签名密钥",
+          "role": "mechanism",
+          "description": "解释消息落入 session、session 以签名形式写入浏览器 Cookie，以及密钥的作用与部署要求。",
+          "outcomeRefs": [
+            "trace-message-flow",
+            "configure-secret-key"
+          ],
+          "order": 1
+        },
+        {
+          "id": "template-display",
+          "title": "在模板中取出并显示消息",
+          "role": "procedure",
+          "description": "在模板中调用 get_flashed_messages 并配合样式把消息呈现给用户。",
+          "outcomeRefs": [
+            "integrate-feedback",
+            "trace-message-flow"
+          ],
+          "order": 2
+        },
+        {
+          "id": "validation-feedback",
+          "title": "校验结果决定消息内容",
+          "role": "worked-example",
+          "description": "把服务端校验的成败分支与两条具体提示消息对应起来。",
+          "outcomeRefs": [
+            "integrate-feedback",
+            "explain-flash-purpose"
+          ],
+          "order": 3
+        },
+        {
+          "id": "flash-checklist",
+          "title": "检查与迁移",
+          "role": "check",
+          "description": "用检查题确认消息链路是否完整，并桥接到重定向响应。",
+          "outcomeRefs": [
+            "explain-flash-purpose",
+            "trace-message-flow",
+            "configure-secret-key",
+            "integrate-feedback"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-flash-purpose",
+          "trace-message-flow",
+          "configure-secret-key",
+          "integrate-feedback"
+        ],
+        "method": "完成消息链路检查题，并说明缺少任一环节时用户看到的结果。",
+        "successCriteria": [
+          "能说清 flash 写入、session 存储、模板读取三者的前后顺序",
+          "能指出密钥缺失或未配置时 session 无法正常签名",
+          "能根据校验结果选择正确的提示文案"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-flash-summary",
+        "nextPointId": "point-7-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-flash-functions",
+        "moduleId": "flash-purpose",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：写入与读取两个函数",
+        "markdown": "在用户执行某些动作后，我们通常要在页面上显示一个提示消息。最简单的实现是在视图函数里定义一个包含消息内容的变量，传入模板，然后在模板里渲染显示它。因为这个需求很常用，Flask 内置了相关函数。\n\n- `flash()`：在视图函数里向模板传递提示消息；\n- `get_flashed_messages()`：在模板中获取提示消息。\n\n使用时从 `flask` 包导入 `flash`，然后在视图函数里调用它并传入要显示的消息内容。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-e0a0d38f117bfe9c05dd311f",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "第 7 章：表单",
+                "flash 消息"
+              ],
+              "lineStart": 434,
+              "lineEnd": 445,
+              "assetRefs": [],
+              "excerptSha256": "35ed3fc9a74f4ff3bedad410c0189e5f785899f203864c2b03c7ca94c5c0b2f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-flash",
+        "moduleId": "flash-purpose",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么需要两个函数而不是一个变量",
+        "markdown": "如果只是把消息放进 `render_template()` 的参数里，消息只在这一次渲染中有效。表单处理后的常见做法是：处理完数据就重定向，让浏览器重新发起 GET 请求。此时渲染页面的是下一次请求，上次视图函数里的局部变量早已消失。\n\n`flash()` 与 `get_flashed_messages()` 的分工正好对应这条链路的两端：请求 1 的视图函数调用 `flash()` 把消息交出去，响应结束后消息暂存在能跨请求保存的地方，请求 2 渲染模板时再由 `get_flashed_messages()` 取回显示。所以“写入端在视图、读取端在模板”不是风格约定，而是由消息必须活过一次重定向决定的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-flash-functions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-session-storage",
+        "moduleId": "session-storage",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：消息存进 session",
+        "markdown": "`flash()` 函数在内部会把消息存储到 Flask 提供的 `session` 对象里。`session` 用来在请求间存储数据，它会把数据签名后存储到浏览器的 Cookie 中。正因为它要签名，我们才需要设置签名所需的密钥。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-e0a0d38f117bfe9c05dd311f",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "第 7 章：表单",
+                "flash 消息"
+              ],
+              "lineStart": 434,
+              "lineEnd": 445,
+              "assetRefs": [],
+              "excerptSha256": "35ed3fc9a74f4ff3bedad410c0189e5f785899f203864c2b03c7ca94c5c0b2f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-session-lifecycle",
+        "moduleId": "session-storage",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充推导：一条消息的完整生命周期",
+        "markdown": "把上一步的存储方式展开成时间顺序，就能解释“提示只出现一次”的体验：\n\n1. **写入**：请求 1 的视图函数调用 `flash('Item Created.')`，消息进入当前 session；\n2. **带走**：响应返回时 session 被签名写入浏览器 Cookie，浏览器保存它；\n3. **带回**：浏览器发起请求 2 时自动携带该 Cookie，服务端据此还原 session，消息仍在其中；\n4. **取出并清除**：模板调用 `get_flashed_messages()` 读出消息，这些消息随即从 session 中移除；\n5. **终态**：页面显示一次提示，刷新时 session 里已没有待显示消息，提示不会重复出现。\n\n如果中间少了任何一步——没有 `flash()` 写入、Cookie 没被带回、或模板没有调用 `get_flashed_messages()`——页面上就看不到这条提示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-session-storage"
+          ]
+        }
+      },
+      {
+        "id": "textbook-secret-key",
+        "moduleId": "session-storage",
+        "depth": "support",
+        "kind": "warning",
+        "title": "教材提示：签名密钥的开发与部署要求",
+        "markdown": "这个密钥的值在开发时可以随便设置。基于安全的考虑，在部署时应该设置为随机字符，且不应该明文写在代码里，具体做法会在部署章节介绍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-e0a0d38f117bfe9c05dd311f",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "第 7 章：表单",
+                "flash 消息"
+              ],
+              "lineStart": 434,
+              "lineEnd": 445,
+              "assetRefs": [],
+              "excerptSha256": "35ed3fc9a74f4ff3bedad410c0189e5f785899f203864c2b03c7ca94c5c0b2f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-secret-key-reason",
+        "moduleId": "session-storage",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：密钥保护的是签名而不是内容",
+        "markdown": "session 数据保存在用户浏览器里，用户可以看见它，但不能凭这一点改它。签名的作用是让服务端判断 Cookie 是否被篡改：密钥只有服务端持有，伪造的签名无法通过校验，整个 session 会被当作无效数据丢弃，待显示的 flash 消息自然也就消失了。\n\n因此密钥必须在应用启动时配置好；缺省或每次都变，都会让上一次请求写入的 session 在下一请求里失效。开发阶段图省事可以写一个临时值，但这正是部署时要换成随机字符、并从代码里移出的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-secret-key"
+          ]
+        }
+      },
+      {
+        "id": "textbook-template-render",
+        "moduleId": "template-display",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材做法：在基模板中获取并显示",
+        "markdown": "在基模板（`base.html`）里使用 `get_flashed_messages()` 函数获取提示消息并显示出来。页面中再借助 `alert` 类为提示消息增加样式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-e0a0d38f117bfe9c05dd311f",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "第 7 章：表单",
+                "flash 消息"
+              ],
+              "lineStart": 434,
+              "lineEnd": 445,
+              "assetRefs": [],
+              "excerptSha256": "35ed3fc9a74f4ff3bedad410c0189e5f785899f203864c2b03c7ca94c5c0b2f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-template-snippet",
+        "moduleId": "template-display",
+        "depth": "support",
+        "kind": "code",
+        "title": "补充示例：模板中的判空与遍历",
+        "markdown": "`get_flashed_messages()` 返回的是一个消息列表，可能为空，也可能有多条，所以模板要先判断再遍历。把下面这段放在基模板的内容区上方，所有继承它的页面都会显示同一条提示：\n\n```jinja\n{% with messages = get_flashed_messages() %}\n  {% if messages %}\n    <ul class=\"alert\">\n    {% for message in messages %}\n      <li>{{ message }}</li>\n    {% endfor %}\n    </ul>\n  {% endif %}\n{% endwith %}\n```\n\n判断 `messages` 是否为空很关键：没有消息时不应该渲染一个空的提示框。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-template-render"
+          ]
+        }
+      },
+      {
+        "id": "textbook-validation",
+        "moduleId": "validation-feedback",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材说明：校验结果决定提示内容",
+        "markdown": "通过在 `<input>` 元素内添加 `required` 属性实现的验证（客户端验证）并不完全可靠，所以还要在服务器端追加验证。真实世界里还会做更严苛的验证，比如对数据去除首尾的空格；一般情况下，我们会使用第三方库（比如 WTForms）来实现表单数据的验证工作。\n\n如果输入的某个数据为空，或是长度不符合要求，就显示错误提示“Invalid input.”，否则显示成功创建的提示“Item Created.”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-e0a0d38f117bfe9c05dd311f",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "第 7 章：表单",
+                "flash 消息"
+              ],
+              "lineStart": 434,
+              "lineEnd": 445,
+              "assetRefs": [],
+              "excerptSha256": "35ed3fc9a74f4ff3bedad410c0189e5f785899f203864c2b03c7ca94c5c0b2f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-feedback-branch",
+        "moduleId": "validation-feedback",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充算例：两条消息的分支写法",
+        "markdown": "把“校验结果决定消息内容”落成代码，就是先校验、再 `flash` 的分支：\n\n```python\n@app.route('/', methods=['GET', 'POST'])\ndef index():\n    if request.method == 'POST':\n        title = request.form.get('title', '').strip()\n        year = request.form.get('year', '').strip()\n        if not title or not year or len(year) != 4:\n            flash('Invalid input.')\n        else:\n            flash('Item Created.')\n        return redirect(url_for('index'))\n```\n\n两条消息互斥：校验失败走 `Invalid input.`，成功走 `Item Created.`。这里用 `.strip()` 先去掉首尾空格，再判断空值和年份位数，正是教材强调的“服务器端再验证一次”。视图函数本身只负责产生消息，如何显示仍由模板决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-validation"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "flash-checklist",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查题：哪一环断掉了",
+        "markdown": "情境：视图函数在校验失败后调用了 `flash('Invalid input.')`，随后重定向回主页。请回答：\n\n1. 如果应用没有设置签名密钥，请求 1 写入的 session 在请求 2 还能读回来吗？\n2. 如果基模板忘记调用 `get_flashed_messages()`，用户能看到提示吗？消息会一直留在 session 里吗？\n3. 如果用户在看到提示后手动刷新页面，提示还会再出现一次吗？为什么？\n\n作答时按“写入 → 携带 → 读取 → 清除”的顺序说明每个环节的作用，只有四步都完整，提示才会恰好出现一次。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-session-lifecycle",
+            "model-feedback-branch"
+          ]
+        }
+      },
+      {
+        "id": "model-flash-summary",
+        "moduleId": "flash-checklist",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "flash 消息的完整链路是：视图函数用 `flash()` 写入消息，消息随 session 签名进入浏览器 Cookie，下一次请求渲染模板时由 `get_flashed_messages()` 读取并清除，因此提示只显示一次。密钥决定了 session 能否被正确签名，开发与部署的要求不同。\n\n在本章的项目里，这条消息通常紧跟着一次页面跳转：提交表单 → 校验 → 设置消息 → 让浏览器重新请求主页。下一步的重定向响应，就是把“跳到哪个页面”这件事交给 Flask 处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-feedback-branch",
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "flash-chain-check",
+        "type": "formative-check",
+        "title": "判断 flash 链路断在哪一环",
+        "anchorBlockId": "model-check",
+        "moduleId": "flash-checklist",
+        "depth": "support",
+        "outcomeRefs": [
+          "trace-message-flow",
+          "configure-secret-key",
+          "integrate-feedback"
+        ],
+        "learningPurpose": "检验学习者能否把写入、携带、读取、清除四个环节分别对应到具体代码位置，并解释缺失某一环时的可观察结果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-validation",
+            "model-check"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questionCount": 3,
+          "mode": "reasoning"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按“写入 → 携带 → 读取 → 清除”的顺序复述 flash 消息的链路，并分别说明缺少密钥、缺少 get_flashed_messages() 调用时用户会看到什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 7 章：表单",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [
+    "point-7-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-e0a0d38f117bfe9c05dd311f",
+      "blockIds": [
+        "block-000064"
+      ],
+      "headingPath": [
+        "第 7 章：表单",
+        "flash 消息"
+      ],
+      "lineStart": 434,
+      "lineEnd": 445,
+      "assetRefs": [],
+      "excerptSha256": "35ed3fc9a74f4ff3bedad410c0189e5f785899f203864c2b03c7ca94c5c0b2f3"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1349,
+    1740
+  ],
+  "scale": 0.89
+}

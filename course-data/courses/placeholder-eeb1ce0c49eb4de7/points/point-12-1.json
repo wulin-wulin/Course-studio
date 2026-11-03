@@ -1,0 +1,469 @@
+{
+  "id": "point-12-1",
+  "title": "计算机动画的光栅方法",
+  "shortSummary": "介绍基于帧缓存操作、颜色表切换和位块传送的动画实现方式及其适用条件。",
+  "keyTerms": [
+    "光栅动画",
+    "帧缓存",
+    "位块传送"
+  ],
+  "animationType": "animationTimelineLab",
+  "animationSuggestion": "并排展示缓存 A、缓存 B 和屏幕，逐刷新周期推进：一个缓存被扫描显示时，另一个缓存绘制下一帧，并在回扫阶段交换角色；允许切换 1/60、1/50、1/25 秒三种建帧时间，观察每帧被重复显示的次数和实际帧率变化。",
+  "difficulty": "中等",
+  "importance": 0.55,
+  "prerequisites": [
+    "point-2-2",
+    "point-7-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-and-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于动画生成方式、双缓存时序和光栅操作的定义与数值，围绕帧率估算与方案选择补充直觉、计算示例和检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-raster-animation",
+          "text": "解释计算机动画的含义，并说明实时动画与逐帧动画的差别及各自适用条件。"
+        },
+        {
+          "id": "explain-double-buffer",
+          "text": "说明双缓存如何轮换显示缓存与生成缓存，并解释交换时机的作用。"
+        },
+        {
+          "id": "estimate-frame-rate",
+          "text": "根据刷新周期和建帧时间估算实际动画帧率，并解释临界点附近的帧率抖动。"
+        },
+        {
+          "id": "choose-raster-ops",
+          "text": "判断块传送和颜色表变换在具体场景中的适用性及其限制。"
+        }
+      ],
+      "misconceptions": [
+        "认为双缓存能缩短一帧的生成时间，从而直接提高帧率。",
+        "认为光栅操作动画可以对任意对象做任意角度旋转和真实三维运动。",
+        "认为计算机动画必须每次重新计算几何坐标和可见面。"
+      ],
+      "modules": [
+        {
+          "id": "animation-basics",
+          "title": "动画含义与生成方式",
+          "role": "orientation",
+          "description": "建立计算机动画的定义，区分实时生成与逐帧生成两条路线。",
+          "outcomeRefs": [
+            "explain-raster-animation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "double-buffer",
+          "title": "双缓存轮换机制",
+          "role": "mechanism",
+          "description": "说明两个刷新缓存如何分工与交换角色。",
+          "outcomeRefs": [
+            "explain-double-buffer"
+          ],
+          "order": 1
+        },
+        {
+          "id": "frame-timing",
+          "title": "刷新周期与帧率",
+          "role": "quantitative-analysis",
+          "description": "把建帧时间与刷新周期换算为实际帧率，解释漂移、帧破裂和抖动。",
+          "outcomeRefs": [
+            "estimate-frame-rate"
+          ],
+          "order": 2
+        },
+        {
+          "id": "raster-operations",
+          "title": "光栅操作动画",
+          "role": "application",
+          "description": "用块传送和颜色表变换直接操作像素，跳过整幅场景重算。",
+          "outcomeRefs": [
+            "choose-raster-ops"
+          ],
+          "order": 3
+        },
+        {
+          "id": "limits-and-check",
+          "title": "方案边界与达成检查",
+          "role": "assessment",
+          "description": "综合比较三种手段的成本与限制，并完成方案选择练习。",
+          "outcomeRefs": [
+            "explain-raster-animation",
+            "estimate-frame-rate",
+            "choose-raster-ops"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-raster-animation",
+          "explain-double-buffer",
+          "estimate-frame-rate",
+          "choose-raster-ops"
+        ],
+        "method": "完成三道方案判断题，写出帧率估算过程和适用条件依据。",
+        "successCriteria": [
+          "能区分实时生成与逐帧生成的成本位置",
+          "能说明双缓存交换时机与帧率的关系",
+          "帧率估算的取整步骤正确",
+          "方案选择能引用光栅操作的具体限制"
+        ],
+        "exerciseBlockId": "model-application-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-12-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-animation-definition",
+        "moduleId": "animation-basics",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：计算机动画的含义与两种生成方式",
+        "markdown": "计算机动画不只是对象位置的移动，而是场景中任何随时间发生的视觉变化：对象可以平移、旋转，也可以改变大小、颜色、透明度或表面纹理；还可以通过改变照相机参数以及光照和绘制过程产生动画。\n\n按生成与播放的关系，动画序列有两条基本路线。实时动画在每一帧生成后立即播放，因此生成速率必须符合刷新频率的约束；逐帧动画则先把每一帧单独生成并存储，再连续回放或转录到胶片。\n\n应用需求决定路线：简单动画可以实时生成，复杂动画通常逐帧生成；但飞行模拟器等应用为了即时响应控制命令，即使场景复杂也必须实时生成，往往依赖专用的硬件和软件系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000393"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "计算机动画"
+              ],
+              "lineStart": 10635,
+              "lineEnd": 10642,
+              "assetRefs": [],
+              "excerptSha256": "077b1df8c6a2058ef706452b55fa3b39fbc296ac4185ac8fbdd665407cf4298f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-animation-flipbook",
+        "moduleId": "animation-basics",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "理解补充：生成快慢如何决定动画形态",
+        "markdown": "可以把逐帧动画想成先拍完、再翻动的画册：每一页都已完整存在，翻页速度只影响观感，不影响每页内容。实时动画更像现场作画，绘制下一张的时间会直接挤占观看当前画面的时间。\n\n这一区别解释了本节的关注点：光栅系统的强项是刷新缓存中的像素，而不是每次都重新计算整幅场景。只要让“改变像素”这一步足够快，就能在刷新节奏内制造连续运动。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-animation-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-raster-frame-constraint",
+        "moduleId": "frame-timing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：光栅系统生成动画的时间约束",
+        "markdown": "在光栅扫描系统中，动画通常一次生成一帧，可以把生成的帧保存到文件中供以后观看，按顺序循环播放即可看到动画，也可以转换为胶片；若要实时生成，产生运动帧的速度必须足够快，才能显示连续的运动序列。\n\n复杂场景会把一个刷新周期的大部分时间用于创建一帧：先生成的对象在周期内显示较久，周期末期生成的对象几乎刚显示就消失。更严重的是，创建一帧的时间可能超过一个刷新周期，于是出现运动漂移和帧破裂。\n\n由于屏幕显示是通过刷新缓存中被连续修改的像素值产生的，我们可以利用光栅屏幕刷新过程的特性来快速产生运动序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000394"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "计算机动画的光栅方法"
+              ],
+              "lineStart": 10643,
+              "lineEnd": 10646,
+              "assetRefs": [],
+              "excerptSha256": "7e068ea6b57cd11f01a7480f3fff7e2d67890778169d297a30aa86e65ef9dbc4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-drift-cause",
+        "moduleId": "frame-timing",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "理解补充：运动漂移与帧破裂从何而来",
+        "markdown": "显示器的刷新是固定节拍，而帧生成是可变节拍。两者不同步时，同一个刷新周期里可能出现来自不同时刻的内容：一部分扫描线来自旧帧、一部分来自新帧，画面就被撕开；若新帧迟迟没有完成，同一帧被反复扫描，运动看起来忽快忽慢、位置漂移。\n\n所以问题不只是“像素画得不够快”，而是“整帧重算”的粒度太粗。双缓存与光栅操作分别从两个方向缓解这一矛盾。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-raster-frame-constraint"
+          ]
+        }
+      },
+      {
+        "id": "tb-double-buffer",
+        "moduleId": "double-buffer",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：双缓存的轮换机制",
+        "markdown": "在光栅系统中生成实时动画的一种方法是使用两个刷新缓存，即双缓存。初始状态时在第一个缓存中创建动画的一帧；当用该缓存中的帧刷新屏幕时，在第二个缓存中创建下一帧；下一帧创建完成后互换两个缓存的角色，刷新进程开始用第二个缓存中的帧刷新屏幕，同时在第一个缓存中继续创建下一帧。这种轮换缓存的操作贯穿整个动画显示过程。\n\n支持双缓存的图形库通常提供一个激活双缓存的函数和一个互换缓存角色的函数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000395"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "双缓存"
+              ],
+              "lineStart": 10647,
+              "lineEnd": 10654,
+              "assetRefs": [],
+              "excerptSha256": "0ad39d71deb9b52a2ef220d6d31fadade3241a20f08a201a8e30e26b15063692"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-double-buffer-roles",
+        "moduleId": "double-buffer",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "理解补充：双缓存换来了什么、没换来什么",
+        "markdown": "双缓存把“正在显示的帧”和“正在生成的帧”分开，学习者不会看到画到一半的场景，因此消除了绘制过程本身被看到的问题。但它并不缩短一帧的生成时间：如果生成仍慢于刷新，屏幕只能重复显示旧帧，动画帧率仍由建帧时间决定。\n\n交换时机也很关键。最直接的做法是在当前刷新周期的末期，即电子束垂直回扫阶段交换两个缓存，避免交换发生在屏幕扫描中途。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-double-buffer"
+          ]
+        }
+      },
+      {
+        "id": "tb-double-buffer-frame-rate",
+        "moduleId": "frame-timing",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：双缓存下的实际帧率",
+        "markdown": "交换缓存并不保证每帧只显示一个刷新周期。如果程序能在一个刷新周期内创建好一帧，运动序列的显示可以与屏幕刷新速率同步；如果创建一帧的时间长于一个刷新周期，则当前帧要显示两个或更多的刷新周期。\n\n例如屏幕刷新率为每秒 60 帧：创建一帧需要 $1/50$ 秒时，每帧显示两次，动画速率只有每秒 30 帧；创建一帧需要 $1/25$ 秒时，每帧显示三次，动画速率降为每秒 20 帧。\n\n当创建一帧的时间非常接近刷新周期的整数倍时，容易出现不规则帧率：生成图形元素及其属性的函数执行时间有微小变化，有些帧短一点、有些帧长一点，帧率便会突然且不稳定地变化。弥补方法之一是在程序中加入少许时延，之二是改变运动或场景描述以缩短创建帧的时间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000395"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "双缓存"
+              ],
+              "lineStart": 10647,
+              "lineEnd": 10654,
+              "assetRefs": [],
+              "excerptSha256": "0ad39d71deb9b52a2ef220d6d31fadade3241a20f08a201a8e30e26b15063692"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-frame-rate-worked-example",
+        "moduleId": "frame-timing",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "计算示例：把建帧时间换算成显示帧率",
+        "markdown": "设刷新周期为 $T_r = 1/60$ 秒，建帧时间为 $T_f$。屏幕每 $T_r$ 秒取一次当前缓存，所以一帧至少显示一个刷新周期；每帧实际占用的周期数是 $T_f/T_r$ 向上取整的结果。\n\n代入教材数据：$T_f = 1/50$ 秒时，$T_f/T_r = 1.2$，向上取整为 2，每帧显示两个周期，动画速率约为每秒 30 帧；$T_f = 1/25$ 秒时，$T_f/T_r = 2.4$，向上取整为 3，动画速率约为每秒 20 帧。\n\n临界点附近的抖动也由此而来：$T_f$ 在 $2T_r$ 附近波动时，向上取整结果会在 2 与 3 之间跳变，帧率便在每秒 30 帧与 20 帧之间突变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-double-buffer-frame-rate"
+          ]
+        }
+      },
+      {
+        "id": "tb-raster-ops",
+        "moduleId": "raster-operations",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用光栅操作生成动画",
+        "markdown": "使用矩形像素阵列的块移动，可以为有限的应用生成实时光栅动画，游戏程序经常使用这种技术。例如在 xy 平面上移动一个对象，可以把定义该对象形状的一组像素从一个位置移动到另一个位置。\n\n90° 倍数的二维旋转很容易实现；绕任意角度旋转矩形块像素可以借助反走样过程，而对于非 90° 倍数的二维旋转，需要确定旋转后重叠区域的百分比。只要把动画限制为在投影平面上的运动，执行光栅操作序列就能实现二维或三维对象的实时动画，不会要求使用观察操作和可见面算法。\n\n另一种做法是沿二维路径使用颜色表变换：沿运动路径的相连位置预先定义对象，把相继块的像素值设为颜色表入口；第一个位置用前景色，其他位置用背景色。随后修改颜色表，把后一位置的像素变为前景色、前一位置的像素变为背景色，就实现了运动（见图 12.1）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000396"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "用光栅操作生成动画"
+              ],
+              "lineStart": 10655,
+              "lineEnd": 10663,
+              "assetRefs": [
+                "parts/part-0004/images/1ed328116233414a42fe879b6ed17e0cca859d7c5d86d470e85fd50ab79ba662.jpg"
+              ],
+              "excerptSha256": "c8b342720753aeed6acb6b08dc7cd46e801dcb6b635c5f5a34cf137467a6c6c0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-raster-ops-comparison",
+        "moduleId": "raster-operations",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "理解补充：块传送与颜色表变换的取舍",
+        "markdown": "两种光栅动画的代价与限制不同。块传送直接搬运像素块，适合精灵式对象的平移和 90° 倍数旋转；一旦需要任意角度旋转、缩放或三维空间中的真实运动，就要处理像素重叠比例与重采样，或退回到几何变换和可见面计算。\n\n颜色表变换不改像素值，只改“像素值到颜色”的映射：路径上的候选位置同时存在于帧缓存中，切换颜色表即可点亮不同位置。它的优点是每帧只需改少量表项，代价是可用颜色数量和路径上的候选位置都受颜色表容量限制，而且对象在各位置的形状必须预先绘好。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-raster-ops"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "limits-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：三条加速路径与共同边界",
+        "markdown": "本节的手段服务于同一个目标——让“改变画面”的成本低到能跟上刷新节拍：逐帧预生成把生成时间移出播放过程；双缓存隐藏绘制过程并按刷新周期切换显示缓存；光栅操作直接修改像素或颜色表，跳过整幅场景重算。\n\n边界同样清楚：双缓存不减少建帧时间，帧率仍受刷新周期整数倍的约束；光栅操作动画只适用于投影平面上的有限运动，任意角度旋转与真实三维运动仍需几何变换和可见面处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-double-buffer-frame-rate",
+            "tb-raster-ops"
+          ]
+        }
+      },
+      {
+        "id": "model-application-check",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：为场景选择光栅动画方案",
+        "markdown": "判断下列说法，并写出依据。\n\n1. 一个游戏精灵只在屏幕上水平移动，形状固定。是否适合用块传送实现动画？\n2. 某程序启用双缓存后，建帧时间仍为 $1/40$ 秒，刷新率为每秒 60 帧。动画帧率大约是多少？双缓存是否提高了这个帧率？\n3. 一个对象需要绕任意角度连续旋转，能否只靠颜色表变换完成？\n\n参考思路：第 1 题对照块传送与 90° 倍数旋转的适用范围；第 2 题用 $T_f/T_r = 1.5$ 向上取整为 2，估算出约每秒 30 帧，并指出帧率由建帧时间决定，双缓存只避免显示绘制过程；第 3 题要考虑颜色表变换要求候选位置的像素预先存在，任意角度旋转还需反走样和重叠区域处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-double-buffer-frame-rate",
+            "tb-raster-ops",
+            "model-frame-rate-worked-example"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "raster-animation-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-application-check",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "estimate-frame-rate",
+          "choose-raster-ops"
+        ],
+        "learningPurpose": "检查学习者能否把帧率估算和光栅操作边界迁移到具体场景。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-double-buffer-frame-rate",
+            "tb-raster-ops"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别回答三道判断题，并写出帧率取整过程或光栅操作的适用条件。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机动画",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000393"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "计算机动画"
+      ],
+      "lineStart": 10635,
+      "lineEnd": 10642,
+      "assetRefs": [],
+      "excerptSha256": "077b1df8c6a2058ef706452b55fa3b39fbc296ac4185ac8fbdd665407cf4298f"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000394"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "计算机动画的光栅方法"
+      ],
+      "lineStart": 10643,
+      "lineEnd": 10646,
+      "assetRefs": [],
+      "excerptSha256": "7e068ea6b57cd11f01a7480f3fff7e2d67890778169d297a30aa86e65ef9dbc4"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000395"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "双缓存"
+      ],
+      "lineStart": 10647,
+      "lineEnd": 10654,
+      "assetRefs": [],
+      "excerptSha256": "0ad39d71deb9b52a2ef220d6d31fadade3241a20f08a201a8e30e26b15063692"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000396"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "用光栅操作生成动画"
+      ],
+      "lineStart": 10655,
+      "lineEnd": 10663,
+      "assetRefs": [
+        "parts/part-0004/images/1ed328116233414a42fe879b6ed17e0cca859d7c5d86d470e85fd50ab79ba662.jpg"
+      ],
+      "excerptSha256": "c8b342720753aeed6acb6b08dc7cd46e801dcb6b635c5f5a34cf137467a6c6c0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1068,
+    1386
+  ],
+  "scale": 1.15
+}

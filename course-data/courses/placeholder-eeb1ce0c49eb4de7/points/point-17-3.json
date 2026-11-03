@@ -1,0 +1,898 @@
+{
+  "id": "point-17-3",
+  "title": "基本光照模型",
+  "shortSummary": "讲解 Phong 光照模型的各项组成、计算流程和参数含义，并说明法向量归一化的必要性。",
+  "keyTerms": [
+    "Phong 模型",
+    "漫反射",
+    "镜面反射"
+  ],
+  "animationType": "lightingModelLab",
+  "animationSuggestion": "在球面上标出 N、L、R、V 四个向量和夹角 φ，让视点沿弧线移动，同步显示漫反射与镜面反射分项亮度的柱状或曲线变化；提供 n_s=1、10、100 的切换，重播时回到同一初始视角。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-17-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的公式、参数范围和适用条件，围绕“给定向量与材质参数算出表面亮度”的学习任务重排讲解顺序，补充算例、诊断练习与单位向量检查。",
+      "estimatedMinutes": 25,
+      "outcomes": [
+        {
+          "id": "explain-model-components",
+          "text": "说明基本光照模型中环境光、漫反射、镜面反射和表面发射项各自的含义与几何依赖。"
+        },
+        {
+          "id": "compute-shading",
+          "text": "给定单位向量、光源强度和材质参数，按 Phong 公式计算表面点的漫反射与镜面反射贡献。"
+        },
+        {
+          "id": "judge-validity",
+          "text": "判断 N·L、V·R、N·H 等点积的符号与归一化条件，解释背光面和高光失效的原因。"
+        },
+        {
+          "id": "extend-multilight",
+          "text": "说明多光源叠加、距离与角度衰减、RGB 分量和亮度如何扩展基本光照模型。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要镜面反射系数足够大，背光面也会出现高光；教材要求 N·L>0 且 V·R>0 才有镜面贡献。",
+        "认为镜面高光一定带表面颜色；Phong 最初把 k_s 设为与表面颜色无关的常量，此时高光颜色与入射光相同，看起来像塑料。",
+        "认为法向量和光源方向向量不归一化也能直接用点积得到入射角的余弦。",
+        "把表面的光发射项当成能自动照亮其他表面的全局光照。"
+      ],
+      "modules": [
+        {
+          "id": "model-scope",
+          "title": "从物理光照到经验模型",
+          "role": "problem-introduction",
+          "outcomeRefs": [
+            "explain-model-components"
+          ],
+          "order": 0
+        },
+        {
+          "id": "ambient-diffuse",
+          "title": "环境光与朗伯漫反射",
+          "role": "core-derivation",
+          "outcomeRefs": [
+            "explain-model-components",
+            "compute-shading"
+          ],
+          "order": 1
+        },
+        {
+          "id": "specular-phong",
+          "title": "镜面反射与 Phong 高光",
+          "role": "core-derivation",
+          "outcomeRefs": [
+            "compute-shading",
+            "judge-validity"
+          ],
+          "order": 2
+        },
+        {
+          "id": "combine-multilight",
+          "title": "项合并、多光源与表面发射",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "explain-model-components",
+            "extend-multilight"
+          ],
+          "order": 3
+        },
+        {
+          "id": "attenuation-general",
+          "title": "衰减、高光与通用光照模型",
+          "role": "extension",
+          "outcomeRefs": [
+            "extend-multilight"
+          ],
+          "order": 4
+        },
+        {
+          "id": "color-luminance",
+          "title": "RGB 分量与亮度",
+          "role": "extension",
+          "outcomeRefs": [
+            "extend-multilight"
+          ],
+          "order": 5
+        },
+        {
+          "id": "check-transfer",
+          "title": "达成检查与迁移",
+          "role": "assessment",
+          "outcomeRefs": [
+            "compute-shading",
+            "judge-validity",
+            "extend-multilight"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-model-components",
+          "compute-shading",
+          "judge-validity",
+          "extend-multilight"
+        ],
+        "method": "完成高光异常诊断练习，并写出一处场景的逐项计算思路。",
+        "successCriteria": [
+          "能写出环境光、漫反射与镜面反射三项并说明各自依赖的几何量",
+          "能指出归一化与点积符号条件，解释背光面为何没有高光",
+          "能把多光源、衰减或 RGB 分量正确接入组合公式"
+        ],
+        "exerciseBlockId": "model-transfer-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-17-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-model-scope",
+        "moduleId": "model-scope",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：基本光照模型的定位与光源假设",
+        "markdown": "精确的光照模型需要按入射光能量与表面材料组成的交互来计算，但基本光照模型采用经验近似：它不追求物理精确，而是在可接受的计算量下生成足够可信的表面明暗。\n\n在这一模型中，发光体一般限定为点光源；许多图形软件包另外提供方向光源（投射光源）和扩展光源的处理函数。后面的各项都在这个简化前提下展开。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000535"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本光照模型"
+              ],
+              "lineStart": 14359,
+              "lineEnd": 14366,
+              "assetRefs": [
+                "parts/part-0005/images/551167e3139fe643318e68ce04382e2640f4d46e4d6108fd37330617cc589f8f.jpg"
+              ],
+              "excerptSha256": "ed995bbe0c428e088dd3f7c32207a739c4ca626e9729664ecdab6b6ae73685d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-empirical-vs-physical",
+        "moduleId": "model-scope",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：经验模型简化了什么",
+        "markdown": "基本模型的简化假设是：光源主要是点光源，表面反射用经验系数近似，且只计入光源直接照射到表面的光。它计算快、参数直观，能生成环境光、漫反射和镜面高光；但不会自动产生阴影或表面之间的互反射，后者需要全局光照方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-model-scope"
+          ]
+        }
+      },
+      {
+        "id": "textbook-ambient",
+        "moduleId": "ambient-diffuse",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：环境光项",
+        "markdown": "在基本光照模型中，可以设定场景的一般亮度级来引入背景光。这样得到的环境光对所有对象都相同，近似表示各照明表面的全局漫反射。\n\n假设讨论单色光（例如灰色阴影），用强度 $I_a$ 表示环境光层次，则场景中每个表面都受到这份背景光照明。环境光产生的反射是漫反射的简单情形：反射出的环境光总量取决于表面光学特性——入射能量中有多少被反射、多少被吸收。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000536"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "环境光"
+              ],
+              "lineStart": 14367,
+              "lineEnd": 14374,
+              "assetRefs": [],
+              "excerptSha256": "6717a4c93fa2e618b0f3fb61a1ea8efe7d838f35fdd4a63846f83f5df0b0a635"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ambient-independent",
+        "moduleId": "ambient-diffuse",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：环境光为何与几何无关",
+        "markdown": "环境光对所有表面一视同仁：它不随表面朝向或观察方向改变，只由场景亮度级和表面的反射能力决定。这也解释了为什么只用环境光的画面缺乏立体感——所有朝向的表面得到几乎相同的亮度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-ambient"
+          ]
+        }
+      },
+      {
+        "id": "textbook-diffuse",
+        "moduleId": "ambient-diffuse",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：朗伯漫反射与入射角",
+        "markdown": "建立表面漫反射模型时，可假设入射光在各方向以相同强度发散且与观察位置无关，这样的表面称为理想漫反射体；由于反射能量按朗伯余弦定律计算，也称朗伯反射体。该定律表明：与表面法向量夹角为 $\\varphi_N$ 的方向上，面元发散的光强与 $\\cos\\varphi_N$ 成正比。因此朗伯反射的光强在所有观察方向上都相同。\n\n用漫反射系数 $k_d$（漫反射率）描述表面把多少入射光按漫反射发出，取值 $0.0$ 到 $1.0$：接近 $1.0$ 的表面很亮，接近 $0.0$ 的表面吸收大部分入射光。对单色光，环境光对漫反射的贡献可写为 $I_{\\mathrm{ambdiff}} = k_d I_a$。\n\n当强度为 $I_l$ 的光源照明表面时，入射光总量取决于表面与光源的相对方向：垂直于入射光的表面比斜对入射光的表面接收更多光。若入射角为 $\\theta$，则 $I_{l,\\mathrm{incident}} = I_l\\cos\\theta$，于是 $I_{l,\\mathrm{diff}} = k_d I_l\\cos\\theta$。只有入射角在 $0^\\circ \\sim 90^\\circ$（$\\cos\\theta$ 在 $0.0$ 到 $1.0$ 之间）时点光源才照亮面片；$\\cos\\theta<0$ 表示光源位于面片之后。\n\n记表面单位法向量为 $\\mathbf{N}$、指向点光源的单位向量为 $\\mathbf{L}$，则 $\\cos\\theta = \\mathbf{N}\\cdot\\mathbf{L}$，于是\n\n$$\nI_{l,\\mathrm{diff}} = \\begin{cases} k_d I_l(\\mathbf{N}\\cdot\\mathbf{L}), & \\mathbf{N}\\cdot\\mathbf{L} > 0 \\\\ 0.0, & \\mathbf{N}\\cdot\\mathbf{L} \\le 0 \\end{cases}\n$$\n\n指向附近点光源的 $\\mathbf{L}$ 由 $\\mathbf{L} = (\\mathbf{P}_{\\mathrm{source}} - \\mathbf{P}_{\\mathrm{surf}})/|\\mathbf{P}_{\\mathrm{source}} - \\mathbf{P}_{\\mathrm{surf}}|$ 计算；无穷远光源没有位置、只有传播方向，取发射方向的反向作为 $\\mathbf{L}$。\n\n许多图形软件包进一步引入每表面指定的环境光反射系数 $k_a$，把单点光源下的全部漫反射写作 $I_{\\mathrm{diff}} = k_a I_a + k_d I_l(\\mathbf{N}\\cdot\\mathbf{L})$（$\\mathbf{N}\\cdot\\mathbf{L}>0$），否则为 $k_a I_a$；$k_a$ 与 $k_d$ 都依赖表面材质，单色情形取值在 0 和 1 之间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000537"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "漫反射"
+              ],
+              "lineStart": 14375,
+              "lineEnd": 14449,
+              "assetRefs": [
+                "parts/part-0005/images/424e59e42c33697afb809b23b5440d3b30bc833e80f14116c70c6006d0a61c13.jpg",
+                "parts/part-0005/images/8f8172875294856d87b7df60cf72331927fe3da317393546a791bdcd64f9cda4.jpg",
+                "parts/part-0005/images/61f2a64236f88a6e2ddb45e937483f55330cd0679982a6df01f97788f91c014f.jpg",
+                "parts/part-0005/images/6fb0f9c8cdbce7dd867b1db3b3afba0082cf8dfd1c1f7252a3f11258031b84df.jpg",
+                "parts/part-0005/images/26b2d870fb62edaa2f9aeb2e8030a1d288652c2c29bcb8b0b814146a93ecbbec.jpg"
+              ],
+              "excerptSha256": "15e862ae905a12543b3bf153eead62949a5e090f0b91aae30c99594e5362c89a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-diffuse-worked",
+        "moduleId": "ambient-diffuse",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：入射角与亮度算例",
+        "markdown": "设 $k_a=0.1$、$I_a=1.0$、$k_d=0.6$、$I_l=1.0$，且所有方向向量均为单位向量。\n\n- 垂直入射（$\\mathbf{N}\\cdot\\mathbf{L}=1$）：$I_{\\mathrm{diff}} = 0.1 + 0.6\\times 1.0\\times 1 = 0.7$。\n- 斜入射（$\\mathbf{N}\\cdot\\mathbf{L}=0.5$）：$I_{\\mathrm{diff}} = 0.1 + 0.6\\times 1.0\\times 0.5 = 0.4$。\n- 光源在背面（$\\mathbf{N}\\cdot\\mathbf{L}=-0.2$）：漫反射项为 $0$，只剩环境光 $0.1$。\n\n算例只用于核对公式结构，实际数值取决于场景参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-diffuse"
+          ]
+        }
+      },
+      {
+        "id": "model-normal-normalize",
+        "moduleId": "ambient-diffuse",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：为什么法向量必须归一化",
+        "markdown": "公式里的 $\\mathbf{N}$、$\\mathbf{L}$ 必须是单位向量，$\\mathbf{N}\\cdot\\mathbf{L}$ 才等于 $\\cos\\theta$。若法向量长度不为 1，点积会被额外缩放，同一个入射角会算出错误的亮度；法向量在顶点之间插值后也应重新归一化。\n\n判断依据：只有单位向量之间的点积才落在 $[-1,1]$，公式中的 $\\mathbf{N}\\cdot\\mathbf{L}>0$ 判断和亮度上限才成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-diffuse"
+          ]
+        }
+      },
+      {
+        "id": "textbook-specular",
+        "moduleId": "specular-phong",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：镜面反射与 Phong 高光",
+        "markdown": "光滑表面上的高光或镜面反射，来自接近镜面反射角的会聚区域内，入射光全部或绝大部分成为反射光。镜面反射角等于入射角，二者位于表面单位法向量 $\\mathbf{N}$ 的两侧。用 $\\mathbf{R}$ 表示理想镜面反射方向的单位向量，$\\mathbf{L}$ 表示指向点光源的单位向量，$\\mathbf{V}$ 表示指向视点的单位向量；$\\varphi$ 是观察方向与 $\\mathbf{R}$ 之间的夹角。理想反射体（镜子）只在 $\\mathbf{V}$ 与 $\\mathbf{R}$ 重合（$\\varphi=0$）时才可观察到反射光。\n\n非理想反射体的镜面反射分布在 $\\mathbf{R}$ 周围有限范围内：表面越光滑，镜面范围越小；表面越粗糙，范围越大。Phong Bui Tuong 提出的 Phong 镜面反射模型认为镜面反射光强度与 $\\cos^{n_s}\\varphi$ 成正比，$\\varphi$ 介于 $0^\\circ$ 到 $90^\\circ$；镜面反射参数 $n_s$ 由材质决定：光滑表面 $n_s$ 较大（如 100 或更大），粗糙表面 $n_s$ 较小（小到 1），理想反射器的 $n_s$ 为无穷大，粉笔、煤渣等粗糙表面接近 1。\n\n镜面反射强度还受材质、入射角等因素影响，可用镜面反射系数 $W(\\theta)$ 近似。一般而言入射角增大时 $W(\\theta)$ 增大，当 $\\theta=90^\\circ$ 时所有入射光均被反射、$W(\\theta)=1$；Fresnel 反射定律描述了这一关系。于是 Phong 镜面反射模型写作 $I_{l,\\mathrm{spec}} = W(\\theta) I_l\\cos^{n_s}\\varphi$，其中 $I_l$ 为光源强度。\n\n透明材质（如玻璃）只在 $\\theta$ 接近 $90^\\circ$ 时才有明显镜面反射，$\\theta=0^\\circ$ 时约 4% 的入射光被玻璃表面反射；许多不透明材质几乎对所有入射角都有近似常量的镜面反射，此时用常量 $k_s$（0 到 1）取代 $W(\\theta)$。由于 $\\mathbf{V}$ 与 $\\mathbf{R}$ 是单位向量，$\\cos\\varphi = \\mathbf{V}\\cdot\\mathbf{R}$；若 $\\mathbf{V}$ 与 $\\mathbf{L}$ 位于 $\\mathbf{N}$ 的同一侧或光源在表面之后，则没有镜面反射。于是\n\n$$\nI_{l,\\mathrm{spec}} = \\begin{cases} k_s I_l(\\mathbf{V}\\cdot\\mathbf{R})^{n_s}, & \\mathbf{V}\\cdot\\mathbf{R} > 0 \\text{ 且 } \\mathbf{N}\\cdot\\mathbf{L} > 0 \\\\ 0.0, & \\mathbf{V}\\cdot\\mathbf{R} \\le 0 \\text{ 或 } \\mathbf{N}\\cdot\\mathbf{L} \\le 0 \\end{cases}\n$$\n\n反射向量可由 $\\mathbf{R} + \\mathbf{L} = (2\\mathbf{N}\\cdot\\mathbf{L})\\mathbf{N}$ 得到，即 $\\mathbf{R} = (2\\mathbf{N}\\cdot\\mathbf{L})\\mathbf{N} - \\mathbf{L}$。若对整个场景使用固定观察方向，可取 $\\mathbf{V}=(0.0,0.0,1.0)$，计算更快但真实感稍差。\n\n为减少计算量，可用 $\\mathbf{L}$ 与 $\\mathbf{V}$ 的半角向量 $\\mathbf{H} = (\\mathbf{L}+\\mathbf{V})/|\\mathbf{L}+\\mathbf{V}|$ 代替 $\\mathbf{R}$：以 $\\mathbf{N}\\cdot\\mathbf{H}$ 替换 $\\mathbf{V}\\cdot\\mathbf{R}$，用经验性的 $\\cos\\alpha$ 替换 $\\cos\\varphi$。对非平面表面，$\\mathbf{N}\\cdot\\mathbf{H}$ 比 $\\mathbf{V}\\cdot\\mathbf{R}$ 计算量小，因为每个表面点的 $\\mathbf{R}$ 都包含变化的 $\\mathbf{N}$。若观察者与光源离表面足够远，$\\mathbf{V}$ 与 $\\mathbf{L}$ 为常量，则各点的 $\\mathbf{H}$ 也为常量；当 $\\mathbf{H}$ 与 $\\mathbf{N}$ 夹角大于 $90^\\circ$ 时 $\\mathbf{N}\\cdot\\mathbf{H}<0$，镜面贡献取 0。$\\mathbf{H}$ 是在观察方向上产生最大镜面反射的表面朝向，故也称最大亮度的表面朝向；当 $\\mathbf{V}$、$\\mathbf{L}$、$\\mathbf{R}$（及 $\\mathbf{N}$）共面时 $\\alpha=\\varphi/2$，否则 $\\alpha>\\varphi/2$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000538"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "镜面反射和 Phong 模型"
+              ],
+              "lineStart": 14450,
+              "lineEnd": 14523,
+              "assetRefs": [
+                "parts/part-0005/images/7f545798d45d0638e75b32f6d16c3db2c0d9eed0b01c361876e6b0793d7dce11.jpg",
+                "parts/part-0005/images/af95b516d1782676a7aaa499ab87a05784c9dfd00daa4ac7778fe094a85fe6d6.jpg",
+                "parts/part-0005/images/71b30b6ce61aba0377696fd529d306f68d6100bb1f3639189a254d9070615973.jpg",
+                "parts/part-0005/images/64f89edb953412a863fd4e6db893d8feb41c6c3c1fc2116f064c24d034701542.jpg",
+                "parts/part-0005/images/01cb5fb68f4e08965a385a66e69dfcfcdf874510621004e824916f2df3cd4a36.jpg",
+                "parts/part-0005/images/a2356fdb1c3ff435422452e8eec5f5516844722546ac77d8170e79e0bd725c13.jpg",
+                "parts/part-0005/images/f46ef2fd7f04b7c5b28b891c07928ed05b21ff3b6548634cbca662df3ed2481f.jpg",
+                "parts/part-0005/images/0bbad80058a24c87220ad4e600e13f27a866f5d950ae14e7af72ea7ad332cd3e.jpg",
+                "parts/part-0005/images/ac3ab91c04b20124e706d918899a2557fd597a288170a86de12e03657b052753.jpg",
+                "parts/part-0005/images/a1270ef894ebdb69a0d0ff0e5acffcc9aa5414f1b52ea26a84e4323791091e09.jpg"
+              ],
+              "excerptSha256": "cce4aeaae1d5b8876b64eb194a0afb0a73bd1c3828ff34053467c1251ecfd91c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-specular-intuition",
+        "moduleId": "specular-phong",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：镜面指数与半角向量的作用",
+        "markdown": "$n_s$ 控制高光的“紧”与“散”：$\\cos^{n_s}\\varphi$ 在 $\\varphi=0$ 时恒为 1，$n_s$ 越大，偏离 $\\varphi=0$ 后衰减越快，高光越小越亮；$n_s$ 接近 1 时高光铺满大半个表面。这就是光滑表面出现小而集中的高光、粗糙表面只出现模糊亮斑的原因。\n\n改用半角向量后，判断条件变成 $\\mathbf{N}\\cdot\\mathbf{H}>0$；它和 $\\mathbf{N}\\cdot\\mathbf{L}>0$ 一起，保证只有光源在表面正面时才产生高光。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-specular"
+          ]
+        }
+      },
+      {
+        "id": "textbook-combine",
+        "moduleId": "combine-multilight",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：漫反射与镜面反射的合并",
+        "markdown": "对单个点光源，把表面上某点处的漫反射和镜面反射相加：\n\n$$\nI = I_{\\mathrm{diff}} + I_{\\mathrm{spec}} = k_a I_a + k_d I_l(\\mathbf{N}\\cdot\\mathbf{L}) + k_s I_l(\\mathbf{N}\\cdot\\mathbf{H})^{n_s}\n$$\n\n如果光源位于表面之后，则表面只有环境光照明；如果 $\\mathbf{V}$ 和 $\\mathbf{L}$ 位于法向量 $\\mathbf{N}$ 的同一侧，则没有镜面反射效果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000539"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "漫反射和镜面反射的合并"
+              ],
+              "lineStart": 14524,
+              "lineEnd": 14533,
+              "assetRefs": [],
+              "excerptSha256": "a30653eeccc4fe8dc83eccee842ab0290d02ffd896d44ad2bb5e085e88a1c7bd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-combine-reading",
+        "moduleId": "combine-multilight",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三项各自的几何依赖",
+        "markdown": "把三项分开看，各自的几何依赖很清楚：环境光项与几何无关；漫反射项随 $\\mathbf{N}\\cdot\\mathbf{L}$ 变化，正对光源最亮；镜面项随 $\\mathbf{N}\\cdot\\mathbf{H}$ 变化，偏离最大亮度朝向就迅速衰减。每一项都在满足正半空间条件后才累加，所以背面点不会因为镜面系数大而变亮。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-combine",
+            "textbook-specular"
+          ]
+        }
+      },
+      {
+        "id": "textbook-multilight",
+        "moduleId": "combine-multilight",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：多光源叠加",
+        "markdown": "场景中可以放置多个点光源。对任意表面点，把各光源产生的光照效果叠加：\n\n$$\nI = I_{\\mathrm{ambdiff}} + \\sum_{l=1}^{n}\\left[I_{l,\\mathrm{diff}} + I_{l,\\mathrm{spec}}\\right] = k_a I_a + \\sum_{l=1}^{n} I_l\\left[k_d(\\mathbf{N}\\cdot\\mathbf{L}_l) + k_s(\\mathbf{N}\\cdot\\mathbf{H}_l)^{n_s}\\right]\n$$\n\n每个光源都有自己的方向向量 $\\mathbf{L}_l$ 与半角向量 $\\mathbf{H}_l$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000540"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "多光源的漫反射和镜面反射"
+              ],
+              "lineStart": 14534,
+              "lineEnd": 14541,
+              "assetRefs": [],
+              "excerptSha256": "6959302ae94baffd4265745ee733bdedd3c63b0cca6b078b604bbd479cccfe1a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-multilight-note",
+        "moduleId": "combine-multilight",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：叠加只扩大求和范围",
+        "markdown": "叠加只改变求和范围，不改变每一项的规则：环境光只加一次，漫反射和镜面反射对每个光源分别判断符号后再累加。实际实现中，逐像素计算量随光源数线性增长，需要在效果与性能之间取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-multilight"
+          ]
+        }
+      },
+      {
+        "id": "textbook-emission",
+        "moduleId": "combine-multilight",
+        "depth": "support",
+        "kind": "definition",
+        "title": "教材：表面的光发射",
+        "markdown": "除了反射光，场景中某些表面还会发射光，例如灯泡、吸顶灯、街灯、招牌和汽车前灯。可以在光照模型中直接加入发射项 $I_{\\mathrm{surfaceemission}}$ 来模拟表面光发射，这与用环境光等级模拟背景光的做法一致；再把它加到光源导致的表面反射和背景光照明上。\n\n若要让发光表面照明其他对象，可在其后放置方向光源生成通过该表面的光圆锥，或用分布在该表面上的一组点光源模拟。由于额外计算时间，基本光照模型一般不用发光表面照明其他表面，而宁愿把发光表面当作扩展光源来逼近以生成白炽效果；更有真实感的模型是辐射度模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000541"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "表面的光发射"
+              ],
+              "lineStart": 14542,
+              "lineEnd": 14547,
+              "assetRefs": [],
+              "excerptSha256": "d1c0dbeec7fcf7cdbfb2dbbc03aa82a60efec45edb9f95e87d812d61d4914430"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-emission-caveat",
+        "moduleId": "combine-multilight",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：发射项不等于全局光照",
+        "markdown": "发射项只增加该表面自身的亮度，不会自动把能量传给别的表面。因此“灯泡看起来亮”与“灯泡照亮房间”是两件事：前者由 $I_{\\mathrm{surfaceemission}}$ 完成，后者需要额外光源近似或全局光照方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-emission"
+          ]
+        }
+      },
+      {
+        "id": "textbook-attenuation",
+        "moduleId": "attenuation-general",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：含衰减与高光的通用模型",
+        "markdown": "包含多光源、衰减因子、方向光效果（高光）、无穷远光源和发光表面的通用单色照明模型为\n\n$$\nI = I_{\\mathrm{surfaceemission}} + I_{\\mathrm{ambdiff}} + \\sum_{l=1}^{n} f_{l,\\mathrm{radatten}} f_{l,\\mathrm{angatten}}\\left(I_{l,\\mathrm{diff}} + I_{l,\\mathrm{spec}}\\right)\n$$\n\n其中辐射衰减函数 $f_{l,\\mathrm{radatten}}$ 和角度衰减函数 $f_{l,\\mathrm{angatten}}$ 分别按点光源距离衰减与聚光方向衰减计算。每个光源的漫反射与镜面反射取\n\n$$\nI_{l,\\mathrm{diff}} = \\begin{cases} 0.0, & \\mathbf{N}\\cdot\\mathbf{L}_l \\le 0.0 \\\\ k_d I_l(\\mathbf{N}\\cdot\\mathbf{L}_l), & \\text{否则} \\end{cases}\n$$\n\n$$\nI_{l,\\mathrm{spec}} = \\begin{cases} 0.0, & \\mathbf{N}\\cdot\\mathbf{L}_l \\le 0.0 \\\\ k_s I_l\\max\\{0.0, (\\mathbf{N}\\cdot\\mathbf{H}_l)^{n_s}\\}, & \\text{否则} \\end{cases}\n$$\n\n为保证每个像素的光强不超过上限，可以给各项设置上限、把各项除以最大项的绝对值，或先算出场景各像素强度再按比例变换到 $0.0$ 到 $1.0$。也可调整衰减函数系数和表面参数；一般不允许强度超过 $1.0$，负值调整为 $0.0$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000542"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "考虑强度衰减和高光的基本光照模型"
+              ],
+              "lineStart": 14548,
+              "lineEnd": 14571,
+              "assetRefs": [],
+              "excerptSha256": "1a7b16295755fb9e310ce92ac0c8ec4278e68490ca579946da9f242dde541bb1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-clamp-and-attenuation",
+        "moduleId": "attenuation-general",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：衰减与强度规范化的工程含义",
+        "markdown": "衰减函数把“距离”和“方向”带进了光照模型：辐射衰减让同一光源随距离变暗，角度衰减让聚光灯只在锥形范围内有效。规范化则处理叠加后的越界问题——各光源贡献相加后可能超过 1，且负值没有物理意义，因此实现常在最后把结果截断或缩放到 $[0,1]$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attenuation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rgb",
+        "moduleId": "color-luminance",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：RGB 分量与镜面高光颜色",
+        "markdown": "RGB 描述下，光照模型中的每个强度是一个指定红、绿、蓝分量的三元素向量，例如 $I_l = (I_{lR}, I_{lG}, I_{lB})$；反射系数同样用 RGB 分量指定：$k_a = (k_{aR}, k_{aG}, k_{aB})$、$k_d = (k_{dR}, k_{dG}, k_{dB})$、$k_s = (k_{sR}, k_{sG}, k_{sB})$。表面颜色的每个分量用分开的表达式计算，例如点光源漫反射和镜面反射的蓝色分量为\n\n$$\nI_{lB,\\mathrm{diff}} = k_{dB} I_{lB}(\\mathbf{N}\\cdot\\mathbf{L}_l), \\qquad I_{lB,\\mathrm{spec}} = k_{sB} I_{lB}\\max\\{0.0, (\\mathbf{N}\\cdot\\mathbf{H}_l)^{n_s}\\}\n$$\n\n若希望表面呈蓝色，只需让 $k_{dB}$ 取非零值，并把红色和绿色反射分量置为 0，于是入射光中的红、绿分量被吸收，只反射蓝色分量。\n\nPhong 最初的镜面反射模型把 $k_s$ 设为与表面颜色无关的常量，这使镜面反射光颜色与入射光相同（通常为白色），表面看起来像塑料。对非塑料材料，镜面反射颜色是表面材质的函数，可能与入射光及漫反射光颜色不同；把镜面反射系数与颜色关联即可近似这些效果。\n\n另一做法是为每个表面定义漫反射和镜面反射的颜色向量 $(S_{dR},S_{dG},S_{dB})$ 与 $(S_{sR},S_{sG},S_{sB})$，而把反射参数定为单值常数，例如 $I_{lB,\\mathrm{diff}} = k_d S_{dB} I_{lB}(\\mathbf{N}\\cdot\\mathbf{L}_l)$。这样表面颜色参数可以独立于反射率设置。有些软件包还允许对一个光源赋以多种颜色，分别用于背景光、漫反射和镜面反射计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000543"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "RGB 颜色考虑"
+              ],
+              "lineStart": 14572,
+              "lineEnd": 14599,
+              "assetRefs": [],
+              "excerptSha256": "49e4a2c0f3d9524f2b6f1403b24fda32dbc0c09276afdaa671526b2b1dc4cf1f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rgb-explain",
+        "moduleId": "color-luminance",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：为什么金属高光带颜色",
+        "markdown": "可以用“高光是否带物体颜色”来快速判断材质感觉：$k_s$ 为与表面颜色无关的常量时，高光保持入射光颜色，看起来像塑料；把 $k_s$ 或镜面颜色向量与表面颜色关联后，高光被染上表面颜色，更接近金属。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rgb"
+          ]
+        }
+      },
+      {
+        "id": "textbook-other-color",
+        "moduleId": "color-luminance",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：其他颜色表示",
+        "markdown": "除 RGB 外还可以使用多种颜色模型：例如用青色、品红、黄色分量表示颜色，或用色彩、亮度、色饱和度描述颜色。光照模型可以使用其中任意一种表示，包括多于三个分量的描述；例如可把漫反射写成按波长 $\\lambda$ 表达的形式 $I_{l\\lambda,\\mathrm{diff}} = k_d S_{d\\lambda} I_{l\\lambda}(\\mathbf{N}\\cdot\\mathbf{L}_l)$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000544"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "其他颜色表示"
+              ],
+              "lineStart": 14600,
+              "lineEnd": 14611,
+              "assetRefs": [],
+              "excerptSha256": "997dcac6ef33805c4c5390da4ff626c46073777d3ae8504742ce35e6d2d4c9e2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-luminance",
+        "moduleId": "color-luminance",
+        "depth": "support",
+        "kind": "definition",
+        "title": "教材：亮度",
+        "markdown": "亮度（luminance）有时也称光能量，给出颜色亮或暗的程度，是观察光照时感知亮度变化的心理度量。物理上颜色用可见辐射的频率范围描述，亮度则按特定照明中强度成分的加权总和计算：由于实际照明包含连续波长，亮度为 $\\int_{\\mathrm{visible}} p(f) I(f)\\,\\mathrm{d}f$，其中 $I(f)$ 是特定方向辐射的波长 $f$ 的光成分，$p(f)$ 是按经验确定、随频率和光照程度变化的比例函数。\n\n灰度和单色显示只需用亮度描述光照。RGB 光源中绿色分量对亮度贡献最大、蓝色最小，常用 $Y = 0.299R + 0.587G + 0.114B$；有时增加绿色分量的贡献效果更好，一种推荐计算是 $0.2125R + 0.7154G + 0.0721B$。亮度参数常用 $Y$ 表示，对应 XYZ 颜色模型中的 Y 分量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000545"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "亮度"
+              ],
+              "lineStart": 14612,
+              "lineEnd": 14631,
+              "assetRefs": [],
+              "excerptSha256": "22611434eb82a45c9cb0b863a1f29a83eb38c2e43227b08bdb92b305344ec648"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-luminance-use",
+        "moduleId": "color-luminance",
+        "depth": "support",
+        "kind": "application",
+        "title": "模型补充：亮度公式的用途",
+        "markdown": "亮度公式把三通道颜色压成一个标量：需要灰度预览或单色显示时，用它比简单平均更符合人眼感受，因为绿色权重最大、蓝色最小。它也是判断“两种颜色看起来哪个更亮”的统一尺度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-luminance"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：诊断一处高光异常",
+        "markdown": "某球体用单点光源和 Phong 模型渲染，材质参数正常，但背光侧出现了一圈不该有的高光，而正面高光位置正确。请回答：\n\n1. 应该检查哪两个点积的符号条件？\n2. 如果法向量长度不为 1，会同时影响哪些项？\n3. 若把 $n_s$ 从 10 调到 100，正面高光会怎样变化？\n4. 若希望高光带表面颜色，RGB 三个分量应分别用 $k_{sR}$、$k_{sG}$、$k_{sB}$ 计算，还是共用一个 $k_s$？\n5. 要把这张彩色结果转成灰度，应怎样用亮度公式处理 RGB 结果？\n\n参考思路：先看 $\\mathbf{N}\\cdot\\mathbf{L}$ 是否为负（负值应按 0 处理），再看 $\\mathbf{V}\\cdot\\mathbf{R}$ 或 $\\mathbf{N}\\cdot\\mathbf{H}$ 是否为正；未归一化的法向量会让点积失真并破坏上限；$n_s$ 增大使高光更窄更集中。高光染色时按 RGB 分量分别使用对应的 $k_s$ 分量，或在单值 $k_s$ 下乘以镜面颜色向量；转灰度时用 $Y = 0.299R + 0.587G + 0.114B$ 把三通道压成一个亮度值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-diffuse",
+            "textbook-specular",
+            "textbook-combine",
+            "textbook-attenuation",
+            "textbook-rgb",
+            "textbook-luminance"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：基本光照模型的计算顺序",
+        "markdown": "实际计算可按固定顺序执行：先把 $\\mathbf{N}$、$\\mathbf{L}$、$\\mathbf{V}$、$\\mathbf{H}$ 归一化；取环境光项；对每个光源在 $\\mathbf{N}\\cdot\\mathbf{L}>0$ 时加漫反射，在 $\\mathbf{V}\\cdot\\mathbf{R}>0$（或 $\\mathbf{N}\\cdot\\mathbf{H}>0$）时加镜面反射；全部光源求和后加发射项并乘衰减；最后逐 RGB 分量截断到 $[0,1]$，需要灰度时再算亮度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-ambient",
+            "textbook-diffuse",
+            "textbook-specular",
+            "textbook-multilight",
+            "textbook-emission",
+            "textbook-attenuation",
+            "textbook-rgb",
+            "textbook-luminance"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "highlight-parameter-sweep",
+        "type": "parameter-explorer",
+        "title": "镜面指数与高光范围",
+        "anchorBlockId": "model-specular-intuition",
+        "moduleId": "specular-phong",
+        "depth": "support",
+        "outcomeRefs": [
+          "compute-shading",
+          "judge-validity"
+        ],
+        "learningPurpose": "通过切换镜面指数 n_s 与观察角 φ，观察 cos^{n_s}φ 如何改变高光宽度与峰值。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-specular",
+            "model-specular-intuition"
+          ]
+        },
+        "config": {
+          "parameters": [
+            {
+              "name": "n_s",
+              "values": [
+                1,
+                10,
+                100
+              ],
+              "note": "光滑表面取较大值，粗糙表面接近 1"
+            },
+            {
+              "name": "phi",
+              "range": [
+                0,
+                90
+              ],
+              "unit": "degree"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "在同一入射条件下比较 n_s=1、10、100 时 cos^{n_s}φ 随 φ 增大而衰减的速度：n_s 越大，高光越窄、峰值越集中。"
+        }
+      }
+    ]
+  },
+  "subtitle": "光照模型与面绘制算法",
+  "clusterId": "chapter-17",
+  "clusterIds": [
+    "chapter-17"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000535"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "基本光照模型"
+      ],
+      "lineStart": 14359,
+      "lineEnd": 14366,
+      "assetRefs": [
+        "parts/part-0005/images/551167e3139fe643318e68ce04382e2640f4d46e4d6108fd37330617cc589f8f.jpg"
+      ],
+      "excerptSha256": "ed995bbe0c428e088dd3f7c32207a739c4ca626e9729664ecdab6b6ae73685d9"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000536"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "环境光"
+      ],
+      "lineStart": 14367,
+      "lineEnd": 14374,
+      "assetRefs": [],
+      "excerptSha256": "6717a4c93fa2e618b0f3fb61a1ea8efe7d838f35fdd4a63846f83f5df0b0a635"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000537"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "漫反射"
+      ],
+      "lineStart": 14375,
+      "lineEnd": 14449,
+      "assetRefs": [
+        "parts/part-0005/images/424e59e42c33697afb809b23b5440d3b30bc833e80f14116c70c6006d0a61c13.jpg",
+        "parts/part-0005/images/8f8172875294856d87b7df60cf72331927fe3da317393546a791bdcd64f9cda4.jpg",
+        "parts/part-0005/images/61f2a64236f88a6e2ddb45e937483f55330cd0679982a6df01f97788f91c014f.jpg",
+        "parts/part-0005/images/6fb0f9c8cdbce7dd867b1db3b3afba0082cf8dfd1c1f7252a3f11258031b84df.jpg",
+        "parts/part-0005/images/26b2d870fb62edaa2f9aeb2e8030a1d288652c2c29bcb8b0b814146a93ecbbec.jpg"
+      ],
+      "excerptSha256": "15e862ae905a12543b3bf153eead62949a5e090f0b91aae30c99594e5362c89a"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000538"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "镜面反射和 Phong 模型"
+      ],
+      "lineStart": 14450,
+      "lineEnd": 14523,
+      "assetRefs": [
+        "parts/part-0005/images/7f545798d45d0638e75b32f6d16c3db2c0d9eed0b01c361876e6b0793d7dce11.jpg",
+        "parts/part-0005/images/af95b516d1782676a7aaa499ab87a05784c9dfd00daa4ac7778fe094a85fe6d6.jpg",
+        "parts/part-0005/images/71b30b6ce61aba0377696fd529d306f68d6100bb1f3639189a254d9070615973.jpg",
+        "parts/part-0005/images/64f89edb953412a863fd4e6db893d8feb41c6c3c1fc2116f064c24d034701542.jpg",
+        "parts/part-0005/images/01cb5fb68f4e08965a385a66e69dfcfcdf874510621004e824916f2df3cd4a36.jpg",
+        "parts/part-0005/images/a2356fdb1c3ff435422452e8eec5f5516844722546ac77d8170e79e0bd725c13.jpg",
+        "parts/part-0005/images/f46ef2fd7f04b7c5b28b891c07928ed05b21ff3b6548634cbca662df3ed2481f.jpg",
+        "parts/part-0005/images/0bbad80058a24c87220ad4e600e13f27a866f5d950ae14e7af72ea7ad332cd3e.jpg",
+        "parts/part-0005/images/ac3ab91c04b20124e706d918899a2557fd597a288170a86de12e03657b052753.jpg",
+        "parts/part-0005/images/a1270ef894ebdb69a0d0ff0e5acffcc9aa5414f1b52ea26a84e4323791091e09.jpg"
+      ],
+      "excerptSha256": "cce4aeaae1d5b8876b64eb194a0afb0a73bd1c3828ff34053467c1251ecfd91c"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000539"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "漫反射和镜面反射的合并"
+      ],
+      "lineStart": 14524,
+      "lineEnd": 14533,
+      "assetRefs": [],
+      "excerptSha256": "a30653eeccc4fe8dc83eccee842ab0290d02ffd896d44ad2bb5e085e88a1c7bd"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000540"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "多光源的漫反射和镜面反射"
+      ],
+      "lineStart": 14534,
+      "lineEnd": 14541,
+      "assetRefs": [],
+      "excerptSha256": "6959302ae94baffd4265745ee733bdedd3c63b0cca6b078b604bbd479cccfe1a"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000541"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "表面的光发射"
+      ],
+      "lineStart": 14542,
+      "lineEnd": 14547,
+      "assetRefs": [],
+      "excerptSha256": "d1c0dbeec7fcf7cdbfb2dbbc03aa82a60efec45edb9f95e87d812d61d4914430"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000542"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "考虑强度衰减和高光的基本光照模型"
+      ],
+      "lineStart": 14548,
+      "lineEnd": 14571,
+      "assetRefs": [],
+      "excerptSha256": "1a7b16295755fb9e310ce92ac0c8ec4278e68490ca579946da9f242dde541bb1"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000543"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "RGB 颜色考虑"
+      ],
+      "lineStart": 14572,
+      "lineEnd": 14599,
+      "assetRefs": [],
+      "excerptSha256": "49e4a2c0f3d9524f2b6f1403b24fda32dbc0c09276afdaa671526b2b1dc4cf1f"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000544"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "其他颜色表示"
+      ],
+      "lineStart": 14600,
+      "lineEnd": 14611,
+      "assetRefs": [],
+      "excerptSha256": "997dcac6ef33805c4c5390da4ff626c46073777d3ae8504742ce35e6d2d4c9e2"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000545"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "亮度"
+      ],
+      "lineStart": 14612,
+      "lineEnd": 14631,
+      "assetRefs": [],
+      "excerptSha256": "22611434eb82a45c9cb0b863a1f29a83eb38c2e43227b08bdb92b305344ec648"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2812,
+    433
+  ],
+  "scale": 0.94
+}

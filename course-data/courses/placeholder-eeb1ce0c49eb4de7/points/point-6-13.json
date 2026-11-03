@@ -1,0 +1,618 @@
+{
+  "id": "point-6-13",
+  "title": "不规则边界区域的填充方法",
+  "shortSummary": "从内部点出发填充不规则区域，比较边界填充与泛滥填充的区域定义方式、4/8 连通性选择、递归栈溢出风险和扫描线区段优化。",
+  "keyTerms": [
+    "边界填充",
+    "泛滥填充",
+    "种子填充",
+    "4-连通",
+    "8-连通",
+    "扫描线区段"
+  ],
+  "animationType": "rasterAlgorithmLab",
+  "animationSuggestion": "逐帧显示填充波前从内点向边界扩展，允许切换 4-连通与 8-连通以对比对角窄道的覆盖差异，并同步显示栈中保存的是像素还是水平区段及其数量变化。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的区域填充定义、算法步骤和风险提示为事实边界，围绕“选哪种方法、用哪种连通性、如何避免栈与漏填问题”重排讲解，并补充对照表、走查与判断题。",
+      "estimatedMinutes": 17,
+      "outcomes": [
+        {
+          "id": "explain-region-fill",
+          "text": "说明从内部点出发的区域填充需要哪些输入，以及它为何适合不规则边界。"
+        },
+        {
+          "id": "compare-boundary-flood",
+          "text": "按区域定义依据、终止条件和适用场景比较边界填充与泛滥填充。"
+        },
+        {
+          "id": "choose-connectivity",
+          "text": "根据区域内部连接结构选择 4-连通或 8-连通，并预判是否会留下未填充区域。"
+        },
+        {
+          "id": "assess-stack-risk",
+          "text": "识别递归栈溢出与已填充像素导致的漏填，并说明扫描线区段优化如何降低栈需求。"
+        }
+      ],
+      "misconceptions": [
+        "把种子填充等同于按边界颜色判断的边界填充，忽略泛滥填充依据的是内部颜色。",
+        "认为区域外形越复杂就必须使用 8-连通，而忽略了判断依据是内部像素的相邻方式。",
+        "认为改用扫描线区段法就不会再遇到栈问题，忽略破碎区域仍会产生大量区段。"
+      ],
+      "modules": [
+        {
+          "id": "region-fill-intuition",
+          "title": "问题导入与基本思路",
+          "role": "concept-intuition",
+          "description": "从内点向外填充的输入与出发点。",
+          "outcomeRefs": [
+            "explain-region-fill"
+          ],
+          "order": 0
+        },
+        {
+          "id": "boundary-fill-mechanism",
+          "title": "边界填充与连通性",
+          "role": "worked-mechanism",
+          "description": "边界颜色驱动的递归扩展及 4/8 连通差异。",
+          "outcomeRefs": [
+            "explain-region-fill",
+            "choose-connectivity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "recursion-risks-and-span-optimization",
+          "title": "递归风险与扫描线区段优化",
+          "role": "pitfall-and-optimization",
+          "description": "栈开销、漏填风险与区段法。",
+          "outcomeRefs": [
+            "assess-stack-risk"
+          ],
+          "order": 2
+        },
+        {
+          "id": "flood-fill-and-comparison",
+          "title": "泛滥填充与方法对照",
+          "role": "comparison",
+          "description": "内部颜色驱动的填充及两种方法的统一比较。",
+          "outcomeRefs": [
+            "compare-boundary-flood"
+          ],
+          "order": 3
+        },
+        {
+          "id": "application-and-check",
+          "title": "选择清单与达成检查",
+          "role": "practice-and-check",
+          "description": "用场景判断题检验选择规则。",
+          "outcomeRefs": [
+            "choose-connectivity",
+            "compare-boundary-flood",
+            "assess-stack-risk"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-region-fill",
+          "compare-boundary-flood",
+          "choose-connectivity",
+          "assess-stack-risk"
+        ],
+        "method": "完成场景判断题，并为方法、连通性和预处理各写出教材依据。",
+        "successCriteria": [
+          "能正确区分边界填充与泛滥填充的终止条件",
+          "能根据对角窄道判断需要 8-连通",
+          "能指出递归栈风险与扫描线区段优化的作用"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-6-14"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-region-idea",
+        "kind": "explanation",
+        "title": "教材：从内点向外填充的基本思路",
+        "markdown": "教材把区域填充的另一种方式描述为：从区域的一个内部点出发，由内向外逐点绘制，直到碰到边界。这类方法适合绘画程序生成的、边界不规则且难以用解析曲线描述的区域。执行前至少需要两类信息：待填充区域内的一个起始位置，以及关于边界颜色或内部颜色的信息。填充内容可以是单一颜色，也可以是颜色图案；图案填充相当于把颜色掩模叠加到区域上，按掩模值决定每个像素的颜色。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000200"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "不规则边界区域的填充方法"
+              ],
+              "lineStart": 5234,
+              "lineEnd": 5239,
+              "assetRefs": [],
+              "excerptSha256": "f4899102a5f3a17b46c2b800ecaf7daf08d8c8a1bfd059d6a2b397df84896821"
+            }
+          ]
+        },
+        "moduleId": "region-fill-intuition",
+        "depth": "core"
+      },
+      {
+        "id": "model-region-inputs",
+        "kind": "note",
+        "title": "模型补充：把方法拆成三个可检查的问题",
+        "markdown": "把上述过程当作状态扩散，可以固定检查三项：起点是否确实落在待填充区域内；用什么条件判断“区域到此结束”（边界颜色还是内部颜色）；允许向哪些方向扩散（四邻域还是含对角）。这三项分别决定填充能否启动、在哪里停止以及能否覆盖完整区域，也是比较边界填充与泛滥填充的统一维度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-region-idea"
+          ]
+        },
+        "moduleId": "region-fill-intuition",
+        "depth": "support"
+      },
+      {
+        "id": "tb-boundary",
+        "kind": "procedure",
+        "title": "教材：边界填充算法",
+        "markdown": "当边界由单一颜色指定时，可以从内点 $(x, y)$ 开始逐个检测相邻位置：如果该位置不是边界颜色，就把它改成填充颜色，并继续检测它的相邻位置；检测到边界颜色即停止这一分支。教材称这种把填充色向边界推进的方法为边界填充算法（boundary-fill algorithm）。它便于在交互式绘画软件中使用：用户先勾勒轮廓、选择填充色与边界色并指定一个内点，然后由算法在内部涂色。内边界和外边界可以共同围出待填充区域。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000201"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "边界填充算法"
+              ],
+              "lineStart": 5240,
+              "lineEnd": 5282,
+              "assetRefs": [
+                "parts/part-0002/images/f0328bb7de3f99a1ac898f21b9f61481b4cf1792ad867b150936468b27221079.jpg",
+                "parts/part-0002/images/afe3ff0d37145844d51462af432a882d1bb3929d45d3edb276de150e8bbf7599.jpg",
+                "parts/part-0002/images/c851f76218aa75d8bb996f1e3d99029d99768af11f73bd28da0042a863abe1d1.jpg",
+                "parts/part-0002/images/9ef1bf5f00544a7810211e1f14576a6e72e7863d038986ba148e4aafb57df86f.jpg",
+                "parts/part-0002/images/2a77d8603eb24f9b2f11c214576ceef9c7058bf35670ebab6f5d5fab98263789.jpg",
+                "parts/part-0002/images/d4b4dd143bcc232d90c5bd9c7f357d0864838ebee01784d2414978d347cc4fc8.jpg",
+                "parts/part-0002/images/3907ea140a742dedfe89d14f75aec954046062fad2bf4f9527ef8a3daacc1e72.jpg",
+                "parts/part-0002/images/26fcd7f12846aca965487cc258bafb4be948b6bb0277ad324cab143caa394c12.jpg",
+                "parts/part-0002/images/6c35952d11506e7540ca8883aa57f0e543e2ab46e4072ca244fb0a580659c166.jpg"
+              ],
+              "excerptSha256": "2c12d375feb334c602d7c4ead8d110dfe6afa80304a7b7c64572aba7c9b59612"
+            }
+          ]
+        },
+        "moduleId": "boundary-fill-mechanism",
+        "depth": "core"
+      },
+      {
+        "id": "model-boundary-walk",
+        "kind": "worked-example",
+        "title": "模型补充：一次四连通填充的走查",
+        "markdown": "设想一条扫描线上的像素为 `B W W W B`，其中 `B` 是边界色、`W` 是内部色，起点取中间的 `W`。按四连通规则，算法先把起点改为填充色，再检查右、左、上、下四个邻点；左右两侧仍是内部色就继续扩展，直到两端的 `B` 截断分支。判断是否填完的关键不是“涂了多远”，而是每个方向是否被边界颜色截断。如果区域只有斜向相连的通道，四连通不会跨过去，这正是需要选择连通性的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-boundary"
+          ]
+        },
+        "moduleId": "boundary-fill-mechanism",
+        "depth": "support"
+      },
+      {
+        "id": "tb-connectivity",
+        "kind": "comparison",
+        "title": "教材：四连通与八连通",
+        "markdown": "边界填充每次检测的邻点集合决定填充区域被称为 4-连通还是 8-连通区域。4-连通只检测当前像素右、左、上、下四个邻点；8-连通还检测四个对角邻点。教材指出，对同一复杂区域，8-连通边界填充能够完整填充内部，而 4-连通算法只能完成部分填充。把递归过程扩充为 8-连通只需增加 (x±1, y±1) 等对角位置的测试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000201"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "边界填充算法"
+              ],
+              "lineStart": 5240,
+              "lineEnd": 5282,
+              "assetRefs": [
+                "parts/part-0002/images/f0328bb7de3f99a1ac898f21b9f61481b4cf1792ad867b150936468b27221079.jpg",
+                "parts/part-0002/images/afe3ff0d37145844d51462af432a882d1bb3929d45d3edb276de150e8bbf7599.jpg",
+                "parts/part-0002/images/c851f76218aa75d8bb996f1e3d99029d99768af11f73bd28da0042a863abe1d1.jpg",
+                "parts/part-0002/images/9ef1bf5f00544a7810211e1f14576a6e72e7863d038986ba148e4aafb57df86f.jpg",
+                "parts/part-0002/images/2a77d8603eb24f9b2f11c214576ceef9c7058bf35670ebab6f5d5fab98263789.jpg",
+                "parts/part-0002/images/d4b4dd143bcc232d90c5bd9c7f357d0864838ebee01784d2414978d347cc4fc8.jpg",
+                "parts/part-0002/images/3907ea140a742dedfe89d14f75aec954046062fad2bf4f9527ef8a3daacc1e72.jpg",
+                "parts/part-0002/images/26fcd7f12846aca965487cc258bafb4be948b6bb0277ad324cab143caa394c12.jpg",
+                "parts/part-0002/images/6c35952d11506e7540ca8883aa57f0e543e2ab46e4072ca244fb0a580659c166.jpg"
+              ],
+              "excerptSha256": "2c12d375feb334c602d7c4ead8d110dfe6afa80304a7b7c64572aba7c9b59612"
+            }
+          ]
+        },
+        "moduleId": "boundary-fill-mechanism",
+        "depth": "core"
+      },
+      {
+        "id": "model-connectivity-rule",
+        "kind": "comparison",
+        "title": "模型补充：连通性的选择规则",
+        "markdown": "选择连通性应看区域内部的连接结构，而不是外形是否复杂。若内部像素只通过上下左右相接，4-连通已经足够；若存在只能靠对角相邻才连通的窄道，4-连通会把它视为不可达而留下缺口，此时需要 8-连通。代价是每个已填充像素要检测的邻点从 4 个增加到 8 个，递归或队列中的候选数量也随之增加。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-connectivity"
+          ]
+        },
+        "moduleId": "boundary-fill-mechanism",
+        "depth": "support"
+      },
+      {
+        "id": "tb-recursion-gap",
+        "kind": "warning",
+        "title": "教材：递归实现的两个风险",
+        "markdown": "教材给出的四连通边界填充是递归过程：对每个待处理像素调用自身，因此需要大量堆栈空间保存相邻点。另一个风险来自已经具有填充颜色的内部像素：算法会同时按边界颜色和填充颜色判断是否继续，遇到填充颜色就终止该分支，于是尚未处理的内点可能被留下。教材建议在调用边界填充前，先把那些初始颜色恰好等于填充颜色的内部像素改成别的颜色，避免误判。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000201"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "边界填充算法"
+              ],
+              "lineStart": 5240,
+              "lineEnd": 5282,
+              "assetRefs": [
+                "parts/part-0002/images/f0328bb7de3f99a1ac898f21b9f61481b4cf1792ad867b150936468b27221079.jpg",
+                "parts/part-0002/images/afe3ff0d37145844d51462af432a882d1bb3929d45d3edb276de150e8bbf7599.jpg",
+                "parts/part-0002/images/c851f76218aa75d8bb996f1e3d99029d99768af11f73bd28da0042a863abe1d1.jpg",
+                "parts/part-0002/images/9ef1bf5f00544a7810211e1f14576a6e72e7863d038986ba148e4aafb57df86f.jpg",
+                "parts/part-0002/images/2a77d8603eb24f9b2f11c214576ceef9c7058bf35670ebab6f5d5fab98263789.jpg",
+                "parts/part-0002/images/d4b4dd143bcc232d90c5bd9c7f357d0864838ebee01784d2414978d347cc4fc8.jpg",
+                "parts/part-0002/images/3907ea140a742dedfe89d14f75aec954046062fad2bf4f9527ef8a3daacc1e72.jpg",
+                "parts/part-0002/images/26fcd7f12846aca965487cc258bafb4be948b6bb0277ad324cab143caa394c12.jpg",
+                "parts/part-0002/images/6c35952d11506e7540ca8883aa57f0e543e2ab46e4072ca244fb0a580659c166.jpg"
+              ],
+              "excerptSha256": "2c12d375feb334c602d7c4ead8d110dfe6afa80304a7b7c64572aba7c9b59612"
+            }
+          ]
+        },
+        "moduleId": "recursion-risks-and-span-optimization",
+        "depth": "core"
+      },
+      {
+        "id": "model-gap-example",
+        "kind": "note",
+        "title": "模型补充：为什么会漏填",
+        "markdown": "可以把填充色理解为“已经访问过”的标记，这样就能看出递归需要区分“尚未处理”和“已经处理”。如果区域中原本就有像素等于填充色，算法无法区分两者，只能保守地终止分支。预先把这些像素改成临时颜色，相当于恢复它们的“未访问”状态；填充结束后再按需要恢复原色或统一着色即可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-recursion-gap"
+          ]
+        },
+        "moduleId": "recursion-risks-and-span-optimization",
+        "depth": "support"
+      },
+      {
+        "id": "tb-span-method",
+        "kind": "procedure",
+        "title": "教材：用扫描线区段减少堆栈",
+        "markdown": "为降低堆栈开销，教材改用沿扫描线填充水平像素区段的方法：先填充初始内点所在扫描行的连续区段，再把相邻扫描线上由边界颜色围住的水平段起始位置压栈；之后每次从栈顶取出一个起始点，重复填充该区段并压入新的相邻段起点。这样栈中只保存“每个水平区段的起始位置”，而不必把当前点周围所有未处理邻点都入栈。教材图 6.55 以四连通区域为例，展示了先向上逐行处理、再向下处理剩余区段，以及各阶段栈中保存的区段位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000201"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "边界填充算法"
+              ],
+              "lineStart": 5240,
+              "lineEnd": 5282,
+              "assetRefs": [
+                "parts/part-0002/images/f0328bb7de3f99a1ac898f21b9f61481b4cf1792ad867b150936468b27221079.jpg",
+                "parts/part-0002/images/afe3ff0d37145844d51462af432a882d1bb3929d45d3edb276de150e8bbf7599.jpg",
+                "parts/part-0002/images/c851f76218aa75d8bb996f1e3d99029d99768af11f73bd28da0042a863abe1d1.jpg",
+                "parts/part-0002/images/9ef1bf5f00544a7810211e1f14576a6e72e7863d038986ba148e4aafb57df86f.jpg",
+                "parts/part-0002/images/2a77d8603eb24f9b2f11c214576ceef9c7058bf35670ebab6f5d5fab98263789.jpg",
+                "parts/part-0002/images/d4b4dd143bcc232d90c5bd9c7f357d0864838ebee01784d2414978d347cc4fc8.jpg",
+                "parts/part-0002/images/3907ea140a742dedfe89d14f75aec954046062fad2bf4f9527ef8a3daacc1e72.jpg",
+                "parts/part-0002/images/26fcd7f12846aca965487cc258bafb4be948b6bb0277ad324cab143caa394c12.jpg",
+                "parts/part-0002/images/6c35952d11506e7540ca8883aa57f0e543e2ab46e4072ca244fb0a580659c166.jpg"
+              ],
+              "excerptSha256": "2c12d375feb334c602d7c4ead8d110dfe6afa80304a7b7c64572aba7c9b59612"
+            }
+          ]
+        },
+        "moduleId": "recursion-risks-and-span-optimization",
+        "depth": "core"
+      },
+      {
+        "id": "model-span-stack",
+        "kind": "explanation",
+        "title": "模型补充：堆栈项从像素变成区段",
+        "markdown": "逐像素递归时，每个待处理像素都可能对应一个栈项；区段方法把同一扫描行上连续的一段压缩成一个栈项。区域越宽、水平连续段越长，压缩效果越明显，因此它能显著降低栈需求。但压缩不等于消除：区域越破碎，相邻扫描线之间的区段越多，栈项仍会增加，所以实现时仍需按实际区域规模评估递归深度，或改用显式栈。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-span-method"
+          ]
+        },
+        "moduleId": "recursion-risks-and-span-optimization",
+        "depth": "support"
+      },
+      {
+        "id": "tb-flood-fill",
+        "kind": "definition",
+        "title": "教材：泛滥填充算法",
+        "markdown": "当待填充区域不是由单一颜色边界定义，或需要对已有区域重新涂色时，教材采用泛滥填充算法（flood-fill algorithm）。图 6.56 的区域由多条不同颜色的色带围成，此时不再搜索边界颜色，而是替换指定的内部颜色：从内点 (x, y) 开始，把所有当前为给定内部颜色的像素改成填充颜色，再按 4-连通或 8-连通逐步扩展，直到所有内部点都被涂色。若区域包含多种内部颜色，需要先把它们重设为同一种内部颜色，再执行泛滥填充。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000202"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "泛滥填充算法"
+              ],
+              "lineStart": 5283,
+              "lineEnd": 5306,
+              "assetRefs": [
+                "parts/part-0002/images/3d0e4a829148e033b557cac06d856a2be7a0eff61c99ca42b9d7882182119f97.jpg"
+              ],
+              "excerptSha256": "563ee5140c6a17a3c35a0948d01758ae4893edddb67af417fd08e94c07caadf4"
+            }
+          ]
+        },
+        "moduleId": "flood-fill-and-comparison",
+        "depth": "core"
+      },
+      {
+        "id": "tb-flood-code",
+        "kind": "code",
+        "title": "教材：四连通泛滥填充的递归过程",
+        "markdown": "教材给出了从输入位置开始递归填充 4-连通区域的过程；这里按原意整理为可直接阅读的形式：\n\n```c\nvoid floodFill4(int x, int y, int fillColor, int interiorColor)\n{\n    int color;\n    getPixel(x, y, color);\n    if (color == interiorColor) {\n        setPixel(x, y, fillColor);\n        floodFill4(x + 1, y, fillColor, interiorColor);\n        floodFill4(x - 1, y, fillColor, interiorColor);\n        floodFill4(x, y + 1, fillColor, interiorColor);\n        floodFill4(x, y - 1, fillColor, interiorColor);\n    }\n}\n```\n\n只有当前像素仍是内部颜色时才涂色并继续递归；填充后再次进入同一位置不会重复涂色。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000202"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "泛滥填充算法"
+              ],
+              "lineStart": 5283,
+              "lineEnd": 5306,
+              "assetRefs": [
+                "parts/part-0002/images/3d0e4a829148e033b557cac06d856a2be7a0eff61c99ca42b9d7882182119f97.jpg"
+              ],
+              "excerptSha256": "563ee5140c6a17a3c35a0948d01758ae4893edddb67af417fd08e94c07caadf4"
+            }
+          ]
+        },
+        "moduleId": "flood-fill-and-comparison",
+        "depth": "support"
+      },
+      {
+        "id": "model-fill-compare",
+        "kind": "comparison",
+        "title": "模型补充：两种填充方法的对照",
+        "markdown": "| 维度 | 边界填充 | 泛滥填充 |\n|---|---|---|\n| 区域定义依据 | 单一颜色的边界 | 指定的内部颜色，边界可以由多种颜色组成 |\n| 判断是否继续 | 遇到边界颜色或已填充颜色就停止该分支 | 像素不再等于指定内部颜色就停止 |\n| 适合的场景 | 交互式绘画软件中先勾轮廓再填色 | 已有区域重新涂色、多色边界围成的区域 |\n| 共同前提 | 需要区域内的起始位置和颜色信息 | 需要区域内的起始位置和颜色信息 |\n| 共同风险 | 递归栈开销、已填充像素被误判 | 递归栈开销、多内部色需要先统一 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-flood-fill",
+            "tb-flood-code"
+          ]
+        },
+        "moduleId": "flood-fill-and-comparison",
+        "depth": "core"
+      },
+      {
+        "id": "model-flood-span",
+        "kind": "note",
+        "title": "模型补充：泛滥填充也能用区段法",
+        "markdown": "泛滥填充也能使用同样的区段优化：只保存内部颜色像素区段的起始位置，从每个区间的第一个位置开始替换像素值，直到遇到不再是内部颜色的位置。与边界填充的区段版本相比，步骤相同，区别只在停止条件——边界填充看边界颜色，泛滥填充看像素是否仍匹配内部颜色。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-span-method",
+            "tb-flood-code"
+          ]
+        },
+        "moduleId": "flood-fill-and-comparison",
+        "depth": "support"
+      },
+      {
+        "id": "model-summary",
+        "kind": "summary",
+        "title": "模型补充：方法选择清单",
+        "markdown": "选择填充方法时依次问四件事：\n1. 区域由单一颜色边界定义，还是由内部颜色或多色边界定义？前者用边界填充，后者用泛滥填充。\n2. 内部是否存在只靠对角相邻才连通的窄道？有则用 8-连通，否则 4-连通通常足够。\n3. 区域内是否已有等于填充色的像素？有则先改成临时颜色，避免递归提前终止。\n4. 区域较大或形状破碎时，继续用逐像素递归还是改用扫描线区段或显式栈？后者能降低栈溢出风险。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-boundary",
+            "tb-connectivity",
+            "tb-recursion-gap",
+            "tb-span-method",
+            "tb-flood-fill",
+            "tb-flood-code"
+          ]
+        },
+        "moduleId": "application-and-check",
+        "depth": "core"
+      },
+      {
+        "id": "model-exercise",
+        "kind": "exercise",
+        "title": "模型补充：场景判断题",
+        "markdown": "一个区域由两种颜色的色带围成，内部已有若干像素恰好等于将要使用的填充色，并且有一段只能沿对角线连通的窄道。请回答：\n1. 应选边界填充还是泛滥填充？\n2. 应使用 4-连通还是 8-连通？\n3. 填充前需要先做什么预处理？\n\n参考要点：选泛滥填充，因为区域不是由单一颜色边界定义；选 8-连通，否则对角窄道不可达；先把内部等于填充色的像素改成临时颜色，避免递归把已填充色误判为终止条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-summary",
+            "tb-boundary",
+            "tb-connectivity",
+            "tb-recursion-gap",
+            "tb-flood-fill"
+          ]
+        },
+        "moduleId": "application-and-check",
+        "depth": "core"
+      },
+      {
+        "id": "model-next-bridge",
+        "kind": "note",
+        "title": "模型补充：与下一知识点的衔接",
+        "markdown": "区段法把不规则区域化成扫描线上的一组水平段。下一知识点将讨论填充模式：图案掩模、影线和颜色调和如何决定这些区段内每个像素的最终颜色，从而把“填满区域”推进到“按图案和透明度填满区域”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-summary"
+          ]
+        },
+        "moduleId": "application-and-check",
+        "depth": "support"
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "choose-fill-method-check",
+        "type": "formative-check",
+        "title": "场景判断题：方法、连通性与预处理",
+        "anchorBlockId": "model-exercise",
+        "moduleId": "application-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-boundary-flood",
+          "choose-connectivity",
+          "assess-stack-risk"
+        ],
+        "learningPurpose": "检查学习者能否把两种填充方法与连通性规则迁移到多色边界、已有填充色和对角窄道同时出现的情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-boundary",
+            "tb-connectivity",
+            "tb-recursion-gap",
+            "tb-flood-fill",
+            "model-summary"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出方法选择、连通性选择和填充前的预处理步骤，并各说明一条教材依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "实现图元及属性的算法",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000200"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "不规则边界区域的填充方法"
+      ],
+      "lineStart": 5234,
+      "lineEnd": 5239,
+      "assetRefs": [],
+      "excerptSha256": "f4899102a5f3a17b46c2b800ecaf7daf08d8c8a1bfd059d6a2b397df84896821"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000201"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "边界填充算法"
+      ],
+      "lineStart": 5240,
+      "lineEnd": 5282,
+      "assetRefs": [
+        "parts/part-0002/images/f0328bb7de3f99a1ac898f21b9f61481b4cf1792ad867b150936468b27221079.jpg",
+        "parts/part-0002/images/afe3ff0d37145844d51462af432a882d1bb3929d45d3edb276de150e8bbf7599.jpg",
+        "parts/part-0002/images/c851f76218aa75d8bb996f1e3d99029d99768af11f73bd28da0042a863abe1d1.jpg",
+        "parts/part-0002/images/9ef1bf5f00544a7810211e1f14576a6e72e7863d038986ba148e4aafb57df86f.jpg",
+        "parts/part-0002/images/2a77d8603eb24f9b2f11c214576ceef9c7058bf35670ebab6f5d5fab98263789.jpg",
+        "parts/part-0002/images/d4b4dd143bcc232d90c5bd9c7f357d0864838ebee01784d2414978d347cc4fc8.jpg",
+        "parts/part-0002/images/3907ea140a742dedfe89d14f75aec954046062fad2bf4f9527ef8a3daacc1e72.jpg",
+        "parts/part-0002/images/26fcd7f12846aca965487cc258bafb4be948b6bb0277ad324cab143caa394c12.jpg",
+        "parts/part-0002/images/6c35952d11506e7540ca8883aa57f0e543e2ab46e4072ca244fb0a580659c166.jpg"
+      ],
+      "excerptSha256": "2c12d375feb334c602d7c4ead8d110dfe6afa80304a7b7c64572aba7c9b59612"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000202"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "泛滥填充算法"
+      ],
+      "lineStart": 5283,
+      "lineEnd": 5306,
+      "assetRefs": [
+        "parts/part-0002/images/3d0e4a829148e033b557cac06d856a2be7a0eff61c99ca42b9d7882182119f97.jpg"
+      ],
+      "excerptSha256": "563ee5140c6a17a3c35a0948d01758ae4893edddb67af417fd08e94c07caadf4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3692,
+    2471
+  ],
+  "scale": 0.86
+}

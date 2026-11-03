@@ -1,0 +1,722 @@
+{
+  "id": "point-6-4",
+  "title": "圆生成算法",
+  "shortSummary": "讲解中点圆算法的判别式推导、八分对称性和整数增量实现，并说明误差如何被控制。",
+  "keyTerms": [
+    "中点圆算法",
+    "八分对称",
+    "判别式"
+  ],
+  "animationType": "rasterAlgorithmLab",
+  "animationSuggestion": "逐步显示两个候选像素的中点、p 的符号与更新后的 (x, y)，同步高亮八个对称点，并允许重播同一条像素轨迹以对照 p 的摆动。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的圆方程、圆函数与六步流程，围绕“从实数公式到整数循环”这条主线重排讲解，补充符号判据的几何读法、r=6 的手算检查与误差上界说明。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "o-circle-baseline",
+          "text": "解释圆的隐式方程与直接步进求值在光栅绘制中的两个具体困难。"
+        },
+        {
+          "id": "o-symmetry-octant",
+          "text": "说明八分对称如何把整圆的计算范围压缩到 x 从 0 到 x=y 的一段。"
+        },
+        {
+          "id": "o-decision-derive",
+          "text": "用圆函数的符号推导中点判别式，并写出整数增量递推式。"
+        },
+        {
+          "id": "o-procedure-implement",
+          "text": "按整数步骤复现给定半径与圆心的圆生成过程，并解释每次像素选择。"
+        },
+        {
+          "id": "o-error-tradeoff",
+          "text": "评估中点法的误差上界、整数化条件及其相对其他圆生成思路的取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为中点圆算法每一步仍需要计算平方或开方。",
+        "把判别式 p_k 当作像素到圆周的欧氏距离，而不是带符号的位置判据。",
+        "认为八分对称只要对坐标取负即可，忽略了 x 与 y 必须互换才能覆盖其余四个八分圆。",
+        "认为 p0 从 5/4 - r 改成 1 - r 是粗略近似，会改变像素选择。"
+      ],
+      "modules": [
+        {
+          "id": "baseline",
+          "title": "问题导入与基线方法",
+          "role": "motivation",
+          "description": "从圆方程、直接求值与极坐标参数法出发，说明为什么需要新的光栅算法。",
+          "outcomeRefs": [
+            "o-circle-baseline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "symmetry",
+          "title": "八分对称与计算范围",
+          "role": "concept",
+          "description": "用对称性把整圆压缩到一个八分圆，并给出八个对称点的坐标映射。",
+          "outcomeRefs": [
+            "o-symmetry-octant"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decision",
+          "title": "圆函数与判别式推导",
+          "role": "derivation",
+          "description": "定义圆函数，比较候选像素中点，推导向量化的整数增量与初始判别式。",
+          "outcomeRefs": [
+            "o-decision-derive"
+          ],
+          "order": 2
+        },
+        {
+          "id": "procedure",
+          "title": "整数化步骤与循环实现",
+          "role": "procedure",
+          "description": "把判别式写成六步流程和循环骨架，明确终止条件与状态变量。",
+          "outcomeRefs": [
+            "o-procedure-implement"
+          ],
+          "order": 3
+        },
+        {
+          "id": "worked-example",
+          "title": "r=10 算例与教材程序",
+          "role": "worked-example",
+          "description": "逐行核对教材算例与程序结构，并通过 r=6 的手算练习检查掌握程度。",
+          "outcomeRefs": [
+            "o-procedure-implement",
+            "o-error-tradeoff"
+          ],
+          "order": 4
+        },
+        {
+          "id": "error-tradeoff",
+          "title": "误差边界与方案取舍",
+          "role": "synthesis",
+          "description": "总结半个像素间隔的误差上界与整数运算前提，并比较三类圆生成思路。",
+          "outcomeRefs": [
+            "o-decision-derive",
+            "o-error-tradeoff"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-circle-baseline",
+          "o-symmetry-octant",
+          "o-decision-derive",
+          "o-procedure-implement",
+          "o-error-tradeoff"
+        ],
+        "method": "独立完成 r=6 的整数增量手算，并用 p 的符号解释每次像素选择。",
+        "successCriteria": [
+          "像素序列与 p 序列正确",
+          "能说明 p 由负转非负时 y 与 2y 的变化",
+          "能指出八分对称与圆心平移在流程中的位置"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "summaryBlockId": "model-tradeoff-summary",
+        "nextPointId": "point-6-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-usage-intro",
+        "moduleId": "baseline",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材引入：圆为什么值得单独研究",
+        "markdown": "圆是图形系统中使用频率最高的图元之一，多数图形软件包都提供生成圆和圆弧的函数，有些还提供可同时绘制圆和椭圆的通用曲线函数。\n\n因此，圆生成算法的目标很具体：在光栅屏幕上，用尽量少的运算选出一圈既连续又贴合圆周的像素。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000175"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "圆生成算法"
+              ],
+              "lineStart": 4300,
+              "lineEnd": 4303,
+              "assetRefs": [],
+              "excerptSha256": "5175cd898d6d97291f34d9e585060e7b935f04f98d191e2c1ad6fb707305b5db"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-route-map",
+        "moduleId": "baseline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：本点的三个连续决定",
+        "markdown": "要理解中点圆算法，可以把它拆成三个连续的决定：\n\n1. **缩小计算范围**：先用八分对称把整圆压缩成第一象限 $x \\in [0, x=y]$ 的一段；\n2. **替代昂贵运算**：把平方、开方和三角函数换成整数加减；\n3. **用中点判据控制误差**：每一步只判断两个候选像素的中点落在圆内还是圆外。\n\n后文按这个顺序展开：先看直接求值的问题，再看对称性，最后推导判别式并写成整数循环。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-usage-intro"
+          ]
+        }
+      },
+      {
+        "id": "textbook-circle-equation",
+        "moduleId": "baseline",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：圆方程与两种直接求值思路",
+        "markdown": "教材把圆定义为到圆心 $(x_c, y_c)$ 距离恒为 $r$ 的点集，由勾股定理得到隐式方程：\n\n$$(x - x_c)^2 + (y - y_c)^2 = r^2$$\n\n若沿 $x$ 轴以单位步长从 $x_c - r$ 走到 $x_c + r$，可由方程反解 $y$：\n\n$$y = y_c \\pm \\sqrt{r^2 - (x_c - x)^2}$$\n\n这条路线有两个问题：每一步都包含平方与开方，计算量大；而且当圆趋于竖直、斜率绝对值大于 1 后，等步长 $x$ 得到的像素间距会明显不均。交换 $x$ 与 $y$ 的步进方向可以改善间距，但又增加了分支和处理过程。\n\n教材还给出极坐标参数形式：\n\n$$x = x_c + r\\cos\\theta, \\qquad y = y_c + r\\sin\\theta$$\n\n以固定角度为步长时点沿圆周等距，取角度间隔 $1/r$ 可让像素大约相隔一个单位，但三角函数的计算同样耗时。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "圆的特性"
+              ],
+              "lineStart": 4304,
+              "lineEnd": 4346,
+              "assetRefs": [
+                "parts/part-0002/images/efe7ae05ce6d7b86b7439871c5303b35b5f43688db5b63ec44c7b0a03d200bb7.jpg",
+                "parts/part-0002/images/2225160fce22c355010e23262a816a09edf7b9d365f3a066238b74cd3e3e8171.jpg",
+                "parts/part-0002/images/033c57982ad168c18e0cfbb24d5cc7d94c5e2f157d03e3bf147d9d9f7aac8a94.jpg"
+              ],
+              "excerptSha256": "c6fee3f2f7d5102a99ae923ef23423a370e0676b37074957bb3ac7e665fdbc30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-spacing-demo",
+        "moduleId": "baseline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：间距不均来自斜率变化",
+        "markdown": "间距不均可以直接从切线斜率读出。对上半圆 $y = \\sqrt{r^2 - x^2}$ 求导得 $\\frac{dy}{dx} = -\\frac{x}{y}$：\n\n- 在 $x = 0$ 附近斜率为 0，$x$ 每加 1，$y$ 几乎不变，像素沿水平方向排布；\n- 当 $x$ 接近 $r$ 时 $y \\to 0$，斜率绝对值迅速增大，同样的 $x$ 步长会让 $y$ 跌落很多，像素之间出现肉眼可见的空隙。\n\n所以“按 $x$ 单位步长求 $y$”在圆的顶部稀疏、在侧面拥挤，正好与均匀像素间距的要求相反；而按斜率切换步进轴又让分支逻辑复杂化，这才逼出了整数量化的判别式路线。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-circle-equation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-octant-symmetry",
+        "moduleId": "symmetry",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：八分对称把整圆缩成一段圆弧",
+        "markdown": "教材指出，圆的形状在每个象限中相似，因此只需计算一个八分圆，其余部分可由对称性映射得到。\n\n具体来说，第一象限的圆弧关于 $y$ 轴对称得到第二象限；第一、二象限的圆弧关于 $x$ 轴对称得到第三、四象限；同一象限内相邻的八分圆又关于分割两部分的 $45^\\circ$ 直线对称。最终只需计算 $x = 0$ 到 $x = y$ 这一段：该段圆弧斜率的绝对值不超过 $1.0$，$x = 0$ 时斜率为 0，$x = y$ 时斜率为 $-1.0$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "圆的特性"
+              ],
+              "lineStart": 4304,
+              "lineEnd": 4346,
+              "assetRefs": [
+                "parts/part-0002/images/efe7ae05ce6d7b86b7439871c5303b35b5f43688db5b63ec44c7b0a03d200bb7.jpg",
+                "parts/part-0002/images/2225160fce22c355010e23262a816a09edf7b9d365f3a066238b74cd3e3e8171.jpg",
+                "parts/part-0002/images/033c57982ad168c18e0cfbb24d5cc7d94c5e2f157d03e3bf147d9d9f7aac8a94.jpg"
+              ],
+              "excerptSha256": "c6fee3f2f7d5102a99ae923ef23423a370e0676b37074957bb3ac7e665fdbc30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-symmetry-mapping",
+        "moduleId": "symmetry",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：八个对称点的坐标映射",
+        "markdown": "设第一八分圆上已求出一点 $(x, y)$，其余七个对称点由坐标互换与变号得到：\n\n| 位置 | 对称点 |\n|---|---|\n| 第一象限靠上 | $(x, y)$ |\n| 第一象限靠右 | $(y, x)$ |\n| 第二象限靠上 | $(-x, y)$ |\n| 第二象限靠右 | $(-y, x)$ |\n| 第三象限靠下 | $(-x, -y)$ |\n| 第三象限靠左 | $(-y, -x)$ |\n| 第四象限靠下 | $(x, -y)$ |\n| 第四象限靠左 | $(y, -x)$ |\n\n注意“靠右”的四个点必须交换 $x$ 与 $y$，否则只能覆盖 $|x| = |y|$ 这条线上的少数点。每次循环仍然只计算一个点，写像素的次数变成八次。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-octant-symmetry"
+          ]
+        }
+      },
+      {
+        "id": "textbook-circle-function",
+        "moduleId": "decision",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：圆函数与中点决策参数",
+        "markdown": "中点法的核心是把“距离比较”换成“圆函数符号比较”。教材定义：\n\n$$f_{circ}(x, y) = x^2 + y^2 - r^2$$\n\n圆周上的点使 $f_{circ} = 0$；圆内点使函数为负，圆外点使函数为正。这样点的相对位置只由符号决定，不必开方。\n\n设在 $x_k$ 处已画出像素 $(x_k, y_k)$，下一步要在 $(x_k + 1, y_k)$ 与 $(x_k + 1, y_k - 1)$ 之间选择。取这两个候选像素的中点代入圆函数，得到决策参数：\n\n$$p_k = f_{circ}\\left(x_k + 1,\\ y_k - \\frac{1}{2}\\right) = (x_k + 1)^2 + \\left(y_k - \\frac{1}{2}\\right)^2 - r^2$$\n\n若 $p_k < 0$，中点位于圆内，圆周边界更靠近扫描线 $y_k$ 上的像素；否则中点位于圆外或圆周上，选择扫描线 $y_k - 1$ 的像素。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000177"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "中点圆算法"
+              ],
+              "lineStart": 4347,
+              "lineEnd": 4419,
+              "assetRefs": [
+                "parts/part-0002/images/64e5429579e7cc5c9a2712c27cf1420f0ceb1af6038fd38f822c40ad35fc79d4.jpg"
+              ],
+              "excerptSha256": "34bf8dd36d2d57c98a640a5fd2355525c415d3a724c0e08d0a540f6d6e13b284"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sign-meaning",
+        "moduleId": "decision",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：p 的符号怎么读",
+        "markdown": "$p_k$ 是带符号的位置判据，不是像素到圆周的距离，它的数值大小没有直接的几何含义。可以这样读：\n\n- $p_k < 0$：两候选像素的中点还在圆内，圆周更靠近上方像素，于是保留 $y_k$；\n- $p_k \\ge 0$：中点已经跑到圆外（或正好落在圆周上），圆周更靠近下方像素，于是把 $y$ 减 1。\n\n中点恰好是两个候选像素距离相等的位置，因此“中点在圆内还是圆外”等价于“哪个像素离圆周更近”。这也解释了为什么误差天然被限制在两个候选像素之间的一半，而不是随步数累积。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-circle-function"
+          ]
+        }
+      },
+      {
+        "id": "textbook-incremental-recurrence",
+        "moduleId": "decision",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：增量递推与初始判别式",
+        "markdown": "若每步都展开 $p_k$ 的定义，仍然要做乘方，因此教材对相邻两步作差。对 $x_{k+1} + 1 = x_k + 2$ 处的圆函数求值并与 $p_k$ 相减，得到循环表达式：\n\n$$p_{k+1} = p_k + 2x_{k+1} + 1 - 2y_{k+1}$$\n\n其中 $y_{k+1}$ 取 $y_k$ 或 $y_k - 1$，由 $p_k$ 的符号决定，于是有两条更新分支：\n\n- 若 $p_k < 0$，$y$ 不变，$p_{k+1} = p_k + 2x_{k+1} + 1$；\n- 若 $p_k \\ge 0$，$y$ 减 1，还要再减 $2y_{k+1}$。\n\n两个增量项本身也能递推，避免了每次重新乘 2：\n\n$$2x_{k+1} = 2x_k + 2, \\qquad 2y_{k+1} = 2y_k - 2$$\n\n起始点在 $(x_0, y_0) = (0, r)$，此时 $2x_0 = 0$、$2y_0 = 2r$。在起点处对圆函数求值即得初始决策参数：\n\n$$p_0 = f_{circ}\\left(1,\\ r - \\frac{1}{2}\\right) = \\frac{5}{4} - r$$",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000177"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "中点圆算法"
+              ],
+              "lineStart": 4347,
+              "lineEnd": 4419,
+              "assetRefs": [
+                "parts/part-0002/images/64e5429579e7cc5c9a2712c27cf1420f0ceb1af6038fd38f822c40ad35fc79d4.jpg"
+              ],
+              "excerptSha256": "34bf8dd36d2d57c98a640a5fd2355525c415d3a724c0e08d0a540f6d6e13b284"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-integer-start",
+        "moduleId": "decision",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：p0 取整为什么不改变结果",
+        "markdown": "半径取整数时，教材把 $p_0 = \\frac{5}{4} - r$ 简化为 $p_0 = 1 - r$。这不是粗略近似，而是因为判据只关心符号：\n\n- 初始值相差 $\\frac{1}{4}$，而后续增量全是整数，所以两条序列始终相差同样的 $\\frac{1}{4}$；\n- 采用 $1 - r$ 时所有 $p_k$ 都是整数，$p_k < 0$ 与 $p_k \\ge 0$ 的划分与原来一一对应，连 $p_k = 0$ 归入非负分支的约定也一致。\n\n代入 $r = 10$ 立刻得到 $p_0 = -9$、$2x_0 = 0$、$2y_0 = 20$，这就是下一个算例的起点；整个过程只需要整数加减。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-incremental-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-algorithm-steps",
+        "moduleId": "procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：中点画圆算法的六个步骤",
+        "markdown": "教材把算法整理为六步，圆心先取原点：\n\n1. 输入半径 $r$，从圆周顶点开始：$(x_0, y_0) = (0, r)$。\n2. 计算初始决策参数 $p_0 = \\frac{5}{4} - r$；整数半径时取 $p_0 = 1 - r$。\n3. 从 $k = 0$ 开始逐个 $x_k$ 判断：若 $p_k < 0$，下一点为 $(x_k + 1, y_k)$，且 $p_{k+1} = p_k + 2x_{k+1} + 1$；否则下一点为 $(x_k + 1, y_k - 1)$，且 $p_{k+1} = p_k + 2x_{k+1} + 1 - 2y_{k+1}$。增量项按 $2x_{k+1} = 2x_k + 2$、$2y_{k+1} = 2y_k - 2$ 更新。\n4. 由对称性确定其余七个八分圆中的对应点。\n5. 把每个像素平移到实际圆心：$x = x + x_c$，$y = y + y_c$。\n6. 重复步骤 3 到 5，直到 $x \\ge y$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000178"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "中点画圆算法的步骤"
+              ],
+              "lineStart": 4420,
+              "lineEnd": 4457,
+              "assetRefs": [],
+              "excerptSha256": "e740a184204b37a48e7a5f74edf886dcf7dbdb1f8e0447b11b0abc30be1afb53"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-step-checklist",
+        "moduleId": "procedure",
+        "depth": "core",
+        "kind": "code",
+        "title": "补充：可对照手算的循环骨架",
+        "markdown": "把六步写成循环时，状态只有 $x$、$y$、$p$ 以及增量项 $2x$、$2y$ 这几个整数。下面的骨架保持了教材的控制流，并显式维护增量项，便于逐行手算核对：\n\n```c\np = 1 - r;              /* p0，整数半径 */\nx = 0;  y = r;\ndx = 0; dy = 2 * r;     /* 2x0, 2y0 */\nplotEight(x, y);        /* 先画 (0, r) */\nwhile (x < y) {\n    x++;\n    dx += 2;            /* dx = 2x_{k+1} */\n    if (p < 0) {\n        p += dx + 1;                 /* p_k + 2x_{k+1} + 1 */\n    } else {\n        y--;\n        dy -= 2;                     /* dy = 2y_{k+1} */\n        p += dx + 1 - dy;            /* 再加 -2y_{k+1} */\n    }\n    plotEight(x, y);\n}\n```\n\n三个容易出错的地方：循环条件是 $x < y$，因此在 $x = y$ 的八分圆边界处停止；每次进入循环先给 $x$ 加 1，对应“先选定 $x_k + 1$ 这一列”；`plotEight` 负责八个对称点并统一加上圆心偏移，不要把平移混进判别式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-algorithm-steps",
+            "textbook-incremental-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-worked-table",
+        "moduleId": "worked-example",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材例 6.2：r=10 的逐点结果",
+        "markdown": "教材以半径 $r = 10$ 演示第一八分圆的生成。初始状态为 $(x_0, y_0) = (0, 10)$、$p_0 = 1 - r = -9$、$2x_0 = 0$、$2y_0 = 20$。下表按 $k$ 列出决策参数、选中的下一点和更新后的增量项：\n\n| $k$ | $p_k$ | 选中的像素 $(x_{k+1}, y_{k+1})$ | $2x_{k+1}$ | $2y_{k+1}$ |\n|---|---|---|---|---|\n| 0 | -9 | (1, 10) | 2 | 20 |\n| 1 | -6 | (2, 10) | 4 | 20 |\n| 2 | -1 | (3, 10) | 6 | 20 |\n| 3 | 6 | (4, 9) | 8 | 18 |\n| 4 | -3 | (5, 9) | 10 | 18 |\n| 5 | 8 | (6, 8) | 12 | 16 |\n| 6 | 5 | (7, 7) | 14 | 14 |\n\n此时 $x = y = 7$，第一八分圆结束，其余七个八分圆由对称补全，整圆像素位置与图 6.15 一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000179"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "例6.2使用中点画圆算法画图"
+              ],
+              "lineStart": 4458,
+              "lineEnd": 4541,
+              "assetRefs": [
+                "parts/part-0002/images/a85b8c60982a93939c1dd8f00d6bdc08966a693241f305d05daf52f483c930b3.jpg"
+              ],
+              "excerptSha256": "f9e545f5e7bb3b155ec6fc329acef25b400ab7600dfb5a186fccbc126bad0b05"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-explanation",
+        "moduleId": "worked-example",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：表格里的转折与摆动",
+        "markdown": "表格的关键转折在 $k = 3$：前三次 $p_k$ 均为负，像素沿 $y = 10$ 水平排列；$p_3 = 6 \\ge 0$ 之后 $y$ 开始下降，$2y$ 也随之每次减 2，说明圆弧开始转弯。\n\n另一个值得盯住的量是 $p$ 的跳变幅度：$p < 0$ 时每步只增加 $2x + 1$；$p \\ge 0$ 时还要再减去 $2y$，于是 $p$ 在正负之间来回摆动。正是这种摆动让像素交替地“走平”和“走斜”，误差不会随着步数累积成整体偏离。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-worked-table"
+          ]
+        }
+      },
+      {
+        "id": "textbook-code-listing",
+        "moduleId": "worked-example",
+        "depth": "support",
+        "kind": "code",
+        "title": "教材程序结构：circleMidpoint 与八点绘制",
+        "markdown": "教材给出的实现把第一八分圆上的像素交给 `circlePlotPoints`，由它对每个点调用八次 `setPixel` 画出对称位置，`setPixel` 最终用 OpenGL 画点函数写入帧缓存。下面是按教材程序段整理出的等价结构（省略了坐标类与 OpenGL 上下文细节）：\n\n```c\nvoid circleMidpoint(GLint xc, GLint yc, GLint radius) {\n    GLint x = 0, y = radius;\n    GLint p = 1 - radius;           /* 初始中点参数 */\n    circlePlotPoints(xc, yc, x, y); /* 先画 (0, r) */\n    while (x < y) {\n        x++;\n        if (p < 0) {\n            p += 2 * x + 1;\n        } else {\n            y--;\n            p += 2 * (x - y) + 1;\n        }\n        circlePlotPoints(xc, yc, x, y);\n    }\n}\n\nvoid circlePlotPoints(GLint xc, GLint yc, GLint x, GLint y) {\n    setPixel(xc + x, yc + y);\n    setPixel(xc - x, yc + y);\n    setPixel(xc + x, yc - y);\n    setPixel(xc - x, yc - y);\n    setPixel(xc + y, yc + x);\n    setPixel(xc - y, yc + x);\n    setPixel(xc + y, yc - x);\n    setPixel(xc - y, yc - x);\n}\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000179"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "例6.2使用中点画圆算法画图"
+              ],
+              "lineStart": 4458,
+              "lineEnd": 4541,
+              "assetRefs": [
+                "parts/part-0002/images/a85b8c60982a93939c1dd8f00d6bdc08966a693241f305d05daf52f483c930b3.jpg"
+              ],
+              "excerptSha256": "f9e545f5e7bb3b155ec6fc329acef25b400ab7600dfb5a186fccbc126bad0b05"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-code-reading",
+        "moduleId": "worked-example",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：代码与六步流程的对应关系",
+        "markdown": "对照代码与步骤，可以确认三件事：\n\n1. **对称只算一次**：`circlePlotPoints` 中的八次 `setPixel` 就是八分对称，主循环因此只维护第一八分圆上的一个点；\n2. **平移放在最后**：第一八分圆始终以原点为圆心计算，$x_c$、$y_c$ 只在写像素时相加，避免圆心偏移进入判别式；\n3. **增量可以现算也可维护**：教材代码用 $2x + 1$ 与 $2(x - y) + 1$ 现算，若像前面的骨架那样显式维护 $2x$、$2y$，每步就只剩加法与比较。\n\n这也说明中点圆算法与 Bresenham 画线算法共享同一个结构：一个决策参数加两个增量项，加一次判断决定下一个像素。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-code-listing",
+            "textbook-algorithm-steps"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "worked-example",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：用 r=6 手算第一八分圆",
+        "markdown": "请用 $r = 6$ 手动执行中点画圆算法，写出第一八分圆上的像素序列，并列出每一步的 $p_k$、$2x_{k+1}$ 与 $2y_{k+1}$。完成后回答：当 $p_k$ 由负变为非负时，$y$ 与 $2y$ 各自发生了什么变化？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-trace-explanation",
+            "model-code-reading"
+          ]
+        }
+      },
+      {
+        "id": "textbook-error-bound",
+        "moduleId": "error-tradeoff",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材结论：误差上界与整数前提",
+        "markdown": "教材对中点法给出两条边界结论：\n\n- **误差上界**：使用中点检验时，沿任何圆锥截面曲线确定的像素位置，其误差限制在像素间隔的 $\\frac{1}{2}$ 以内。这是“比较两个候选像素中点”的直接结果，也是该方法能推广到椭圆等其他圆锥曲线的原因。\n- **整数前提**：以整数屏幕坐标指定圆参数后，所有增量都是整数，因此中点方法只用整数加减就能确定沿圆周的像素位置；对整数半径，中点法与 Bresenham 画圆算法得到相同的像素位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "圆的特性"
+              ],
+              "lineStart": 4304,
+              "lineEnd": 4346,
+              "assetRefs": [
+                "parts/part-0002/images/efe7ae05ce6d7b86b7439871c5303b35b5f43688db5b63ec44c7b0a03d200bb7.jpg",
+                "parts/part-0002/images/2225160fce22c355010e23262a816a09edf7b9d365f3a066238b74cd3e3e8171.jpg",
+                "parts/part-0002/images/033c57982ad168c18e0cfbb24d5cc7d94c5e2f157d03e3bf147d9d9f7aac8a94.jpg"
+              ],
+              "excerptSha256": "c6fee3f2f7d5102a99ae923ef23423a370e0676b37074957bb3ac7e665fdbc30"
+            },
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000177"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "中点圆算法"
+              ],
+              "lineStart": 4347,
+              "lineEnd": 4419,
+              "assetRefs": [
+                "parts/part-0002/images/64e5429579e7cc5c9a2712c27cf1420f0ceb1af6038fd38f822c40ad35fc79d4.jpg"
+              ],
+              "excerptSha256": "34bf8dd36d2d57c98a640a5fd2355525c415d3a724c0e08d0a540f6d6e13b284"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tradeoff-summary",
+        "moduleId": "error-tradeoff",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：三类圆生成思路的取舍",
+        "markdown": "把三种思路放在同一张表里，取舍就清楚了：\n\n| 方法 | 每步主要运算 | 间距与误差表现 | 主要问题 |\n|---|---|---|---|\n| 方程直接求值 | 平方、开方 | 间距随斜率变化而不均 | 计算量大，需按斜率切换步进轴 |\n| 极坐标参数 | 乘加、三角函数 | 角度均匀，像素近乎等距 | 三角函数耗时 |\n| 中点圆算法 | 整数加减 | 误差不超过半个像素间隔 | 需要判别式推导与对称映射 |\n\n换句话说，中点法不是“更精确的圆方程求值”，而是把“离圆周多近”的几何问题改写成“中点在圆内还是圆外”的符号问题，再用整数增量维持这个判断。只要圆参数是整数屏幕坐标，它就能以接近画线算法的成本生成整圆。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-error-bound",
+            "textbook-incremental-recurrence"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "midpoint-r6-check",
+        "type": "formative-check",
+        "title": "r=6 手算自检",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "worked-example",
+        "depth": "core",
+        "outcomeRefs": [
+          "o-procedure-implement",
+          "o-error-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否独立执行整数增量流程，并从 p 的符号解释像素选择与 y 的变化。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-algorithm-steps",
+            "textbook-worked-table",
+            "model-trace-explanation"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "answerSequence": [
+            [
+              0,
+              6
+            ],
+            [
+              1,
+              6
+            ],
+            [
+              2,
+              6
+            ],
+            [
+              3,
+              5
+            ],
+            [
+              4,
+              4
+            ]
+          ],
+          "answerPValues": [
+            -5,
+            -2,
+            3,
+            0
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考答案：$p_0 = 1 - 6 = -5$，$2x_0 = 0$，$2y_0 = 12$。依次得到像素 $(0,6) \\to (1,6) \\to (2,6) \\to (3,5) \\to (4,4)$，对应 $p_k$ 为 $-5, -2, 3, 0$。$p_k$ 由负变非负后，$y$ 减 1，$2y$ 也随之减 2；此时 $x = y = 4$，第一八分圆结束。"
+        }
+      }
+    ]
+  },
+  "subtitle": "实现图元及属性的算法",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000175"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "圆生成算法"
+      ],
+      "lineStart": 4300,
+      "lineEnd": 4303,
+      "assetRefs": [],
+      "excerptSha256": "5175cd898d6d97291f34d9e585060e7b935f04f98d191e2c1ad6fb707305b5db"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000176"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "圆的特性"
+      ],
+      "lineStart": 4304,
+      "lineEnd": 4346,
+      "assetRefs": [
+        "parts/part-0002/images/efe7ae05ce6d7b86b7439871c5303b35b5f43688db5b63ec44c7b0a03d200bb7.jpg",
+        "parts/part-0002/images/2225160fce22c355010e23262a816a09edf7b9d365f3a066238b74cd3e3e8171.jpg",
+        "parts/part-0002/images/033c57982ad168c18e0cfbb24d5cc7d94c5e2f157d03e3bf147d9d9f7aac8a94.jpg"
+      ],
+      "excerptSha256": "c6fee3f2f7d5102a99ae923ef23423a370e0676b37074957bb3ac7e665fdbc30"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000177"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "中点圆算法"
+      ],
+      "lineStart": 4347,
+      "lineEnd": 4419,
+      "assetRefs": [
+        "parts/part-0002/images/64e5429579e7cc5c9a2712c27cf1420f0ceb1af6038fd38f822c40ad35fc79d4.jpg"
+      ],
+      "excerptSha256": "34bf8dd36d2d57c98a640a5fd2355525c415d3a724c0e08d0a540f6d6e13b284"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000178"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "中点画圆算法的步骤"
+      ],
+      "lineStart": 4420,
+      "lineEnd": 4457,
+      "assetRefs": [],
+      "excerptSha256": "e740a184204b37a48e7a5f74edf886dcf7dbdb1f8e0447b11b0abc30be1afb53"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000179"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "例6.2使用中点画圆算法画图"
+      ],
+      "lineStart": 4458,
+      "lineEnd": 4541,
+      "assetRefs": [
+        "parts/part-0002/images/a85b8c60982a93939c1dd8f00d6bdc08966a693241f305d05daf52f483c930b3.jpg"
+      ],
+      "excerptSha256": "f9e545f5e7bb3b155ec6fc329acef25b400ab7600dfb5a186fccbc126bad0b05"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3964,
+    2136
+  ],
+  "scale": 0.96
+}

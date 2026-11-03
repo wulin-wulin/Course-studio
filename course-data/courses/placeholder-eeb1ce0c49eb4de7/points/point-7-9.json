@@ -1,0 +1,457 @@
+{
+  "id": "point-7-9",
+  "title": "OpenGL 二维几何变换函数",
+  "shortSummary": "介绍 OpenGL 矩阵模式、变换函数和矩阵栈的使用方式，说明模型变换与观察变换的协作。",
+  "keyTerms": [
+    "OpenGL",
+    "矩阵栈",
+    "变换函数"
+  ],
+  "animationType": "transform2dLab",
+  "animationSuggestion": "按调用顺序逐步显示当前矩阵的累积，并同步显示同一顶点经过累积矩阵后的位置变化，突出最后指定的变换最先生效。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-7-1",
+    "point-7-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-then-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三类变换函数、矩阵模式与后乘累积规则，按调用流程重排讲解，补足参数对照、顺序算例与自查练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-4x4-usage",
+          "text": "解释为什么二维几何变换在 OpenGL 中仍用 4×4 矩阵和四元素齐次坐标表示。"
+        },
+        {
+          "id": "call-transform-functions",
+          "text": "正确选择 glTranslate、glRotate、glScale 的参数与二维设置，写出等价的变换调用。"
+        },
+        {
+          "id": "manage-current-matrix",
+          "text": "说明 glMatrixMode、glLoadIdentity、glLoadMatrix、glMultMatrix 如何确定和更新当前矩阵。"
+        },
+        {
+          "id": "resolve-composition-order",
+          "text": "根据后乘规则判断程序中变换调用的实际作用顺序，并修正常见顺序错误。"
+        }
+      ],
+      "misconceptions": [
+        "认为二维变换在 OpenGL 中使用 2×2 矩阵，因此平移无法用矩阵乘法表示。",
+        "把 glRotate 的角度当作弧度，或省略旋转轴而误以为二维旋转不需要指定轴。",
+        "认为变换会回溯修改此前已经绘制的对象，而不是只作用于其后定义的对象。",
+        "按程序书写顺序理解变换生效顺序，误以为最先写的变换最先作用于顶点。"
+      ],
+      "modules": [
+        {
+          "id": "uniform-transform-pipeline",
+          "title": "统一的三维表示与二维用法",
+          "role": "concept-framing",
+          "description": "从 OpenGL 的三维设计出发，说明二维变换如何通过固定 z 分量复用 4×4 矩阵。",
+          "outcomeRefs": [
+            "explain-4x4-usage"
+          ],
+          "order": 0
+        },
+        {
+          "id": "basic-transform-calls",
+          "title": "三类基本变换函数",
+          "role": "procedure",
+          "description": "按平移、旋转、缩放逐一给出函数签名、参数含义、二维设置和典型调用。",
+          "outcomeRefs": [
+            "call-transform-functions"
+          ],
+          "order": 1
+        },
+        {
+          "id": "matrix-mode-management",
+          "title": "矩阵模式与当前矩阵",
+          "role": "procedure",
+          "description": "说明如何选择建模观察矩阵、初始化与直接装载矩阵，以及后乘合并矩阵。",
+          "outcomeRefs": [
+            "manage-current-matrix"
+          ],
+          "order": 2
+        },
+        {
+          "id": "composition-and-order",
+          "title": "变换累积与书写顺序",
+          "role": "worked-example",
+          "description": "用具体目标演示后乘导致的顺序反转，并给出恢复初值的方式。",
+          "outcomeRefs": [
+            "resolve-composition-order"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "自查与下一点桥接",
+          "role": "check",
+          "description": "通过改写调用顺序的练习检查规则掌握程度，并引出示例程序。",
+          "outcomeRefs": [
+            "explain-4x4-usage",
+            "call-transform-functions",
+            "manage-current-matrix",
+            "resolve-composition-order"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-4x4-usage",
+          "call-transform-functions",
+          "manage-current-matrix",
+          "resolve-composition-order"
+        ],
+        "method": "把一句中文变换需求翻译成正确的 OpenGL 调用序列，并解释为什么书写顺序与作用顺序相反。",
+        "successCriteria": [
+          "函数名与参数与需求匹配",
+          "二维情形下的 z 分量设置正确",
+          "调用顺序能产生目标作用顺序"
+        ],
+        "exerciseBlockId": "model-order-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-7-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-overview",
+        "moduleId": "uniform-transform-pipeline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "每种基本几何变换对应一个核心库函数",
+        "markdown": "OpenGL 核心库为每一种基本几何变换提供一个独立函数。由于 OpenGL 是作为三维图形应用编程接口设计的，所有变换都在三维空间中定义：内部用 4 元素列向量表示坐标，用 $4 \\times 4$ 矩阵表示变换。因此二维变换通过选择不改变第三维 $z$ 值的方式实现——平移时令 $t_z = 0.0$，一个二维位置表示成 $z$ 分量为 0.0 的四元素列向量。\n\n要完成一次平移，需引用平移子程序并设定三维平移向量；旋转函数需指定经过坐标系原点的旋转轴的角度和方向；缩放函数设定相对于坐标系原点的三个坐标缩放系数。每种变换子程序都建立一个 $4 \\times 4$ 矩阵，用于变换其后定义的对象坐标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000247"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 二维几何变换函数"
+              ],
+              "lineStart": 6735,
+              "lineEnd": 6740,
+              "assetRefs": [],
+              "excerptSha256": "a895e6d71d2ffb9c177cee10b33210167ededc15e58376f6f53a8a0c1c87c08d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-4x4",
+        "moduleId": "uniform-transform-pipeline",
+        "depth": "support",
+        "kind": "note",
+        "title": "为什么二维也要用 4×4 矩阵",
+        "markdown": "以下为模型补充的理解提示，不是教材原文。\n\n如果只用 $2 \\times 2$ 矩阵，旋转和缩放可以写成矩阵乘法，但平移只能额外相加，无法与其他变换合并成一次乘法。齐次坐标把二维点写成 $(x, y, 0)$ 的四元素列向量，平移就变成 $4 \\times 4$ 矩阵中的一列常数项；于是平移、旋转、缩放可以相乘为一个矩阵，再一次性作用于顶点。这正是本点后面“变换可以累积”和“后乘合并”能够成立的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-translate",
+        "moduleId": "basic-transform-calls",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "平移矩阵：glTranslate*",
+        "markdown": "$4 \\times 4$ 平移矩阵由 `glTranslate*(tx, ty, tz)` 构造。平移参数 $t_x$、$t_y$、$t_z$ 可赋任意实数值，单个后缀码取 `f`（浮点）或 `d`（双倍长浮点）。二维应用设定 $t_z = 0.0$。\n\n例如 `glTranslatef(25.0, -10.0, 0.0)` 将随后定义的坐标位置在 $x$ 方向平移 25 个单位、在 $y$ 方向平移 $-10$ 个单位。由该函数生成的平移矩阵用来对调用此函数之后定义的对象的位置进行变换。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000248"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本的 OpenGL 几何变换"
+              ],
+              "lineStart": 6741,
+              "lineEnd": 6784,
+              "assetRefs": [],
+              "excerptSha256": "7a65cc75218f7638ef852fa5e9f7bd7d5053dee45c6629512b68cbe4d1e42e17"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-rotate",
+        "moduleId": "basic-transform-calls",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "旋转矩阵：glRotate*",
+        "markdown": "$4 \\times 4$ 旋转矩阵由 `glRotate*(theta, vx, vy, vz)` 生成。向量 $\\mathbf{v} = (v_x, v_y, v_z)$ 的分量可取任意浮点数值，用于定义通过坐标原点的旋转轴方向；如果 $\\mathbf{v}$ 未定义成单位向量，旋转矩阵在用于计算之前会被规范化。\n\n参数 `theta` 赋以旋转角度数，函数内部将其转换成弧度后再进行三角计算。二维系统中的旋转是绕 $z$ 轴的旋转，该轴由 $x$、$y$ 分量为 0、$z$ 分量为 1.0 的单位向量描述，例如 `glRotatef(90.0, 0.0, 0.0, 1.0)` 设定绕 $z$ 轴旋转 90° 的矩阵。该函数用四元数方法生成旋转矩阵，对绕任意指定旋转轴的旋转都很有效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000248"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本的 OpenGL 几何变换"
+              ],
+              "lineStart": 6741,
+              "lineEnd": 6784,
+              "assetRefs": [],
+              "excerptSha256": "7a65cc75218f7638ef852fa5e9f7bd7d5053dee45c6629512b68cbe4d1e42e17"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-scale",
+        "moduleId": "basic-transform-calls",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "缩放矩阵：glScale*",
+        "markdown": "$4 \\times 4$ 缩放矩阵由 `glScale*(sx, sy, sz)` 得到，后缀码同样是 `f` 或 `d`，缩放参数可赋任意实数值。二维系统中的比例变换只改变 $x$、$y$ 坐标，因此典型二维比例变换的 $z$ 比例因子为 1.0。\n\n由于比例因子可为负值，该函数也能生成反射矩阵，例如 `glScalef(2.0, -3.0, 1.0)` 生成在 $x$ 方向缩放 2 倍、在 $y$ 方向缩放 3 倍且相对于 $x$ 轴反射的矩阵。任何缩放参数为 0 都会引起处理错误，因为其逆矩阵无法计算。该缩放-反射矩阵应用于在其后定义的对象。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000248"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本的 OpenGL 几何变换"
+              ],
+              "lineStart": 6741,
+              "lineEnd": 6784,
+              "assetRefs": [],
+              "excerptSha256": "7a65cc75218f7638ef852fa5e9f7bd7d5053dee45c6629512b68cbe4d1e42e17"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-function-table",
+        "moduleId": "basic-transform-calls",
+        "depth": "support",
+        "kind": "table",
+        "title": "三类函数的参数对照（模型整理）",
+        "markdown": "下表由模型根据上述教材内容整理，用于快速比对，不引入新事实。\n\n| 函数 | 关键参数 | 二维设置 | 生成的矩阵 |\n|---|---|---|---|\n| `glTranslate*(tx, ty, tz)` | 三个平移量 | $t_z = 0.0$ | 平移 |\n| `glRotate*(theta, vx, vy, vz)` | 角度（度）与旋转轴 | 轴 $(0, 0, 1.0)$ | 绕 $z$ 轴旋转 |\n| `glScale*(sx, sy, sz)` | 三个缩放因子 | $s_z = 1.0$ | 缩放；负因子即反射 |\n\n三个易错点：角度用度而不是弧度；二维旋转的轴必须显式给出且为 $(0,0,1.0)$ 方向；缩放因子不能为 0。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-translate",
+            "textbook-rotate",
+            "textbook-scale"
+          ]
+        }
+      },
+      {
+        "id": "textbook-matrix-mode",
+        "moduleId": "matrix-mode-management",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "指定当前矩阵：glMatrixMode",
+        "markdown": "`glMatrixMode` 用来设定投影模式，即指定将用于投影变换的矩阵；同样的子程序也可用来设定几何变换矩阵，此时该矩阵被看做建模观察矩阵（modelview matrix），用于存储和组合几何变换，也用于将几何变换与向观察坐标系的变换进行组合。建模观察模式用 `glMatrixMode(GL_MODELVIEW)` 指定。\n\n该语句指定一个 $4 \\times 4$ 建模观察矩阵作为当前矩阵。前述 OpenGL 变换子程序都用于组合当前矩阵，因此必须在进行几何变换前用 `glMatrixMode` 修改建模观察矩阵。用 `glMatrixMode` 还可设定纹理模式和颜色模式；其默认变量是 `GL_MODELVIEW`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000249"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 矩阵操作"
+              ],
+              "lineStart": 6785,
+              "lineEnd": 6865,
+              "assetRefs": [],
+              "excerptSha256": "f09117dec83a020d06b785c251308d9343d4fa2042ee4bbcebddbda6ee8fa986"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-load-mult",
+        "moduleId": "matrix-mode-management",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "装载与合并当前矩阵",
+        "markdown": "建立建模观察模式后，调用变换子程序所生成的矩阵要与该模式的当前矩阵相乘。此外，`glLoadIdentity()` 可把当前矩阵设定为单位矩阵；`glLoadMatrix*(elements16)` 用 16 个浮点值为当前矩阵赋值，数组元素必须按列优先顺序指定，即先列第一列的 4 个元素，再是第二、三、四列。\n\n`glMultMatrix*(otherElements16)` 把指定矩阵与当前矩阵合并：当前矩阵按后乘方式与它相乘，其积取代当前矩阵，即 $M = M \\cdot M'$。因此 `glLoadIdentity()` 后依次调用 `glMultMatrixf(elemsM2)`、`glMultMatrixf(elemsM1)` 得到的建模观察矩阵是 $M = M_2 \\cdot M_1$。在这个序列中最先应用的变换是程序中最后指定的。OpenGL 还按列优先顺序存储矩阵，引用 $m_{jk}$ 指的是第 $j$ 列第 $k$ 行的元素。每种由 `glMatrixMode` 选择的模式都有一个矩阵栈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000249"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 矩阵操作"
+              ],
+              "lineStart": 6785,
+              "lineEnd": 6865,
+              "assetRefs": [],
+              "excerptSha256": "f09117dec83a020d06b785c251308d9343d4fa2042ee4bbcebddbda6ee8fa986"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-order-worked-example",
+        "moduleId": "composition-and-order",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "书写顺序与作用顺序相反：一个算例",
+        "markdown": "以下算例由模型构造，规则来自 `glMultMatrix` 的后乘约定。\n\n目标：先把矩形绕原点旋转 30°，再整体平移到 $(100, 50)$。若顺序写反，得到的会是“先平移再绕原点旋转”，矩形位置完全不同。\n\n正确的调用序列（每帧开始时清零）：\n\n```javascript\nglMatrixMode(GL_MODELVIEW);\nglLoadIdentity();              // 当前矩阵 M = I\nglTranslatef(100.0, 50.0, 0.0); // M = T\nglRotatef(30.0, 0.0, 0.0, 1.0); // M = T · R\nglScalef(2.0, 2.0, 1.0);        // M = T · R · S\n// 此处绘制矩形\n```\n\n顶点先被 $S$ 缩放，再被 $R$ 旋转，最后被 $T$ 平移，因为顶点是右乘在当前矩阵之后的。记住两条规则即可避免出错：一是最后指定的变换最先作用；二是每帧都要用 `glLoadIdentity()` 重置，否则上一帧的累积矩阵会继续叠加到本帧顶点上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-load-mult",
+            "textbook-matrix-mode"
+          ]
+        }
+      },
+      {
+        "id": "model-order-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自查：写出调用顺序",
+        "markdown": "需求：先把一个二维对象在 $x$ 方向放大 3 倍、在 $y$ 方向放大 3 倍，再绕原点逆时针旋转 45°，最后平移到 $(10, -20)$。\n\n请回答两点：\n\n1. 给出从 `glLoadIdentity()` 开始的调用序列（包含必要的 `glMatrixMode`）。\n2. 说明为什么调用书写顺序与“先缩放、再旋转、最后平移”的作用顺序相反。\n\n参考判断：作用顺序中最先执行的变换要写在最靠近绘制语句的位置，也就是最后调用；二维情形下平移的 $t_z$ 写 0.0、缩放的 $s_z$ 写 1.0、旋转轴写 $(0, 0, 1.0)$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-order-worked-example",
+            "model-function-table"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "把函数、模式与顺序串成一条链",
+        "markdown": "本点的操作链可以概括为：先用 `glMatrixMode(GL_MODELVIEW)` 选中建模观察矩阵，再用 `glLoadIdentity()` 恢复初值，然后按需要的书写顺序调用 `glTranslate*`、`glRotate*`、`glScale*`，每次调用都把新矩阵后乘到当前矩阵上，最后一个调用最先作用于顶点。\n\n下一知识点 `point-7-10` 会把这条链放进完整的 OpenGL 程序：依次绘制原始矩形、平移后的矩形、旋转后的矩形和缩放反射后的矩形，观察每次重置矩阵后画面如何变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-matrix-mode",
+            "textbook-load-mult",
+            "model-order-worked-example"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "transform-order-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-order-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "title": "变换调用顺序自检",
+        "outcomeRefs": [
+          "call-transform-functions",
+          "resolve-composition-order"
+        ],
+        "learningPurpose": "检查学习者能否把中文变换需求翻译为符合后乘规则的调用序列，并解释顺序反转的原因。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-load-mult",
+            "model-order-worked-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "requiresExplanation": true
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出“先缩放 3 倍、再绕原点旋转 45°、最后平移 (10, -20)”的调用序列，并用后乘规则解释为什么书写顺序与作用顺序相反。"
+        }
+      }
+    ]
+  },
+  "subtitle": "二维几何变换",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000247"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 二维几何变换函数"
+      ],
+      "lineStart": 6735,
+      "lineEnd": 6740,
+      "assetRefs": [],
+      "excerptSha256": "a895e6d71d2ffb9c177cee10b33210167ededc15e58376f6f53a8a0c1c87c08d"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000248"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "基本的 OpenGL 几何变换"
+      ],
+      "lineStart": 6741,
+      "lineEnd": 6784,
+      "assetRefs": [],
+      "excerptSha256": "7a65cc75218f7638ef852fa5e9f7bd7d5053dee45c6629512b68cbe4d1e42e17"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000249"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 矩阵操作"
+      ],
+      "lineStart": 6785,
+      "lineEnd": 6865,
+      "assetRefs": [],
+      "excerptSha256": "f09117dec83a020d06b785c251308d9343d4fa2042ee4bbcebddbda6ee8fa986"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2945,
+    2295
+  ],
+  "scale": 0.91
+}

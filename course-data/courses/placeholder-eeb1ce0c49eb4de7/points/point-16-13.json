@@ -1,0 +1,468 @@
+{
+  "id": "point-16-13",
+  "title": "线框图可见性算法",
+  "shortSummary": "介绍线框图中隐藏线消除的基本方法，并比较其与隐藏面消除在目标上的差异。",
+  "keyTerms": [
+    "线框图",
+    "隐藏线消除",
+    "线框面可见性",
+    "深度提示"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.5,
+  "prerequisites": [
+    "point-16-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的判别规则与深度提示公式，按“为什么需要处理—逐边对面的判定—复用面算法—深度提示—如何取舍”的顺序重排，并补充可执行的检查顺序与数值示例。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-wireframe-goal",
+          "text": "解释线框图为何需要可见性处理，并说出它与隐藏面消除在输出对象上的差异。"
+        },
+        {
+          "id": "apply-edge-face-test",
+          "text": "依据端点与交点深度，判定一条边相对某个面是可见、隐藏还是部分隐藏。"
+        },
+        {
+          "id": "compare-ported-methods",
+          "text": "说明后向面判别、深度排序、区域细分与扫描线算法如何被移植到隐藏线消除，并按场景条件取舍。"
+        },
+        {
+          "id": "apply-depth-cueing",
+          "text": "用深度提示函数计算给定距离的强度系数，并说明它与遮挡判定不是同一件事。"
+        }
+      ],
+      "misconceptions": [
+        "认为线框图只画线条，因此不需要任何可见性处理。",
+        "只看边端点的可见性就给整条边下结论，忽略边穿过面时的部分隐藏。",
+        "把深度提示当成精确的隐藏线消除，以为亮度差能说明哪条边被哪个面挡住。"
+      ],
+      "modules": [
+        {
+          "id": "why-wireframe-visibility",
+          "title": "问题导入：全边显示为什么会看不清",
+          "role": "motivation",
+          "description": "从快速轮廓显示的需求出发，说明投影丢失深度造成的读图歧义。",
+          "outcomeRefs": [
+            "explain-wireframe-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "edge-face-depth-test",
+          "title": "逐边对面的深度比较",
+          "role": "core-procedure",
+          "description": "把教材规则整理为端点判定、求交与分段处置的检查顺序。",
+          "outcomeRefs": [
+            "apply-edge-face-test"
+          ],
+          "order": 1
+        },
+        {
+          "id": "porting-surface-algorithms",
+          "title": "把可见面算法移植到隐藏线",
+          "role": "method-comparison",
+          "description": "比较四种可见面算法改写为线框可见性的方式与代价。",
+          "outcomeRefs": [
+            "compare-ported-methods"
+          ],
+          "order": 2
+        },
+        {
+          "id": "depth-cueing",
+          "title": "深度提示的定量规则",
+          "role": "quantitative-mechanism",
+          "description": "推导线性深度提示函数的取值，并说明它在管线中的实现位置。",
+          "outcomeRefs": [
+            "apply-depth-cueing"
+          ],
+          "order": 3
+        },
+        {
+          "id": "choose-and-check",
+          "title": "取舍、自检与下一步",
+          "role": "decision-and-check",
+          "description": "按输出需求选择方法，用数值问题检验掌握程度，并桥接 OpenGL 实现。",
+          "outcomeRefs": [
+            "explain-wireframe-goal",
+            "apply-edge-face-test",
+            "compare-ported-methods",
+            "apply-depth-cueing"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-wireframe-goal",
+          "apply-edge-face-test",
+          "compare-ported-methods",
+          "apply-depth-cueing"
+        ],
+        "method": "完成逐边判定的自检题与深度提示系数计算，并用一句话说明在给定场景下应选可见性测试还是深度提示。",
+        "successCriteria": [
+          "能区分整条隐藏、整条可见与部分隐藏三种判定结果",
+          "深度提示系数计算正确且能说明其只是视觉线索",
+          "方法选择理由能对应到输出形式与场景结构"
+        ],
+        "exerciseBlockId": "check-yourself",
+        "summaryBlockId": "method-choice",
+        "nextPointId": "point-16-14"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-intro",
+        "moduleId": "why-wireframe-visibility",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：全边显示的歧义与两种对策",
+        "markdown": "场景通常并不只由孤立线条组成，但在需要快速查看三维对象的轮廓特征时，我们常以线框图的形式显示它们，而生成线框图最快的办法就是把对象的所有边都画出来。\n\n把所有边都画出来会带来读图问题：投影已经把深度压平，观察者难以仅凭画面判断哪些特征在前、哪些在后。教材给出两条对策：一是使用深度提示，让线段的显示强度成为它离开观察者距离的函数；二是应用可见性测试，把隐藏线消除，或者用与可见边不同的方式显示。\n\n确定对象边可见性的过程称为线框可见性算法（wire-frame visibility method），也称为可见线判别算法（visible-line detection method）或隐藏线判别算法（hidden-line detection method）。教材同时指出，前面讨论的可见面判别算法也可用于边的可见性测试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000514"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "线框图可见性算法"
+              ],
+              "lineStart": 14001,
+              "lineEnd": 14004,
+              "assetRefs": [],
+              "excerptSha256": "d2ed286152edc9cb98d4cd481f02e9eb3ea5ea1e80b105bfbc73e49e3a633f7e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-visibility",
+        "moduleId": "why-wireframe-visibility",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：与隐藏面消除的目标差异",
+        "markdown": "把线框可见性与隐藏面消除放在一起比较，差别在输出对象与判定粒度：隐藏面消除决定每个像素或面片最终显示成什么颜色，结果是一幅实心画面；线框可见性只关心每条边有没有被面挡住、挡住的是整条还是其中一段，输出仍是线条，但线条之间的前后关系必须可读。\n\n所以线框算法不能简单地“把面填成背景色”了事，它要回答两个问题：这条边相对某个面处于什么位置，以及被挡住的部分用什么方式呈现——消除、改虚线，还是别的区分样式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro"
+          ]
+        }
+      },
+      {
+        "id": "textbook-edge-face-test",
+        "moduleId": "edge-face-depth-test",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材规则：逐边与各面比较深度",
+        "markdown": "判别可见线最直接的做法是：依次把每一条边与场景中的每一个面作比较。这个过程与任意形状窗口的线段裁剪十分相似——同样要测试线段端点与区域边界的位置关系——但可见性测试还必须比较边与面的深度值。\n\n当一条边的两个投影端点都落在某个面的投影区域内时，把端点深度与该面在对应 $(x, y)$ 位置的面深度比较：\n\n- 两个端点都位于该面之后，这条边相对该面是隐藏线；\n- 两个端点都位于该面之前，这条边相对该面可见；\n- 端点分处该面两侧，则必须计算交点位置并确定交点处的深度。若在各交点处边的深度都比面深度大，边的一部分被该面隐藏；若一条边在一个边界的交点处深度较大、在另一个边界的交点处深度较小（假定面是凸的），则需要确定该边在何处穿入该面内部。\n\n一旦确认了边的隐藏部分，可以消除它、把它显示成虚线，或用其他区别于可见部分的方法显示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000515"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "线框面可见性算法"
+              ],
+              "lineStart": 14005,
+              "lineEnd": 14017,
+              "assetRefs": [
+                "parts/part-0005/images/99e4284f131272de0f0ce54c777de19a78392245f750e6a74694b8faf7833e87.jpg",
+                "parts/part-0005/images/99bceb3156fa9252f3a8a8bb1522c72715856a82445a565251ade26dc8742dac.jpg"
+              ],
+              "excerptSha256": "f7fbd4bc98c9acf22376c62be9c380ac8dcaee3ded731cfd4d4631aad18d0fd0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-test-procedure",
+        "moduleId": "edge-face-depth-test",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：可执行的判定顺序与数值示例",
+        "markdown": "把上面的规则整理成固定检查顺序，可以减少漏判：\n\n1. 取一条边，求出它在屏幕上的两个端点；\n2. 对每个面，先判断两个端点是否都落在该面的投影区域内，不满足时该面在该位置不参与比较；\n3. 两端都在区域内时，比较端点深度与该位置的面深度，先排除“整条边在面前”和“整条边在面后”两种情形；\n4. 端点分处面两侧时，求边与该面投影边界的交点，在交点处再比较深度；\n5. 按结果把边切成可见段与隐藏段，再对隐藏段选择消除或改样式。\n\n一个模型补充的数值例子：设某面在给定位置的深度为 5，边的一个端点深度为 3、另一个为 8。深度 3 的一端在面之前，深度 8 的一端在面之后；由于两端分处两侧，必须求交，把边分成深度小于 5 与大于 5 两段分别处理。如果整条边的两个端点深度都是 8，那么它相对这个面整条隐藏，无需求交。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-edge-face-test"
+          ]
+        }
+      },
+      {
+        "id": "model-endpoint-misconception",
+        "moduleId": "edge-face-depth-test",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "易错点：端点结论不能代替整条边的判定",
+        "markdown": "常见误解是：只要两个端点都落在面的投影区域内，就能凭端点深度给整条边下结论。端点分处面两侧时，整条边既不是全可见也不是全隐藏，必须求出它与面边界的交点并按段判定，这正是教材强调“部分隐藏”的原因。\n\n另一个误解是把线框可见性与深度提示混为一谈。可见性测试给出的是几何遮挡的分段结论，深度提示只改变线条强度，并不判定谁挡住了谁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-edge-face-test"
+          ]
+        }
+      },
+      {
+        "id": "textbook-porting-methods",
+        "moduleId": "porting-surface-algorithms",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材方法：四种可见面算法的线框化",
+        "markdown": "教材指出，一些可见面判别算法可以很容易地移植到线框图的可见性测试：\n\n- 后向面判别：判别出对象的所有后向面，只显示可见面的边界；\n- 深度排序：由后往前逐个处理表面，用背景色填充表面内部、用前景色绘制边界，把表面写入刷新缓存，于是隐藏线被前面的表面消除；\n- 区域细分：通过只显示可见面的边框来消除隐藏线；\n- 扫描线：沿扫描线与可见面边界的相交处画点，由此显示可见线。\n\n这些方法的共同点是借用“面”的可见性结果来决定“线”的取舍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000515"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "线框面可见性算法"
+              ],
+              "lineStart": 14005,
+              "lineEnd": 14017,
+              "assetRefs": [
+                "parts/part-0005/images/99e4284f131272de0f0ce54c777de19a78392245f750e6a74694b8faf7833e87.jpg",
+                "parts/part-0005/images/99bceb3156fa9252f3a8a8bb1522c72715856a82445a565251ade26dc8742dac.jpg"
+              ],
+              "excerptSha256": "f7fbd4bc98c9acf22376c62be9c380ac8dcaee3ded731cfd4d4631aad18d0fd0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-porting-tradeoffs",
+        "moduleId": "porting-surface-algorithms",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：移植时的三个取舍维度",
+        "markdown": "移植时可以用三个维度作取舍：\n\n- 输出形式：若必须保留线条样式（例如用虚线表示被遮挡段），逐边对面前的深度比较更直接；若只需看到可见边界，借用面算法即可；\n- 场景结构：后向面判别只处理背向观察者的面边界，同一观察方向上多个面之间的相互遮挡仍需其他深度信息；\n- 实现成本：深度排序与扫描线本来就要维护面的排序或边表，把它们改成画边界，通常比另写一套逐边求交更省。\n\n实际系统常把可见性测试与深度提示叠加：先消除隐藏线，再对保留的线条按距离调整强度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-porting-methods"
+          ]
+        }
+      },
+      {
+        "id": "textbook-depth-cueing",
+        "moduleId": "depth-cueing",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材公式：深度提示的线性函数",
+        "markdown": "另一种显示可见性信息的方法不判定遮挡，而是把场景中对象的亮度作为离观察位置距离的函数来改变，这种方法称为深度提示（depth-cueing）。教材使用的一般线性函数为：\n\n$$f_{\\mathrm{depth}}(d) = \\frac{d_{\\max} - d}{d_{\\max} - d_{\\min}}$$\n\n其中 $d$ 是点离观察位置的距离；最小与最大深度 $d_{\\min}$ 和 $d_{\\max}$ 在具体系统中设定为方便的值，也可规范化为 $d_{\\min}=0.0$、$d_{\\max}=1.0$。处理每个像素后，把它的颜色乘以 $f_{\\mathrm{depth}}(d)$，于是较近的点以高强度显示，而位于最大深度处的点强度等于 0。\n\n实现上有多种做法。有些图形库提供通用的雾气函数，把深度提示与雾气效果结合以模拟烟或雾，对象的颜色因此可先用深度提示函数修改，再与雾颜色混合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000516"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "线框图深度提示算法"
+              ],
+              "lineStart": 14018,
+              "lineEnd": 14029,
+              "assetRefs": [],
+              "excerptSha256": "5fd20f75780fc9c9c569c03c78ae3b183c110d6d7ed2459beebb6f8c5b9e43a0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cueing-example",
+        "moduleId": "depth-cueing",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：一次强度系数的计算",
+        "markdown": "用规范化深度算一次：取 $d_{\\min}=0.0$、$d_{\\max}=1.0$，某点距离 $d=0.4$，则\n\n$$f_{\\mathrm{depth}}(0.4) = \\frac{1.0 - 0.4}{1.0 - 0.0} = 0.6$$\n\n该点像素颜色按 0.6 的系数衰减；距离为 0 时系数为 1，保持原强度；距离为 1 时系数为 0，完全消失。\n\n要注意它仍只是视觉线索：深度提示不会告诉你哪条边被哪个面挡住，只是用亮度差把远近关系提示出来。因此教材把它作为与可见性测试并列的另一种方法，而不是替代品。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-depth-cueing"
+          ]
+        }
+      },
+      {
+        "id": "method-choice",
+        "moduleId": "choose-and-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "取舍：先问输出要什么，再选方法",
+        "markdown": "把本节两条路线放在一起做决定：\n\n- 目标是把前后遮挡关系读清楚，且需要区分整条与部分遮挡——选可见性测试。逐边对面的深度比较能给出分段结论，并允许对隐藏段改虚线或保留样式；借用后向面、深度排序、区域细分、扫描线等面算法，则适合只要看到可见边界的情形。\n- 目标只是让画面快速产生远近感、计算预算很小——选深度提示。它只需按距离衰减颜色，还可以和雾气效果合并，但不会回答“谁挡住了谁”。\n- 两者并不冲突：先做可见性测试消除或区分隐藏线，再对保留下来的线条施加深度提示，是最常见的组合。\n\n无论选哪条路线，输出仍然是线框图，这与隐藏面消除要生成实心画面是不同层次的目标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro",
+            "textbook-edge-face-test",
+            "textbook-depth-cueing"
+          ]
+        }
+      },
+      {
+        "id": "check-yourself",
+        "moduleId": "choose-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "自检：两问检验掌握程度",
+        "markdown": "先自己判断，再对照括号中的结论：\n\n1. 某面在位置 $(x, y)$ 的深度为 5，一条边的两个投影端点都落在该面投影区域内，端点深度分别为 2 和 7。这条边相对该面如何判定？（两端分处面两侧，必须与面边界求交并按段判定：深度 2 的一段在面前可见，深度 7 的一段在面后隐藏。）\n2. 取 $d_{\\min}=0$、$d_{\\max}=10$，距离 $d=2.5$ 的点，深度提示系数是多少？（$f_{\\mathrm{depth}}=(10-2.5)/(10-0)=0.75$，即颜色乘以 0.75。）\n\n如果第一问答成“整条可见”或“整条隐藏”，回看端点分处两侧时的求交步骤；如果第二问把系数当成深度值，回看公式中分子与分母各自的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-edge-face-test",
+            "textbook-depth-cueing"
+          ]
+        }
+      },
+      {
+        "id": "model-next-bridge",
+        "moduleId": "choose-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "衔接：这些规则在图形库中的落点",
+        "markdown": "本节给出的是算法层的判别规则。下一节转到 OpenGL，用面剔除与深度缓存等函数在图形库层面完成同样的可见性检查。阅读那些函数时，可以回到本节的两个问题来对照：哪些面背向观察者需要剔除，哪个片元离观察者更近从而通过深度比较。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "method-choice"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "wireframe-visibility-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-yourself",
+        "moduleId": "choose-and-check",
+        "depth": "support",
+        "title": "线框可见性与深度提示自检",
+        "outcomeRefs": [
+          "apply-edge-face-test",
+          "apply-depth-cueing"
+        ],
+        "learningPurpose": "检查学习者能否把逐边对面的深度判定和深度提示公式套用到具体数值情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-edge-face-test",
+            "textbook-depth-cueing"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            {
+              "prompt": "面在给定位置的深度为 5，边两端的深度为 2 和 7，且两端都落在该面投影区域内。该边相对这个面的判定是？",
+              "options": [
+                "整条边可见",
+                "整条边隐藏",
+                "部分隐藏，需与面边界求交后按段判定"
+              ],
+              "answerIndex": 2,
+              "explanation": "两端分处面两侧，不能直接给整条边下结论，必须求交点并按深度分段。"
+            },
+            {
+              "prompt": "取 d_min=0、d_max=10，距离 d=2.5 处的深度提示系数是？",
+              "options": [
+                "0.25",
+                "0.75",
+                "2.5"
+              ],
+              "answerIndex": 1,
+              "explanation": "f_depth(d)=(d_max-d)/(d_max-d_min)=(10-2.5)/10=0.75。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "1. 面深度 5、边端点深度 2 与 7：两端分处两侧，属于部分隐藏，需与面边界求交后按段判定。\n2. $d_{\\min}=0$、$d_{\\max}=10$、$d=2.5$：$f_{\\mathrm{depth}}=(10-2.5)/10=0.75$。"
+        }
+      }
+    ]
+  },
+  "subtitle": "可见面判别算法",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000514"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "线框图可见性算法"
+      ],
+      "lineStart": 14001,
+      "lineEnd": 14004,
+      "assetRefs": [],
+      "excerptSha256": "d2ed286152edc9cb98d4cd481f02e9eb3ea5ea1e80b105bfbc73e49e3a633f7e"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000515"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "线框面可见性算法"
+      ],
+      "lineStart": 14005,
+      "lineEnd": 14017,
+      "assetRefs": [
+        "parts/part-0005/images/99e4284f131272de0f0ce54c777de19a78392245f750e6a74694b8faf7833e87.jpg",
+        "parts/part-0005/images/99bceb3156fa9252f3a8a8bb1522c72715856a82445a565251ade26dc8742dac.jpg"
+      ],
+      "excerptSha256": "f7fbd4bc98c9acf22376c62be9c380ac8dcaee3ded731cfd4d4631aad18d0fd0"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000516"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "线框图深度提示算法"
+      ],
+      "lineStart": 14018,
+      "lineEnd": 14029,
+      "assetRefs": [],
+      "excerptSha256": "5fd20f75780fc9c9c569c03c78ae3b183c110d6d7ed2459beebb6f8c5b9e43a0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3795,
+    347
+  ],
+  "scale": 0.88
+}

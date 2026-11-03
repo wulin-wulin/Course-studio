@@ -1,0 +1,591 @@
+{
+  "id": "point-14-16",
+  "title": "OpenGL的逼近样条函数",
+  "shortSummary": "说明 OpenGL 求值器和 NURBS 接口的使用方式，以及控制点、节点向量与纹理坐标的组织。",
+  "keyTerms": [
+    "OpenGL",
+    "求值器",
+    "NURBS"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-14-8",
+    "point-14-9",
+    "point-14-10",
+    "point-14-11",
+    "point-14-13"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-and-parameter-mapping",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的调用顺序为主线，补充参数映射推导、内存布局检查、修剪约束与练习，不改变任何接口语义和限制。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-api-split",
+          "text": "区分核心库 Bézier 求值器与 GLU 的 B 样条/NURBS 接口的分工及启用、禁用方式。"
+        },
+        {
+          "id": "explain-parameter-mapping",
+          "text": "说明 uValue、vValue 到 0~1 区间的映射规则，以及 stride、控制点数与节点向量的组织要求。"
+        },
+        {
+          "id": "select-sampling-mode",
+          "text": "选择 glMapGrid/glEvalMesh 或 GLU 属性生成点、折线或填充曲面，并说明采样密度的影响。"
+        },
+        {
+          "id": "check-parameters-and-trim",
+          "text": "依据节点数、次数和控制点数关系核对 GLU 调用，并检查修剪曲线是否封闭且无自相交。"
+        }
+      ],
+      "misconceptions": [
+        "把 GLU 的 NURB 子程序理解为只能生成非均匀有理 B 样条；教材指出它同样可生成均匀节点间隔的多项式 B 样条和有/无理的 Bézier 样条。",
+        "认为 glMap1/glMap2 的 uMin、uMax 必须固定为 0.0 和 1.0；它们只是外部参数区间，glEvalCoord 会按公式重新映射，Bézier 曲线通常才取 0 和 1。",
+        "把 stride 当成字节数，或忽略坐标与颜色、法向量交错存放时 stride 必须增大。",
+        "认为修剪曲线可以开放或自相交；GLU 要求任何修剪曲线不自相交且封闭。"
+      ],
+      "modules": [
+        {
+          "id": "entry-and-api-map",
+          "title": "两套接口的分工",
+          "role": "concept-overview",
+          "outcomeRefs": [
+            "explain-api-split"
+          ],
+          "description": "先建立核心库求值器与 GLU 接口的职责地图。",
+          "order": 0
+        },
+        {
+          "id": "bezier-curve-evaluator",
+          "title": "Bézier 曲线求值器",
+          "role": "procedure",
+          "outcomeRefs": [
+            "explain-parameter-mapping",
+            "select-sampling-mode"
+          ],
+          "description": "glMap1 的设置、glEvalCoord1 的参数映射与均匀采样。",
+          "order": 1
+        },
+        {
+          "id": "bezier-surface-evaluator",
+          "title": "Bézier 曲面求值器",
+          "role": "procedure",
+          "outcomeRefs": [
+            "explain-parameter-mapping",
+            "select-sampling-mode"
+          ],
+          "description": "glMap2 的双参数设置、位移量与网格化输出。",
+          "order": 2
+        },
+        {
+          "id": "glu-nurbs-curve",
+          "title": "GLU 的 B 样条曲线",
+          "role": "procedure",
+          "outcomeRefs": [
+            "explain-parameter-mapping",
+            "check-parameters-and-trim"
+          ],
+          "description": "节点向量、次数参数与控制点数的组织方式。",
+          "order": 3
+        },
+        {
+          "id": "glu-nurbs-surface-trim",
+          "title": "GLU 的 B 样条曲面与修剪",
+          "role": "procedure-and-comparison",
+          "outcomeRefs": [
+            "select-sampling-mode",
+            "check-parameters-and-trim"
+          ],
+          "description": "曲面属性、采样控制与参数域修剪曲线。",
+          "order": 4
+        },
+        {
+          "id": "practice-and-check",
+          "title": "选型与参数自检",
+          "role": "practice",
+          "outcomeRefs": [
+            "explain-api-split",
+            "explain-parameter-mapping",
+            "select-sampling-mode",
+            "check-parameters-and-trim"
+          ],
+          "description": "把接口选择与参数核对组织成可执行的检查清单。",
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-api-split",
+          "explain-parameter-mapping",
+          "select-sampling-mode",
+          "check-parameters-and-trim"
+        ],
+        "method": "先判断应使用核心库求值器还是 GLU，再按节点数、次数、控制点数和 stride 核对一次调用，最后检查修剪曲线约束。",
+        "successCriteria": [
+          "能写出曲线与曲面的核心库调用骨架并说明每个参数含义",
+          "能由控制点数和次数参数算出节点向量应有的元素数",
+          "能说明 GL_LINE 与 GL_FILL 输出形态的差别",
+          "能指出一条修剪曲线是否满足封闭且无自相交"
+        ],
+        "exerciseBlockId": "practice-checklist",
+        "summaryBlockId": "bridge-to-summary",
+        "nextPointId": "point-14-17"
+      }
+    },
+    "blocks": [
+      {
+        "id": "api-two-libraries",
+        "moduleId": "entry-and-api-map",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "核心库与 GLU 的分工",
+        "markdown": "教材把 OpenGL 的逼近样条显示能力分成两部分：核心库提供 Bézier 样条曲线和曲面函数，OpenGL 实用库 GLU 提供 B 样条与修剪曲线函数。Bézier 函数常用硬件实现，而 GLU 函数提供一个调用 OpenGL 画点和画线子程序的 B 样条接口。\n\n最小的激活形式是先用 `glMap1*(GL_MAP1_VERTEX_3, uMin, uMax, stride, nPts, *ctrlPts)` 设定参数，再用 `glEnable(GL_MAP1_VERTEX_3)` 打开求值器；关闭时调用 `glDisable`。也就是说，核心库负责\"按控制点求值并产生顶点\"，GLU 负责\"把样条细分后交给画点画线命令\"。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000477"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL的逼近样条函数"
+              ],
+              "lineStart": 12904,
+              "lineEnd": 12910,
+              "assetRefs": [],
+              "excerptSha256": "fede27ece77f3d049a5290cdb5805b3ed7f28931953e9a2ae5da892be6533e1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "api-two-libraries-analogy",
+        "moduleId": "entry-and-api-map",
+        "depth": "support",
+        "kind": "example",
+        "title": "把两者想成求值器与适配器",
+        "markdown": "可以把核心库求值器想成\"自带绘制的计算器\"：给它控制点和参数区间，它直接算出曲线上的坐标；把 GLU 想成\"几何适配器\"：它接收节点向量、次数和控制点，把样条翻译成 OpenGL 图元。正因为两者都能生成 Bézier，同一条曲线既能用 `glMap1` 构造，也能交给 `gluNurbsCurve`，区别在于参数组织和谁负责细分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "api-two-libraries"
+          ]
+        }
+      },
+      {
+        "id": "bezier-curve-map1",
+        "moduleId": "bezier-curve-evaluator",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "glMap1 与 glEvalCoord1 的参数",
+        "markdown": "`glMap1` 的后缀 `f` 或 `d` 指出浮点或双精度类型。`uMin`、`uMax` 指定曲线参数的最小值和最大值，Bézier 曲线一般分别置为 0.0 和 1.0；`ctrlPts` 列出控制点的三维浮点笛卡儿坐标，`nPts` 以正整数给出元素数量。`stride` 是整型位移量，指出数组 `ctrlPts` 中一个坐标位置开始到下一个坐标位置开始之间的数据值数量；对三维控制点列表取 `stride = 3`。若用四维齐次坐标或插入颜色等数据，`stride` 要更大，并把 `GL_MAP1_VERTEX_3` 换成 `GL_MAP1_VERTEX_4`。\n\n参数设定并激活后，用 `glEvalCoord1(uValue)` 计算曲线上的位置，其中 `uValue` 是 `uMin` 到 `uMax` 之间的值。该函数按\n\n$$u = \\frac{u_{value} - u_{min}}{u_{max} - u_{min}}$$\n\n把参数映射到 0.0 至 1.0，再代入求值。反复调用 `glEvalCoord1` 取一系列参数值，并用直线段连接这些点，就用折线逼近了样条曲线。\n\n均匀参数值由 `glMapGrid1(n, u1, u2)` 与 `glEvalMesh1(mode, n1, n2)` 生成。`n` 是 u1 到 u2 之间均匀划分的整数量，`n1`、`n2` 是对应 u1、u2 的整数范围，`mode` 取 `GL_POINT`（点状曲线）或 `GL_LINE`（折线）。它的输出等价于以 $u_1 + k(u_2-u_1)/n$ 均匀取样并连接的循环，只在端点用 u1、u2 避免舍入误差。\n\n除坐标外，`glMap1` 还能用 `GL_MAP1_COLOR_4`、`GL_MAP1_INDEX`、`GL_MAP1_NORMAL` 等常量生成颜色、索引和法向量，其余常量对应表面纹理信息。多个 `glMap1` 可同时激活，但 `GL_MAP1_VERTEX_3` 与 `GL_MAP1_VERTEX_4` 不能同时激活，同一时刻只能激活一个曲面纹理生成器。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000478"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL的Bézier样条曲线函数"
+              ],
+              "lineStart": 12911,
+              "lineEnd": 12987,
+              "assetRefs": [
+                "parts/part-0004/images/a4b2c9d17dd6c98a3cca3570c3bada42a406b81335e54fd9550e56af77b8f297.jpg"
+              ],
+              "excerptSha256": "600bc84162f58b5c57000d595ad7fd6506685345cf707f83a138f631660bb79c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bezier-param-example",
+        "moduleId": "bezier-curve-evaluator",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "参数区间与映射的算例",
+        "markdown": "以 4 个三维控制点、`stride = 3`、`uMin = 0.0`、`uMax = 1.0` 为例：控制点数组展开为 12 个浮点数，每个点占 3 个值，所以位移量 3 恰好跨到下一个点。\n\n若把区间改为 `uMin = 0.0`、`uMax = 2.0`，调用 `glEvalCoord1(1.0)` 时按映射公式得到 $u = (1.0 - 0.0)/(2.0 - 0.0) = 0.5$，取到的是曲线中点。可见 `uValue` 是外部参数，真正的样条参数被重新归一化。教材的 50 点折线例子可以等价改写为 `glMapGrid1f(50, 0.0, 1.0)` 加 `glEvalMesh1(GL_LINE, 0, 50)`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bezier-curve-map1"
+          ]
+        }
+      },
+      {
+        "id": "bezier-stride-check",
+        "moduleId": "bezier-curve-evaluator",
+        "depth": "support",
+        "kind": "note",
+        "title": "stride 数的是数据值个数",
+        "markdown": "若把三维坐标与三维颜色交错存放，一个控制点占 6 个浮点数，`stride` 应为 6 而不是 3；也可以把坐标和颜色拆成两个数组分别调用 `glMap1`。检查时可记：`stride` 数的是相邻同类坐标之间的**数据值个数**，不是字节数；它必须覆盖从当前坐标到下一个同类坐标的完整间距。用齐次坐标时还要同步把常量从 `_3` 改为 `_4`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bezier-curve-map1"
+          ]
+        }
+      },
+      {
+        "id": "bezier-surface-map2",
+        "moduleId": "bezier-surface-evaluator",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "glMap2 与双参数求值",
+        "markdown": "曲面的激活和参数设定用 `glMap2*(GL_MAP2_VERTEX_3, uMin, uMax, uStride, nuPts, vMin, vMax, vStride, nvPts, *ctrlPts)` 加 `glEnable(GL_MAP2_VERTEX_3)`。后缀 `f` 或 `d` 指定数据类型；u 和 v 都要给出最小值和最大值；`ctrlPts` 给出控制点三维坐标，`nuPts`、`nvPts` 是两个方向的控制点数量。`uStride` 是 u 方向相邻控制点坐标起始位置之间的整数位移，`vStride` 是 v 方向的同类位移；这允许在坐标数据中插入其他数据。四维齐次坐标改用 `GL_MAP2_VERTEX_4`，失效用 `glDisable`。\n\n曲面位置用 `glEvalCoord2(uValue, vValue)` 或向量版本 `glEvalCoord2*v(uvArray)` 计算，并按下式分别映射两个参数：\n\n$$u = \\frac{u_{value} - u_{min}}{u_{max} - u_{min}}, \\quad v = \\frac{v_{value} - v_{min}}{v_{max} - v_{min}}$$\n\n反复调用即可生成一系列 `glVertex3`。均匀参数用 `glMapGrid2(nu, u1, u2, nv, v1, v2)` 与 `glEvalMesh2(mode, nu1, nu2, nv1, nv2)` 生成；`mode` 取 `GL_POINT`、`GL_LINE` 或 `GL_FILL`。`GL_LINE` 输出两组正交折线，`GL_FILL` 用四边形条带填充面片。与曲线一样，可用 `GL_MAP2_COLOR_4`、`GL_MAP2_NORMAL` 等常量生成其他数据并组合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000479"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL的Bézier 样条曲面函数"
+              ],
+              "lineStart": 12988,
+              "lineEnd": 13084,
+              "assetRefs": [],
+              "excerptSha256": "3e1a6ca76a83411198b8c25c7d2fd33999a812048a1cbec31045c9c2eb9f2625"
+            }
+          ]
+        }
+      },
+      {
+        "id": "surface-stride-example",
+        "moduleId": "bezier-surface-evaluator",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "4×4 控制网格的行内与行间步长",
+        "markdown": "教材例子给出 4×4 个三维控制点。每个点 3 个浮点数，u 方向相邻点间隔 3，v 方向相邻点要跨越一整行 $4 \\times 3 = 12$，因此 `uStride = 3`、`vStride = 12`。例子按 9 条 u 方向曲线、每条 41 个点绘制，形成曲面上的线框。\n\n可以把 `uStride` 看成\"行内步长\"、`vStride` 看成\"行间步长\"。若控制点数组不是紧凑排列，两个位移都必须按真实内存布局重算，否则求值器会读到错误坐标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bezier-surface-map2"
+          ]
+        }
+      },
+      {
+        "id": "surface-call-skeleton",
+        "moduleId": "bezier-surface-evaluator",
+        "depth": "support",
+        "kind": "code",
+        "title": "曲面调用骨架",
+        "markdown": "用最小骨架对照参数顺序：\n\n```c\nglMap2f(GL_MAP2_VERTEX_3,\n        0.0f, 1.0f, 3, 4,\n        0.0f, 1.0f, 12, 4,\n        &ctrlPts[0][0][0]);\nglEnable(GL_MAP2_VERTEX_3);\n/* 绘制时调用 glEvalCoord2f(u, v) */\n```\n\n顺序依次是目标类型、u 区间与 u 步长/点数、v 区间与 v 步长/点数、控制点指针。`stride` 写在区间之后、点数之前，是 `glMap2` 相对 `glMap1` 最容易写错的位置；`glEvalMesh2` 的四个索引也按 u 范围、v 范围的顺序给出。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bezier-surface-map2"
+          ]
+        }
+      },
+      {
+        "id": "glu-nurbs-curve-sequence",
+        "moduleId": "glu-nurbs-curve",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "GLU 的 B 样条曲线调用序列",
+        "markdown": "GLU 的 B 样条子程序虽然称为 NURB 函数，但也可以生成既非均匀也非有理的 B 样条，因此能用它显示均匀节点间隔的多项式 B 样条；它同样可生成有理或非有理的 Bézier 样条。基本序列是：\n\n```c\nGLUnurbsObj *curveName = gluNewNurbsRenderer();\ngluBeginCurve(curveName);\ngluNurbsCurve(curveName, nknots, knotVector, stride,\n              ctrlPts, degParam, GL_MAP1_VERTEX_3);\ngluEndCurve(curveName);\n```\n\n若存储不足，`curveName` 会被赋为 0。`gluBeginCurve`/`gluEndCurve` 之间用一个 `gluNurbsCurve` 说明曲线属性，可建立多个有不同名字的曲线段。`knotVector` 是浮点节点值，`nknots` 是元素数量；多项式次数为 `degParam - 1`；`ctrlPts` 含 `nknots - degParam` 个三维控制点；`stride` 是相邻控制点坐标起始位置之间的位移，控制点连续存放时取 3。删除用 `gluDeleteNurbsRenderer`。\n\n教材的三次 Bézier 例子取 `degParam = 4`（三次），用 4 个控制点和 8 元素开放均匀节点向量，两端各重复 4 个值：`{0,0,0,0,1,1,1,1}`。要建立有理 B 样条，把 `GL_MAP1_VERTEX_3` 换成 `GL_MAP1_VERTEX_4`，并用四维齐次坐标指定控制点。也可为颜色、法向量、纹理传入其他常量，但每种数据类型不能有多个函数，且至少要有一个生成 B 样条曲线本身的函数。`gluNurbsProperty(splineName, property, value)` 用于设置绘制器选项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000480"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLU的B 样条曲线函数"
+              ],
+              "lineStart": 13085,
+              "lineEnd": 13127,
+              "assetRefs": [],
+              "excerptSha256": "e4e1c53820a7d5fdc0ff7203f5f6af3ee91b9264ae93d689a270197c59fb333b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "knot-degree-count",
+        "moduleId": "glu-nurbs-curve",
+        "depth": "core",
+        "kind": "formula",
+        "title": "节点数、次数与控制点数",
+        "markdown": "三者的关系是 $\\mathrm{nknots} = N_{ctrl} + \\mathrm{degParam}$，其中多项式次数 $p = \\mathrm{degParam} - 1$。\n\n三次 Bézier 用 4 个控制点、`degParam = 4`，于是 `nknots = 8`，正好对应两端各重复 4 次的开放均匀节点向量。若控制点增到 5 个而仍保持三次，节点向量应为 9 个元素。调用前按此关系核对 `knots`、`ctrlPts` 与 `degParam`，可以避免越界或曲线退化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "glu-nurbs-curve-sequence"
+          ]
+        }
+      },
+      {
+        "id": "open-uniform-knot-intuition",
+        "moduleId": "glu-nurbs-curve",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "开放均匀节点向量的直觉",
+        "markdown": "两端各重复 $p+1$ 次，使曲线经过首末控制点，端部行为接近 Bézier；内部节点等间隔，使各段基函数形状一致。这也解释了为什么叫 NURB 的接口仍能表示均匀非有理 B 样条：名称来自它支持的最一般形式，而不是对输入的强制限制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "glu-nurbs-curve-sequence"
+          ]
+        }
+      },
+      {
+        "id": "glu-nurbs-surface",
+        "moduleId": "glu-nurbs-surface-trim",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "GLU 的 B 样条曲面与属性",
+        "markdown": "曲面的基本序列是：`gluNewNurbsRenderer` 得到 `surfName`，随后可调用多个 `gluNurbsProperty` 设置特征，再 `gluBeginSurface`、`gluNurbsSurface`、`gluEndSurface`。`gluNurbsSurface(surfName, nuKnots, uKnotVector, nvKnots, vKnotVector, uStride, vStride, ctrlPts, uDegParam, vDegParam, GL_MAP2_VERTEX_3)` 中，u/v 方向的多项式次数分别是 `uDegParam - 1`、`vDegParam - 1`；控制点数组含 $(nuKnots-uDegParam) \\times (nvKnots-vDegParam)$ 个三维点；`uStride`、`vStride` 是相应方向连续控制点起始位置之间的位移。存储不足时 `surfName` 被赋为 0，清除仍用 `gluDeleteNurbsRenderer`。\n\n默认把曲面显示为一组多边形填充区。`GLU_DISPLAY_MODE` 可设为 `GLU_FILL`（默认）、`GLU_OUTLINE_PATCH` 或 `GLU_OUTLINE_POLYGON`，后者会把曲面分割成三角形并按多边形轮廓显示；`GLU_NURBS_MODE` 取 `GLU_NURBS_TESSELLATOR` 时可从回调提取三角网格，取默认 `GLU_NURBS_RENDERER` 则只绘制。`GLU_U_STEP`/`GLU_V_STEP` 与 `GLU_SAMPLING_METHOD`（如 `GLU_DOMAIN_DISTANCE`）控制每单位长度的取样点数，`GLU_SAMPLING_TOLERANCE`、`GLU_PARAMETRIC_TOLERANCE` 设定最大取样长度，`GLU_CULLING` 可跳过视体外对象，`GLU_AUTO_LOAD_MATRIX` 决定是否自动下载观察、投影和视口矩阵。\n\n`gluGetNurbsProperty` 查询当前值；当 `GLU_AUTO_LOAD_MATRIX` 为 `GL_FALSE` 时，应用必须用 `gluLoadSamplingMatrices` 提供模型观察矩阵、投影矩阵和视口。`gluNurbsCallback`/`gluNurbsCallbackData` 处理错误以及网格化产生的图元事件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000481"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLU的B 样条曲面函数"
+              ],
+              "lineStart": 13128,
+              "lineEnd": 13189,
+              "assetRefs": [],
+              "excerptSha256": "68d096d6563efef2a67a774454b8336da4f8817b41475b3ef2b699b9b77dc87e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "glu-surface-trim",
+        "moduleId": "glu-nurbs-surface-trim",
+        "depth": "advanced",
+        "kind": "procedure",
+        "title": "GLU 曲面修剪",
+        "markdown": "修剪用 `gluBeginTrim(surfName)`、`gluPwlCurve(surfName, nPts, curvePts, stride, GLU_MAP1_TRIM_2)`、`gluEndTrim(surfName)`。`curvePts` 含 `nPts` 个浮点坐标位置，`stride` 是相邻位置之间的整数位移；生成的修剪\"曲线\"实际是一条分段线性折线。若曲线点在三维齐次 $(u, v, h)$ 参数空间给出，最后一个常量改为 `GLU_MAP1_TRIM_3`。也可以用一个或多个 `gluNurbsCurve`，或把 `gluPwlCurve` 与 `gluNurbsCurve` 混合成一条修剪曲线。\n\n任何修剪曲线必须没有自相交，并且必须是一条封闭曲线。教材例子在单位正方形上设置外圈：沿正方形逆时针给出 5 个点并回到起点；内圈分两段按顺时针给出，第一段是折线，第二段用节点向量生成三次 Bézier 曲线，两段合起来围出内部孔洞。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000482"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLU曲面修剪函数"
+              ],
+              "lineStart": 13190,
+              "lineEnd": 13230,
+              "assetRefs": [],
+              "excerptSha256": "69d037bca607ea6f13fccec096e1aa4682d5362592bd8275eee18cbe83732fb3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "trim-orientation-check",
+        "moduleId": "glu-nurbs-surface-trim",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "外圈逆时针、内圈顺时针",
+        "markdown": "修剪曲线位于参数域 $(u, v)$ 中，方向决定保留哪一侧。教材示例用逆时针外圈和顺时针内圈，围出\"外正方形减去内部孔洞\"的区域。实现时可先按 `GLU_OUTLINE_PATCH` 或默认填充确认轮廓，再逐条检查 trim 是否闭合、是否自交；不封闭或自交会让网格化结果不确定，这类问题不会通过调整采样密度消失。\n\n与核心库求值器的对照：`glMap1`/`glMap2` 只负责由控制点求值，修剪和网格化不在其职责内；GLU 则在细分之后处理属性、显示模式和修剪，因此两者不能互相替代。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "glu-nurbs-surface",
+            "glu-surface-trim"
+          ]
+        }
+      },
+      {
+        "id": "practice-checklist",
+        "moduleId": "practice-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "选型与参数自检清单",
+        "markdown": "动手调用前按顺序回答四个问题：\n\n1. **接口**：要显示的是 Bézier 曲线、曲面，还是任意 B 样条？前者可直接用核心库 `glMap1`/`glMap2`，后者用 GLU 的 NURBS 接口；两者都能生成 Bézier。\n2. **节点关系**：GLU 调用中 $\\mathrm{nknots} = N_{ctrl} + \\mathrm{degParam}$ 是否成立？`degParam` 是次数加一，不是次数本身。\n3. **内存布局**：控制点是连续存放还是与颜色、法向量交错？`stride` 是否与真实间距一致，齐次坐标是否已改用 `GL_MAP1_VERTEX_4`/`GL_MAP2_VERTEX_4`？\n4. **显示与修剪**：曲面用 `GL_FILL`、`GLU_OUTLINE_PATCH` 还是 `GLU_OUTLINE_POLYGON`？需要修剪时，每条曲线是否封闭且无自相交？\n\n练习：给定 6 个控制点的三次 B 样条，`degParam = 4`，节点向量应有多少个元素？若算得 10，说明已经会用节点关系反推数组长度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bezier-curve-map1",
+            "glu-nurbs-curve-sequence",
+            "glu-nurbs-surface",
+            "glu-surface-trim",
+            "trim-orientation-check"
+          ]
+        }
+      },
+      {
+        "id": "bridge-to-summary",
+        "moduleId": "practice-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "回到样条表示的整体框架",
+        "markdown": "本节把前面各节的 Bézier、B 样条、有理样条和修剪曲面落成 OpenGL 调用：核心库求值器按控制点和参数区间直接算顶点，GLU 负责节点向量、次数、曲面网格化与修剪。接口选择取决于表示类型与是否需要修剪，参数核对则围绕控制点数、次数参数、节点数和内存步长展开。下一节将回顾样条表示与连续性的整体脉络，把这里的接口细节放回\"表示—控制—显示\"的框架中。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "practice-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "api-parameter-check",
+        "type": "formative-check",
+        "anchorBlockId": "practice-checklist",
+        "moduleId": "practice-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "check-parameters-and-trim"
+        ],
+        "learningPurpose": "检查学习者能否根据控制点数、次数参数和内存布局核对一次 GLU 或核心库调用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "bezier-curve-map1",
+            "glu-nurbs-curve-sequence",
+            "glu-nurbs-surface"
+          ]
+        },
+        "config": {
+          "questions": [
+            "6 个控制点的三次 B 样条需要多少个节点值？",
+            "三维控制点与三维颜色交错存放时 stride 取多少？",
+            "曲面修剪曲线必须满足哪两个几何条件？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "依次检查：节点数 = 控制点数 + 次数参数；`stride` 等于相邻同类坐标之间的数据值个数；修剪曲线封闭且无自相交。"
+        }
+      }
+    ]
+  },
+  "subtitle": "样条表示",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000477"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL的逼近样条函数"
+      ],
+      "lineStart": 12904,
+      "lineEnd": 12910,
+      "assetRefs": [],
+      "excerptSha256": "fede27ece77f3d049a5290cdb5805b3ed7f28931953e9a2ae5da892be6533e1e"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000478"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL的Bézier样条曲线函数"
+      ],
+      "lineStart": 12911,
+      "lineEnd": 12987,
+      "assetRefs": [
+        "parts/part-0004/images/a4b2c9d17dd6c98a3cca3570c3bada42a406b81335e54fd9550e56af77b8f297.jpg"
+      ],
+      "excerptSha256": "600bc84162f58b5c57000d595ad7fd6506685345cf707f83a138f631660bb79c"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000479"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL的Bézier 样条曲面函数"
+      ],
+      "lineStart": 12988,
+      "lineEnd": 13084,
+      "assetRefs": [],
+      "excerptSha256": "3e1a6ca76a83411198b8c25c7d2fd33999a812048a1cbec31045c9c2eb9f2625"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000480"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLU的B 样条曲线函数"
+      ],
+      "lineStart": 13085,
+      "lineEnd": 13127,
+      "assetRefs": [],
+      "excerptSha256": "e4e1c53820a7d5fdc0ff7203f5f6af3ee91b9264ae93d689a270197c59fb333b"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000481"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLU的B 样条曲面函数"
+      ],
+      "lineStart": 13128,
+      "lineEnd": 13189,
+      "assetRefs": [],
+      "excerptSha256": "68d096d6563efef2a67a774454b8336da4f8817b41475b3ef2b699b9b77dc87e"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000482"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLU曲面修剪函数"
+      ],
+      "lineStart": 13190,
+      "lineEnd": 13230,
+      "assetRefs": [],
+      "excerptSha256": "69d037bca607ea6f13fccec096e1aa4682d5362592bd8275eee18cbe83732fb3"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2618,
+    1113
+  ],
+  "scale": 0.87
+}

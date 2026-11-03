@@ -1,0 +1,515 @@
+{
+  "id": "point-16-3",
+  "title": "深度缓存算法",
+  "shortSummary": "说明深度缓存的逐像素比较流程、实现结构和复杂度，并解释它与帧缓存并行工作的方式。",
+  "keyTerms": [
+    "深度缓存",
+    "Z-buffer",
+    "逐像素"
+  ],
+  "animationType": "visibilityAlgorithmLab",
+  "animationSuggestion": "按给定顺序逐个处理三个重叠表面，逐步显示该像素的 depthBuff 与 frameBuff 数值变化，高亮“更小则覆盖”的判定，最后停在深度最小的可见面，并允许重播同一组深度值与处理顺序。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-6-10"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-state-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的算法步骤、平面方程与扫描线增量公式，围绕“逐像素状态更新”重排讲解，补充追踪算例、代价分析和达成检查。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-role",
+          "text": "解释深度缓存为何能在像空间逐像素判定可见面，并说明它与对象空间排序思路的区别。"
+        },
+        {
+          "id": "describe-procedure",
+          "text": "按顺序描述双缓存的初始化与逐像素深度测试流程。"
+        },
+        {
+          "id": "compute-increment",
+          "text": "用平面方程解释同一扫描线上相邻像素深度的一步增量更新。"
+        },
+        {
+          "id": "analyze-cost",
+          "text": "分析深度缓存的存储与计算代价、常见冗余及缓解方式。"
+        }
+      ],
+      "misconceptions": [
+        "把深度缓存中保存的值当作场景点的真实 z 坐标，而教材说明它通常记录沿 z 轴从投影面到表面点的距离。",
+        "认为必须先按远近对多边形排序才能得到正确可见面，实际上表面可按任意次序处理。",
+        "认为深度缓存不需要额外存储，实际上除刷新缓存外还需要一块深度缓存。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-definition",
+          "title": "问题导入与算法定位",
+          "role": "motivation",
+          "description": "明确深度缓存解决的是投影面每个像素上多个表面竞争可见性的问题。",
+          "outcomeRefs": [
+            "explain-role"
+          ],
+          "order": 0
+        },
+        {
+          "id": "buffer-structure",
+          "title": "双缓存结构与初始化",
+          "role": "concept",
+          "description": "建立深度缓存与帧缓存一一对应、各存一类信息的结构认识。",
+          "outcomeRefs": [
+            "explain-role",
+            "describe-procedure"
+          ],
+          "order": 1
+        },
+        {
+          "id": "pixel-test-procedure",
+          "title": "逐像素测试流程",
+          "role": "procedure",
+          "description": "按步骤执行深度比较、条件更新和最终读取。",
+          "outcomeRefs": [
+            "describe-procedure"
+          ],
+          "order": 2
+        },
+        {
+          "id": "incremental-depth",
+          "title": "扫描线增量求深度",
+          "role": "quantitative",
+          "description": "由平面方程推导相邻像素和相邻扫描线的深度增量。",
+          "outcomeRefs": [
+            "compute-increment"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-and-limits",
+          "title": "实现代价与边界",
+          "role": "cost-analysis",
+          "description": "分析额外缓存、分辨率规模、冗余着色与深度范围限制。",
+          "outcomeRefs": [
+            "analyze-cost"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用判断与计算题检查状态更新规则，并指出单值记录带来的边界。",
+          "outcomeRefs": [
+            "explain-role",
+            "describe-procedure",
+            "compute-increment",
+            "analyze-cost"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-role",
+          "describe-procedure",
+          "compute-increment",
+          "analyze-cost"
+        ],
+        "method": "完成三道检查题并说明每一步判定所依据的深度比较规则。",
+        "successCriteria": [
+          "能写出初始化值与更新条件",
+          "能用负的常数增量解释相邻像素深度变化",
+          "能指出额外深度缓存与冗余着色的来源"
+        ],
+        "exerciseBlockId": "model-check-depth",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-16-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-problem",
+        "moduleId": "problem-and-definition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：像空间的逐像素深度比较",
+        "markdown": "深度缓存算法（depth buffer method，又称 z 缓存 z-buffer）是一种常用的判定对象表面可见性的**像空间算法**：它在投影面上的每一像素位置比较场景中所有面的深度。算法对场景中的各个对象表面单独处理，并在表面上逐点进行。\n\n它通常用于只包含多边形面的场景，因为这类场景能很快算出深度值且算法容易实现；当然也可以处理非平面表面。需要注意：它通常计算的是沿观察系统 $z$ 轴从投影面到表面点的距离，而不是场景中该点的真实 $z$ 坐标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000501"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "深度缓存算法"
+              ],
+              "lineStart": 13632,
+              "lineEnd": 13646,
+              "assetRefs": [
+                "parts/part-0005/images/fa49e8702412a7da9b3c4cb40ddd46a65ecb61a2752bf5aafda8ea6b1dec3bd1.jpg"
+              ],
+              "excerptSha256": "a0d95080ae27f59b45fad4ee0af7036da5ec5cfb02d343b70e5cacabf6c5f9c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-image-space-contrast",
+        "moduleId": "problem-and-definition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么可以只看像素",
+        "markdown": "像空间方法把“哪个面可见”拆成每个像素各自的问题：像素 $(x,y)$ 只关心所有覆盖它的表面中深度最小者。每个像素的判定互不依赖，因此不必先建立整个场景的面与面遮挡顺序，这也正是它便于逐扫描线实现和硬件并行的原因。\n\n代价是必须为每个像素保存当前的“最近深度”，这直接引出后面要讲的双缓存结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-problem"
+          ]
+        }
+      },
+      {
+        "id": "tb-overlap-example",
+        "moduleId": "problem-and-definition",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材示例：三个表面的深度竞争",
+        "markdown": "图 16.4 中，从观察平面上的点 $(x,y)$ 出发沿正交投影方向看去，有三个表面处于不同距离并重叠覆盖该像素。处理每个面时，把它的深度与前面已处理表面在该像素的深度比较；只要它比任意已处理表面都近，就计算它的表面颜色，并把颜色与深度一起存储。\n\n所有表面处理完后，保留下来的那组表面就表示场景的可见面，其中深度最小的表面 $S$ 在该像素可见。三个面可以按任意次序处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000501"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "深度缓存算法"
+              ],
+              "lineStart": 13632,
+              "lineEnd": 13646,
+              "assetRefs": [
+                "parts/part-0005/images/fa49e8702412a7da9b3c4cb40ddd46a65ecb61a2752bf5aafda8ea6b1dec3bd1.jpg"
+              ],
+              "excerptSha256": "a0d95080ae27f59b45fad4ee0af7036da5ec5cfb02d343b70e5cacabf6c5f9c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-two-buffers",
+        "moduleId": "buffer-structure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "双缓存结构与初始化",
+        "markdown": "算法需要两块缓存区域：**深度缓存**保存每个像素 $(x,y)$ 对应的深度值，**刷新缓存**（帧缓存）保存该像素位置的表面颜色值。\n\n执行前，深度缓存所有单元初始化为 $1.0$（最大深度），帧缓存各单元初始化为背景颜色。深度值通常规范化到 $0.0$ 至 $1.0$，观察平面位于深度 $0$ 处；变量 $z$ 表示多边形表面点沿负 $z$ 轴方向到观察平面的距离。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000501"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "深度缓存算法"
+              ],
+              "lineStart": 13632,
+              "lineEnd": 13646,
+              "assetRefs": [
+                "parts/part-0005/images/fa49e8702412a7da9b3c4cb40ddd46a65ecb61a2752bf5aafda8ea6b1dec3bd1.jpg"
+              ],
+              "excerptSha256": "a0d95080ae27f59b45fad4ee0af7036da5ec5cfb02d343b70e5cacabf6c5f9c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-buffer-role",
+        "moduleId": "buffer-structure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "两块缓存各自回答的问题",
+        "markdown": "可以把深度缓存看成“每个像素目前的最近距离记录”，把帧缓存看成“该像素当前应该显示的颜色”。\n\n深度缓存用于比较，决定是否覆盖；帧缓存用于显示，只在深度测试通过时更新。二者按下标 $(x,y)$ 一一对应，因此一次测试会在同一像素位置同时读写这两个单元。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-buffers"
+          ]
+        }
+      },
+      {
+        "id": "model-overlap-trace",
+        "moduleId": "buffer-structure",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "按任意顺序处理的追踪示例",
+        "markdown": "设某像素被三个面覆盖，沿视线方向的深度分别为 $S_1=0.6$、$S_2=0.3$、$S_3=0.8$，初始 depthBuff $=1.0$，frameBuff 为背景色。\n\n按 $S_3 \\to S_1 \\to S_2$ 处理：$S_3$ 的 $0.8<1.0$，写入深度 $0.8$ 与颜色；$S_1$ 的 $0.6<0.8$，更新为 $0.6$；$S_2$ 的 $0.3<0.6$，更新为 $0.3$。最终该像素显示 $S_2$ 的颜色。\n\n若换成 $S_1 \\to S_2 \\to S_3$，中间覆盖的次数不同，但最终结果仍是深度最小的 $S_2$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overlap-example",
+            "tb-two-buffers"
+          ]
+        }
+      },
+      {
+        "id": "tb-algorithm-steps",
+        "moduleId": "pixel-test-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材算法步骤",
+        "markdown": "1. 初始化深度缓存与帧缓存中的所有单元 $(x,y)$：depthBuff$(x,y)=1.0$，frameBuff$(x,y)=$ 背景色。\n2. 逐个处理场景中的多边形，对多边形面上各点 $(x,y)$ 计算或取得深度值 $z$。\n3. 若 $z < \\mathrm{depthBuff}(x,y)$，则计算该位置的表面颜色，并令 depthBuff$(x,y)=z$、frameBuff$(x,y)=$ surfColor$(x,y)$。\n4. 所有多边形处理完后，深度缓存保存可见面的深度值，帧缓存保存这些表面的对应属性值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000502"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "深度缓存算法"
+              ],
+              "lineStart": 13647,
+              "lineEnd": 13723,
+              "assetRefs": [
+                "parts/part-0005/images/63b369814842879f47f18bf5d398b1161c8e6bc60bace09293fb3e1cee86437c.jpg",
+                "parts/part-0005/images/4c33ec8c337be8ae0ac777f424fcadf300d623c0fb3d34257ed2ca0ae472ed81.jpg",
+                "parts/part-0005/images/33b3bfec1b072b52f6914010c34552d05558f1e485eb953b0641adfdc4141b4c.jpg"
+              ],
+              "excerptSha256": "7252ffb9c97aa0e2c9b1ef056ec0e62205c10af6ae22c42dc454a9aca65a782a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-depth-trace",
+        "moduleId": "pixel-test-procedure",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "一次深度测试的判定逻辑",
+        "markdown": "对单个像素，整个过程可以写成一条更新规则：只有新表面的深度严格小于当前记录时才覆盖。\n\n```text\nif z < depthBuff(x, y):\n    depthBuff(x, y) = z\n    frameBuff(x, y) = surfColor(x, y)\n```\n\n等号不成立时不更新，因此同一深度重复写入不会改变结果；处理顺序只影响中间状态和无效的颜色计算次数，不影响最终可见面。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-algorithm-steps",
+            "tb-overlap-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-incremental-depth",
+        "moduleId": "incremental-depth",
+        "depth": "core",
+        "kind": "formula",
+        "title": "扫描线增量计算深度",
+        "markdown": "给定多边形顶点的深度值，可以由平面方程求出该平面上任意点的深度：$z = \\frac{-Ax - By - D}{C}$。\n\n沿扫描线相邻像素的水平位移为 $\\pm 1$，因此相邻点的深度满足 $z' = z - \\frac{A}{C}$。比率 $-A/C$ 对同一表面是常数，所以沿扫描线的后继像素只需在前一像素深度上加一次固定增量。每条扫描线先算出与多边形左边界交点处的深度，再依次递推。\n\n从多边形最高顶点开始，左边界上的 $x$ 可按 $x' = x - \\frac{1}{m}$ 递推，深度按 $z' = z + \\frac{A/m + B}{C}$ 递推；若沿垂直边处理，斜率无穷大，递推式简化为 $z' = z + \\frac{B}{C}$。\n\n由于像素坐标总是整数，而扫描线与多边形边的真实交点未必是整数，可能需要向上或向下取整来微调交点坐标；也可以采用中点法或 Bresenham 类型算法为每条扫描线确定最左边的 $x$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000502"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "深度缓存算法"
+              ],
+              "lineStart": 13647,
+              "lineEnd": 13723,
+              "assetRefs": [
+                "parts/part-0005/images/63b369814842879f47f18bf5d398b1161c8e6bc60bace09293fb3e1cee86437c.jpg",
+                "parts/part-0005/images/4c33ec8c337be8ae0ac777f424fcadf300d623c0fb3d34257ed2ca0ae472ed81.jpg",
+                "parts/part-0005/images/33b3bfec1b072b52f6914010c34552d05558f1e485eb953b0641adfdc4141b4c.jpg"
+              ],
+              "excerptSha256": "7252ffb9c97aa0e2c9b1ef056ec0e62205c10af6ae22c42dc454a9aca65a782a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-increment-numeric",
+        "moduleId": "incremental-depth",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "增量式的算例",
+        "markdown": "设某表面所在平面的 $-A/C = -0.02$，扫描线上左边界交点处深度为 $z=0.5$。\n\n则向右每移动一个像素，深度按 $z' = z - 0.02$ 更新，依次得到 $0.48, 0.46, 0.44, \\dots$，无需为每个像素重新代入完整平面方程。若换到下一扫描线，同一侧边界的起点深度还要按 $\\frac{A/m + B}{C}$ 对应的行间增量更新，然后继续沿该行递推。\n\n这正是把每像素的乘法求值降为一次加法的原因；但每条扫描线的起点仍需直接计算一次深度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-incremental-depth"
+          ]
+        }
+      },
+      {
+        "id": "tb-cost",
+        "moduleId": "cost-and-limits",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材指出的实现代价与问题",
+        "markdown": "深度缓存算法易于实现，且无须将场景中的表面排序；但除刷新缓存外还需要另一块深度缓存。对 $1280 \\times 1024$ 分辨率的系统，需要超过 130 万个位置的深度缓存，且每个位置要包含足以表示深度值的位数。\n\n一种减少存储需求的方案是每次只处理场景的一部分，使用较小的深度缓存，处理完后再用于下一部分。\n\n由于对象按任意次序处理，基本算法常执行一些不需要的计算：有些表面已经算过颜色，之后又被更近的表面替换。为缓解这一问题，有些图形软件允许用户调整表面测试的深度范围，例如排除较远的对象，也可以排除非常靠近投影平面的对象。高档图形系统一般集成了该算法的硬件实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000502"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "深度缓存算法"
+              ],
+              "lineStart": 13647,
+              "lineEnd": 13723,
+              "assetRefs": [
+                "parts/part-0005/images/63b369814842879f47f18bf5d398b1161c8e6bc60bace09293fb3e1cee86437c.jpg",
+                "parts/part-0005/images/4c33ec8c337be8ae0ac777f424fcadf300d623c0fb3d34257ed2ca0ae472ed81.jpg",
+                "parts/part-0005/images/33b3bfec1b072b52f6914010c34552d05558f1e485eb953b0641adfdc4141b4c.jpg"
+              ],
+              "excerptSha256": "7252ffb9c97aa0e2c9b1ef056ec0e62205c10af6ae22c42dc454a9aca65a782a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-analysis",
+        "moduleId": "cost-and-limits",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "代价从哪里来",
+        "markdown": "可以按三类代价理解：\n\n- **存储**：每个像素一个深度单元，分辨率越高、深度位数越多，缓存越大；\n- **计算**：每个被光栅化的片元都要做一次比较，“先画后覆盖”带来冗余着色；\n- **带宽**：测试要读取深度，通过后还要写深度和颜色。\n\n因此深度范围限制、分块处理和硬件实现分别从减少无效片元、降低缓存规模和提升吞吐三个方向缓解压力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cost"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "深度缓存用“每个像素保存一个最近深度”的方式，把可见面判定变成逐像素的深度比较：初始化为最大深度，任一表面深度更小就同时更新深度与颜色。扫描线增量公式让相邻像素的深度只需一次加法；无需面排序、便于硬件实现是它的主要优势，额外的深度缓存、可能被覆盖的冗余着色以及每个像素只保留一条深度记录则是它的边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-algorithm-steps",
+            "tb-incremental-depth",
+            "tb-cost"
+          ]
+        }
+      },
+      {
+        "id": "model-check-depth",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. 某像素当前 depthBuff 为 $0.4$，新表面在该像素的深度为 $0.45$，是否更新？为什么？\n2. 同一表面上沿扫描线向右移动一个像素，若 $-A/C=0.01$，深度如何变化？\n3. 为什么改变多边形的处理顺序不会改变最终的可见面，却可能改变计算量？\n\n参考要点：第 1 题不更新，因为 $0.45 > 0.4$，不满足严格小于的更新条件；第 2 题深度减少 $0.01$，即新深度为原深度减 $0.01$；第 3 题最终结果由最小深度决定，但中间覆盖次数和无效着色次数会随顺序变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-algorithm-steps",
+            "model-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "depth-test-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-depth",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "describe-procedure",
+          "compute-increment"
+        ],
+        "learningPurpose": "检查学习者能否用深度比较规则判断是否覆盖，并用常数增量推算相邻像素深度。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-algorithm-steps",
+            "model-summary"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "判断新深度 $0.45$ 与当前深度 $0.4$ 是否满足严格小于的更新条件，并说明沿扫描线每移动一个像素深度递减 $0.01$ 的理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "可见面判别算法",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000501"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "深度缓存算法"
+      ],
+      "lineStart": 13632,
+      "lineEnd": 13646,
+      "assetRefs": [
+        "parts/part-0005/images/fa49e8702412a7da9b3c4cb40ddd46a65ecb61a2752bf5aafda8ea6b1dec3bd1.jpg"
+      ],
+      "excerptSha256": "a0d95080ae27f59b45fad4ee0af7036da5ec5cfb02d343b70e5cacabf6c5f9c2"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000502"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "深度缓存算法"
+      ],
+      "lineStart": 13647,
+      "lineEnd": 13723,
+      "assetRefs": [
+        "parts/part-0005/images/63b369814842879f47f18bf5d398b1161c8e6bc60bace09293fb3e1cee86437c.jpg",
+        "parts/part-0005/images/4c33ec8c337be8ae0ac777f424fcadf300d623c0fb3d34257ed2ca0ae472ed81.jpg",
+        "parts/part-0005/images/33b3bfec1b072b52f6914010c34552d05558f1e485eb953b0641adfdc4141b4c.jpg"
+      ],
+      "excerptSha256": "7252ffb9c97aa0e2c9b1ef056ec0e62205c10af6ae22c42dc454a9aca65a782a"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3800,
+    738
+  ],
+  "scale": 0.95
+}

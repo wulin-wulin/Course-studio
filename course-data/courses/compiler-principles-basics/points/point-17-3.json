@@ -1,0 +1,537 @@
+{
+  "id": "point-17-3",
+  "title": "Avoiding repeated evaluation",
+  "shortSummary": "说明如何通过寄存器复用和公共子表达式缓存避免重复计算，并分析其收益与适用限制。",
+  "keyTerms": [
+    "重复求值",
+    "公共子表达式",
+    "寄存器复用",
+    "缓存",
+    "优化",
+    "表达式"
+  ],
+  "animationType": "loopInvariantReuse",
+  "animationSuggestion": "逐轮显示下标推进与地址按 $+k$ 线性增加，同时用并排计数展示未优化时每轮重算、优化后只做一次加法或直接复用，并标出循环边界。",
+  "difficulty": "进阶",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-11-3",
+    "point-17-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-tradeoff-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的优化分类、递推公式与实验数据，按“重复求值从哪来、怎样消除、何时不值得”重组讲解，并补充推导、判据与检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-common-subexpression",
+          "text": "说明公共子表达式消除针对的是哪类重复求值，以及源码改写与编译器优化各自能覆盖的情形。"
+        },
+        {
+          "id": "apply-loop-invariants",
+          "text": "判断循环不变量外提与递推地址计算在给定代码片段中是否适用。"
+        },
+        {
+          "id": "evaluate-optimization-payoff",
+          "text": "依据收益与编译代价评估一项消除重复求值的变换是否值得实施。"
+        }
+      ],
+      "misconceptions": [
+        "把公共子表达式消除当成总能用改写源码完成的优化，忽略隐含的地址计算必须由编译器识别。",
+        "认为消除重复求值没有代价，忽视上下文分析带来的编译时间与实现复杂度。",
+        "把教材实验中的加速倍数当作普遍结论，忽略它来自寄存器使用、越界检查消除和乘加指令的共同作用。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-payoff",
+          "title": "重复求值问题与优化收益",
+          "role": "orient",
+          "outcomeRefs": [
+            "explain-common-subexpression"
+          ],
+          "order": 0
+        },
+        {
+          "id": "source-level-cse",
+          "title": "源码可见的公共子表达式",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-common-subexpression"
+          ],
+          "order": 1
+        },
+        {
+          "id": "implicit-and-loop",
+          "title": "隐含子表达式与循环不变量",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-common-subexpression",
+            "apply-loop-invariants"
+          ],
+          "order": 2
+        },
+        {
+          "id": "recurrence-and-measurement",
+          "title": "递推复用与实测收益",
+          "role": "quantitative",
+          "outcomeRefs": [
+            "apply-loop-invariants",
+            "evaluate-optimization-payoff"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-and-limits",
+          "title": "分析代价与适用限制",
+          "role": "analysis",
+          "outcomeRefs": [
+            "evaluate-optimization-payoff"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-common-subexpression",
+            "apply-loop-invariants",
+            "evaluate-optimization-payoff"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-common-subexpression",
+          "apply-loop-invariants",
+          "evaluate-optimization-payoff"
+        ],
+        "method": "完成三道判断练习，并对每个结论写出所依赖的重复次数、操作数是否改变以及分析范围。",
+        "successCriteria": [
+          "能区分源码可改写与只能由编译器识别的重复求值",
+          "能写出递推地址公式并说明其成立前提",
+          "能用收益与分析代价说明是否采用某次优化"
+        ],
+        "exerciseBlockId": "repeated-eval-check",
+        "summaryBlockId": "repeated-eval-summary",
+        "nextPointId": "point-17-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-repeated-eval-problem",
+        "moduleId": "problem-and-payoff",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：重复求值与公共子表达式消除",
+        "markdown": "教材把公共子表达式的消除列为最知名的、与目标机无关的优化。它的对象是**重复求值**：同一子表达式在同一段计算中被反复求出相同结果，于是重复的算术工作可以被省掉。\n\n教材同时提醒，这类优化表面上可以归入“可选优化”，因为程序员往往能自己改写源码来避免重复求值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-expensive",
+        "moduleId": "problem-and-payoff",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：重复求值的代价从哪里来",
+        "markdown": "模型补充，不是教材原文。消除重复求值的收益可以用一个朴素代价模型估算：\n\n- 设某子表达式在动态执行中被求值 $r$ 次，单次求值需要 $c$ 个运算；\n- 若只保留首次求值并复用结果，算术运算次数从 $r \\cdot c$ 降到 $c$；\n- 节省量随 $r$ 线性增长，因此**动态执行频率**比源码中出现次数更能决定收益。\n\n这也解释了教材为什么强调“只有确实被反复求值时消除才值得”：源码里出现一次、却在循环里执行上千次的表达式，往往比源码里出现三次、只执行一次的表达式更有价值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-repeated-eval-problem"
+          ]
+        }
+      },
+      {
+        "id": "textbook-source-rewrite",
+        "moduleId": "source-level-cse",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：可以用辅助变量改写的情形",
+        "markdown": "教材给出的一类情形是源码层面就能看清的重复：若干条赋值重复计算同一个和式，只要引入一个辅助变量 $u$ 保存中间结果，就可以把它们换成三条更简单的赋值。\n\n教材对此的评价是分两面的：这样做确实减少了算术运算的次数，但赋值语句的条数和源码的清晰度未必改善，因此“这究竟算不算一次改进”仍然是一个开放问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rewrite-criterion",
+        "moduleId": "source-level-cse",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：源码改写与编译器消除的分界",
+        "markdown": "模型补充。把教材的两面评价转成判据，可以问三个问题：\n\n1. **算术运算是否真的减少**？若只是把重复表达式搬进一个临时变量，运算次数不变，就不算消除。\n2. **赋值条数与可读性是否明显恶化**？教材正是用这一点质疑改写是否值得。\n3. **改写能否普遍适用**？只能修好个别程序的改写，对编译器用户整体价值有限。\n\n三个问题都通过时，让程序员自己改写即可；只要有一个不通过，就需要编译器在内部完成识别与复用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-source-rewrite"
+          ]
+        }
+      },
+      {
+        "id": "textbook-implicit-address",
+        "moduleId": "implicit-and-loop",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：源码中不可见的公共子表达式",
+        "markdown": "教材指出，更关键的是**无法通过改写源码获得改进**的情形：同一段地址计算在源码中出现三次，每次至少涉及一次乘法和一次加法。这些公共子表达式是隐含的，在源码层面并不直接可见，因此只能由编译器识别并消除。\n\n这正是公共子表达式消除不能只当作“可选优化”的原因：它补上的不是程序员的粗心，而是源码语言与目标机之间的语义鸿沟。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-address-example",
+        "moduleId": "implicit-and-loop",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：把隐含的地址计算摊开",
+        "markdown": "模型补充的例子，使用教材同节的地址公式。设数组元素大小为 $k$，元素 $a[i]$ 的地址为\n\n$$\\mathrm{adr}(a[i]) = k \\cdot i + a_0$$\n\n若一条语句三次访问同一个 $a[i]$，未优化时每次都要重算 $k \\cdot i + a_0$，即三次乘法加三次加法。编译器在第一次求出地址后把它留在寄存器中，后两次直接复用，只剩一次乘法加一次加法。\n\n注意这里的复用对象是**地址值**，不是数组内容；若中间发生过写操作使地址公式中的量改变，复用就不再成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-implicit-address"
+          ]
+        }
+      },
+      {
+        "id": "textbook-loop-invariant",
+        "moduleId": "implicit-and-loop",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：循环不变量代码外提",
+        "markdown": "教材进一步指出，消除公共表达式只有在它们被反复求值时才值得，而反复求值甚至可能发生在表达式于源码中只出现一次的时候。\n\n若变量 $x$ 与 $y$ 在循环重复期间保持不变，那么它们的和只需计算一次。编译器必须把对 $z$ 的赋值提到循环之外，这一技术称为**循环不变量代码外提**（loop invariant code motion）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-licm-conditions",
+        "moduleId": "implicit-and-loop",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "模型补充：外提成立的前提",
+        "markdown": "模型补充，把教材的“$x$ 与 $y$ 保持不变”展开为可检查的前提：\n\n- **值不变**：被移动的计算在每次迭代中产生相同结果，循环体内没有写入它的操作数。\n- **语义不变**：移动后不改变可观察行为；若循环可能一次都不执行，就不能无条件外提；若计算可能触发异常或副作用，也不能提前执行。\n- **有处安放**：结果需要寄存器或临时变量保存，这会占用下一点要讨论的寄存器资源。\n\n三条中任一条不成立，外提就不是“免费的加速”，而可能改变程序行为。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-loop-invariant"
+          ]
+        }
+      },
+      {
+        "id": "textbook-recurrence",
+        "moduleId": "recurrence-and-measurement",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：用上一次迭代的结果化简表达式",
+        "markdown": "与把常量表达式提出循环相关的另一种技术，是利用上一次重复中已经算出的值来化简表达式，也就是考虑**递推关系**。\n\n若数组元素的地址为 $\\mathrm{adr}(a[i]) = k \\cdot i + a_0$，那么\n\n$$\\mathrm{adr}(a[i+1]) = \\mathrm{adr}(a[i]) + k$$\n\n教材指出这种情形特别常见，因此把带下标变量的地址计算改成在前一个值上加一个常量，能显著减少计算时间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recurrence-derivation",
+        "moduleId": "recurrence-and-measurement",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：递推式为什么成立",
+        "markdown": "模型补充的推导：\n\n$$\\mathrm{adr}(a[i+1]) = k \\cdot (i+1) + a_0 = (k \\cdot i + a_0) + k = \\mathrm{adr}(a[i]) + k$$\n\n因此每轮迭代只需一次加法，而不是一次乘法加一次加法。成立条件是 $k$ 与 $a_0$ 在该循环内不变，即数组基址与元素大小不被修改，并且下标每轮确实按 1 递增。\n\n最后一条正是教材强调的难点：编译器不能只看源码中的一次下标访问，而必须通过控制流与数据流分析确认“每轮加 1”这个事实。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-measured-gain",
+        "moduleId": "recurrence-and-measurement",
+        "depth": "support",
+        "kind": "table",
+        "title": "教材：矩阵乘法实验中的加速",
+        "markdown": "教材用一个矩阵乘法例子报告了逐步叠加的加速效果：\n\n| 采取的变换 | 相对加速倍数 |\n|---|---|\n| 用寄存器而非内存保存下标值与和，并消除下标越界检查 | 1.5 |\n| 再把变址访问改为地址的线性推进（递推） | 2.75 |\n| 再使用乘加合并指令计算标量积 | 3.90 |\n\n教材用这组数据说明，消除重复求值与改善寄存器使用带来的收益可以相当可观。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gain-attribution",
+        "moduleId": "recurrence-and-measurement",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "模型补充：怎样读这组数字",
+        "markdown": "模型补充的解读。三点需要注意：\n\n- 表中三行是**累积**关系，后一行建立在前一行之上，因此倍数递增不能拆成三个独立结论相加。\n- 3.90 倍同时包含寄存器使用、越界检查消除、地址递推和乘加指令的贡献，不能把它单独归功于公共子表达式消除。\n- 这是教材在特定硬件与特定测试程序上的一次测量，说明“收益可能很大”，而不是对所有程序成立的定律。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-measured-gain",
+            "textbook-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-analysis-cost",
+        "moduleId": "cost-and-limits",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：上下文分析的代价",
+        "markdown": "教材明确区分了两类情况：可以直接从局部上下文看出的优化几乎必须实现；而上述隐含公共子表达式、循环外提和地址递推等情形，只能通过对上下文的针对性分析来改进代码，这恰恰会显著增加编译期的工作量。\n\n教材还指出，书中的 Oberon-0 编译器并不是实现这类优化的合适基础；处理递推地址时，需要复杂的控制流与数据流分析，并要识别出每轮迭代中下标单调加 1 这一事实。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "16. Optimizations and the Frontend/Backend Structure",
+                "Avoiding repeated evaluation"
+              ],
+              "lineStart": 676,
+              "lineEnd": 690,
+              "assetRefs": [],
+              "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-benefit",
+        "moduleId": "cost-and-limits",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "模型补充：收益与代价的判断清单",
+        "markdown": "模型补充的决策清单，供评估一项消除重复求值的变换是否值得实施：\n\n| 判断维度 | 要问的问题 | 偏向实施 | 偏向放弃 |\n|---|---|---|---|\n| 动态频率 | 该表达式每轮执行多少次？ | 在热循环中被反复求值 | 只在冷路径出现一两次 |\n| 分析范围 | 需要局部浏览还是跨块、跨循环分析？ | 局部上下文即可确认 | 需要复杂控制流与数据流分析 |\n| 语义风险 | 移动或复用是否会改变可观察行为？ | 操作数确定不变、无副作用 | 可能越界、出错或跳过一次都不执行的循环 |\n| 资源占用 | 复用结果需要几份寄存器或临时变量？ | 只需少量寄存器 | 大量值争抢有限寄存器 |\n| 编译成本 | 编译器的实现与编译时间增加多少？ | 代价小、收益普遍 | 只对罕见程序有效 |\n\n教材的立场与此一致：简单优化几乎必做，依赖全局上下文分析的优化则要权衡；Oberon-0 这样的直接编译器不具备后者的基础。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-analysis-cost",
+            "textbook-source-rewrite"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "cost-and-limits",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：三个常见误解",
+        "markdown": "模型补充，针对本点最容易出现的三种误判：\n\n- **“重复求值总能靠改源码解决”**：源码可见的重复可以改写，但隐含的地址计算在源码中不可见，必须由编译器消除。\n- **“消除重复求值没有代价”**：识别隐含子表达式、把计算移出循环、跟踪下标递推都需要上下文分析，编译时间与实现复杂度随之上升。\n- **“3.90 倍是公共子表达式消除单独的功劳”**：该数字是寄存器使用、越界检查消除、地址递推与乘加指令叠加后的结果，不能拆开归因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-repeated-eval-problem",
+            "textbook-source-rewrite",
+            "textbook-implicit-address",
+            "textbook-analysis-cost"
+          ]
+        }
+      },
+      {
+        "id": "repeated-eval-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：三类重复求值及其所需分析",
+        "markdown": "模型补充的小结。本点讨论的重复求值可以分成三层：\n\n1. **源码可见的重复**：可用辅助变量改写，但算术次数之外还要看赋值条数与可读性。\n2. **隐含的公共子表达式**：如数组地址计算，源码层面看不清，只能由编译器识别，通常只需局部或近邻上下文。\n3. **循环中的重复**：循环不变量外提把不变计算移出循环；地址递推则利用上一轮结果，每轮只加常量 $k$，需要控制流与数据流分析确认下标行为。\n\n复用结果最终要放在寄存器里，而寄存器数量有限。哪些值值得占用寄存器、多个值如何共享寄存器，正是下一点“寄存器分配”要解决的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-source-rewrite",
+            "textbook-implicit-address",
+            "textbook-loop-invariant",
+            "textbook-recurrence",
+            "textbook-analysis-cost"
+          ]
+        }
+      },
+      {
+        "id": "repeated-eval-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：判断这些重复求值能否消除",
+        "markdown": "模型补充的检查题。对下面三个片段，分别回答：重复的是什么？能否消除？需要什么前提或分析？\n\n1. 三条赋值各自计算同一个和式 $x + y$，而 $x$、$y$ 在三条赋值之间都不被修改。\n2. 一条语句内三次访问 $a[i]$，元素大小 $k$ 为常量。\n3. 一个循环体中反复计算 $x + y$，但循环体末尾会执行 `y := y + 1`。\n\n自检要点：\n\n- 片段 1 可引入辅助变量，但要判断赋值条数与可读性的得失。\n- 片段 2 属于隐含子表达式，编译器缓存地址即可，前提是这三次访问之间没有改变地址公式中的量。\n- 片段 3 不是循环不变量，不能外提；$y$ 每轮都变，若强行复用会算出错误的和。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-implicit-address",
+            "textbook-loop-invariant",
+            "textbook-recurrence",
+            "textbook-analysis-cost"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "repeated-eval-formative-check",
+        "type": "formative-check",
+        "anchorBlockId": "repeated-eval-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-loop-invariants",
+          "evaluate-optimization-payoff"
+        ],
+        "learningPurpose": "检查学习者能否区分源码可改写、隐含子表达式与循环不变量三类重复求值，并说明各自的前提。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-implicit-address",
+            "textbook-loop-invariant",
+            "textbook-recurrence"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别判断三个片段中的重复求值能否消除，并写出所需的前提：源码可见的和式、同一下标的多次地址计算、循环体中操作数被修改的和式。"
+        }
+      }
+    ]
+  },
+  "subtitle": "16. Optimizations and the Frontend/Backend Structure",
+  "clusterId": "chapter-17",
+  "clusterIds": [
+    "chapter-17"
+  ],
+  "role": "branch",
+  "related": [
+    "point-11-2"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000079"
+      ],
+      "headingPath": [
+        "16. Optimizations and the Frontend/Backend Structure",
+        "Avoiding repeated evaluation"
+      ],
+      "lineStart": 676,
+      "lineEnd": 690,
+      "assetRefs": [],
+      "excerptSha256": "e7ab88755d831a6b490d67c638355ed060bd0829ae478b270103a8a2ae5ba533"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2574,
+    72
+  ],
+  "scale": 0.89
+}

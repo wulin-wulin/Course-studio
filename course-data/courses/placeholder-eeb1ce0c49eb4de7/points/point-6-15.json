@@ -1,0 +1,705 @@
+{
+  "id": "point-6-15",
+  "title": "反走样的实现方法",
+  "shortSummary": "讲解超采样、区域采样和滤波等反走样方法的原理、实现流程与计算代价。",
+  "keyTerms": [
+    "反走样",
+    "超采样",
+    "滤波"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "method-comparison-and-coverage-computation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的取样定理、覆盖计算与各方法定义，围绕“像素亮度如何反映覆盖贡献”重排讲解，补充算例、方法比较与检查题。",
+      "estimatedMinutes": 26,
+      "outcomes": [
+        {
+          "id": "explain-aliasing",
+          "text": "解释走样的成因与奈奎斯特取样条件，并说明提高分辨率为何不能彻底消除走样。"
+        },
+        {
+          "id": "apply-supersampling",
+          "text": "用子像素计数和加权掩模实现直线过取样并计算像素亮度。"
+        },
+        {
+          "id": "apply-area-filtering",
+          "text": "用像素覆盖比例和连续过滤函数计算反走样后的像素亮度。"
+        },
+        {
+          "id": "compare-methods",
+          "text": "比较过取样、区域取样、过滤、像素移相与亮度校正的适用条件、代价与效果。"
+        },
+        {
+          "id": "estimate-boundary-coverage",
+          "text": "对区域边界估计像素覆盖比例，并说明中点决策参数如何同时用于定位与亮度分配。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要不断提高屏幕分辨率就能彻底消除走样，而忽略取样间隔仍需任意小这一根本限制。",
+        "把过取样理解成简单地把线条调亮或模糊，而没有看到它是在更细网格上估计像素的平均覆盖贡献。",
+        "把区域取样与过取样混为一谈，没有注意到区域取样直接求像素整体覆盖面积，不需要先算子像素亮度。",
+        "认为反走样只改善锯齿外观，与对角线比水平线更暗的亮度差校正无关。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-aliasing",
+          "title": "走样成因与取样条件",
+          "role": "concept",
+          "description": "从离散取样解释走样，给出奈奎斯特条件并说明分辨率提升的边界。",
+          "outcomeRefs": [
+            "explain-aliasing"
+          ],
+          "order": 0
+        },
+        {
+          "id": "supersampling-and-mask",
+          "title": "过取样与加权掩模",
+          "role": "worked-example",
+          "description": "用子像素网格统计覆盖数，并用加权掩模体现中心子像素的更高贡献。",
+          "outcomeRefs": [
+            "apply-supersampling"
+          ],
+          "order": 1
+        },
+        {
+          "id": "area-and-filtering",
+          "title": "区域取样与过滤函数",
+          "role": "method",
+          "description": "直接计算像素覆盖比例，并用连续过滤核做加权平均。",
+          "outcomeRefs": [
+            "apply-area-filtering"
+          ],
+          "order": 2
+        },
+        {
+          "id": "phasing-and-brightness",
+          "title": "像素移相与亮度差校正",
+          "role": "method",
+          "description": "移动像素显示位置平滑路径，并按斜率补偿线段亮度差。",
+          "outcomeRefs": [
+            "compare-methods"
+          ],
+          "order": 3
+        },
+        {
+          "id": "region-boundary",
+          "title": "区域边界的覆盖估计",
+          "role": "procedure",
+          "description": "按边界像素覆盖比例调整亮度，并用中点决策参数估计覆盖量。",
+          "outcomeRefs": [
+            "estimate-boundary-coverage"
+          ],
+          "order": 4
+        },
+        {
+          "id": "method-selection",
+          "title": "方法比较与选择",
+          "role": "synthesis",
+          "description": "按硬件能力、覆盖面积可得性与计算预算选择反走样方法，并完成检查。",
+          "outcomeRefs": [
+            "compare-methods"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-aliasing",
+          "apply-supersampling",
+          "apply-area-filtering",
+          "compare-methods",
+          "estimate-boundary-coverage"
+        ],
+        "method": "完成加权亮度、覆盖比例与亮度差三组计算，并说明选择某种反走样方法的理由。",
+        "successCriteria": [
+          "能写出奈奎斯特取样条件并解释其含义",
+          "能按加权掩模或覆盖比例正确计算像素亮度",
+          "能根据硬件与计算条件选择合适方法并说明代价"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-synthesis",
+        "nextPointId": "point-6-16"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-aliasing-cause",
+        "moduleId": "problem-and-aliasing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "走样与奈奎斯特取样条件",
+        "markdown": "光栅化把物体上的连续坐标取样为离散的整数像素位置，低频（不充分）取样会把高频细节折叠成错误的低频结构，使图元出现锯齿或阶梯状外观。这种由不充分取样造成的信息失真称为走样（aliasing）。\n\n为避免从周期性对象中丢失信息，取样频率至少应设置为对象最高频率的两倍，即奈奎斯特取样频率 $f_s = 2 f_{\\max}$；等价地说，取样间隔不应超过循环间隔的一半，$\\Delta x_s = \\Delta x_{\\mathrm{cycle}} / 2$。\n\n教材进一步指出，单纯提高屏幕分辨率只能缓解而不能根除走样：帧缓存容量以及保持每秒 60 帧以上刷新率等限制，使取样间隔无法任意小。对能显示两级以上亮度的光栅系统，可以通过调整图元边界像素的亮度来平滑锯齿。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000206"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "反走样的实现方法"
+              ],
+              "lineStart": 5354,
+              "lineEnd": 5387,
+              "assetRefs": [
+                "parts/part-0002/images/bc877fc2c865e3f33b81ccd8f74639fe5d243e8ecc02b4d7aa87f37c8555e640.jpg",
+                "parts/part-0002/images/5f4da84ce3f13c8cf8f0c8c426858cd27eaf94055aa27ce51b3b1db31ea96631.jpg"
+              ],
+              "excerptSha256": "fd643881bd84d9e443405e575bd09e250d091fb789deb6f72c16ea86bcfa8c22"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aliasing-intuition",
+        "moduleId": "problem-and-aliasing",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把走样看成采样栅格与细节的拍频",
+        "markdown": "可以把走样理解为“用太少的尺子去量太细的花纹”：取样点落在哪里，决定了看到的是花纹本身，还是花纹与取样栅格拍频后产生的假纹理。反走样因此不是简单地把线画粗或调亮，而是让每个像素记录其覆盖区域内图元的平均贡献。\n\n提高分辨率相当于把尺子变细，能减小拍频的可见程度，但并没有改变“像素仍是对连续图像的一次离散取样”这一事实，所以它不能替代反走样。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-aliasing-cause"
+          ]
+        }
+      },
+      {
+        "id": "tb-line-supersampling",
+        "moduleId": "supersampling-and-mask",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "直线段的过取样",
+        "markdown": "过取样把每个像素再划分为更细的子像素网格，在子网格上判断哪些子像素落在线段路径上，再用被选中的子像素数决定像素亮度。\n\n- 3×3 划分时，每个像素沿零宽度直线最多有 3 个子像素被选中，因此除 0 以外可得到 3 个亮度等级。教材例子中，(10,20) 设为最高级 3，(11,21) 与 (12,21) 为 2 级，(11,20) 与 (12,22) 为 1 级。\n- 子像素越多，可用亮度等级越多：16 个子像素给出 0 以上的 4 级，25 个给出 5 级。\n\n若把线段看成具有有限宽度的多边形区域，则统计落在该多边形内的子像素数，此时 3×3 网格的每个像素可取 0 到 9 共 9 个亮度级别，亮度等级总数等于一个像素内的子像素总数。判定规则是：子像素左下角在多边形边界内，就视为在线段内。\n\n过取样也可处理颜色。若一个像素内 5 个子像素在红线边界内、4 个在蓝色背景内，则\n\n$$\\operatorname{pixel}_{\\operatorname{color}} = \\frac{5\\cdot\\mathrm{red} + 4\\cdot\\mathrm{blue}}{9}$$\n\n对有限宽线段还要按斜率定位多边形边界：45° 时线段路径位于多边形中央；水平线或垂直线时路径就是多边形的一条边；$|m|<1$ 时按线段与像素上下边界的接近程度定位，$|m|>1$ 时按左右边界定位。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000207"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "直线段的过取样"
+              ],
+              "lineStart": 5388,
+              "lineEnd": 5407,
+              "assetRefs": [
+                "parts/part-0002/images/b651c87693dad2ce64bffa5f92a89c9a62a9e136be1b93a54780be13dceeb5dd.jpg",
+                "parts/part-0002/images/23306b52294a6674ad2f713e93bebbf150a09c7bf966484d42384c554dfad7f9.jpg"
+              ],
+              "excerptSha256": "ab70c01df8255733b5991ea7b30a2a2db2eb6145e309edec34f8f4cfcf9eb732"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-supersampling-count",
+        "moduleId": "supersampling-and-mask",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：子像素数、亮度级数与覆盖计数",
+        "markdown": "以 3×3 网格为例，若被覆盖的子像素数为 $k$，零宽度线段的亮度等级可直接取 $k$；因为沿一条直线每行最多命中 3 个子像素，所以等级上限为 3。若改用有限宽多边形，$k$ 可以取 0–9，亮度可直接取 $k/9$。\n\n这解释了为什么增加子像素数会同时提高空间精度与亮度分级数：$n\\times n$ 网格在零宽度情形下可给出 $n$ 级以上的亮度，在有限宽情形下可给出 $n^2$ 级。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-line-supersampling"
+          ]
+        }
+      },
+      {
+        "id": "tb-weighted-mask",
+        "moduleId": "supersampling-and-mask",
+        "depth": "core",
+        "kind": "formula",
+        "title": "子像素的加权掩模",
+        "markdown": "当子像素对像素亮度的贡献不相等时，过取样会给靠近像素中心的子像素更大权值。教材的 3×3 掩模把中心子像素的权值设为角子像素的 4 倍、边子像素的 2 倍；归一化后中心系数为 $1/4$，上下左右四个边子像素为 $1/8$，四个角子像素为 $1/16$，总和为 1。\n\n这样一组描述子像素相对重要性的数值数组称为加权掩模（weighting mask）。更大的子网格可以建立类似的掩模，掩模也常扩展到相邻像素的子像素上，对相邻像素一起做加权平均。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000208"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "子像素的加权掩模"
+              ],
+              "lineStart": 5408,
+              "lineEnd": 5416,
+              "assetRefs": [
+                "parts/part-0002/images/84f554b0493f31b6ea158a07ded62c7c0342869b65a990c1d329f5eee34a6cdb.jpg"
+              ],
+              "excerptSha256": "29b6a6b0f940881484e967e6e152df1bf06de9b8eab6349c22b91335eca37775"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-weighted-average",
+        "moduleId": "supersampling-and-mask",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：加权掩模的算例",
+        "markdown": "把 3×3 子像素按中心、边、角三类分别记为 $b_c$、$b_e$、$b_k$，则像素亮度为\n\n$$B=\\frac{1}{4}b_c+\\frac{1}{8}\\sum_{\\text{边}}b_e+\\frac{1}{16}\\sum_{\\text{角}}b_k$$\n\n例如四个边子像素全亮、中心与四角全暗时，$B=4\\times 1/8=0.5$。加权掩模与过滤函数的区别只是：掩模用离散权重表近似过滤函数，过滤函数则在连续域上积分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-weighted-mask"
+          ]
+        }
+      },
+      {
+        "id": "tb-area-sampling",
+        "moduleId": "area-and-filtering",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "直线段的区域取样",
+        "markdown": "区域取样（area sampling，又称前滤波 prefiltering）不先求子像素亮度，而是直接计算每个像素与有限宽线段覆盖区域的重叠比例，再令像素亮度正比于该比例。\n\n实现时把线段看成矩形，两相邻竖直（或水平）网格线之间的线段区域是一个梯形；只要确定每一列（或每一行）中梯形覆盖该像素的面积，就能得到覆盖比例。教材例子中，网格坐标 (10,20) 的像素约 90% 被线段区域覆盖，于是亮度取最大值的 90%；(10,21) 约为 15%。子像素计数可以近似覆盖面积，且子网格越细，估计越精确。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000209"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "直线段的区域取样"
+              ],
+              "lineStart": 5417,
+              "lineEnd": 5420,
+              "assetRefs": [],
+              "excerptSha256": "cae4a77bd7ea388d8312c5f05d00e12d33320e7bf4bf2a8f9f08288d72d9a320"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-area-vs-super",
+        "moduleId": "area-and-filtering",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：前滤波与后滤波的区别",
+        "markdown": "两种方法的差别在于“何时求平均”：\n\n- 过取样（后滤波）先在子像素位置求出覆盖或颜色，再把子像素结果合并成像素亮度；\n- 区域取样（前滤波）直接把像素作为一个整体求其与图元的覆盖面积，因此不需要逐子像素的中间亮度。\n\n两者都在估计同一件事——像素覆盖比例；当子网格足够细时，子像素计数会收敛到覆盖面积。工程上选择哪一种，取决于能否廉价地解析求面积，还是更方便地做规则子网格采样。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-area-sampling",
+            "tb-line-supersampling"
+          ]
+        }
+      },
+      {
+        "id": "tb-filtering",
+        "moduleId": "area-and-filtering",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "过滤技术",
+        "markdown": "过滤技术（filtering technique）把加权掩模推广为覆盖像素的连续加权表面，即过滤函数。矩形（box）、圆锥（cone）和高斯（Gaussian）是三种常用过滤函数。\n\n应用方式与加权掩模类似，但权重来自对过滤函数在像素区域上的积分，从而得到加权平均亮度。过滤函数的体积通常规范化为 1.0，任意子像素位置上的高度给出该子像素的相对权值。因为逐像素积分代价较高，实现中常用查表法取得整数值以降低计算量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000210"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "过滤技术"
+              ],
+              "lineStart": 5421,
+              "lineEnd": 5434,
+              "assetRefs": [
+                "parts/part-0002/images/d8a6d0e0948ca173536e8ff19183c3201170d7be22a3ceb7021a9ff23cea26d7.jpg",
+                "parts/part-0002/images/be9d912046b9461f169138275428eee8a9c82b36090e93150e4d40cf4e3ec3eb.jpg",
+                "parts/part-0002/images/7cde508bafb8ee2f9ff0da28447bd6da6fe0b70f5232d643d665dc0afb139da5.jpg"
+              ],
+              "excerptSha256": "f5e10768a489e0f351f6e24c8b7b3220953e5b8342d231f26d957c2742e7be9d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-filter-kernels",
+        "moduleId": "area-and-filtering",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：三种过滤核的取舍",
+        "markdown": "三种过滤核可以这样理解：矩形核对邻域一视同仁，等价于简单平均；圆锥核随距离线性衰减，中心权重更突出；高斯核衰减更平滑，能进一步抑制高频残留。核越“软”，边缘过渡越平滑，但也越容易把细节抹开。因此要在清晰度与平滑度之间按显示目标选择，并用查表把积分预计算成整数权重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-filtering"
+          ]
+        }
+      },
+      {
+        "id": "tb-pixel-phasing",
+        "moduleId": "phasing-and-brightness",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "像素移相",
+        "markdown": "像素移相（pixel phasing）通过移动像素的显示位置而不是改变亮度来反走样。系统把像素位置微定位到更接近线段路径处：典型情况下电子束按像素直径的 1/4、1/2、3/4 移动，从而在接近线段或对象边界真实路径的位置绘点。\n\n有些系统还允许调整单个像素的尺寸，作为分配亮度的附加手段。该方法的直接效果是把锯齿点移到更贴近理想路径的位置，使线段看起来更平滑。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000211"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "像素移相"
+              ],
+              "lineStart": 5435,
+              "lineEnd": 5438,
+              "assetRefs": [],
+              "excerptSha256": "bcf731c509c87421e2747574be858d6455ad73ab3d26f436b085a006312bcefc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-phasing-hardware",
+        "moduleId": "phasing-and-brightness",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：像素移相依赖可微定位硬件",
+        "markdown": "像素移相依赖硬件能把可编址点细分到像素内部。它不是纯软件后处理：若显示系统只能按整数像素寻址，就无法把点移动到 1/4 像素的位置。因此它常与过取样、区域取样互补——有可微定位硬件时直接移点，没有时用亮度加权模拟覆盖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pixel-phasing"
+          ]
+        }
+      },
+      {
+        "id": "tb-brightness-correction",
+        "moduleId": "phasing-and-brightness",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "直线亮度差的校正",
+        "markdown": "反走样还能顺带校正直线亮度差。用相同数目的像素绘制两条线段时，对角线段的实际长度约为水平线段的 $\\sqrt{2}$ 倍（教材例子：水平线为 10 cm 时，对角线超过 14 cm），于是对角线在单位长度上的亮度更低，看起来更暗。\n\n画线算法可按斜率调整亮度来补偿：水平线和垂直线以最低亮度显示，45° 线以最高亮度显示。应用反走样后这一亮度差会被自动校正；考虑有限宽度时，可把整条线段的显示亮度调整为正比于其长度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000212"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "直线亮度差的校正"
+              ],
+              "lineStart": 5439,
+              "lineEnd": 5449,
+              "assetRefs": [
+                "parts/part-0002/images/15358de87d1a7ecf9e730392323d882639d5cb53aa089d93fa7e3c80657bfb39.jpg",
+                "parts/part-0002/images/3f3caddad28514ef13dc6bba28a020865b3de213384a7744473a44d43289df0b.jpg"
+              ],
+              "excerptSha256": "aac4c74fafb0dd0230392bdafd1020e43e2bd744d83237fdd4c87831456b34fc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-brightness-ratio",
+        "moduleId": "phasing-and-brightness",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：亮度差的数值估计",
+        "markdown": "设两条线使用相同像素数 $N$，水平线长度为 10，对角线长度为 $10\\sqrt{2}\\approx 14.14$。若每个像素贡献相同亮度，则单位长度亮度之比为 $10/14.14\\approx 0.707$，即对角线看起来约暗 29%。\n\n按斜率补偿时，可把对角线每个像素的亮度乘以 $\\sqrt{2}$，或按长度比例缩放，使两条线的单位长度亮度一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-brightness-correction"
+          ]
+        }
+      },
+      {
+        "id": "tb-region-boundary",
+        "moduleId": "region-boundary",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "区域边界的反走样",
+        "markdown": "区域边界的反走样把同样的思想用到填充区轮廓，可以并入扫描线算法。若系统支持像素重定位，可把边界像素移到更靠近区域边界；更通用的做法是按边界像素被区域覆盖的百分比调整亮度：教材例子中，(x,y) 处像素约一半在边界内，亮度取设定值的一半；下一个位置约 1/3 在边界内，亮度取约 1/3。\n\n- 过取样做法：把 4×4 像素区域细分为 8×8 网格，穿过网格的扫描线由 4 条变为 8 条；若某像素的 4 个子区域中有 3 个在边界内，则亮度取最大值的 75%。\n- Pitteway–Watkinson 方法：以中点算法为基础，用决策参数 $p$ 同时判断下一个像素并估计当前像素被覆盖的比例。对 $0\\le m\\le 1$，先计算\n\n$$y-y_{\\mathrm{mid}}=[m(x_k+1)+b]-(y_k+0.5)$$\n\n再加 $1-m$ 得到\n\n$$p=[m(x_k+1)+b]-(y_k+0.5)+(1-m)$$\n\n若 $p<1-m$，则 $y_k$ 上的像素更接近直线；若 $p>1-m$，则 $y_k+1$ 上的像素更接近。对 $(x_k,y_k)$ 的覆盖比例可写成\n\n$$\\text{覆盖比例}=m x_k + b - y_k + 0.5$$\n\n它与决策参数表达式一致，因此一次计算既定位下一个边界像素，又给出当前像素的覆盖比例。\n\n对负斜率和斜率大于 1 的线段需要相应推广；多边形顶点或很小的多边形可能有多条边穿过同一像素，需要处理所有相交边再确定正确的内部区域。过滤技术同样可用于区域边界，边界方程可估计覆盖量，相关性技术可沿扫描线或在两条扫描线之间简化计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000213"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "区域边界的反走样"
+              ],
+              "lineStart": 5450,
+              "lineEnd": 5514,
+              "assetRefs": [
+                "parts/part-0002/images/5a928078fd8480d94e9e38adf03d1fcf7dc44fbe0c5844f7c1a145f16849aaa9.jpg",
+                "parts/part-0002/images/2526d13088dc097954c940a3e6e65a8955dfa96d2f39ad89e96808b2c46a6424.jpg",
+                "parts/part-0002/images/8f08e80f33eb92fe6ac6ed5487239ab9938aabc41cbcb2876e5e4729de1b4cff.jpg",
+                "parts/part-0002/images/e913dbade49e2f4998fc8f91ec5ed27ea9cb95b78b65ece30a926cd8bd6f0801.jpg",
+                "parts/part-0002/images/e43450b609d2dd760f9c41109c5f6b04e1de0972f9fa3063c246f3ba90388627.jpg",
+                "parts/part-0002/images/29f6a0bac18497afccaf0e23c96ef0fd88ecc8d64e73a27beab9dff286e15364.jpg",
+                "parts/part-0002/images/3fffedcac055e3d09702ba1612ad63f971c421249a7f40931a2e169ba24e2ce1.jpg"
+              ],
+              "excerptSha256": "a7de05f74d325f6290267b16d5896bc4f6133b8978cabc6c9748b13b8456082e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pw-coverage",
+        "moduleId": "region-boundary",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：决策参数为何同时给出位置与覆盖量",
+        "markdown": "Pitteway–Watkinson 方法的关键观察是：“选哪个像素”和“当前像素被覆盖多少”共享同一个几何量——直线在中点附近的相对位置。决策参数 $p$ 的符号回答前者，$p$ 的数值回答后者。\n\n这把可见的锯齿定位与亮度分配合并进一次增量计算，避免了单独的覆盖面积积分；代价是推导要按斜率区间分别处理，并在顶点处补上多条边相交的特殊情形。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-region-boundary"
+          ]
+        }
+      },
+      {
+        "id": "model-method-comparison",
+        "moduleId": "method-selection",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "模型补充：多种反走样实现的比较",
+        "markdown": "| 方法 | 核心操作 | 需要的条件 | 主要代价 | 典型用途 |\n|---|---|---|---|---|\n| 过取样（后滤波） | 在子像素网格上采样后合并 | 更高采样网格与相应帧缓存或计算量 | 采样数随子像素数增长 | 通用直线与多边形，配合加权掩模 |\n| 加权掩模 | 给中心、边、角子像素不同权重 | 预定义权重表 | 乘加运算 | 过取样中强调中心贡献 |\n| 区域取样（前滤波） | 直接求像素与图元的覆盖面积 | 能解析求交或求面积 | 每像素覆盖计算 | 直线与区域边界的覆盖估计 |\n| 过滤技术 | 用连续核在像素区域上积分 | 过滤函数与可选查表 | 积分或查表 | 更精确的加权平均 |\n| 像素移相 | 微定位像素的显示位置 | 硬件支持子像素寻址 | 依赖显示器能力 | 具备可微定位能力的系统 |\n| 亮度差校正 | 按斜率或长度缩放亮度 | 已知线段斜率 | 计算量很小 | 消除对角线与水平线的亮度不均 |\n\n选择时应同时看输出质量、硬件能力与计算预算，而不是只追求子像素数最多。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-aliasing-cause",
+            "tb-line-supersampling",
+            "tb-weighted-mask",
+            "tb-area-sampling",
+            "tb-filtering",
+            "tb-pixel-phasing",
+            "tb-brightness-correction",
+            "tb-region-boundary"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "method-selection",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：反走样计算检查",
+        "markdown": "1. 3×3 子像素中有 2 个角、1 个边、0 个中心被覆盖，按教材加权掩模计算像素亮度。\n2. 一个像素有 75% 被有限宽线段覆盖，其亮度应取最大值的多少？这与“4×4 像素区域分成 8×8 网格、4 个子区域中 3 个在边界内”的结果是否一致？\n3. 用相同像素数画一条水平线和一条 45° 线，若不做亮度校正，哪条看起来更暗？为什么？\n\n参考思路：按 $1/16$、$1/8$、$1/4$ 的权重加权；覆盖比例直接决定亮度比例；对角线单位长度像素更少，故更暗。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-weighted-mask",
+            "tb-area-sampling",
+            "tb-region-boundary",
+            "tb-brightness-correction"
+          ]
+        }
+      },
+      {
+        "id": "model-synthesis",
+        "moduleId": "method-selection",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：选择反走样方法的三个问题",
+        "markdown": "选择反走样方法时依次问三个问题：显示系统能否在像素内部寻址，决定像素移相是否可用；能否廉价获得覆盖面积，决定区域取样是否划算；计算预算允许多少子像素或过滤核，决定过取样的等级与核宽。\n\n无论采用哪种方法，目标都是让像素亮度反映其覆盖区域内图元的平均贡献，而不是只由单个数学点决定。这也是反走样能同时平滑边缘并校正线段亮度差的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-aliasing-cause",
+            "tb-line-supersampling",
+            "tb-area-sampling",
+            "tb-filtering",
+            "tb-pixel-phasing",
+            "tb-brightness-correction",
+            "tb-region-boundary"
+          ]
+        }
+      }
+    ]
+  },
+  "subtitle": "实现图元及属性的算法",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000206"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "反走样的实现方法"
+      ],
+      "lineStart": 5354,
+      "lineEnd": 5387,
+      "assetRefs": [
+        "parts/part-0002/images/bc877fc2c865e3f33b81ccd8f74639fe5d243e8ecc02b4d7aa87f37c8555e640.jpg",
+        "parts/part-0002/images/5f4da84ce3f13c8cf8f0c8c426858cd27eaf94055aa27ce51b3b1db31ea96631.jpg"
+      ],
+      "excerptSha256": "fd643881bd84d9e443405e575bd09e250d091fb789deb6f72c16ea86bcfa8c22"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000207"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "直线段的过取样"
+      ],
+      "lineStart": 5388,
+      "lineEnd": 5407,
+      "assetRefs": [
+        "parts/part-0002/images/b651c87693dad2ce64bffa5f92a89c9a62a9e136be1b93a54780be13dceeb5dd.jpg",
+        "parts/part-0002/images/23306b52294a6674ad2f713e93bebbf150a09c7bf966484d42384c554dfad7f9.jpg"
+      ],
+      "excerptSha256": "ab70c01df8255733b5991ea7b30a2a2db2eb6145e309edec34f8f4cfcf9eb732"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000208"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "子像素的加权掩模"
+      ],
+      "lineStart": 5408,
+      "lineEnd": 5416,
+      "assetRefs": [
+        "parts/part-0002/images/84f554b0493f31b6ea158a07ded62c7c0342869b65a990c1d329f5eee34a6cdb.jpg"
+      ],
+      "excerptSha256": "29b6a6b0f940881484e967e6e152df1bf06de9b8eab6349c22b91335eca37775"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000209"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "直线段的区域取样"
+      ],
+      "lineStart": 5417,
+      "lineEnd": 5420,
+      "assetRefs": [],
+      "excerptSha256": "cae4a77bd7ea388d8312c5f05d00e12d33320e7bf4bf2a8f9f08288d72d9a320"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000210"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "过滤技术"
+      ],
+      "lineStart": 5421,
+      "lineEnd": 5434,
+      "assetRefs": [
+        "parts/part-0002/images/d8a6d0e0948ca173536e8ff19183c3201170d7be22a3ceb7021a9ff23cea26d7.jpg",
+        "parts/part-0002/images/be9d912046b9461f169138275428eee8a9c82b36090e93150e4d40cf4e3ec3eb.jpg",
+        "parts/part-0002/images/7cde508bafb8ee2f9ff0da28447bd6da6fe0b70f5232d643d665dc0afb139da5.jpg"
+      ],
+      "excerptSha256": "f5e10768a489e0f351f6e24c8b7b3220953e5b8342d231f26d957c2742e7be9d"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000211"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "像素移相"
+      ],
+      "lineStart": 5435,
+      "lineEnd": 5438,
+      "assetRefs": [],
+      "excerptSha256": "bcf731c509c87421e2747574be858d6455ad73ab3d26f436b085a006312bcefc"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000212"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "直线亮度差的校正"
+      ],
+      "lineStart": 5439,
+      "lineEnd": 5449,
+      "assetRefs": [
+        "parts/part-0002/images/15358de87d1a7ecf9e730392323d882639d5cb53aa089d93fa7e3c80657bfb39.jpg",
+        "parts/part-0002/images/3f3caddad28514ef13dc6bba28a020865b3de213384a7744473a44d43289df0b.jpg"
+      ],
+      "excerptSha256": "aac4c74fafb0dd0230392bdafd1020e43e2bd744d83237fdd4c87831456b34fc"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000213"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "区域边界的反走样"
+      ],
+      "lineStart": 5450,
+      "lineEnd": 5514,
+      "assetRefs": [
+        "parts/part-0002/images/5a928078fd8480d94e9e38adf03d1fcf7dc44fbe0c5844f7c1a145f16849aaa9.jpg",
+        "parts/part-0002/images/2526d13088dc097954c940a3e6e65a8955dfa96d2f39ad89e96808b2c46a6424.jpg",
+        "parts/part-0002/images/8f08e80f33eb92fe6ac6ed5487239ab9938aabc41cbcb2876e5e4729de1b4cff.jpg",
+        "parts/part-0002/images/e913dbade49e2f4998fc8f91ec5ed27ea9cb95b78b65ece30a926cd8bd6f0801.jpg",
+        "parts/part-0002/images/e43450b609d2dd760f9c41109c5f6b04e1de0972f9fa3063c246f3ba90388627.jpg",
+        "parts/part-0002/images/29f6a0bac18497afccaf0e23c96ef0fd88ecc8d64e73a27beab9dff286e15364.jpg",
+        "parts/part-0002/images/3fffedcac055e3d09702ba1612ad63f971c421249a7f40931a2e169ba24e2ce1.jpg"
+      ],
+      "excerptSha256": "a7de05f74d325f6290267b16d5896bc4f6133b8978cabc6c9748b13b8456082e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3504,
+    2324
+  ],
+  "scale": 0.92
+}

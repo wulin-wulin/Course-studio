@@ -1,0 +1,495 @@
+{
+  "id": "point-16-5",
+  "title": "扫描线算法",
+  "shortSummary": "讲解扫描线可见面算法利用边表和区间确定可见面的方法，并说明其逐行处理的特点。",
+  "keyTerms": [
+    "扫描线",
+    "边表",
+    "可见面"
+  ],
+  "animationType": "visibilityAlgorithmLab",
+  "animationSuggestion": "用一个自上而下推进的水平扫描线与两个相互覆盖的多边形投影，逐帧显示活化边表的边、各面的 on/off 标志和交点区间；单一覆盖区间直接上色，重叠区间用平面参数比较深度再决定颜色，并在相邻扫描线相交关系不变时标注“复用上一行深度结果”。",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-4-7",
+    "point-6-10"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的逐扫描线判定流程与数据结构定义，围绕单条扫描线的追踪补充步骤化说明、深度计算推导和局限对比。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-scanline-visibility",
+          "text": "说明扫描线算法为什么能沿单条扫描线确定可见面，以及边表、多边形表和活化边表各自承担什么作用。"
+        },
+        {
+          "id": "trace-single-scanline",
+          "text": "给定扫描线与各面投影的交点与面标志位，追踪该扫描线上每个区间应直接取色还是需要比较深度，并给出最终可见面。"
+        },
+        {
+          "id": "evaluate-scanline-limits",
+          "text": "判断扫描线算法在表面相交或循环遮挡场景下的适用边界，并说明处理方式。"
+        }
+      ],
+      "misconceptions": [
+        "以为扫描线算法要对每个像素遍历全部表面并计算深度；实际只在多个面同时覆盖的区间内才计算深度，单一覆盖区间直接取该面的颜色。",
+        "把面标志位为 on 直接当成该面可见；on 只表示像素落在该面的投影内，重叠时仍需按深度选出最近的表面。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-idea",
+          "title": "问题导入：按行判定可见性",
+          "role": "concept-introduction",
+          "description": "从逐像素判断的代价引出沿扫描线逐行处理的思路。",
+          "outcomeRefs": [
+            "explain-scanline-visibility"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-structures",
+          "title": "支撑数据结构：边表、多边形表与活化边表",
+          "role": "mechanism-components",
+          "description": "说明三张表的内容分工与活化边表的排序方式。",
+          "outcomeRefs": [
+            "explain-scanline-visibility",
+            "trace-single-scanline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "single-span-tracing",
+          "title": "单条扫描线的区间判定",
+          "role": "worked-example",
+          "description": "沿扫描线从左到右按交点划分区间并确定可见面。",
+          "outcomeRefs": [
+            "trace-single-scanline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "depth-and-coherence",
+          "title": "重叠区间的深度比较与扫描线相干性",
+          "role": "mechanism-and-optimization",
+          "description": "说明重叠区间如何计算深度，以及相邻扫描线如何复用结果。",
+          "outcomeRefs": [
+            "explain-scanline-visibility",
+            "trace-single-scanline"
+          ],
+          "order": 3
+        },
+        {
+          "id": "edge-cases-limits",
+          "title": "适用边界：相交与循环遮挡",
+          "role": "boundary-analysis",
+          "description": "说明算法成立前提以及循环遮挡时的表面划分。",
+          "outcomeRefs": [
+            "evaluate-scanline-limits"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "用小场景检验区间判定，并引出按深度排序的画家算法。",
+          "outcomeRefs": [
+            "trace-single-scanline",
+            "evaluate-scanline-limits"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-scanline-visibility",
+          "trace-single-scanline",
+          "evaluate-scanline-limits"
+        ],
+        "method": "完成一次单扫描线区间判定，并说明该场景是否可用扫描线算法直接求解。",
+        "successCriteria": [
+          "能按交点划分区间并正确判断每个区间的面标志位组合",
+          "能说明哪些区间需要深度比较、哪些可以直接取色",
+          "能指出循环遮挡为何使算法失效以及如何划分表面"
+        ],
+        "exerciseBlockId": "model-check",
+        "nextPointId": "point-16-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-scanline-idea",
+        "moduleId": "problem-and-idea",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：沿扫描线比较深度",
+        "markdown": "扫描线算法是一种像空间的隐面消除方法。它沿每条扫描线计算并比较场景的深度值：处理一条扫描线时，先判别与该扫描线相交的所有表面的可见性，再计算重叠表面的深度值，找出离观察平面最近的表面。确定某像素对应的可见面后，就可以得到该点的强度值并写入帧缓存。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "扫描线算法"
+              ],
+              "lineStart": 13760,
+              "lineEnd": 13784,
+              "assetRefs": [
+                "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+                "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+                "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+                "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+              ],
+              "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-big-picture",
+        "moduleId": "problem-and-idea",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把逐像素问题变成逐行问题",
+        "markdown": "教材描述的流程可以概括为“先定区间、再定深度、最后上色”。逐像素独立判断需要为每个像素反复回答“哪些面覆盖我”，而同一行内相邻像素面对的往往还是同样几个面，因此沿扫描线集中处理一次相交关系，就能把大量重复判断摊销掉。\n\n与逐像素比较的深度缓存相比，扫描线算法的关键差别在于它把可见性判定组织成“行—区间”的层次：一条扫描线被交点切成若干区间，区间内的覆盖面组合不变，于是可以整段处理而不是逐点重新判断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scanline-idea"
+          ]
+        }
+      },
+      {
+        "id": "textbook-tables",
+        "moduleId": "data-structures",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：边表、多边形表与活化边表",
+        "markdown": "扫描线算法使用多边形表中存储的信息处理表面。边表记录场景中各线段的端点坐标、线段斜率的倒数和指向多边形表中对应多边形的指针；多边形表记录各多边形面的平面方程系数、表面材料特性、其他表面数据以及可能指向边表的指针。\n\n为了加速查找与扫描线相交的表面，处理时会建立一张**活化边表**：它只包含与当前扫描线相交的边，并按 $x$ 升序排列。此外可为各个多边形面设置一个取值为 on 或 off 的标志位，表示扫描线上某像素位于多边形内还是多边形外。扫描线从左向右处理：在凸多边形投影的左边界处标志位置 on（开始），右边界处置 off（结束）；对凹多边形，交点从左往右存储，每一对交点之间把面标志位置 on。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "扫描线算法"
+              ],
+              "lineStart": 13760,
+              "lineEnd": 13784,
+              "assetRefs": [
+                "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+                "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+                "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+                "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+              ],
+              "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-aet-role",
+        "moduleId": "data-structures",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么需要活化边表",
+        "markdown": "若每条扫描线都从头遍历整个边表，大量边其实与当前行不相交，查找成本会被浪费。活化边表只保留当前行真正相交的边，并按 $x$ 升序排好，使得从左到右扫描时可以直接按顺序取交点，不必再排序。\n\n面标志位承担的则是“内外判断”的职责：区间落在某个面的投影内时其标志为 on，落在外面时为 off。这样，某段区间被哪些面覆盖，就可以直接读标志位得到，而不必对每个像素重新做点在多边形内的测试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-tables"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scanline-one",
+        "moduleId": "single-span-tracing",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材：扫描线 1 的区间判定",
+        "markdown": "以教材的图 16.10 为例，扫描线 1 的活化边表中包含边 AB、BC、EH 和 FG 的信息。考察边 AB 与 BC 之间沿线的像素点，只有面 $S_1$ 的标志位为 on，因此可以直接由面 $S_1$ 的表面特性和光照条件算出颜色，无须计算深度值。同样，在边 EH 与 FG 之间只有面 $S_2$ 的标志位为 on。扫描线 1 的其余部分与所有表面都不相交，这些像素的强度值应为背景强度；缓存单元可在初始化时统一置为背景强度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "扫描线算法"
+              ],
+              "lineStart": 13760,
+              "lineEnd": 13784,
+              "assetRefs": [
+                "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+                "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+                "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+                "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+              ],
+              "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-steps",
+        "moduleId": "single-span-tracing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：单扫描线的处理步骤",
+        "markdown": "把教材的判定过程写成可执行的步骤：\n\n1. 初始化：把该行像素全部置为背景强度。\n2. 更新活化边表：加入与当前行相交的边，删除不再相交的边，按交点 $x$ 升序排列。\n3. 从左到右取相邻交点构成的区间。\n4. 统计该区间内标志位为 on 的面：0 个保持背景；1 个直接用该面的颜色上色；2 个及以上进入深度比较。\n5. 深度比较后把最近面的颜色写入该区间的像素。\n6. 切换到下一交点区间，标志位在跨越边界时相应翻转。\n\n对照扫描线 1：AB 到 BC 区间只有 $S_1$ 为 on，走第 4 步的“1 个面”分支；EH 到 FG 区间只有 $S_2$ 为 on，同样直接取色；行首与行尾为 0 个面，保留背景。整个过程没有发生任何深度计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scanline-one",
+            "textbook-tables"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scanline-two",
+        "moduleId": "depth-and-coherence",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：重叠区间的深度比较",
+        "markdown": "对图 16.10 中的扫描线 2 和扫描线 3，活化边表包含边 AD、EH、BC 及 FG。在扫描线 2 上，边 AD 与 EH 之间的部分只有面 $S_1$ 的标志位为 on。而在边 EH 与 BC 之间的部分，所有面的标志位均为 on，因此碰到边 EH 时必须用平面参数为两个表面计算深度值。\n\n教材假设面 $S_1$ 的深度小于面 $S_2$，于是把面 $S_1$ 的颜色值沿扫描线置入像素，直到边界 BC；随后把面 $S_1$ 的标志位置 off，再把面 $S_2$ 的颜色值置入刷新缓存，直到边 FG。一旦在边 EH 上确定了深度关系，并假定面 $S_2$ 在 $S_1$ 之后，就不再需要另外的深度计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "扫描线算法"
+              ],
+              "lineStart": 13760,
+              "lineEnd": 13784,
+              "assetRefs": [
+                "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+                "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+                "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+                "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+              ],
+              "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-depth-formula",
+        "moduleId": "depth-and-coherence",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：用平面参数求出深度",
+        "markdown": "教材指出深度值要用多边形表中记录的“平面方程系数”来计算。若平面方程写成\n\n$$Ax+By+Cz+D=0$$\n\n则在已知像素的 $x$、$y$ 且 $C\\neq 0$ 时，深度可直接解出：\n\n$$z=-\\frac{Ax+By+D}{C}$$\n\n因此只需在区间起点（如边 EH 的交点）取一次 $x$、$y$ 求深度，就能比较两个面的远近，无须对区间内每个像素都重新解方程。这正是教材所说“一旦确定深度关系就不再需要另外的深度计算”的原因。需要注意 $C=0$ 时平面平行于观察平面方向的退化情形，需要单独处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scanline-two",
+            "textbook-tables"
+          ]
+        }
+      },
+      {
+        "id": "textbook-coherence",
+        "moduleId": "depth-and-coherence",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：扫描线相干性",
+        "markdown": "逐条处理扫描线时，可以利用线段的连贯性。如图 16.10 所示，扫描线 3 与扫描线 2 具有相同的活化边表。由于线段交点没有发生变化，因此无须在边 EH 与 BC 之间再进行深度计算；两个表面必须处于相同的方向，类似于扫描线 2 中的情况，于是将面 $S_1$ 置入刷新缓存而无须更多计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "扫描线算法"
+              ],
+              "lineStart": 13760,
+              "lineEnd": 13784,
+              "assetRefs": [
+                "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+                "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+                "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+                "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+              ],
+              "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-coherence-meaning",
+        "moduleId": "depth-and-coherence",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：相干性节省了什么",
+        "markdown": "相干性指的是相邻扫描线之间相交关系往往不变。活化边表内容不变时，区间划分和各面的 on/off 状态也不变，上一行已经确定的深度顺序在同一区间内仍然成立，于是可以跳过重复的深度计算，只做颜色写入。\n\n需要注意这种复用是有条件的：一旦某条边结束或新边开始，活化边表与交点顺序改变，就必须重新建立区间并重新比较深度。把相干性理解为“在相交关系未变化的前提下复用上一行的结论”，而不是“永远只算一次深度”，才能正确判断算法何时需要重新计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-coherence",
+            "textbook-scanline-two"
+          ]
+        }
+      },
+      {
+        "id": "textbook-limitations",
+        "moduleId": "edge-cases-limits",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：循环遮挡的处理",
+        "markdown": "扫描线算法可以处理任意数目的相互覆盖的多边形面。设置面标志可以表示某点与平面内外侧的位置关系，当表面间有重叠部分时，需要计算它们的深度值。只有在表面没有相互贯穿或循环遮挡的情况下，上述处理才能获得正确结果（参见图 16.11）。若场景中出现循环遮挡，则需要将表面进行划分以消除循环，图 16.11 中的虚线表示可以在此处将表面分割为两个独立部分，以消除循环遮挡。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000504"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "扫描线算法"
+              ],
+              "lineStart": 13760,
+              "lineEnd": 13784,
+              "assetRefs": [
+                "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+                "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+                "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+                "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+              ],
+              "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-limits-compare",
+        "moduleId": "edge-cases-limits",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：与深度缓存对照看边界",
+        "markdown": "扫描线算法与深度缓存都属于像空间方法，但难点来源不同：深度缓存对每个像素独立比较，天然能处理相互贯穿的表面；扫描线算法依赖“同一区间内深度顺序稳定”这一前提，因此当多个面互相穿插、形成循环遮挡时，同一对表面在不同位置谁近谁远会反复变化，单一深度结论不再成立。\n\n教材给出的处理方式是在图中虚线处把表面分割为独立部分，使每个子面内部不再出现循环依赖，再分别处理。工程上也可以理解为：先把难以定序的几何拆成简单片元，再交给按区间判定的流程。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-limitations",
+            "textbook-tables"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "设某条扫描线与两个面 $S_A$、$S_B$ 的投影相交，按 $x$ 升序得到交点序列 $x_1<x_2<x_3<x_4$。已知 $S_A$ 在 $[x_1,x_3]$ 内为 on，$S_B$ 在 $[x_2,x_4]$ 内为 on。\n\n请回答：\n\n1. 该扫描线被分成哪几个区间？各区间内 on 的面分别是谁？\n2. 哪些区间必须计算深度，哪些可以直接取色？\n3. 若场景中这两个面互相贯穿并形成循环遮挡，该扫描线算法还能直接给出正确结果吗？应如何处理？\n\n参考思路：区间为 $[x_1,x_2)$、$[x_2,x_3)$、$[x_3,x_4)$；中间区间两面同时为 on，需要按平面方程比较深度；两侧区间各只有一个面为 on，可直接取色。循环遮挡场景下算法前提被破坏，需要先划分表面消除循环。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scanline-one",
+            "textbook-scanline-two",
+            "textbook-limitations",
+            "textbook-tables"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "scanline-visibility-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-single-scanline",
+          "evaluate-scanline-limits"
+        ],
+        "learningPurpose": "检查学习者能否把教材的区间判定与深度比较流程迁移到新的交点序列，并识别算法的适用边界。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-scanline-one",
+            "textbook-scanline-two",
+            "textbook-limitations"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "按交点序列划分区间，标出需要深度比较的区间并判断循环遮挡场景是否适用。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "按 $x$ 升序把扫描线切成区间，逐段统计标志位为 on 的面：0 个保持背景，1 个直接取色，2 个及以上用平面参数比较深度；若出现循环遮挡，需先划分表面。"
+        }
+      }
+    ]
+  },
+  "subtitle": "可见面判别算法",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000504"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "扫描线算法"
+      ],
+      "lineStart": 13760,
+      "lineEnd": 13784,
+      "assetRefs": [
+        "parts/part-0005/images/d2d565de2b4bbc34a1849e816f12868e49266300e42150285d8129bf776a4b22.jpg",
+        "parts/part-0005/images/888c37912b5e0a4c9f44b2561a32a78e3afe7651a92acc3600ae19c46352d68a.jpg",
+        "parts/part-0005/images/734b41002655e98fbdefcfbd4183c87d9cf477b83f31e53bf63ff839038f8111.jpg",
+        "parts/part-0005/images/3ca1c866819f81e0a0b228a24f35dba649bc9e32d1ecc667bf0033ff15924435.jpg"
+      ],
+      "excerptSha256": "6ed74b137554ed107ab8694553598d641b4e2c2a323fd807d52a57d8558d4857"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3922,
+    599
+  ],
+  "scale": 0.86
+}

@@ -1,0 +1,656 @@
+{
+  "id": "point-1-6",
+  "title": "固化程序",
+  "shortSummary": "讲解把编译生成的程序写入目标板 Flash 并设置为上电启动的固化流程与注意事项。",
+  "keyTerms": [
+    "固化",
+    "Flash",
+    "下载",
+    "启动"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.66,
+  "prerequisites": [
+    "point-1-4",
+    "point-1-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-branch-recovery",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的地址、生成目标与跳线数值，按“目的—链接配置—下载通道—启动验证”的操作顺序重排，并补充分支判断与失败恢复的检查点。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-programming-purpose",
+          "text": "解释固化程序的目的，以及它与脱机运行的关系。"
+        },
+        {
+          "id": "configure-link-address",
+          "text": "针对片内或片外 Flash 选择正确的生成目标、代码起始地址与分散加载文件。"
+        },
+        {
+          "id": "perform-jtag-isp",
+          "text": "按条件描述 JTAG 与 ISP 两条固化通道的操作步骤、适用前提和错误恢复方式。"
+        },
+        {
+          "id": "verify-offline-boot",
+          "text": "依据向量表校验和与 JP9/JP10 跳线设置，判断程序能否上电启动。"
+        }
+      ],
+      "misconceptions": [
+        "认为在 AXD 中调试通过的程序已经可以脱机运行，忽视必须固化到 Flash 这一步。",
+        "认为片内与片外 Flash 可以共用同一代码起始地址、同一生成目标和同一分散加载文件。",
+        "认为所有 LPC2200 系列芯片都能用 ISP 下载，忽略 LPC2210 没有片内 Flash。",
+        "认为 JTAG 下载与代码链接地址无关，仿真器会自动把程序放进正确的 Flash 空间。"
+      ],
+      "modules": [
+        {
+          "id": "purpose-and-prerequisites",
+          "title": "固化要解决什么问题",
+          "role": "导入",
+          "description": "说明固化的定义、与调试运行的区别，以及固化前必须完成的链接配置。",
+          "outcomeRefs": [
+            "explain-programming-purpose"
+          ],
+          "order": 0
+        },
+        {
+          "id": "internal-flash-link",
+          "title": "片内固化的链接与地址分配",
+          "role": "前置配置",
+          "description": "读懂 mem_c.scf 的加载区、执行区、向量表位置和 RAM 分区。",
+          "outcomeRefs": [
+            "configure-link-address"
+          ],
+          "order": 1
+        },
+        {
+          "id": "jtag-and-isp",
+          "title": "两条片内下载通道",
+          "role": "操作步骤与分支",
+          "description": "分别给出 JTAG 与 ISP 的操作步骤、前置条件和失败恢复。",
+          "outcomeRefs": [
+            "perform-jtag-isp",
+            "configure-link-address"
+          ],
+          "order": 2
+        },
+        {
+          "id": "checksum-and-offline-boot",
+          "title": "启动校验与脱机运行",
+          "role": "机制与验证",
+          "description": "解释向量表 32 位累加和为零的启动条件及片内脱机跳线。",
+          "outcomeRefs": [
+            "verify-offline-boot"
+          ],
+          "order": 3
+        },
+        {
+          "id": "external-flash",
+          "title": "片外 Flash 的固化差异",
+          "role": "迁移与对照",
+          "description": "对照片外 Flash 的起始地址、生成目标、分散加载文件与跳线组合。",
+          "outcomeRefs": [
+            "configure-link-address",
+            "perform-jtag-isp"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "检查表与情境迁移",
+          "role": "达成检查",
+          "description": "用检查表复核固化流程，并在失败情境中定位问题。",
+          "outcomeRefs": [
+            "verify-offline-boot",
+            "perform-jtag-isp",
+            "explain-programming-purpose"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-programming-purpose",
+          "configure-link-address",
+          "perform-jtag-isp",
+          "verify-offline-boot"
+        ],
+        "method": "完成固化流程检查表，并对“复位后不运行”的情境给出排查顺序与依据。",
+        "successCriteria": [
+          "能写出片内与片外两种固化的起始地址、生成目标和分散加载文件",
+          "能说明 JTAG 与 ISP 各自的前置条件和结束动作",
+          "能依据校验和条件与跳线设置判断启动结果"
+        ],
+        "exerciseBlockId": "model-exercise-boot-failure",
+        "summaryBlockId": "model-checklist",
+        "nextPointId": "point-2-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-purpose",
+        "moduleId": "purpose-and-prerequisites",
+        "depth": "core",
+        "kind": "definition",
+        "title": "固化的定义与作用",
+        "markdown": "在 JTAG 仿真调试通过后，还需要把程序下载到片内的 FLASH 或外部的 FLASH 中，也就是**固化程序**，之后才能**脱机运行**。\n\n调试阶段程序依附仿真器和调试环境运行；固化则把最终代码持久保存到非易失存储器中，使目标板单独上电就能执行同一段程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-flash",
+        "moduleId": "purpose-and-prerequisites",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：固化改变的不只是存储位置",
+        "markdown": "把固化理解成“把程序复制进 Flash”并不完整。它同时确定了三件事：启动时从哪个地址取指、向量表位于何处、片上与片外 RAM 如何分配。\n\n所以固化前必须先改编译链接配置，再选择下载通道——否则代码即使写进了 Flash，也会因为地址不对而无法启动。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-purpose"
+          ]
+        }
+      },
+      {
+        "id": "tb-link-address",
+        "moduleId": "internal-flash-link",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "片内固化的前提：链接到 0x00000000",
+        "markdown": "对 LPC2200 系列 ARM7 微控制器，片内 FLASH 固化有两条通道：JTAG 接口下载和使用 ISP 功能下载。无论使用哪一种，用户都要先设置编译链接的地址，即代码地址从 `0x00000000` 开始。\n\n使用 LPC2200 专用工程模板时，生成目标选用 `RelInChip`，地址分配由分散加载描述文件 `mem_c.scf`（程序清单 1.6）完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-scatter-regions",
+        "moduleId": "internal-flash-link",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "mem_c.scf 的加载区与执行区",
+        "markdown": "`ROM_LOAD` 是加载区名称，其后的 `0x00000000` 表示加载区起始地址（存放程序代码的起始地址）；也可以在后面添加空间大小，如 `ROM_LOAD 0x00000000 0x20000` 表示起始地址为 `0x00000000`、大小为 128 KB。\n\n`ROM_EXEC` 描述执行区地址，放在第一块位置定义，其起始地址、空间大小必须与加载区一致。从起始地址开始放置向量表（`Startup.o(vectors, +First)`，其中 `Startup.o` 是 `Startup.s` 的目标文件），接着放置其它代码（`*(+RO)`）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scatter-example",
+        "moduleId": "internal-flash-link",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "示例：读一条分散加载语句",
+        "markdown": "以 `ROM_LOAD 0x00000000 0x20000` 为例：`0x20000` 等于 131072 字节，也就是 128 KB，这是留给加载区的容量上限，不等于当前程序的实际大小。\n\n填写时有两个硬约束：加载区与执行区同址、同大小；向量表必须排在执行区最前面。因为复位后 CPU 从 `0x00000000` 取第一条指令，向量表不在最前面就无法正确启动。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-link-address",
+            "tb-scatter-regions"
+          ]
+        }
+      },
+      {
+        "id": "tb-memory-regions",
+        "moduleId": "internal-flash-link",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "变量区、堆与栈的地址分配",
+        "markdown": "`mem_c.scf` 同样写死了 RAM 分区：变量区 `IRAM` 起始地址 `0x40000000`，放置 `Startup.o(MyStacks)`；变量区 `ERAM` 起始地址 `0x80000000`，放置除 `Startup.o` 之外其它文件的变量（`*(+RW,+ZI)`）；紧靠 `ERAM` 变量区之后是系统堆空间 `HEAP`，放置 `Startup.o(Heap)`。\n\n堆栈区 `STACKS` 使用片内 RAM。由于 ARM 的堆栈一般采用满递减堆栈，堆栈区起始地址设置为 `0x40004000`，放置 `Startup.o(Stacks)`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-memory-explain",
+        "moduleId": "internal-flash-link",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么栈区从 0x40004000 开始",
+        "markdown": "片内 RAM 从 `0x40000000` 起，栈区却把起始地址设在 `0x40004000`。原因是满递减栈压栈时地址向低地址方向增长，把栈顶放在区域末端，栈向低处生长时才不会立刻与低地址的数据区相撞。\n\n这也说明分散加载文件里的地址不是可有可无的格式：一旦 RAM 分区改变，必须同步修改分散加载文件，否则堆栈会覆盖其它变量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-memory-regions"
+          ]
+        }
+      },
+      {
+        "id": "tb-jtag",
+        "moduleId": "jtag-and-isp",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "JTAG 通道：用 EasyJTAG 写入片内 FLASH",
+        "markdown": "使用 JTAG 接口下载程序到 FLASH 需要 JTAG 仿真器的支持。EasyJTAG 仿真器可支持 LPC2000 系列 ARM7 微控制器的片内 FLASH 下载，从而把程序写入 FLASH 以便脱机运行。\n\n操作步骤：先设置 EasyJTAG 仿真器，注意 `ARMcore` 项一定要选择正确的 CPU 型号，否则可能导致编程出错；然后把工程的生成目标选用 `RelInChip`，编译链接；再按 F5 键进入 AXD 调试环境，在加载调试映像文件时即会下载程序到 FLASH 中。只要加载调试映像文件且代码地址设置为 FLASH 的地址，EasyJTAG 仿真器就会把程序下载到指定的 FLASH 空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-jtag-check",
+        "moduleId": "jtag-and-isp",
+        "depth": "core",
+        "kind": "warning",
+        "title": "JTAG 固化后的三个检查点",
+        "markdown": "按教材流程操作后若程序仍不运行，按顺序检查三项：\n\n1. 生成目标是否确实为 `RelInChip`，而不是用于 RAM 调试的目标；\n2. `ARMcore` 是否选了与开发板一致的 LPC2200 系列型号；\n3. 分散加载文件中的代码地址是否从 `0x00000000` 开始。\n\n三者任一不符，仿真器就可能把代码写到错误空间或编程失败，而不是程序逻辑有问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-jtag",
+            "tb-link-address"
+          ]
+        }
+      },
+      {
+        "id": "tb-isp",
+        "moduleId": "jtag-and-isp",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "ISP 通道：用串口把 HEX 写入片内 FLASH",
+        "markdown": "LPC2200 系列 ARM7 微控制器芯片具有 ISP 功能（`LPC2210` 无片内 FLASH，不能进行 ISP 编程），可以通过串口进行程序下载。\n\n先把当前工程编译生成 HEX 文件：打开工程的 `DebugRel Settings` 窗口，在 `Target Settings` 项中把 `Post-linker` 选取 `ARM from ELF`；再在 `ARM from ELF` 项中设置输出文件类型（如 `Intel 32 bit Hex`）和输出文件名，也可指定目录，不指定时生成文件存放在当前工程目录中；重新编译连接，编译通过即生成指定输出文件。\n\n生成 HEX 文件后，用串口延长线连接 PC 串口（如 COM1）和 SmartARM2200 实验板（UART0），并将实验板上的 ISP（JP1）跳线短接。打开 LPC2000 Flash Utility 软件，设置串口、波特率、系统晶振等参数，注意晶振频率项单位为 kHz。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-isp-upload",
+        "moduleId": "jtag-and-isp",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "ISP 的连接确认、擦除与上传",
+        "markdown": "参数设置好后，点击 `Read Device ID` 按钮读取芯片 ID 号。若读取成功（状态栏显示 “Read Part ID Successfully!”），表明 ISP 连接成功；否则当出错提示为复位 LPC2000 信息时，先按 SmartARM2200 开发板上的 RST 键复位，然后再确定提示。\n\n连接成功后，先使用 `Erase` 按钮擦除选定扇区的 FLASH，然后在 `Filename` 项输入要下载的 HEX 文件全名，点击 `Upload to Flash` 按钮开始下载程序。程序固化后，将 ISP（JP1）跳线断开，重新复位系统即可运行程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-isp-troubleshoot",
+        "moduleId": "jtag-and-isp",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：ISP 失败的常见分支",
+        "markdown": "ISP 环节的失败大多出在连接与文件格式上，而不是程序本身：\n\n- `Read Device ID` 失败：先按 RST 复位再重试，并核对串口、波特率与以 kHz 为单位的晶振设置；\n- `Upload to Flash` 失败：确认已用 `Erase` 擦除目标扇区，且 `Filename` 指向刚生成的 HEX 文件；\n- 下载成功但不运行：检查 JP1 是否仍处于短接状态，短接时芯片停留在 ISP 等待状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-isp",
+            "tb-isp-upload"
+          ]
+        }
+      },
+      {
+        "id": "tb-checksum",
+        "moduleId": "checksum-and-offline-boot",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "启动条件：向量表 32 位累加和为零",
+        "markdown": "教材给出一个容易被忽略的启动条件：LPC2200 系列 ARM7 微控制器要求向量表中所有的数据（即 `0x00000000`～`0x0000001C` 地址上的指令机器码）32 位累加和为零，才能启动用户程序。该条件通过设置保留异常向量地址 `0x14` 上的数据实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checksum-meaning",
+        "moduleId": "checksum-and-offline-boot",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：为什么改 0x14 就能满足校验",
+        "markdown": "启动代码在跳转到用户程序之前，会对向量表前 8 个 32 位字做累加校验，只有结果为零才认为向量表有效。`0x14` 属于保留的异常向量，正常运行时不会被触发，因此把它的值当作“补数”写入，既能把总和调成零，又不会改变任何真实异常入口的行为。\n\n反过来说，如果链接脚本或启动代码改动了 `0x14` 的内容而没有重新计算校验，即使程序已经写进 FLASH，芯片也不会启动用户程序。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-checksum"
+          ]
+        }
+      },
+      {
+        "id": "tb-offline-internal",
+        "moduleId": "checksum-and-offline-boot",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "片内固化的脱机运行跳线",
+        "markdown": "片内 FLASH 固化完成后，脱机运行按以下顺序设置：\n\n1. 将 JP9 跳线选择 `INSIDE`；\n2. 将 JP1 断开，禁止 ISP；\n3. 将 JP10 跳线器选择 RAM 为 BANK0 地址、FLASH 为 BANK1 地址；\n4. 复位系统，即可启动片内 FLASH 中的程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-jumper-meaning",
+        "moduleId": "checksum-and-offline-boot",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：跳线决定的是地址映射",
+        "markdown": "跳线不是“让它能跑”的开关，而是决定地址如何映射到存储器件：JP9 选择从片内还是片外启动，JP10 决定 Bank0、Bank1 分别落到 RAM 还是 FLASH。\n\n片内固化时要求 RAM 位于 BANK0、FLASH 位于 BANK1，再复位，芯片才会从刚写入的片内 FLASH 取指。跳线与固化的目标不一致时，即使写入成功，启动的也可能是另一块存储器。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-offline-internal"
+          ]
+        }
+      },
+      {
+        "id": "tb-external-link",
+        "moduleId": "external-flash",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "片外 FLASH 固化：链接到 0x80000000",
+        "markdown": "EasyJTAG 仿真器支持对特定的片外 FLASH 编程。固化到片外 FLASH 时，同样要先设置编译链接地址，即代码地址从 `0x80000000` 开始。使用 LPC2200 专用工程模板时，在 target system 选用 `RelOutChip`，分散加载描述文件为 `mem_a.scf`（程序清单 1.7）。\n\n其中 `ROM_LOAD` 后的 `0x80000000` 表示加载区起始地址（因为片外 FLASH 分配为 Bank0）；`ROM_EXEC` 放在第一块位置定义，起始地址与空间大小须与加载区一致；向量表 `Startup.o(vectors, +First)` 从起始地址开始放置，随后是 `*(+RO)`；变量区 `IRAM` 仍为 `0x40000000`，放置 `Startup.o(MyStacks)`；堆栈区 `STACKS` 使用片内 RAM，起始地址 `0x40004000`，放置 `Startup.o(Stacks)`；变量区 `ERAM` 起始地址改为 `0x81000000`（因为片外 RAM 分配为 BANK1），放置其它文件的 `*(+RW,+ZI)`；系统堆 `HEAP` 紧靠 `ERAM` 之后。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-external-download",
+        "moduleId": "external-flash",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "片外 FLASH 的下载与脱机运行",
+        "markdown": "下载片外 FLASH：先把 JP10 跳线选择 Bank0-Flash、Bank1-Ram；然后设置 EasyJTAG 仿真器；最后把工程生成目标选用 `RelOutChip`，编译链接后按 F5 键进入 AXD，在加载调试映像文件时即会下载程序到片外 FLASH 中。\n\n脱机运行时：将 JP9 跳线选择 `OUTSIDE`，JP1 断开禁止 ISP，JP10 保持 Bank0-Flash、Bank1-Ram，复位系统即可启动片外 FLASH 中的程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000007"
+              ],
+              "headingPath": [
+                "ADS 集成开发环境及EasyJTAG 仿真器应用",
+                "固化程序"
+              ],
+              "lineStart": 140,
+              "lineEnd": 173,
+              "assetRefs": [],
+              "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compare-table",
+        "moduleId": "external-flash",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "片内与片外固化对照",
+        "markdown": "| 比较项 | 片内 FLASH | 片外 FLASH |\n|---|---|---|\n| 代码起始地址 | `0x00000000` | `0x80000000` |\n| 生成目标 | `RelInChip` | `RelOutChip` |\n| 分散加载文件 | `mem_c.scf` | `mem_a.scf` |\n| 变量区 ERAM | `0x80000000` | `0x81000000` |\n| 可选下载通道 | JTAG、ISP | JTAG（EasyJTAG） |\n| 脱机 JP9 | `INSIDE` | `OUTSIDE` |\n| 脱机 JP10 | RAM 为 BANK0、FLASH 为 BANK1 | Bank0-Flash、Bank1-Ram |\n\n对照时优先看前三行：起始地址、生成目标和分散加载文件必须成套匹配，任意一项单独修改都会造成“写进去了但启动不了”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-external-link",
+            "tb-external-download",
+            "tb-link-address"
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "固化流程检查表",
+        "markdown": "1. **确认目标**：调试已通过，明确固化到片内还是片外 FLASH。\n2. **改链接**：片内从 `0x00000000` 起、`RelInChip` + `mem_c.scf`；片外从 `0x80000000` 起、`RelOutChip` + `mem_a.scf`。\n3. **选通道**：JTAG 需 EasyJTAG 且 `ARMcore` 型号正确；ISP 只适用于有片内 FLASH 的型号，需生成 HEX、短接 JP1 并设置串口参数。\n4. **写入核查**：ISP 先擦除目标扇区、完成后断开 JP1；片内程序还要满足向量表 32 位累加和为零。\n5. **脱机验证**：片内设 JP9 `INSIDE`、JP10 RAM/BANK0 + FLASH/BANK1；片外设 JP9 `OUTSIDE`、JP10 Bank0-Flash + Bank1-Ram，然后复位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-compare-table",
+            "tb-isp-upload",
+            "tb-checksum"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-boot-failure",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "情境判断：复位后不运行",
+        "markdown": "某同学把生成目标改为 `RelOutChip` 编译后按 F5，提示下载完成，但复位后程序不运行。请按固化流程给出最可能的两个原因，并说明排查顺序。\n\n参考思路：先看 JP10 是否设为 Bank0-Flash、Bank1-Ram（否则代码没有进入片外 FLASH 的映射空间），再核对分散加载文件是否为 `mem_a.scf`、代码是否从 `0x80000000` 起（否则写入地址与执行地址不一致）。排查顺序应从硬件映射开始，再检查链接配置，最后才怀疑程序逻辑。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-external-download",
+            "tb-external-link",
+            "model-jumper-meaning"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "offline-boot-decision-check",
+        "type": "formative-check",
+        "title": "选择正确的固化组合",
+        "anchorBlockId": "model-exercise-boot-failure",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "configure-link-address",
+          "verify-offline-boot"
+        ],
+        "learningPurpose": "检查学习者能否把起始地址、生成目标、分散加载文件与脱机跳线作为一套组合来选择，而不是逐项记忆。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-external-download",
+            "tb-offline-internal",
+            "tb-checksum"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "itemType": "matching",
+          "prompt": "把片内固化与片外固化各自需要的起始地址、生成目标、分散加载文件和脱机跳线配对。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "列出片内固化与片外固化各自的代码起始地址、生成目标、分散加载文件、JP9 与 JP10 设置，并说明哪几项必须成套修改。"
+        }
+      }
+    ]
+  },
+  "subtitle": "ADS 集成开发环境及EasyJTAG 仿真器应用",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-05387b5e0cf2e9137fce3889",
+      "blockIds": [
+        "block-000007"
+      ],
+      "headingPath": [
+        "ADS 集成开发环境及EasyJTAG 仿真器应用",
+        "固化程序"
+      ],
+      "lineStart": 140,
+      "lineEnd": 173,
+      "assetRefs": [],
+      "excerptSha256": "93fe36d2cfb07a6cec7b7597fd689e2436a6e6cbca0cb119a41f20178ea42366"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1741,
+    1889
+  ],
+  "scale": 0.6
+}

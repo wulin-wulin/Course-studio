@@ -1,0 +1,414 @@
+{
+  "id": "point-12-3",
+  "title": "Boolean operations",
+  "shortSummary": "讨论 and、or、not 的短路求值语义及代码生成方式，说明布尔表达式如何与控制流结合。",
+  "keyTerms": [
+    "布尔运算",
+    "boolean",
+    "短路求值",
+    "and",
+    "or",
+    "not",
+    "控制流"
+  ],
+  "animationType": "conditionalJumpBackpatching",
+  "animationSuggestion": "逐步展示关系求值顺序、每步发射的分支指令与跳转列表的增长；遇到短路时高亮直接跳到 T 或 F 的那一跳，最后显示回填完成的目标地址。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-12-1",
+    "point-12-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-derivation-with-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对短路语义、F-jump/T-jump 模式与 Op1/Op2 回填机制的表述，围绕“为什么不能当算术算”和“代码如何逐段生成”补充求值轨迹、对照表与检查题。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-short-circuit",
+          "text": "解释 and、or 的短路语义，以及为什么布尔表达式不能像算术表达式那样无条件求值两侧。"
+        },
+        {
+          "id": "explain-code-pattern",
+          "text": "说明 & 的 F-jump 链、OR 的 T-jump 链与取反的代码模式各自发射什么分支、何时跳转。"
+        },
+        {
+          "id": "explain-fixup",
+          "text": "说明 Op1/Op2、loadCond、跳转列表与 FixLink、merged 在单遍编译中如何发射并回填分支。"
+        },
+        {
+          "id": "apply-short-circuit",
+          "text": "判断给定布尔表达式的求值顺序与短路后果，并说明它与条件语句编译机制的对应关系。"
+        }
+      ],
+      "misconceptions": [
+        "把 and/or 当作普通二目运算符，认为两侧总会被求值，短路只是可选的性能优化。",
+        "认为短路求值只影响效率，不会改变程序行为，因此编译器可以自由决定是否求值第二操作数。"
+      ],
+      "modules": [
+        {
+          "id": "semantics-and-motivation",
+          "title": "为什么布尔表达式不能照搬算术编译",
+          "role": "concept-introduction",
+          "description": "从布尔运算符的定义引出短路语义与未定义操作数问题。",
+          "outcomeRefs": [
+            "explain-short-circuit",
+            "apply-short-circuit"
+          ],
+          "order": 0
+        },
+        {
+          "id": "and-code-pattern",
+          "title": "& 的条件分支链",
+          "role": "mechanism-derivation",
+          "description": "推导合取表达式的 F-jump 模式并跟踪一次完整求值。",
+          "outcomeRefs": [
+            "explain-code-pattern"
+          ],
+          "order": 1
+        },
+        {
+          "id": "or-and-negation",
+          "title": "OR 的跳转链与取反",
+          "role": "mechanism-variant",
+          "description": "对照 OR 的 T-jump 模式与不发射指令的取反处理。",
+          "outcomeRefs": [
+            "explain-code-pattern"
+          ],
+          "order": 2
+        },
+        {
+          "id": "jump-lists-and-fixup",
+          "title": "跳转表、Op1/Op2 与回填",
+          "role": "implementation-detail",
+          "description": "说明 term 过程扩展、Cond 模式转换、列表遍历与 merged 的实现细节。",
+          "outcomeRefs": [
+            "explain-fixup",
+            "explain-code-pattern"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundaries-and-check",
+          "title": "结论、误区与检查",
+          "role": "consolidation",
+          "description": "收束教材结论，纠正把短路当作纯优化的误解并做一次迁移检查。",
+          "outcomeRefs": [
+            "explain-short-circuit",
+            "explain-code-pattern",
+            "explain-fixup",
+            "apply-short-circuit"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-short-circuit",
+          "explain-code-pattern",
+          "explain-fixup",
+          "apply-short-circuit"
+        ],
+        "method": "完成检查题，写出给定表达式的求值顺序与短路后果，并说明对应分支如何回填。",
+        "successCriteria": [
+          "能指出第二操作数在什么条件下被跳过",
+          "能区分 F-jump 与 T-jump 的触发条件",
+          "能说明单遍编译为何必须为分支保留回填信息"
+        ],
+        "exerciseBlockId": "check-short-circuit",
+        "summaryBlockId": "textbook-recap",
+        "nextPointId": "point-12-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-short-circuit-definition",
+        "moduleId": "semantics-and-motivation",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：第二操作数可以不被求值",
+        "markdown": "教材指出，把布尔表达式与算术表达式同等处理，常常不仅低效，甚至会生成**错误**代码，原因在于布尔运算符的定义：当第一个操作数 `p` 的值已经唯一确定结果时，第二个操作数 `q` 不必求值；许多语言定义更进一步，规定此时**不得**求值 `q`。这样 `q` 可以保持未定义，而不会导致程序执行被终止。\n\n教材给出的典型情形涉及指针 `x`：当 `x` 为 NIL 时，`x^.size` 是未定义的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "11. Conditional and Repeated Statements and Boolean Expressions",
+                "Boolean operations"
+              ],
+              "lineStart": 409,
+              "lineEnd": 423,
+              "assetRefs": [],
+              "excerptSha256": "eefc8d01e75ec98552e7644f3a23e1e6f3d8a8ae8dec97150c723d868a37c196"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-nil-guard-example",
+        "moduleId": "semantics-and-motivation",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：判空之后再读字段",
+        "markdown": "把定义落到一个具体判断上：若要确认指针有效且其 `size` 为正，只能先判断指针，再在指针有效时读取字段。短路求值把“读取字段”这一步安排在“指针非空”成立之后；如果编译器无视这一顺序先求值右侧，就可能对 NIL 解引用。\n\n因此短路不是风格选择，而是程序语义的一部分：它决定哪些操作在什么条件下发生。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-short-circuit-definition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-and-pattern",
+        "moduleId": "and-code-pattern",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材模式：每个 & 发射一条条件分支",
+        "markdown": "设表达式由三个关系用 `&` 连接，`a, b, ..., f` 是数值。教材用标号 T 和 F 表示整个表达式为真与为假时的目标位置。代码模式为每个 `&` 发射一条条件分支指令，且跳转在**前一个条件不满足**时执行（F-jump）：例如 `<` 关系对应 BGE，`=` 关系对应 BNE。\n\n也就是说，只要有一个合取项为假，控制流立即跳向 F，其右侧的关系不再求值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "11. Conditional and Repeated Statements and Boolean Expressions",
+                "Boolean operations"
+              ],
+              "lineStart": 409,
+              "lineEnd": 423,
+              "assetRefs": [],
+              "excerptSha256": "eefc8d01e75ec98552e7644f3a23e1e6f3d8a8ae8dec97150c723d868a37c196"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-and-trace",
+        "moduleId": "and-code-pattern",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：三重合取的求值轨迹",
+        "markdown": "以 `a < b & c = d & e > f` 为例，按上述模式逐项推进：\n\n1. 求值 `a < b`；结果为假则跳到 F。\n2. 只有上一步为真，才求值 `c = d`；结果为假则跳到 F。\n3. 只有前两步都为真，才求值 `e > f`；结果为假则跳到 F。\n4. 三步都为真时到达 T。\n\n终点语义很清晰：到达 T 当且仅当三个关系同时成立；任何一步失败都会短路到 F，并跳过其右侧尚未求值的关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-and-pattern"
+          ]
+        }
+      },
+      {
+        "id": "textbook-or-negation",
+        "moduleId": "or-and-negation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材模式：OR 的 T-jump 与取反",
+        "markdown": "OR 的处理与 `&` 类似，区别在跳转时机：只要当前条件满足就跳转（T-jump），因为这些指令把控制送往表达式为真的标号。教材把 OR 产生的这类指令记录在第二个列表中，链路存放在 item 的字段 `b` 里。\n\n取反的实现更省：不需要发射任何指令，只需把 item 字段 `c` 表示的条件取反，并交换 F-jump 与 T-jump 两个列表。教材图 11.1 与 11.2 的右侧给出了含 `&` 和 OR 的表达式取反后的代码模式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "11. Conditional and Repeated Statements and Boolean Expressions",
+                "Boolean operations"
+              ],
+              "lineStart": 409,
+              "lineEnd": 423,
+              "assetRefs": [],
+              "excerptSha256": "eefc8d01e75ec98552e7644f3a23e1e6f3d8a8ae8dec97150c723d868a37c196"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-operator-table",
+        "moduleId": "or-and-negation",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型对照：三种运算的生成动作",
+        "markdown": "把三种运算的生成动作并排比较：\n\n| 运算 | 分支时机 | 使用的跳转列表 | 额外指令 |\n|---|---|---|---|\n| `&` | 条件**不**满足时跳转（F-jump） | F-list | 无 |\n| OR | 条件满足时跳转（T-jump） | T-list，链接存于字段 `b` | 无 |\n| `~` | 不发射指令，取反字段 `c` 并交换两个列表 | 交换后沿用 | 无 |\n\n这张表说明 `&`、OR、`~` 并不是三条独立的“运算指令”，而是同一套条件分支与跳转列表机制的不同配置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-and-pattern",
+            "textbook-or-negation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-term-op1-op2",
+        "moduleId": "jump-lists-and-fixup",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材实现：扩展 term、Op1/Op2 与回填",
+        "markdown": "生成这类代码需要对处理算术项的 `term` 过程稍作扩展：在求值第二个操作数**之前**发射一条分支指令，由 `Op1` 完成；在末尾回填该指令的目标地址，由 `Op2` 完成。\n\n若第一个布尔因子是 mode 为 Cond 的 item `x`，则当前位置 `x` 为 TRUE，第二操作数的求值指令必须被执行；当条件为 FALSE 时必须跳过它们。若 `x` 不在 Cond 模式，就先由 `loadCond` 把它转换成 Cond。约定 FALSE 用 0 表示，于是属性 `c = 1` 会使 BEQ 在 `x` 等于 0 时生效。\n\n编译含 `&` 与 OR 的表达式时还要注意：在每个 `&` 的条件处要求 P 成立，在每个 OR 的条件处要求 `~P` 成立。做法是遍历对应的跳转列表（`&` 用 T-list，OR 用 F-list），并通过 `FixLink` 回填指定指令。若子表达式的列表可能并入包含它的表达式的列表（模式中 Q 的 F-link），就由 `merged(a, b)` 完成，返回两个参数列表的连接。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "11. Conditional and Repeated Statements and Boolean Expressions",
+                "Boolean operations"
+              ],
+              "lineStart": 409,
+              "lineEnd": 423,
+              "assetRefs": [],
+              "excerptSha256": "eefc8d01e75ec98552e7644f3a23e1e6f3d8a8ae8dec97150c723d868a37c196"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-guard-emission",
+        "moduleId": "jump-lists-and-fixup",
+        "depth": "support",
+        "kind": "application",
+        "title": "模型补充：一次“先判空再读字段”的生成过程",
+        "markdown": "把机制串成一次生成过程：为“先判空、再读字段”写条件时，解析器先用比较得到 mode 为 Cond 的 item；`Op1` 在求值右侧之前发射 F-jump 占位，使右侧指令在左侧为假时被跳过；右侧求值结束后，`Op2` 与 `FixLink` 在目标标号确定时回填这些分支。\n\n结果就是字段访问的访存指令只出现在“指针非空”成立的控制流路径上。跳过与回填是同一机制的先后两半：只发射分支而不回填，目标地址在单遍编译中仍然未知。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-term-op1-op2"
+          ]
+        }
+      },
+      {
+        "id": "textbook-recap",
+        "moduleId": "boundaries-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材结论：布尔表达式与条件语句合流",
+        "markdown": "教材的结论是：带布尔运算符的表达式因此具有条件语句（更准确地说条件表达式）的形态，适合采用与条件语句相同的编译技术。布尔表达式与条件语句在代码生成层面合流，前文建立的分支、回填与跳转列表机制可以原样复用。\n\n这也解释了为什么本章把布尔运算安排在条件与重复语句之后：真正新增的只是 Cond 模式下运算符的处理，而不是另一套控制流设施。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "11. Conditional and Repeated Statements and Boolean Expressions",
+                "Boolean operations"
+              ],
+              "lineStart": 409,
+              "lineEnd": 423,
+              "assetRefs": [],
+              "excerptSha256": "eefc8d01e75ec98552e7644f3a23e1e6f3d8a8ae8dec97150c723d868a37c196"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-short-circuit-misconception",
+        "moduleId": "boundaries-and-check",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：短路不是可有可无的优化",
+        "markdown": "常见误区：把短路求值当成可有可无的性能优化，认为编译器总可以先求值两侧再合并结果。\n\n按教材定义，条件唯一决定结果时第二个操作数可以保持未定义；若强行求值，就会把“未定义但不被访问”的情形变成真实访问，改变程序行为。同样地，语言定义若规定此时**不得**求值，编译器也不能擅自求值。短路的取舍属于语义契约，不属于实现自由度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-recap"
+          ]
+        }
+      },
+      {
+        "id": "check-short-circuit",
+        "moduleId": "boundaries-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：OR 与 & 的短路行为",
+        "markdown": "设表达式为 `(p) OR (q)` 与 `(p) & (q)`，其中求值 `q` 时可能访问未定义的数据。\n\n1. 说明为什么编译器不能在 OR 左侧为真时继续求值 `q`。\n2. 指出 `&` 模式中 F-jump 的触发条件，并解释它为什么对应“条件不满足时跳转”。\n3. 若对整个表达式取反 `~(p & q)`，按教材做法需要发射哪些指令、交换哪些列表？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-recap",
+            "textbook-or-negation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "short-circuit-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-short-circuit",
+        "moduleId": "boundaries-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-short-circuit",
+          "explain-code-pattern"
+        ],
+        "learningPurpose": "检查学习者能否从短路语义推导出分支时机，并区分 & 与 OR 的跳转列表。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-and-pattern",
+            "textbook-or-negation"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "reveal": "after-attempt"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "先写出表达式的求值顺序，再标出每一步的分支时机：`&` 在条件失败时跳向 F，OR 在条件成立时跳向 T；取反不发射指令，只取反条件值并交换两个跳转列表。"
+        }
+      }
+    ]
+  },
+  "subtitle": "11. Conditional and Repeated Statements and Boolean Expressions",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000047"
+      ],
+      "headingPath": [
+        "11. Conditional and Repeated Statements and Boolean Expressions",
+        "Boolean operations"
+      ],
+      "lineStart": 409,
+      "lineEnd": 423,
+      "assetRefs": [],
+      "excerptSha256": "eefc8d01e75ec98552e7644f3a23e1e6f3d8a8ae8dec97150c723d868a37c196"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2901,
+    1001
+  ],
+  "scale": 0.9
+}

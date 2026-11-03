@@ -1,0 +1,499 @@
+{
+  "id": "point-14-15",
+  "title": "样条曲线和曲面的显示",
+  "shortSummary": "介绍样条曲线曲面的离散化、细分和绘制方法，并说明精度与绘制成本的权衡。",
+  "keyTerms": [
+    "样条显示",
+    "离散化",
+    "细分"
+  ],
+  "animationType": "splineCurveLab",
+  "animationSuggestion": "逐步显示差分表三行数值同步更新、采样点沿曲线依次出现，允许切换步长 δ 并重播，便于对比不同步长下的点密度和点数。",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-14-4",
+    "point-14-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 Horner 规则、向前差分与递归细分的定义、公式与边界，围绕‘在哪里取点、每点怎么算、误差怎么控制’重排讲解，补充数值算例、成本对比与达成检查。",
+      "estimatedMinutes": 28,
+      "outcomes": [
+        {
+          "id": "explain-display-sampling",
+          "text": "解释显示样条为什么要在参数定义域内按增量求值，并区分取点位置与单点算法两个问题。"
+        },
+        {
+          "id": "apply-horner-rule",
+          "text": "把三次多项式改写成 Horner 嵌套形式，并算出每点所需的乘加次数。"
+        },
+        {
+          "id": "apply-forward-differences",
+          "text": "由初始值和常量三阶差分递推后续采样点，并用加法次数说明其优势与适用条件。"
+        },
+        {
+          "id": "apply-subdivision-display",
+          "text": "说明 Bézier 细分的控制点来源、表示转换流程和停止准则，并判断细分是否改变曲线。"
+        },
+        {
+          "id": "choose-display-method",
+          "text": "按采样密度、精度要求和曲线类型在三种显示方法之间作出取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为样条显示必须对每个采样点重新计算完整多项式；向前差分只用加法递推就能得到后续点。",
+        "把细分后的控制多边形当成新的曲线；细分只改变表示和控制点数量，曲线路径本身保持不变。",
+        "以为一阶向前差分在三次曲线上仍是常数；只有线性样条的差分为常数，三次曲线的一阶差分是二次函数。",
+        "忽略曲面的双参数开销；曲面要在 u、v 两个方向分别增量计算，成本是行列规模的乘积。"
+      ],
+      "modules": [
+        {
+          "id": "display-problem",
+          "title": "显示问题：在哪里取点",
+          "role": "problem-framing",
+          "outcomeRefs": [
+            "explain-display-sampling"
+          ],
+          "order": 0
+        },
+        {
+          "id": "horner-rule",
+          "title": "Horner 规则：单点求值的最小乘加",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "apply-horner-rule"
+          ],
+          "order": 1
+        },
+        {
+          "id": "forward-differences",
+          "title": "向前差分：把求值变成加法递推",
+          "role": "derivation",
+          "outcomeRefs": [
+            "apply-forward-differences"
+          ],
+          "order": 2
+        },
+        {
+          "id": "subdivision-display",
+          "title": "递归细分：用控制点逼近曲线",
+          "role": "procedure",
+          "outcomeRefs": [
+            "apply-subdivision-display"
+          ],
+          "order": 3
+        },
+        {
+          "id": "method-choice",
+          "title": "三种方法的比较与取舍",
+          "role": "comparison",
+          "outcomeRefs": [
+            "explain-display-sampling",
+            "choose-display-method"
+          ],
+          "order": 4
+        },
+        {
+          "id": "consolidation",
+          "title": "达成检查与下一点衔接",
+          "role": "assessment",
+          "outcomeRefs": [
+            "apply-forward-differences",
+            "apply-subdivision-display",
+            "choose-display-method"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-display-sampling",
+          "apply-horner-rule",
+          "apply-forward-differences",
+          "apply-subdivision-display",
+          "choose-display-method"
+        ],
+        "method": "完成三道达成检查题，并为每种方法写出适用条件与代价依据。",
+        "successCriteria": [
+          "能正确写出并递推三次曲线的初始差分",
+          "能说明细分后控制点数与曲线路径各自是否改变",
+          "能针对不同的采样需求选出合适方法并给出理由"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-14-16"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-display-goal",
+        "moduleId": "display-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：显示样条要先定位坐标",
+        "markdown": "为了把样条曲线或曲面画到显示设备上，必须确定曲线上将被投影到像素位置的那些坐标点。教材的结论很直接：在函数定义域内，以一定增量求参数多项式的值，就能得到这些位置。\n\n这里要区分两个问题：\n\n- 在哪里取点：参数 $u$（曲面还有 $v$）取哪些值；\n- 每个点怎么算：同一个多项式值用什么算法求，决定每一点的运算量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000473"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "样条曲线和曲面的显示"
+              ],
+              "lineStart": 12753,
+              "lineEnd": 12756,
+              "assetRefs": [],
+              "excerptSha256": "686d05ea30b7710cc19aacf0b23edcb1d2d1d52441819d336e5347296a0bb78b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sampling-question",
+        "moduleId": "display-problem",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：为什么“怎么算”值得单独讨论",
+        "markdown": "一条曲线要覆盖屏幕上的几百个像素，就要算几百个点；曲面还要在 $u$、$v$ 两个方向同时加密，点数是乘积关系。单点求值哪怕只差几次乘法，累积到整幅画面也会变成可观的绘制成本。因此教材把显示方法拆成 Horner 规则、向前差分和细分三类——它们不是三种曲线，而是同一批采样点的三种算法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-display-goal"
+          ]
+        }
+      },
+      {
+        "id": "tb-horner",
+        "moduleId": "horner-rule",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：Horner 规则的嵌套求值",
+        "markdown": "三次样条的坐标分量表示为\n\n$$x(u) = a_x u^3 + b_x u^2 + c_x u + d_x$$\n\n逐项计算需要反复乘方。Horner 规则改为逐层提取因子：\n\n$$x(u) = [((a_x u + b_x)u + c_x)u + d_x]$$\n\n每提取一层做一次乘法和一次加法，$n$ 次多项式共 $n$ 步计算。对三次式，一个坐标分量需要 3 次乘法与 3 次加法，因此确定一个 $(x,y,z)$ 位置需要 9 次乘法和 9 次加法。\n\n教材同时指出：对高阶多项式还可以用别的因式分解方式继续减少计算；但若要在同一个样条上反复定位许多点，向前差分或细分的速度会更快。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000474"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "Horner 规则"
+              ],
+              "lineStart": 12757,
+              "lineEnd": 12776,
+              "assetRefs": [],
+              "excerptSha256": "c9616a17a458debb4eafbabbb696bf3ab6d446d472f8ea75f36d9d21748f18e7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-horner-example",
+        "moduleId": "horner-rule",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：一次具体的嵌套求值",
+        "markdown": "设某坐标分量 $x(u) = 2u^3 - 3u^2 + 4u + 1$，要求在 $u = 0.5$ 处求值。按 Horner 规则写成\n\n$$x(u) = ((2u - 3)u + 4)u + 1$$\n\n自内向外计算：$2 \\times 0.5 = 1$，$1 - 3 = -2$，$-2 \\times 0.5 = -1$，$-1 + 4 = 3$，$3 \\times 0.5 = 1.5$，$1.5 + 1 = 2.5$。代入原式核对：$2(0.125) - 3(0.25) + 4(0.5) + 1 = 2.5$，结果一致，而整个过程只用了 3 次乘法和 3 次加法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-horner"
+          ]
+        }
+      },
+      {
+        "id": "tb-forward-differences",
+        "moduleId": "forward-differences",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：向前差分把求值变成累加",
+        "markdown": "向前差分的出发点是递推而不是重算：\n\n$$x_{k+1} = x_k + \\Delta x_k$$\n\n只要知道当前值和本步增量，下一个坐标就是一次加法。把参数区间按固定步长 $\\delta$ 划分，$u_{k+1} = u_k + \\delta$，相邻坐标之差就是向前差分 $\\Delta x_k$。对线性样条，$\\Delta x_k = a_x \\delta$ 是常数；对高次多项式，差分本身也是 $u$ 的多项式，次数比原式低 1。\n\n对三次样条依次求差，会得到一个差分阶梯：二阶差分是线性函数，三阶差分是常数\n\n$$\\Delta_3 x_k = 6 a_x \\delta^3$$\n\n递推关系为\n\n$$x_{k+1} = x_k + \\Delta x_k,\\quad \\Delta x_{k+1} = \\Delta x_k + \\Delta_2 x_k,\\quad \\Delta_2 x_{k+1} = \\Delta_2 x_k + \\Delta_3 x_k$$\n\n从 $u_0 = 0$ 开始，初始值只需计算一次：\n\n$$x_0 = d_x,\\quad \\Delta x_0 = a_x \\delta^3 + b_x \\delta^2 + c_x \\delta,\\quad \\Delta_2 x_0 = 6 a_x \\delta^3 + 2 b_x \\delta^2$$\n\n此后每个后继 $x$ 坐标只需 3 次加法；对次数为 $n$ 的曲线，一个 $(x,y,z)$ 位置需要 $3n$ 次加法。曲面在两个参数方向上都要做同样的增量计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000475"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "向前差分计算"
+              ],
+              "lineStart": 12777,
+              "lineEnd": 12852,
+              "assetRefs": [],
+              "excerptSha256": "62ee12b897aa9db9a8e99f44a9bc9ee7457f9b0bb0d551896f3616e1986d158a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-forward-example",
+        "moduleId": "forward-differences",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：用递推表复算同一曲线",
+        "markdown": "仍取 $x(u) = 2u^3 - 3u^2 + 4u + 1$，步长 $\\delta = 0.1$。由 $a_x = 2$、$b_x = -3$、$c_x = 4$、$d_x = 1$ 得到初始差分：\n\n- $x_0 = 1$\n- $\\Delta x_0 = 2(0.001) - 3(0.01) + 4(0.1) = 0.372$\n- $\\Delta_2 x_0 = 12(0.001) - 6(0.01) = -0.048$\n- $\\Delta_3 x = 12(0.001) = 0.012$\n\n按“先更新 $x$，再更新一阶差分，最后更新二阶差分”的顺序递推：\n\n| $k$ | $x_k$ | $\\Delta x_k$ | $\\Delta_2 x_k$ |\n|---|---|---|---|\n| 0 | 1 | 0.372 | -0.048 |\n| 1 | 1.372 | 0.324 | -0.036 |\n| 2 | 1.696 | 0.288 | -0.024 |\n| 3 | 1.984 | 0.264 | -0.012 |\n\n与直接代入 $u = 0.1, 0.2, 0.3$ 的结果 $1.372$、$1.696$、$1.984$ 完全一致。表中每一列的后继值都只由上一行的加法和常量 $\\Delta_3 x$ 得到。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-forward-differences"
+          ]
+        }
+      },
+      {
+        "id": "tb-subdivision-idea",
+        "moduleId": "subdivision-display",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：递归细分用控制点逼近曲线",
+        "markdown": "递归样条细分（recursive spline-subdivision）反复平分曲线段，每一步都增加控制点。它特别适合显示逼近样条：不断细分，直到控制多边形足够贴近曲线路径，再把控制点坐标当作曲线位置绘出。细分还有第二个用途——先用少量控制点设计形状，再用细分生成附加控制点，对曲线的某些小段做精细调整。\n\n细分最容易用在 Bézier 曲线上，因为 Bézier 曲线通过首末控制点，参数范围固定在 $0 \\le u \\le 1$，“控制点是否充分靠近曲线”容易判断。对其他样条表达式，教材给出的流程是：\n\n1. 将所用的样条表达式转换到 Bézier 表达式；\n2. 应用 Bézier 细分算法；\n3. 再把 Bézier 表达式转换回原来的样条表达式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000476"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "细分方法"
+              ],
+              "lineStart": 12853,
+              "lineEnd": 12903,
+              "assetRefs": [
+                "parts/part-0004/images/8348f68ec38cb3583ab09a7c665fc819ca242d47ad7f5e74a1c76095bb4cff2d.jpg"
+              ],
+              "excerptSha256": "2246362e3638a6e9bcc28b3b2924d761b5d74fe76eb0dbff054e1fdc8a69c3d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-subdivision-points",
+        "moduleId": "subdivision-display",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：一次细分的控制点公式",
+        "markdown": "对三次 Bézier 曲线 $\\mathbf{P}(u)$（$0 \\le u \\le 1$），第一步细分为两段，用中点 $\\mathbf{P}(0.5)$ 分开：\n\n$$s = 2u,\\ 0.0 \\le u \\le 0.5;\\qquad t = 2u - 1,\\ 0.5 \\le u \\le 1.0$$\n\n两段新曲线与原子段具有相同数目的控制点，端点处的位置与斜率也与原曲线一致，这给出确定四个控制点的条件。前半段的四个新控制点为\n\n$$\\mathbf{p}_{1,0} = \\mathbf{p}_0,\\quad \\mathbf{p}_{1,1} = \\tfrac{1}{2}(\\mathbf{p}_0 + \\mathbf{p}_1),\\quad \\mathbf{p}_{1,2} = \\tfrac{1}{4}(\\mathbf{p}_0 + 2\\mathbf{p}_1 + \\mathbf{p}_2),\\quad \\mathbf{p}_{1,3} = \\tfrac{1}{8}(\\mathbf{p}_0 + 3\\mathbf{p}_1 + 3\\mathbf{p}_2 + \\mathbf{p}_3)$$\n\n后半段为\n\n$$\\mathbf{p}_{2,0} = \\tfrac{1}{8}(\\mathbf{p}_0 + 3\\mathbf{p}_1 + 3\\mathbf{p}_2 + \\mathbf{p}_3),\\quad \\mathbf{p}_{2,1} = \\tfrac{1}{4}(\\mathbf{p}_1 + 2\\mathbf{p}_2 + \\mathbf{p}_3),\\quad \\mathbf{p}_{2,2} = \\tfrac{1}{2}(\\mathbf{p}_2 + \\mathbf{p}_3),\\quad \\mathbf{p}_{2,3} = \\mathbf{p}_3$$\n\n这些系数只用到加法与移位（除以 2），因此可以写成共享中间结果的形式：\n\n$$\\mathbf{p}_{1,1} = \\tfrac{1}{2}(\\mathbf{p}_0 + \\mathbf{p}_1),\\quad \\mathbf{T} = \\tfrac{1}{2}(\\mathbf{p}_1 + \\mathbf{p}_2),\\quad \\mathbf{p}_{1,2} = \\tfrac{1}{2}(\\mathbf{p}_{1,1} + \\mathbf{T}),\\quad \\cdots$$\n\n细分可以重复多次。停止准则可以是每段首末控制点距离“充分”小、相邻控制点距离足够小，或每段控制点几乎共线。对次数为 $n-1$ 的 Bézier 多项式，第一次细分后每对初始曲线的 $2n$ 个控制点为\n\n$$\\mathbf{p}_{1,k} = \\frac{1}{2^k}\\sum_{j=0}^{k} C(k,j)\\,\\mathbf{p}_j,\\qquad \\mathbf{p}_{2,k} = \\frac{1}{2^{n-k}}\\sum_{j=k}^{n} C(n-k,n-j)\\,\\mathbf{p}_j$$\n\n其中 $C(k,j)$ 与 $C(n-k,n-j)$ 是二项式系数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000476"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "细分方法"
+              ],
+              "lineStart": 12853,
+              "lineEnd": 12903,
+              "assetRefs": [
+                "parts/part-0004/images/8348f68ec38cb3583ab09a7c665fc819ca242d47ad7f5e74a1c76095bb4cff2d.jpg"
+              ],
+              "excerptSha256": "2246362e3638a6e9bcc28b3b2924d761b5d74fe76eb0dbff054e1fdc8a69c3d9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-subdivision-why",
+        "moduleId": "subdivision-display",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：细分为什么能当显示方法",
+        "markdown": "把细分当作显示方法，有三点需要看清。\n\n第一，细分不改变曲线本身。两段新曲线合起来仍是原曲线，只是用更多控制点重新表示；控制多边形随细分逐步收敛到曲线路径。因此“画控制点”不是画另一个形状。\n\n第二，新控制点可以只用中点运算得到。上面公式中的 $\\tfrac{1}{2}(\\mathbf{p}_0 + \\mathbf{p}_1)$ 等就是逐层取中点，与 de Casteljau 算法共用同一组几何构造，所以实现中主要是加法和移位。\n\n第三，停止准则决定显示误差。距离阈值越松，控制多边形与曲线的偏差越大；阈值越紧，控制点越多，存储和绘制成本越高。教材给出的首末控制点距离、相邻控制点距离和共线判断，都是可实现的替代判据。\n\n需要留意教材的边界说明：细分也可通过增加节点向量值直接用于非均匀 B 样条，但一般情况下不如 Bézier 细分有效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-subdivision-idea",
+            "tb-subdivision-points"
+          ]
+        }
+      },
+      {
+        "id": "model-method-choice",
+        "moduleId": "method-choice",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：三种显示方法的取舍",
+        "markdown": "三种方法面对同一个问题——在参数域上产生足够密的采样点，差别在于每点成本与适用条件。\n\n| 方法 | 每点主要运算 | 适合的情形 | 需要注意的边界 |\n|---|---|---|---|\n| Horner 规则 | 三次式每坐标 3 乘 3 加 | 只算少数点，或需要任意参数值 | 反复采样同一条曲线时仍要重算 |\n| 向前差分 | 三次式每坐标每步 3 次加法 | 等步长连续生成大量点 | 要先正确求出初始差分；步长改变后需重算初始值 |\n| 递归细分 | 每次细分主要用加法与移位 | 逼近样条，需要控制多边形近似曲线 | 通常先转到 Bézier，再转回原表示 |\n\n曲面上还要多一层考虑：曲线只有一个参数 $u$，曲面有 $u$、$v$ 两个方向。差分和细分都可以先在 $u$ 方向排出一行采样点或控制点，再沿 $v$ 方向对每一行重复；成本是行数与列数的乘积，这也是曲面显示更容易成为瓶颈的原因。\n\n选择上可以按需求排序：只需要屏幕上少量点，Horner 规则的代码最简单；要沿整条曲线等步长铺很多点，向前差分用加法替代乘法；曲线是逼近样条且更关心控制多边形的逼近质量，细分更自然，但要处理表示转换与停止准则。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-horner",
+            "tb-forward-differences",
+            "tb-subdivision-idea",
+            "tb-subdivision-points",
+            "model-subdivision-why"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：达成检查",
+        "markdown": "1. 对 $x(u) = u^3 + 2u^2 - u + 3$、步长 $\\delta = 0.2$，写出 $x_0$、$\\Delta x_0$、$\\Delta_2 x_0$ 与 $\\Delta_3 x$，并递推 $x_1$ 与 $x_2$。\n\n2. 三次 Bézier 曲线第一次细分后，前后两段的控制点数是否改变？控制多边形是否就是曲线？\n\n3. 某场景只需要在参数 $u = 0.15$ 和 $u = 0.85$ 处各取一个点，三种方法中哪种最省事，为什么？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-forward-differences",
+            "tb-subdivision-points",
+            "model-method-choice"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "consolidation",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：参考答案与要点",
+        "markdown": "第 1 题：$a_x = 1$、$b_x = 2$、$c_x = -1$、$d_x = 3$，$\\delta = 0.2$，于是\n\n- $x_0 = 3$\n- $\\Delta x_0 = 1(0.008) + 2(0.04) - 1(0.2) = -0.112$\n- $\\Delta_2 x_0 = 6(0.008) + 4(0.04) = 0.208$\n- $\\Delta_3 x = 6(0.008) = 0.048$\n\n按顺序更新得到 $x_1 = 2.888$、$\\Delta x_1 = 0.096$、$\\Delta_2 x_1 = 0.256$，再得 $x_2 = 2.984$。代入原式核对：$x(0.2) = 0.008 + 0.08 - 0.2 + 3 = 2.888$，$x(0.4) = 0.064 + 0.32 - 0.4 + 3 = 2.984$。\n\n第 2 题：控制点数不变，两段各自的控制点仍为四个；控制多边形不是曲线，只是随细分收敛到曲线的近似折线。\n\n第 3 题：用 Horner 规则直接算两个点最省事。向前差分的优势建立在连续等步长采样上，只取两点时初始化差分并不划算；细分也会引入不必要的控制点。\n\n衔接下一点：这里讨论的是“自己算点”。下一个知识点转入 OpenGL 的逼近样条函数，由求值器与 NURBS 接口承担采样以及控制点、节点向量的组织。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check-exercise",
+            "tb-horner",
+            "tb-forward-differences",
+            "tb-subdivision-idea"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "forward-difference-delta-experiment",
+        "type": "parameter-experiment",
+        "anchorBlockId": "model-forward-example",
+        "moduleId": "forward-differences",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-forward-differences"
+        ],
+        "learningPurpose": "让学习者改变步长 δ，观察一阶差分初始值如何随 δ 变化、三阶差分如何始终保持常量，以及采样点密度的变化。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-forward-differences",
+            "model-forward-example"
+          ]
+        },
+        "config": {
+          "coefficients": {
+            "a": 2,
+            "b": -3,
+            "c": 4,
+            "d": 1
+          },
+          "deltaRange": [
+            0.05,
+            0.2
+          ],
+          "deltaStep": 0.05,
+          "differenceOrder": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "取 $a_x=2$、$b_x=-3$、$c_x=4$、$d_x=1$，在 $\\delta=0.1$ 时有 $x_0=1$、$\\Delta x_0=0.372$、$\\Delta_2 x_0=-0.048$、$\\Delta_3 x=0.012$。把 $\\delta$ 改为 $0.05$ 或 $0.2$ 后，初始一阶与二阶差分都会改变，而三阶差分 $6a_x\\delta^3$ 始终是常量，采样点数随 $\\delta$ 减小而增加。"
+        }
+      }
+    ]
+  },
+  "subtitle": "样条表示",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000473"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "样条曲线和曲面的显示"
+      ],
+      "lineStart": 12753,
+      "lineEnd": 12756,
+      "assetRefs": [],
+      "excerptSha256": "686d05ea30b7710cc19aacf0b23edcb1d2d1d52441819d336e5347296a0bb78b"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000474"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "Horner 规则"
+      ],
+      "lineStart": 12757,
+      "lineEnd": 12776,
+      "assetRefs": [],
+      "excerptSha256": "c9616a17a458debb4eafbabbb696bf3ab6d446d472f8ea75f36d9d21748f18e7"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000475"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "向前差分计算"
+      ],
+      "lineStart": 12777,
+      "lineEnd": 12852,
+      "assetRefs": [],
+      "excerptSha256": "62ee12b897aa9db9a8e99f44a9bc9ee7457f9b0bb0d551896f3616e1986d158a"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000476"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "细分方法"
+      ],
+      "lineStart": 12853,
+      "lineEnd": 12903,
+      "assetRefs": [
+        "parts/part-0004/images/8348f68ec38cb3583ab09a7c665fc819ca242d47ad7f5e74a1c76095bb4cff2d.jpg"
+      ],
+      "excerptSha256": "2246362e3638a6e9bcc28b3b2924d761b5d74fe76eb0dbff054e1fdc8a69c3d9"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2588,
+    1197
+  ],
+  "scale": 0.86
+}

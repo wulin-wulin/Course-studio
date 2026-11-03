@@ -62,6 +62,7 @@ export function CourseCatalog({
   onStartGenerationDemo,
 }: CourseCatalogProps) {
   const liveRuns = useCourseGenerationStore((state) => state.liveRuns);
+  const removeLiveGeneration = useCourseGenerationStore((state) => state.removeLive);
   const [courses, setCourses] = useState<CourseSummary[]>([]);
   const [groups, setGroups] = useState<CourseCatalogGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,6 +76,7 @@ export function CourseCatalog({
   const [catalogBusy, setCatalogBusy] = useState(false);
   const mountedRef = useRef(true);
   const requestRef = useRef(0);
+  const checkedOrphanGenerationsRef = useRef(new Set<string>());
 
   const loadCourses = useCallback(async () => {
     const requestId = ++requestRef.current;
@@ -211,6 +213,39 @@ export function CourseCatalog({
       window.removeEventListener("course-data-changed", onCourseDataChanged);
     };
   }, [loadCourses]);
+
+  useEffect(() => {
+    for (const run of Object.values(liveRuns)) {
+      const isOrphanCandidate =
+        !run.published &&
+        (run.status === "paused" || run.status === "error") &&
+        run.course === null;
+      if (
+        !isOrphanCandidate ||
+        checkedOrphanGenerationsRef.current.has(run.conversationId)
+      ) {
+        continue;
+      }
+
+      checkedOrphanGenerationsRef.current.add(run.conversationId);
+      void fetch(`/api/conversations/${encodeURIComponent(run.conversationId)}`, {
+        cache: "no-store",
+      })
+        .then((response) => {
+          if (response.status === 404 || response.status === 410) {
+            removeLiveGeneration(run.conversationId);
+            return;
+          }
+          if (!response.ok) {
+            checkedOrphanGenerationsRef.current.delete(run.conversationId);
+          }
+        })
+        .catch(() => {
+          // A temporary network failure must not discard a recoverable run.
+          checkedOrphanGenerationsRef.current.delete(run.conversationId);
+        });
+    }
+  }, [liveRuns, removeLiveGeneration]);
 
   const validCourses = courses.filter((course) => !course.invalid);
   const invalidCourses = courses.filter((course) => course.invalid);

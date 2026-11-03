@@ -1,0 +1,511 @@
+{
+  "id": "point-11-3",
+  "title": "多路平衡归并的实现",
+  "shortSummary": "讲解多路平衡归并的败者树实现，说明如何减少关键字比较次数并组织 k 路归并。",
+  "keyTerms": [
+    "多路归并",
+    "平衡归并",
+    "败者树",
+    "k路归并",
+    "比较次数"
+  ],
+  "animationType": "loserTree",
+  "animationSuggestion": "用 5 个归并段的败者树逐步演示：高亮当前冠军段、输出其记录、更新叶子、沿路径逐层比较并刷新败者，最后显示 MAXKEY 终止；提供单步与重播，便于对照每次调整的比较次数。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-11-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于比较代价、败者树结构与 k 值取舍的结论，围绕“代价矛盾—结构—调整流程—选 k”的学习路径重排讲解，并补充类比、追踪示例与检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-cost",
+          "text": "说明 k 路归并为什么增加内部比较次数，以及败者树如何把选最小关键字的代价降到约 ⌈log_2 k⌉ 次比较。"
+        },
+        {
+          "id": "explain-structure",
+          "text": "解释败者树如何用内部结点记录败者、让胜者继续上行，并由 ls[0] 指示当前冠军。"
+        },
+        {
+          "id": "apply-merge",
+          "text": "模拟一次从叶子到根的 Adjust，并说明 K_Merge 的输出、读入与循环终止过程。"
+        },
+        {
+          "id": "evaluate-k",
+          "text": "结合外存读写、内部比较和内存容量，判断 k 值选择为什么不是越大越好。"
+        }
+      ],
+      "misconceptions": [
+        "误以为 k 越大外部排序一定越快，忽略了朴素 k 路归并每次选最小记录需要 k−1 次比较。",
+        "误以为败者树的每个内部结点保存胜者；实际上内部结点保存败者，胜者继续向上比赛，ls[0] 才是冠军。",
+        "误以为建树和终止都依赖同一个哨兵；MINKEY 用于初建败者树，MAXKEY 用于判断归并是否结束。"
+      ],
+      "modules": [
+        {
+          "id": "cost-and-motivation",
+          "title": "比较代价与败者树的动机",
+          "role": "problem-analysis",
+          "description": "先量化 k 路归并的内部比较代价，说明单纯增大 k 的矛盾。",
+          "outcomeRefs": [
+            "explain-cost"
+          ],
+          "order": 0
+        },
+        {
+          "id": "loser-tree-anatomy",
+          "title": "败者树的结构",
+          "role": "concept-explanation",
+          "description": "说明内部结点记录败者、胜者上行以及冠军所在位置。",
+          "outcomeRefs": [
+            "explain-structure"
+          ],
+          "order": 1
+        },
+        {
+          "id": "merge-loop",
+          "title": "k 路归并的主循环",
+          "role": "procedure",
+          "description": "按 K_Merge 的步骤组织输出、读入、调整和终止。",
+          "outcomeRefs": [
+            "explain-structure",
+            "apply-merge"
+          ],
+          "order": 2
+        },
+        {
+          "id": "adjust-and-build",
+          "title": "调整与初建败者树",
+          "role": "procedure",
+          "description": "拆解 Adjust 的路径比较规则、CreateLoserTree 的初始化以及常见边界。",
+          "outcomeRefs": [
+            "apply-merge"
+          ],
+          "order": 3
+        },
+        {
+          "id": "k-selection-and-wrapup",
+          "title": "k 值取舍与总结",
+          "role": "decision-and-summary",
+          "description": "用代价模型讨论 k 的选择，并回顾整点逻辑。",
+          "outcomeRefs": [
+            "evaluate-k"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-cost",
+          "explain-structure",
+          "apply-merge",
+          "evaluate-k"
+        ],
+        "method": "完成 k 值取舍练习，并用自己的话复述一次 Adjust 的路径比较与冠军更新。",
+        "successCriteria": [
+          "能写出朴素 k 路归并与败者树在选最小记录时的比较次数差异",
+          "能指出 ls[0]、内部结点和叶子结点分别保存什么",
+          "能说明 MAXKEY 的终止作用，并给出选择 k 时需要权衡的因素"
+        ],
+        "exerciseBlockId": "model-k-tradeoff",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-11-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-merge-cost",
+        "moduleId": "cost-and-motivation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "朴素 k 路归并的内部比较代价",
+        "markdown": "设待归并的 $u$ 个记录分布在 $k$ 个归并段上，且每个归并段内部已经有序。若不借助特殊结构，归并后的第一个记录必须从 $k$ 个归并段的首记录中选出最小者，这需要 $k−1$ 次比较；此后每输出一个记录，仍要重复一次这样的选择。因此得到一个含 $u$ 个记录的归并段需要 $(u−1)(k−1)$ 次比较。对整个含 $n$ 个记录的文件，归并趟数为 $s$ 时，内部归并的总比较次数为 $s(k−1)(n−1)$。代入 $s=⌊log_k m⌋$（$m$ 为初始归并段个数），得到教材式 (11-3)：$$⌊log_k m⌋(k−1)(n−1)t_mg = ⌊(log_2 m)/(log_2 k)⌋(k−1)(n−1)t_mg$$ 教材指出，$(k−1)/log_2 k$ 随 $k$ 增长而增长，所以单纯增大 $k$ 虽然减少了归并趟数和外存读写，却会抬高内部归并时间，这正是需要败者树来解决的矛盾。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000317"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "多路平衡归并的实现"
+              ],
+              "lineStart": 10513,
+              "lineEnd": 10569,
+              "assetRefs": [
+                "parts/part-0004/images/551adae6572e3a0ed085b2864cb8e29da4bad9eb789085b40bf3f68bd35ae6a7.jpg"
+              ],
+              "excerptSha256": "e06c458bcf00bacdf367075e2ee3790105674614cb91dd07349f74571a0f8697"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reading-formula",
+        "moduleId": "cost-and-motivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "读懂式 (11-3)：为什么朴素 k 路归并会更慢",
+        "markdown": "式 (11-3) 可以拆成两部分看：$⌊(log_2 m)/(log_2 k)⌋$ 是归并趟数，$(k−1)(n−1)$ 是每趟内部归并的比较量。前者随 $k$ 增大而下降，后者却随 $k$ 线性上升，二者的乘积并不单调下降。例如 $k=2,4,8,16$ 时，$(k−1)/log_2 k$ 依次为 $1、1.5、≈2.33、3.75$，比值持续增大。这说明“路数越多越快”只在忽略内部比较时才成立。败者树的作用不是改变归并趟数，而是把“从 $k$ 个首记录中选最小”的每次比较代价从 $k−1$ 降到 $⌈log_2 k⌉$，使总内部比较量不再随 $k$ 增长。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-merge-cost"
+          ]
+        }
+      },
+      {
+        "id": "tb-loser-tree-anatomy",
+        "moduleId": "loser-tree-anatomy",
+        "depth": "core",
+        "kind": "definition",
+        "title": "败者树的定义与冠军位置",
+        "markdown": "败者树是树形选择排序的一种变型。它与“胜者树”的区别在于：每个非终端结点记录的是刚进行完的那场比赛的败者，而胜者继续向上参加更高一层的比赛。根结点 $ls[1]$ 的双亲 $ls[0]$ 存放“冠军”，即当前 $k$ 个归并段中最小关键字所在的归并段编号。教材图 11.4 给出实现 5-路归并的败者树 $ls[0..4]$：方形叶子结点 $b_0,…,b_4$ 存放 5 个归并段当前参加选择的记录关键字；$ls[3]$ 记录 $b_1$ 与 $b_2$ 的败者，$ls[1]$ 记录更高一层比赛的败者，$ls[0]$ 则指出最小关键字来自第三段。败者树的深度为 $⌈log_2 k⌉+1$，因此在 $k$ 个记录中选出最小关键字只需 $⌈log_2 k⌉$ 次比较，总内部归并时间变为 $⌊log_2 m⌋(n−1)t_mg$，与 $k$ 无关。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000317"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "多路平衡归并的实现"
+              ],
+              "lineStart": 10513,
+              "lineEnd": 10569,
+              "assetRefs": [
+                "parts/part-0004/images/551adae6572e3a0ed085b2864cb8e29da4bad9eb789085b40bf3f68bd35ae6a7.jpg"
+              ],
+              "excerptSha256": "e06c458bcf00bacdf367075e2ee3790105674614cb91dd07349f74571a0f8697"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loser-tree-mental-model",
+        "moduleId": "loser-tree-anatomy",
+        "depth": "support",
+        "kind": "example",
+        "title": "把败者树想成淘汰赛对阵表",
+        "markdown": "可以把败者树想成一张淘汰赛对阵表：每场比赛结束后，败者的名字留在该场的记录栏里，胜者继续晋级；最后一场的胜者由 $ls[0]$ 单独指出。这样，查询冠军只需看 $ls[0]$，而某个选手的成绩更新后，也只需沿着它原来晋级的那条路径重新比赛，不必让所有人重新两两比较。注意“结点存败者”不是笔误：内部结点保存败者，才能让胜者继续上行；如果每个结点都存胜者，就退化成胜者树，更新路径上的信息组织方式也会不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loser-tree-anatomy"
+          ]
+        }
+      },
+      {
+        "id": "tb-k-merge-loop",
+        "moduleId": "merge-loop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "K_Merge 的主循环",
+        "markdown": "算法 11.1 的 `K_Merge` 把败者树用于 $k$-路归并，其主循环可以概括为四步：（1）从 $k$ 个输入归并段分别读入当前第一个记录的关键字到外结点 $b[0..k−1]$；（2）调用 `CreateLoserTree` 建立败者树，此时 $b[ls[0]].key$ 就是最小关键字；（3）当 $b[ls[0]].key ≠ MAXKEY$ 时，令 $q=ls[0]$，把第 $q$ 段的当前记录输出到归并结果，再从第 $q$ 段读入下一个记录的关键字，并调用 `Adjust(ls,q)` 选出新的最小关键字；（4）循环结束时，冠军关键字为 `MAXKEY`，最后把这条哨兵记录输出，归并完成。算法有意略去外存读写的细节，把归并段视为已在内存，以便突出败者树如何承担“选最小”的工作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000317"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "多路平衡归并的实现"
+              ],
+              "lineStart": 10513,
+              "lineEnd": 10569,
+              "assetRefs": [
+                "parts/part-0004/images/551adae6572e3a0ed085b2864cb8e29da4bad9eb789085b40bf3f68bd35ae6a7.jpg"
+              ],
+              "excerptSha256": "e06c458bcf00bacdf367075e2ee3790105674614cb91dd07349f74571a0f8697"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-merge-trace",
+        "moduleId": "merge-loop",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "追踪一次冠军更新",
+        "markdown": "以教材图 11.4 的 5-路归并为例做一次追踪。初始时 $ls[0]=3$，说明第三段的当前记录最小，于是输出第三段的这条记录；随后从第三段读入下一条记录，更新叶子 $b_3$，再调用 `Adjust(ls,3)`。调整只沿 $b_3$ 到根的路径进行：$b_3$ 先与双亲 $ls[3]$ 记录的败者比较，胜者继续上行；到 $ls[1]$ 再与另一支的胜者比较；最后把整条路径的胜者写入 $ls[0]$。教材指出，当第三段第二条记录参加归并时，新的冠军变为第一段中的记录，即 $ls[0]=0$。这正说明一次更新只需要 $⌈log_2 k⌉$ 次比较，而不是重新扫描全部 $k$ 段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loser-tree-anatomy",
+            "tb-k-merge-loop"
+          ]
+        }
+      },
+      {
+        "id": "tb-maxkey-sentinel",
+        "moduleId": "merge-loop",
+        "depth": "core",
+        "kind": "warning",
+        "title": "MAXKEY 哨兵与归并终止",
+        "markdown": "为了防止归并过程中某个归并段变空，教材在每个归并段末尾附加一个关键字为最大值的记录 `MAXKEY`。当 `K_Merge` 选出的冠军关键字等于 `MAXKEY` 时，说明所有真实记录都已输出，循环可以结束。与此对应，初建败者树时还会使用一个关键字为最小值的虚拟叶子 `MINKEY`，让初始化阶段的比较有统一的起点。`MINKEY` 和 `MAXKEY` 分别服务于“建树”和“终止”，不能混用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000317"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "多路平衡归并的实现"
+              ],
+              "lineStart": 10513,
+              "lineEnd": 10569,
+              "assetRefs": [
+                "parts/part-0004/images/551adae6572e3a0ed085b2864cb8e29da4bad9eb789085b40bf3f68bd35ae6a7.jpg"
+              ],
+              "excerptSha256": "e06c458bcf00bacdf367075e2ee3790105674614cb91dd07349f74571a0f8697"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-adjust-procedure",
+        "moduleId": "adjust-and-build",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "Adjust：沿叶到根重新选冠军",
+        "markdown": "算法 11.2 的 `Adjust(ls,s)` 负责在叶子 $b_s$ 的关键字改变后，沿叶到根路径调整败者树。设 $t=(s+k)/2$，它给出 $b_s$ 的双亲下标（整数除法）；然后不断执行：若 $b_s.key>b[ls[t]].key$，说明 $s$ 当前指向的记录更大，是这场比赛的败者，于是交换 $s$ 与 $ls[t]$，让胜者继续向上；否则 $ls[t]$ 原来的记录仍是败者，保持不变；令 $t=t/2$，继续向上一层。循环在 $t=0$ 时停止，最后执行 $ls[0]=s$，把最终胜者登记为冠军。整个过程的比较次数等于路径长度，即 $O(log_2 k)$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000317"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "多路平衡归并的实现"
+              ],
+              "lineStart": 10513,
+              "lineEnd": 10569,
+              "assetRefs": [
+                "parts/part-0004/images/551adae6572e3a0ed085b2864cb8e29da4bad9eb789085b40bf3f68bd35ae6a7.jpg"
+              ],
+              "excerptSha256": "e06c458bcf00bacdf367075e2ee3790105674614cb91dd07349f74571a0f8697"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-build-loser-tree",
+        "moduleId": "adjust-and-build",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "CreateLoserTree：自底向上初建",
+        "markdown": "算法 11.3 的 `CreateLoserTree` 用“先放虚拟最小值，再自底向上调整”的办法建树：先把 $b[k].key$ 设为 `MINKEY`，把所有内部结点 $ls[i]$ 初始化为 $k$，然后令 $i$ 从 $k−1$ 递减到 $0$，依次调用 `Adjust(ls,i)`。这样，每个叶子都沿着自己的路径与已有败者比较一次，$k$ 条路径完成后就得到完整的败者树。初始化并不需要特殊的建树递归，复用的仍是 `Adjust` 的同一套比较规则。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000318"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "算法 11.2"
+              ],
+              "lineStart": 10570,
+              "lineEnd": 10582,
+              "assetRefs": [],
+              "excerptSha256": "c3e5e64f9f741023d5a2d71b990cd9b697ea1e5eb800ba78c11bf74767e9e4c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundary",
+        "moduleId": "adjust-and-build",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "实现时最容易出错的四个边界",
+        "markdown": "第一，下标对应：叶子用 $b[0..k−1]$ 表示，但完全二叉树的下标习惯常把叶子放在 $k..2k−1$，所以双亲用 $(s+k)/2$ 计算，直接写 $s/2$ 会找错双亲。第二，内部结点存败者：调整过程中交换的是“当前胜者”编号 $s$ 与 $ls[t]$，不是关键字本身；若把胜者写进内部结点，$ls[0]$ 就不再是冠军。第三，循环终止：`Adjust` 的循环条件是 $t>0$，结束后必须单独写 $ls[0]=s$，漏掉这一步会保留旧的冠军。第四，空段与终止：每个归并段都要有 `MAXKEY` 哨兵，否则某段读空后无法用统一条件结束；`MINKEY` 只用于建树，不能拿来判断归并结束。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-maxkey-sentinel",
+            "tb-adjust-procedure",
+            "tb-build-loser-tree"
+          ]
+        }
+      },
+      {
+        "id": "tb-k-choice",
+        "moduleId": "k-selection-and-wrapup",
+        "depth": "core",
+        "kind": "note",
+        "title": "k 值并非越大越好",
+        "markdown": "教材在最后特别提醒：$k$ 值的选择并非越大越好。增大 $k$ 可以减少归并趟数 $s$，从而减少外存读写；但 $k$ 越大，败者树的深度越大，每次调整的比较次数约为 $⌈log_2 k⌉$，同时需要更多输入缓冲区和更大的内存工作区。因此合适的 $k$ 要结合外存块大小、可用内存、归并段数量和记录规模综合权衡。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000319"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "算法 11.3"
+              ],
+              "lineStart": 10583,
+              "lineEnd": 10586,
+              "assetRefs": [],
+              "excerptSha256": "79e323abad7eaa0685ab6347305378f03da73fa66b7b0b08f7c90013cf3f3072"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-k-tradeoff",
+        "moduleId": "k-selection-and-wrapup",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "练习：用代价模型选 k",
+        "markdown": "设初始归并段数 $m=1000$，记录总数 $n$ 很大而内部比较时间不可忽略。若取 $k=10$，归并趟数为 $⌊log_10 1000⌋=3$；若取 $k=100$，趟数降为 $⌊log_100 1000⌋=2$。但使用败者树时，每输出一个记录的比较次数约为 $⌈log_2 k⌉$：$k=10$ 约为 4 次，$k=100$ 约为 7 次。请回答：仅凭“少一趟”能否断定 $k=100$ 更好？还需要比较哪些量？提示：把外存读写次数与内部比较次数分开估算，并检查缓冲区能否同时容纳 $k$ 个输入块。参考判断：只有当减少一趟所节省的外存读写时间，超过内部比较增加的时间以及内存占用带来的限制时，增大 $k$ 才划算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-k-choice",
+            "tb-merge-cost"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "k-selection-and-wrapup",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本点逻辑回顾",
+        "markdown": "本点的逻辑可以压缩成一条链：第一步，$k$ 路归并减少趟数，但朴素选择最小记录需要每输出一个记录比较 $k−1$ 次，内部代价随 $k$ 上升；第二步，败者树把内部结点用来记录败者，让胜者继续上行，$ls[0]$ 指向冠军，使选最小只需 $⌈log_2 k⌉$ 次比较；第三步，`K_Merge` 用“输出冠军段记录—读入该段下一条—`Adjust` 调整路径”的循环完成归并，`CreateLoserTree` 负责初始化；第四步，`MAXKEY` 哨兵负责终止，$k$ 的最终取值要在外存读写、内部比较和内存容量之间折中。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-merge-cost",
+            "tb-loser-tree-anatomy",
+            "tb-k-merge-loop",
+            "tb-adjust-procedure",
+            "tb-build-loser-tree",
+            "tb-k-choice"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "loser-tree-adjust-check",
+        "type": "formative-check",
+        "title": "预测 Adjust 后的新冠军",
+        "anchorBlockId": "model-merge-trace",
+        "moduleId": "merge-loop",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-merge",
+          "explain-structure"
+        ],
+        "learningPurpose": "检查学习者能否根据败者树结构预测一次叶子更新后的冠军变化，而不是死记调整代码。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-loser-tree-anatomy",
+            "tb-k-merge-loop"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若无法交互，请用纸笔画出 5 个叶子的败者树，标出 $ls[3]$、$ls[1]$、$ls[0]$，并在更新 $b_3$ 后重新标注每条路径上的败者与新冠军，再与教材图 11.4(b) 对照。"
+        }
+      }
+    ]
+  },
+  "subtitle": "外部排序",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+      "blockIds": [
+        "block-000317"
+      ],
+      "headingPath": [
+        "计算机精品学习资料大放送",
+        "多路平衡归并的实现"
+      ],
+      "lineStart": 10513,
+      "lineEnd": 10569,
+      "assetRefs": [
+        "parts/part-0004/images/551adae6572e3a0ed085b2864cb8e29da4bad9eb789085b40bf3f68bd35ae6a7.jpg"
+      ],
+      "excerptSha256": "e06c458bcf00bacdf367075e2ee3790105674614cb91dd07349f74571a0f8697"
+    },
+    {
+      "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+      "blockIds": [
+        "block-000318"
+      ],
+      "headingPath": [
+        "计算机精品学习资料大放送",
+        "算法 11.2"
+      ],
+      "lineStart": 10570,
+      "lineEnd": 10582,
+      "assetRefs": [],
+      "excerptSha256": "c3e5e64f9f741023d5a2d71b990cd9b697ea1e5eb800ba78c11bf74767e9e4c2"
+    },
+    {
+      "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+      "blockIds": [
+        "block-000319"
+      ],
+      "headingPath": [
+        "计算机精品学习资料大放送",
+        "算法 11.3"
+      ],
+      "lineStart": 10583,
+      "lineEnd": 10586,
+      "assetRefs": [],
+      "excerptSha256": "79e323abad7eaa0685ab6347305378f03da73fa66b7b0b08f7c90013cf3f3072"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2635,
+    799
+  ],
+  "scale": 0.96
+}

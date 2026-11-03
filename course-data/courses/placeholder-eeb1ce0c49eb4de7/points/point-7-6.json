@@ -1,0 +1,452 @@
+{
+  "id": "point-7-6",
+  "title": "几何变换的光栅方法",
+  "shortSummary": "说明不经过几何坐标重算而直接操作像素的光栅变换方法，以及其重采样误差与适用局限。",
+  "keyTerms": [
+    "光栅变换",
+    "像素操作",
+    "重采样"
+  ],
+  "animationType": "transform2dLab",
+  "animationSuggestion": "先用网格演示 90° 旋转的逐行颠倒与行列交换，再连续增大角度到非 90° 倍数，显示每个目标像素的重叠比例和加权颜色，便于对比精确重排与重采样。",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-4-11",
+    "point-7-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-and-boundary",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于块移动、90° 倍数旋转与重叠加权重采样的原始结论和顺序，补充可观察的操作对照、数值例子与边界判断。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-raster-approach",
+          "text": "说明光栅变换通过操作帧缓存中的像素值阵列完成二维变换，而不重新计算几何坐标。"
+        },
+        {
+          "id": "explain-block-ops",
+          "text": "描述块移动以及按行、列重排实现 90° 倍数旋转、反射与错切的操作方式。"
+        },
+        {
+          "id": "apply-resampling",
+          "text": "对非 90° 倍数旋转和缩放，按目标像素与源像素区域的重叠比例加权求值。"
+        },
+        {
+          "id": "judge-limits",
+          "text": "判断光栅方法的精度、信息上限、场景假设和适用边界。"
+        }
+      ],
+      "misconceptions": [
+        "认为光栅变换与几何变换只是实现手段不同，结果必然完全一致。",
+        "认为非 90° 旋转只需把每个源像素搬到最近的目标格，不需要按重叠比例加权。",
+        "认为用背景填充原块来删除对象在任何场景下都不会影响画面其他内容。"
+      ],
+      "modules": [
+        {
+          "id": "m-why",
+          "title": "为什么直接操作像素",
+          "role": "problem-introduction",
+          "description": "从帧缓冲区的颜色阵列引出光栅操作与块移动。",
+          "outcomeRefs": [
+            "explain-raster-approach"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-block-ops",
+          "title": "块移动与像素阵列重排",
+          "role": "core-procedure",
+          "description": "平移、90° 倍数旋转、反射和错切如何只靠重排像素完成。",
+          "outcomeRefs": [
+            "explain-block-ops"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-resampling",
+          "title": "任意角旋转与缩放的重采样",
+          "role": "core-mechanism",
+          "description": "目标像素映射到旋转或缩放后的源区域并按重叠比例加权。",
+          "outcomeRefs": [
+            "apply-resampling"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-boundary",
+          "title": "误差与适用边界",
+          "role": "boundary-analysis",
+          "description": "区分精确重排与需要重采样的操作，说明信息上限和场景假设。",
+          "outcomeRefs": [
+            "judge-limits"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-check",
+          "title": "达成检查与下一点桥接",
+          "role": "check-and-bridge",
+          "description": "用判断练习检验操作分类，并引出 OpenGL 光栅变换。",
+          "outcomeRefs": [
+            "explain-raster-approach",
+            "explain-block-ops",
+            "apply-resampling",
+            "judge-limits"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-raster-approach",
+          "explain-block-ops",
+          "apply-resampling",
+          "judge-limits"
+        ],
+        "method": "对给定的一组变换操作判断属于精确重排还是需要重采样，并说明依据。",
+        "successCriteria": [
+          "能按“目标网格是否与源网格对齐”分类操作",
+          "能说清重采样结果的加权含义与质量代价",
+          "能指出块移动删除原块所依赖的场景假设"
+        ],
+        "exerciseBlockId": "check-transform-choice",
+        "summaryBlockId": "summary-raster",
+        "nextPointId": "point-7-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-raster-idea",
+        "moduleId": "m-why",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "像素阵列就是可操作的图像",
+        "markdown": "光栅系统把图像信息作为颜色图案保存在帧缓冲器中，因此屏幕上的一块像素可以看成一个矩形数组。对这类数组做操作，就能直接完成一部分二维变换：不必重新计算图元的几何坐标再扫描转换，只需移动或重排已经存在的像素值，算术运算量很小，所以特别高效。\n\n控制矩形像素数组的光栅功能通常称为光栅操作（raster operation），把一块像素从一个位置移到另一位置的过程称为像素值的块移动（block transfer，简称 bitblt 或 pixblt）。图形软件通常提供完成这些光栅操作的子程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000244"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "几何变换的光栅方法"
+              ],
+              "lineStart": 6583,
+              "lineEnd": 6621,
+              "assetRefs": [
+                "parts/part-0003/images/1fba13a9a3aa5af48cec9e0348658f612c4fd5c6e44d79415e570351f37cd90f.jpg",
+                "parts/part-0003/images/cdbbbaec38c849ebafa6b708400867102512f92de878ce94b8556700477ba025.jpg",
+                "parts/part-0003/images/5223bd09248b85b3702830f4d007701537047252ad28250d210e286d8e7879fe.jpg",
+                "parts/part-0003/images/89d33a0e48c23919967ea004af6184f6c2f7aeada0f17d834b78d92a1a4ea97d.jpg",
+                "parts/part-0003/images/75f888999966941ee25b111a8ac8ff5980b2b92d24a070da5d921838ffe6cd71.jpg",
+                "parts/part-0003/images/a934d85e74092de144bff1dea9d231b12c4145b37b27d55f204b056a791dbc0d.jpg",
+                "parts/part-0003/images/4e67617cc255c8fae813121521234aec9fb6fb263f6040277af7886651a804f8.jpg"
+              ],
+              "excerptSha256": "39caf1a66446cd72a035293b1890845ac411ed0ac2c9170792e06bddde7681e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pixel-vs-geometry",
+        "moduleId": "m-why",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "几何变换与光栅变换的对照",
+        "markdown": "把两条路径对照起来看更清楚：\n\n| 方面 | 几何变换 | 光栅变换 |\n|---|---|---|\n| 操作对象 | 顶点坐标 | 帧缓存中的像素值 |\n| 处理时机 | 重新计算坐标后再扫描转换 | 直接处理已生成的图像 |\n| 精度来源 | 坐标与扫描转换精度 | 原像素分辨率与重采样方式 |\n| 主要代价 | 几何运算与光栅化 | 内存读写与块复制 |\n\n关键差别在于图像已经被采样过一次。像素阵列只记录离散的颜色，不再保留原来的几何描述，所以光栅方法只能近似地重排这些样本，无法恢复采样时已经丢失的细节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-raster-idea"
+          ]
+        }
+      },
+      {
+        "id": "tb-block-transfer",
+        "moduleId": "m-block-ops",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "块移动与 90° 倍数旋转",
+        "markdown": "最简单的光栅变换是二维平移：把矩形区域内的全部像素作为一个块复制到帧缓存的另一部分，就完成了平移。\n\n- 删除原位置：用背景亮度填充该矩形区域即可，前提是原对象所在位置没有覆盖其他需要保留的图案。\n- 逆时针旋转 90°：先把阵列每一行的像素值颠倒，再交换行和列。\n- 旋转 180°：先颠倒每一行中元素的顺序，再颠倒行的顺序。\n\n图 7.27 给出了将像素块旋转 90° 和 180° 所需的数组管理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000244"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "几何变换的光栅方法"
+              ],
+              "lineStart": 6583,
+              "lineEnd": 6621,
+              "assetRefs": [
+                "parts/part-0003/images/1fba13a9a3aa5af48cec9e0348658f612c4fd5c6e44d79415e570351f37cd90f.jpg",
+                "parts/part-0003/images/cdbbbaec38c849ebafa6b708400867102512f92de878ce94b8556700477ba025.jpg",
+                "parts/part-0003/images/5223bd09248b85b3702830f4d007701537047252ad28250d210e286d8e7879fe.jpg",
+                "parts/part-0003/images/89d33a0e48c23919967ea004af6184f6c2f7aeada0f17d834b78d92a1a4ea97d.jpg",
+                "parts/part-0003/images/75f888999966941ee25b111a8ac8ff5980b2b92d24a070da5d921838ffe6cd71.jpg",
+                "parts/part-0003/images/a934d85e74092de144bff1dea9d231b12c4145b37b27d55f204b056a791dbc0d.jpg",
+                "parts/part-0003/images/4e67617cc255c8fae813121521234aec9fb6fb263f6040277af7886651a804f8.jpg"
+              ],
+              "excerptSha256": "39caf1a66446cd72a035293b1890845ac411ed0ac2c9170792e06bddde7681e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rotation-trace",
+        "moduleId": "m-block-ops",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "逐步跟踪一次 90° 旋转",
+        "markdown": "以两行三列的像素块为例（按行书写）：\n\n```\n1 2 3\n4 5 6\n```\n\n第一步颠倒每一行，得到 `3 2 1` 与 `6 5 4`。第二步交换行和列，得到三行两列：\n\n```\n3 6\n2 5\n1 4\n```\n\n这正是逆时针 90° 的结果：原来的右上角元素 3 移到了左上角。每个源像素都整格落到一个目标格上，没有产生新颜色，所以 90° 倍数的旋转是无损重排。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-block-transfer"
+          ]
+        }
+      },
+      {
+        "id": "model-overlap-note",
+        "moduleId": "m-block-ops",
+        "depth": "support",
+        "kind": "warning",
+        "title": "块移动要留意源块与目标块的重叠",
+        "markdown": "块移动的实现细节取决于源矩形和目标矩形是否重叠。若两者有交集，逐行或逐列的复制顺序会影响结果：先写入的区域可能覆盖尚未读取的源像素，导致复制出错误数据。实现时通常先判断平移方向，从不会被覆盖的一端开始复制，或借助临时缓冲区中转。教材只要求把整块搬到新位置；在真实帧缓存上，这一步决定了结果是否正确。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-block-transfer"
+          ]
+        }
+      },
+      {
+        "id": "tb-exact-ops",
+        "moduleId": "m-block-ops",
+        "depth": "core",
+        "kind": "note",
+        "title": "反射与错切也是像素重排",
+        "markdown": "使用在像素块中颠倒行或列的变换，并与平移结合，可以完成光栅对象的反射；沿行或列移动像素位置，则可以实现错切。这些操作同样只重排或搬移已有的像素，不重新计算几何坐标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000244"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "几何变换的光栅方法"
+              ],
+              "lineStart": 6583,
+              "lineEnd": 6621,
+              "assetRefs": [
+                "parts/part-0003/images/1fba13a9a3aa5af48cec9e0348658f612c4fd5c6e44d79415e570351f37cd90f.jpg",
+                "parts/part-0003/images/cdbbbaec38c849ebafa6b708400867102512f92de878ce94b8556700477ba025.jpg",
+                "parts/part-0003/images/5223bd09248b85b3702830f4d007701537047252ad28250d210e286d8e7879fe.jpg",
+                "parts/part-0003/images/89d33a0e48c23919967ea004af6184f6c2f7aeada0f17d834b78d92a1a4ea97d.jpg",
+                "parts/part-0003/images/75f888999966941ee25b111a8ac8ff5980b2b92d24a070da5d921838ffe6cd71.jpg",
+                "parts/part-0003/images/a934d85e74092de144bff1dea9d231b12c4145b37b27d55f204b056a791dbc0d.jpg",
+                "parts/part-0003/images/4e67617cc255c8fae813121521234aec9fb6fb263f6040277af7886651a804f8.jpg"
+              ],
+              "excerptSha256": "39caf1a66446cd72a035293b1890845ac411ed0ac2c9170792e06bddde7681e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exact-ops-example",
+        "moduleId": "m-block-ops",
+        "depth": "support",
+        "kind": "example",
+        "title": "用行颠倒做镜像",
+        "markdown": "例如，把像素块中每一行左右颠倒，就得到关于竖直方向的镜像；再配合块移动把镜像结果放到目标位置，便完成了绕任意竖直参考线的反射。错切则按行或列方向做与到参考线距离成正比的位移；当位移取整数像素时操作仍是精确重排，但需要亚像素位移的场景就无法只靠搬移像素表达。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exact-ops"
+          ]
+        }
+      },
+      {
+        "id": "tb-resample",
+        "moduleId": "m-resampling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "非 90° 旋转与缩放：按重叠比例重采样",
+        "markdown": "当旋转角不是 90° 的倍数时，目标网格与源像素网格不再对齐，必须做重采样。通用做法是：把每个目标像素区域映射到旋转后的源像素区域，计算它与各源像素覆盖区域的重叠量；目标像素的亮度由覆盖到的源像素亮度按重叠百分比加权平均得到，也可以采用与反走样类似的近似方法。\n\n缩放采用类似思路：用指定的 $s_x$ 和 $s_y$ 缩放原始块，把缩放后的矩形映射到一组目标像素上，再按目标像素与缩放后像素区域的重叠比例设置其亮度（参见图 7.29）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000244"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "几何变换的光栅方法"
+              ],
+              "lineStart": 6583,
+              "lineEnd": 6621,
+              "assetRefs": [
+                "parts/part-0003/images/1fba13a9a3aa5af48cec9e0348658f612c4fd5c6e44d79415e570351f37cd90f.jpg",
+                "parts/part-0003/images/cdbbbaec38c849ebafa6b708400867102512f92de878ce94b8556700477ba025.jpg",
+                "parts/part-0003/images/5223bd09248b85b3702830f4d007701537047252ad28250d210e286d8e7879fe.jpg",
+                "parts/part-0003/images/89d33a0e48c23919967ea004af6184f6c2f7aeada0f17d834b78d92a1a4ea97d.jpg",
+                "parts/part-0003/images/75f888999966941ee25b111a8ac8ff5980b2b92d24a070da5d921838ffe6cd71.jpg",
+                "parts/part-0003/images/a934d85e74092de144bff1dea9d231b12c4145b37b27d55f204b056a791dbc0d.jpg",
+                "parts/part-0003/images/4e67617cc255c8fae813121521234aec9fb6fb263f6040277af7886651a804f8.jpg"
+              ],
+              "excerptSha256": "39caf1a66446cd72a035293b1890845ac411ed0ac2c9170792e06bddde7681e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-resample-example",
+        "moduleId": "m-resampling",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "一个目标像素的颜色如何合成",
+        "markdown": "设某个目标像素与两个源像素的重叠比例分别为 $0.7$ 和 $0.3$，源像素颜色为 $C_1$ 与 $C_2$，则该目标像素的颜色为 $C = 0.7 C_1 + 0.3 C_2$。\n\n按面积加权相当于对源图像做了一次局部平均：它让目标图像的整体亮度保持合理，并让角度任意的边缘出现中间色，从而减轻锯齿。代价是图像会变软：重叠比例的估算越粗，模糊与走样越明显；反复对同一图像做非 90° 旋转还会累积这种损失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-resample"
+          ]
+        }
+      },
+      {
+        "id": "model-limits",
+        "moduleId": "m-boundary",
+        "depth": "core",
+        "kind": "warning",
+        "title": "把操作按精度分类，看清边界",
+        "markdown": "把前面的操作按精度归类，可以看清光栅方法的边界：\n\n- 精确重排：平移、90° 倍数旋转、按行或列颠倒的反射、整数像素位移的错切，只是重排像素，不产生新颜色。\n- 需要重采样：任意角旋转和非整数倍缩放，必须按重叠比例加权，结果依赖估算方式，可能出现模糊和走样。\n- 场景假设：删除原块时用背景填充，假设该区域没有覆盖其他对象；一旦存在遮挡，这种删除会破坏被覆盖的内容。\n- 信息上限：像素阵列不再包含原几何描述，重采样无法恢复采样时已经丢失的细节。\n\n因此光栅方法适合对已渲染图像做快速的整体搬移和 90° 倍数的方向调整；需要高质量的任意角变换时，应回到几何变换并重新光栅化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-block-transfer",
+            "tb-exact-ops",
+            "tb-resample"
+          ]
+        }
+      },
+      {
+        "id": "check-transform-choice",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "判断哪些操作需要重采样",
+        "markdown": "判断下列操作中哪些可以只靠光栅重排完成，哪些必须重采样，并说明理由：\n\n1. 把图标向右平移 40 个像素；\n2. 把图标逆时针旋转 90°；\n3. 把图标旋转 30°；\n4. 把图标放大 2 倍；\n5. 以竖直参考线镜像图标。\n\n提示：先问目标网格是否仍与源网格对齐，再问是否需要为每个目标像素合成新颜色。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-block-transfer",
+            "tb-resample"
+          ]
+        }
+      },
+      {
+        "id": "summary-raster",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "光栅方法把二维变换重新表述为像素阵列操作：平移用块移动，90° 倍数旋转、反射和错切用行或列重排，任意角旋转和缩放用按重叠比例的重采样。它的优势是运算量小、可以直接作用于帧缓存中的图像；它的限制来自像素已经被采样一次——非对齐的变换只能近似，删除原块又依赖背景填充的假设。下一个知识点将看到 OpenGL 如何把这些像素操作封装成复制、缩放和旋转函数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-raster-idea",
+            "tb-block-transfer",
+            "tb-resample"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-rotation-necessity",
+        "type": "formative-check",
+        "anchorBlockId": "check-transform-choice",
+        "moduleId": "m-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-block-ops",
+          "apply-resampling"
+        ],
+        "learningPurpose": "检查学习者能否按“目标网格是否与源像素网格对齐”区分精确重排与需要重采样的变换。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-block-transfer",
+            "tb-resample"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": 5
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "列出五个操作，逐一判断属于精确重排还是需要重采样，并写出判断依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "二维几何变换",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000244"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "几何变换的光栅方法"
+      ],
+      "lineStart": 6583,
+      "lineEnd": 6621,
+      "assetRefs": [
+        "parts/part-0003/images/1fba13a9a3aa5af48cec9e0348658f612c4fd5c6e44d79415e570351f37cd90f.jpg",
+        "parts/part-0003/images/cdbbbaec38c849ebafa6b708400867102512f92de878ce94b8556700477ba025.jpg",
+        "parts/part-0003/images/5223bd09248b85b3702830f4d007701537047252ad28250d210e286d8e7879fe.jpg",
+        "parts/part-0003/images/89d33a0e48c23919967ea004af6184f6c2f7aeada0f17d834b78d92a1a4ea97d.jpg",
+        "parts/part-0003/images/75f888999966941ee25b111a8ac8ff5980b2b92d24a070da5d921838ffe6cd71.jpg",
+        "parts/part-0003/images/a934d85e74092de144bff1dea9d231b12c4145b37b27d55f204b056a791dbc0d.jpg",
+        "parts/part-0003/images/4e67617cc255c8fae813121521234aec9fb6fb263f6040277af7886651a804f8.jpg"
+      ],
+      "excerptSha256": "39caf1a66446cd72a035293b1890845ac411ed0ac2c9170792e06bddde7681e8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3074,
+    2091
+  ],
+  "scale": 0.84
+}

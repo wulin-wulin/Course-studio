@@ -1,0 +1,453 @@
+{
+  "id": "point-6-2",
+  "title": "并行画线算法",
+  "shortSummary": "说明如何把画线任务划分到多个处理器，并分析并行化的收益、同步成本与通信开销。",
+  "keyTerms": [
+    "并行绘制",
+    "任务划分",
+    "通信开销"
+  ],
+  "animationType": "rasterAlgorithmLab",
+  "animationSuggestion": "按处理器分色显示各分段并同步推进像素写入，末尾短暂停顿以展示末段更短导致的提前完成，并支持重播同一分段方案。",
+  "difficulty": "进阶",
+  "importance": 0.5,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的分段公式、起始状态公式、两条并行路线与负载均衡结论，重排为「目标—划分—起始状态—替代路线—取舍」的教学顺序，并补充数值算例、误区与练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-parallel-goal",
+          "text": "说明顺序画线的依赖瓶颈、并行为什么能提速，以及负载均衡为什么决定实际收益。"
+        },
+        {
+          "id": "compute-segment-state",
+          "text": "用分段宽度的整数除法与起始状态公式，算出任意分段的起始坐标与初始决策参数。"
+        },
+        {
+          "id": "compare-parallel-strategies",
+          "text": "比较分段并行、包围盒像素分配与扫描线分配三种划分方式的适用条件与主要代价。"
+        }
+      ],
+      "misconceptions": [
+        "认为处理器数量越多加速比就线性提高，忽略划分与起始状态计算这段串行成本以及分段长度不均。",
+        "认为并行化必然改变像素集合，实际上只要各分段起始状态精确导出，段内像素与顺序 Bresenham 一致。",
+        "认为分段越细负载越均匀，忽略每段都要单独计算起始 y 与决策参数，且整数除法的余数会被最后一段吸收。"
+      ],
+      "modules": [
+        {
+          "id": "parallel-goal",
+          "title": "为什么要把画线并行化",
+          "role": "problem-framing",
+          "description": "从顺序算法的依赖链出发，说明并行目标与负载均衡要求。",
+          "outcomeRefs": [
+            "explain-parallel-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "segment-partition",
+          "title": "分段与边界计算",
+          "role": "derivation",
+          "description": "推导分段水平宽度与各段起始 x，并解释末段偏短与端点舍入。",
+          "outcomeRefs": [
+            "compute-segment-state"
+          ],
+          "order": 1
+        },
+        {
+          "id": "segment-start-state",
+          "title": "分段的起始 y 与决策参数",
+          "role": "derivation",
+          "description": "用公式给出每段起始 y 和初始决策参数，并通过算例验证与顺序算法一致。",
+          "outcomeRefs": [
+            "compute-segment-state"
+          ],
+          "order": 2
+        },
+        {
+          "id": "pixel-assignment",
+          "title": "按像素与按扫描线分配",
+          "role": "alternative-solution",
+          "description": "介绍包围盒内逐像素距离判定与扫描线交点两类替代路线。",
+          "outcomeRefs": [
+            "compare-parallel-strategies"
+          ],
+          "order": 3
+        },
+        {
+          "id": "tradeoffs",
+          "title": "取舍、误区与检查",
+          "role": "synthesis",
+          "description": "统一比较三种划分方式，澄清常见误区，并通过练习检查掌握程度。",
+          "outcomeRefs": [
+            "explain-parallel-goal",
+            "compare-parallel-strategies"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-parallel-goal",
+          "compute-segment-state",
+          "compare-parallel-strategies"
+        ],
+        "method": "完成分段起始状态计算练习，并用比较表说明三种并行划分方式的取舍。",
+        "successCriteria": [
+          "分段宽度、起始坐标与起始决策参数计算正确",
+          "能说明负载均衡与串行成本对加速比的限制",
+          "能针对给定条件选出划分方式并给出理由"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-6-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-parallel-motivation",
+        "moduleId": "parallel-goal",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：顺序画线的瓶颈与并行目标",
+        "markdown": "教材指出，前面讨论过的线段生成算法都是**顺序**地确定像素位置：每算出一个像素，才根据它推进到下一个像素。并行画线的目标是把这部分计算分割到多个可用处理器上，从而更快地得到线段的像素位置。教材给出两条路线：\n\n- 把现有的顺序算法直接放到多个处理器上；\n- 寻找其他处理办法，使像素位置能以并行方式有效地计算。\n\n无论走哪条路线，设计并行算法时都要考虑**平衡可用处理器之间的处理负载**，因为整体完成时间由最慢的那一部分决定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "并行画线算法"
+              ],
+              "lineStart": 4207,
+              "lineEnd": 4270,
+              "assetRefs": [
+                "parts/part-0002/images/5a80e69038fc106dd1bc6e0a4812ac5890672ab6c719a6c04f1aa1c4d5b81dca.jpg"
+              ],
+              "excerptSha256": "4aeef8da16838d2ab231bcdc28eb3df0d018978983b5b6d1eec5a10a75db36c8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-speedup-intuition",
+        "moduleId": "parallel-goal",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：依赖链被切断之后",
+        "markdown": "顺序画线时每个像素都依赖前一个像素的状态：必须先知道当前 $y$ 和决策参数，才能决定下一个像素落在哪里。分段并行把这条长依赖链切成若干条短链，只要每条短链的**起点状态**能直接算出来，各处理器就不必互相等待。\n\n于是整体完成时间大致由最慢的一段决定，这正是教材强调负载均衡的原因：分段长度不均会直接吃掉并行收益。另一类方法干脆绕开依赖链，让每个处理器独立判定自己负责的像素，代价是重复计算。\n\n可以把分段并行想成把接力赛改成并排跑：每个人从不同起跑线出发，但起跑线必须由同一套公式精确算出，否则交接处就会错位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parallel-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-segment-partition",
+        "moduleId": "segment-partition",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：分成 $n_p$ 个子段",
+        "markdown": "对斜率为 $0<m<1$、左端点坐标为 $(x_0,y_0)$ 的线段，沿正 $x$ 方向把它分成 $n_p$ 个子段，并在每个子段中同时生成线段。相邻分段起始 $x$ 位置之间的距离，即分段水平宽度，为\n\n$$\\Delta x_p = \\frac{\\Delta x + n_p - 1}{n_p}$$\n\n其中 $\\Delta x$ 是线段的水平宽度，$\\Delta x_p$ 的值利用整数除法计算。把分段和处理器从 $0$、$1$、$2$ 编号到 $n_p-1$，第 $k$ 个分段的起始 $x$ 坐标为\n\n$$x_k = x_0 + k\\Delta x_p$$\n\n教材的例子是 $\\Delta x = 15$、$n_p = 4$：此时分段水平宽度为 $4$，各分段的初始 $x$ 值为 $x_0$、$x_0+4$、$x_0+8$、$x_0+12$。教材同时提醒两种偏差：这种分段策略下，最后一（最右）个子段可能比其他段小；若线段端点不是整数，舍入误差会使沿线各分段的宽度不同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "并行画线算法"
+              ],
+              "lineStart": 4207,
+              "lineEnd": 4270,
+              "assetRefs": [
+                "parts/part-0002/images/5a80e69038fc106dd1bc6e0a4812ac5890672ab6c719a6c04f1aa1c4d5b81dca.jpg"
+              ],
+              "excerptSha256": "4aeef8da16838d2ab231bcdc28eb3df0d018978983b5b6d1eec5a10a75db36c8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-partition-detail",
+        "moduleId": "segment-partition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：整数除法的余数去了哪里",
+        "markdown": "$\\Delta x_p = \\lceil \\Delta x / n_p \\rceil = \\lfloor (\\Delta x + n_p - 1)/n_p \\rfloor$ 的含义是：先让每段至少容纳 $\\Delta x / n_p$ 列，再把不足一整段的余数抬成一段，保证 $n_p$ 段能覆盖整条线段。\n\n以教材的 $\\Delta x = 15$、$n_p = 4$ 为例，各段宽度为 4、4、4、3：前三段各处理 4 个像素列，最后一段处理剩下的 3 列。若端点坐标不是整数，需要先舍入端点再分段，否则各段宽度会随舍入方式变化，出现长短不一的段。\n\n这种「前段满、末段短」的划分是可预测的，便于静态分配处理器；若希望各段更接近等长，只能让段边界落在非整数像素列上，但那会重新引入端点舍入问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segment-partition"
+          ]
+        }
+      },
+      {
+        "id": "tb-segment-start-state",
+        "moduleId": "segment-start-state",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：分段的起始 $y$ 与初始决策参数",
+        "markdown": "为了把 Bresenham 算法用于各分段，需要有每个分段的 $y$ 坐标初始值和决策参数的初始值。分段在 $y$ 方向的变化量可由线段斜率 $m$ 和分段宽度 $\\Delta x_p$ 算出：\n\n$$\\Delta y_p = m\\Delta x_p$$\n\n第 $k$ 分段的起始 $y$ 坐标为\n\n$$y_k = y_0 + \\mathrm{round}(k\\Delta y_p)$$\n\n第 $k$ 分段起始处 Bresenham 算法的初始决策参数，可从标准初始决策式推广得到：\n\n$$p_k = (k\\Delta x_p)(2\\Delta y) - \\mathrm{round}(k\\Delta y_p)(2\\Delta x) + 2\\Delta y - \\Delta x$$\n\n然后各处理器利用该分段的起始坐标 $(x_k,y_k)$ 和初始决策参数 $p_k$，计算指定分段上的像素位置。也可以通过代入 $m = \\Delta y/\\Delta x$ 并重排有关项，把 $y_k$ 与 $p_k$ 起始值计算中的浮点运算简化为整数运算。若在 $y$ 方向对线段分段并计算分段的起始 $x$ 值，可以把并行 Bresenham 算法拓展到斜率大于 1.0 的线段；对于负斜率，则在一个方向递增坐标值，而在另一方向递减。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "并行画线算法"
+              ],
+              "lineStart": 4207,
+              "lineEnd": 4270,
+              "assetRefs": [
+                "parts/part-0002/images/5a80e69038fc106dd1bc6e0a4812ac5890672ab6c719a6c04f1aa1c4d5b81dca.jpg"
+              ],
+              "excerptSha256": "4aeef8da16838d2ab231bcdc28eb3df0d018978983b5b6d1eec5a10a75db36c8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-start-state-worked",
+        "moduleId": "segment-start-state",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：四段并行算例",
+        "markdown": "取 $\\Delta x = 15$、$\\Delta y = 6$、$n_p = 4$，则 $m = 0.4$、$\\Delta x_p = 4$、$\\Delta y_p = 1.6$。按教材公式，各段起始状态为：\n\n| 分段 $k$ | 起始 $x_k$ | 起始 $y_k$ | 初始 $p_k$ |\n|---|---|---|---|\n| 0 | $x_0$ | $y_0$ | $-3$ |\n| 1 | $x_0+4$ | $y_0+2$ | $-15$ |\n| 2 | $x_0+8$ | $y_0+3$ | $3$ |\n| 3 | $x_0+12$ | $y_0+5$ | $-9$ |\n\n计算过程：$2\\Delta y = 12$、$2\\Delta x = 30$、$2\\Delta y - \\Delta x = -3$，所以 $p_k = 12k\\Delta x_p - 30\\,\\mathrm{round}(1.6k) - 3$，而 $y_k$ 的偏移为 $\\mathrm{round}(1.6k)$。\n\n可以核对：从 $(x_0,y_0)$ 顺序执行 Bresenham，走到第 4 列时恰好是 $y_0+2$、$p=-15$；走到第 8 列是 $y_0+3$、$p=3$；走到第 12 列是 $y_0+5$、$p=-9$。也就是说，用这三个公式导出的起始状态与顺序执行到该列时的状态完全相同，段内继续用同一套决策规则推进即可得到同样的像素。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segment-start-state"
+          ]
+        }
+      },
+      {
+        "id": "tb-bounding-box",
+        "moduleId": "pixel-assignment",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为每个处理器分配屏幕像素",
+        "markdown": "建立光栅系统并行算法的另一种方法是，为每个处理器分配一组屏幕像素。只要处理器数量足够，就可以把每个处理器分配给某个屏幕区域内的一个像素：为处理器分配线段坐标范围之内的一个像素，再计算该像素到线段的距离，从而决定是否显示。\n\n在线段的包围盒中的像素数目为 $\\Delta x \\cdot \\Delta y$（图 6.9）。从线段到坐标 $(x,y)$ 处像素的垂直距离可写成\n\n$$d = Ax + By + C$$\n\n其中 $A$、$B$、$C$ 是由线段的 $\\Delta x$、$\\Delta y$ 与其端点确定的常量。一旦算出这三个常量，每个处理器只需完成两次乘法和两次加法就能算出像素到线段的距离；如果 $d$ 小于指定的线段粗细参数，就绘制该像素。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "并行画线算法"
+              ],
+              "lineStart": 4207,
+              "lineEnd": 4270,
+              "assetRefs": [
+                "parts/part-0002/images/5a80e69038fc106dd1bc6e0a4812ac5890672ab6c719a6c04f1aa1c4d5b81dca.jpg"
+              ],
+              "excerptSha256": "4aeef8da16838d2ab231bcdc28eb3df0d018978983b5b6d1eec5a10a75db36c8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-distance-coeffs",
+        "moduleId": "pixel-assignment",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "模型补充：距离系数的标准推导",
+        "markdown": "教材把垂直距离写成 $d = Ax + By + C$，但校对文本中 $A$、$B$、$C$ 的分式已经残缺。这里给出与 $d = Ax + By + C$ 以及图 6.9 中出现的 $\\sqrt{\\Delta x^2 + \\Delta y^2}$ 一致的标准推导，供理解使用。\n\n线段方向为 $(\\Delta x, \\Delta y)$，与之垂直的法向可取 $(-\\Delta y, \\Delta x)$，于是点 $(x,y)$ 到过 $(x_0,y_0)$ 的直线的有符号距离为\n\n$$d = \\frac{-\\Delta y\\,(x-x_0) + \\Delta x\\,(y-y_0)}{\\sqrt{\\Delta x^2+\\Delta y^2}} = Ax + By + C$$\n\n对应系数为\n\n$$A = \\frac{-\\Delta y}{\\sqrt{\\Delta x^2+\\Delta y^2}},\\quad B = \\frac{\\Delta x}{\\sqrt{\\Delta x^2+\\Delta y^2}},\\quad C = \\frac{x_0\\Delta y - y_0\\Delta x}{\\sqrt{\\Delta x^2+\\Delta y^2}}$$\n\n两个端点确定后，$A$、$B$、$C$ 就固定下来。把 $|d|$ 与线段粗细参数比较，就能决定是否绘制该像素；$|d|$ 要用绝对值，因为法向的符号取决于所选方向。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bounding-box"
+          ]
+        }
+      },
+      {
+        "id": "tb-scanline-assignment",
+        "moduleId": "pixel-assignment",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：按扫描线或像素列分配",
+        "markdown": "除了把屏幕分割成单个像素，也可以按线段的斜率为每个处理器分配一条扫描线或一列像素，然后让每个处理器计算线段与分配给它的水平行或垂直列的交点。\n\n对于斜率 $|m|<1.0$ 的线段，每个处理器按给定的 $x$ 值从直线方程求解 $y$；对于斜率大于 1.0 的线段，处理器则根据给定的扫描线 $y$ 值从直线方程求解 $x$。教材指出，这种直接方法在顺序算法机器中计算速度很慢，但通过使用多处理器能十分有效地完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "并行画线算法"
+              ],
+              "lineStart": 4207,
+              "lineEnd": 4270,
+              "assetRefs": [
+                "parts/part-0002/images/5a80e69038fc106dd1bc6e0a4812ac5890672ab6c719a6c04f1aa1c4d5b81dca.jpg"
+              ],
+              "excerptSha256": "4aeef8da16838d2ab231bcdc28eb3df0d018978983b5b6d1eec5a10a75db36c8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-strategy-compare",
+        "moduleId": "tradeoffs",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：三种划分方式的取舍",
+        "markdown": "把教材提到的三种并行方式放在同一组维度上比较：\n\n| 划分方式 | 每个处理器负责什么 | 需要预先共享什么 | 负载均衡 | 与顺序算法的关系 | 主要代价 |\n|---|---|---|---|---|---|\n| 分段并行 Bresenham | 一个 $x$ 方向子段（斜率大于 1 时改为 $y$ 方向子段） | 各段起始 $(x_k,y_k)$ 与 $p_k$ | 段数固定，末段可能偏短 | 段内沿用同一套决策规则推进 | 每段一次起始状态计算与一次划分 |\n| 包围盒像素分配 | 包围盒内的一组像素 | 距离系数 $A$、$B$、$C$ | 与线段穿过的像素数分布有关，常不均衡 | 逐像素判定距离，不依赖分段 | 包围盒内 $\\Delta x \\cdot \\Delta y$ 个像素都要计算 |\n| 扫描线或像素列分配 | 一条扫描线或一列像素 | 直线方程或 $\\Delta x$、$\\Delta y$ 与端点 | 每个处理器只求解一次，较均衡 | 直接由交点定位像素 | 顺序求解慢，需靠并行度补偿 |\n\n取舍规则：连线短、处理器多，且希望像素集合与顺序 Bresenham 完全一致时用分段并行；线段很长、包围盒远大于线段本身时，逐像素距离判定会浪费大量计算；只想让每个处理器只做一次简单求解时，按扫描线或列划分最直接。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segment-partition",
+            "tb-bounding-box",
+            "tb-scanline-assignment"
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "tradeoffs",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：三个常见误解",
+        "markdown": "**误解一：处理器越多一定越快。** 划分与起始状态计算这一段是串行的，各分段长度不同也会让部分处理器空等；教材强调平衡负载，正是为了避免最慢的分段拖住整体。\n\n**误解二：并行化会改变像素集合。** 在 $0<m<1$ 的适用范围内，只要每个分段的 $(x_k,y_k,p_k)$ 严格由公式导出，段内推进规则与顺序 Bresenham 相同，得到的像素就与顺序执行一致；起始值算错才会在段首出现错位或重复。\n\n**误解三：分段越细负载越均匀。** 每多一段就要多算一次起始 $y$ 与决策参数，而整数除法的余数只会被最后一段吸收；划分粒度需要在建立成本与并行收益之间取平衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segment-start-state",
+            "tb-segment-partition",
+            "model-partition-detail",
+            "model-strategy-compare"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "tradeoffs",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：分段起始状态练习",
+        "markdown": "设线段 $\\Delta x = 20$、$\\Delta y = 8$、$m = 0.4$，用 $n_p = 5$ 个处理器沿 $x$ 方向分段。\n\n1. 求分段水平宽度 $\\Delta x_p$ 与五个分段的起始 $x$；\n2. 求 $k=3$ 分段的起始坐标 $(x_3,y_3)$ 与起始决策参数 $p_3$；\n3. 若改用 $n_p = 3$，各分段宽度是多少？为什么最后一段会变短？\n\n**参考答案。** $\\Delta x_p = \\lfloor (20+5-1)/5 \\rfloor = 4$，五段起始 $x$ 为 $x_0$、$x_0+4$、$x_0+8$、$x_0+12$、$x_0+16$。由 $\\Delta y_p = 0.4 \\times 4 = 1.6$ 得 $y_3 = y_0 + \\mathrm{round}(4.8) = y_0+5$。由 $p_k$ 公式，$2\\Delta y = 16$、$2\\Delta x = 40$、$2\\Delta y-\\Delta x = -4$：\n\n$$p_3 = 12 \\times 16 - 40 \\times 5 - 4 = 192 - 200 - 4 = -12$$\n\n改用 $n_p = 3$ 时 $\\Delta x_p = \\lfloor 22/3 \\rfloor = 7$，三段覆盖宽度 7、7、6；因为 $20$ 不能被 $3$ 整除，余下的 2 列被最后一段吸收，所以末段更短。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-segment-partition",
+            "tb-segment-start-state",
+            "model-start-state-worked",
+            "model-strategy-compare"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "tradeoffs",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：本点小结",
+        "markdown": "并行画线把「顺序确定像素」的工作拆给多个处理器，核心只有两件事：**划分**与**起始状态**。\n\n- 按 $x$ 方向分段时，用 $\\Delta x_p$、$x_k$ 定边界，用 $\\Delta y_p$、$y_k$、$p_k$ 让每段从正确的 Bresenham 状态出发；斜率大于 1 时改为沿 $y$ 分段。\n- 也可以放弃分段，改成按包围盒像素或按扫描线、像素列分配，用 $d = Ax+By+C$ 或直线交点独立判定每个像素。\n- 设计时必须平衡负载，并把划分与起始状态的串行计算、整数除法的余数、端点舍入误差都计入成本。\n\n下一知识点转向帧缓存值的装载，讨论已经算出的像素值如何真正写进帧缓存。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parallel-motivation",
+            "tb-segment-start-state",
+            "tb-scanline-assignment"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "segment-width-experiment",
+        "type": "parameter-experiment",
+        "anchorBlockId": "model-partition-detail",
+        "moduleId": "segment-partition",
+        "depth": "support",
+        "outcomeRefs": [
+          "compute-segment-state"
+        ],
+        "learningPurpose": "让学习者改变处理器数，观察整数除法如何改变分段宽度、各段起点与最后一段长度。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-segment-partition"
+          ]
+        },
+        "config": {
+          "deltaX": 15,
+          "deltaY": 6,
+          "processorCounts": [
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "fallback": {
+          "type": "table",
+          "markdown": "$\\Delta x = 15$ 时：$n_p = 2$ 各段宽度为 8、7；$n_p = 3$ 为 5、5、5；$n_p = 4$ 为 4、4、4、3；$n_p = 5$ 为 3、3、3、3、3。最后一段不会长于 $\\Delta x_p$，可能更短。"
+        }
+      }
+    ]
+  },
+  "subtitle": "实现图元及属性的算法",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000173"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "并行画线算法"
+      ],
+      "lineStart": 4207,
+      "lineEnd": 4270,
+      "assetRefs": [
+        "parts/part-0002/images/5a80e69038fc106dd1bc6e0a4812ac5890672ab6c719a6c04f1aa1c4d5b81dca.jpg"
+      ],
+      "excerptSha256": "4aeef8da16838d2ab231bcdc28eb3df0d018978983b5b6d1eec5a10a75db36c8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3889,
+    2298
+  ],
+  "scale": 0.83
+}

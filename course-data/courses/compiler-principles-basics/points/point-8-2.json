@@ -1,0 +1,405 @@
+{
+  "id": "point-8-2",
+  "title": "The parser",
+  "shortSummary": "说明 Oberon-0 parser 的整体结构，介绍如何组织递归下降过程、维护当前符号并构造语法树或驱动语义动作。",
+  "keyTerms": [
+    "parser",
+    "语法分析器",
+    "递归下降",
+    "当前符号",
+    "语法树",
+    "Oberon-0"
+  ],
+  "animationType": "recursiveDescentParsing",
+  "animationSuggestion": "用上下两层画面同步展示：上层是符号序列与当前符号高亮并逐步右移，下层是依赖图上的过程结点按调用关系展开与返回，循环处标记为递归；提供重播按钮复位到同一段输入。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-4-1",
+    "point-8-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "structure-and-dependency-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于确定性检查、过程集合、依赖图与模块入口的原始结论，围绕「结构如何落到代码」重排讲解顺序并补充读图与自检活动。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-parser-design",
+          "text": "说明 Oberon-0 parser 在动手实现前为何要先做确定性检查，以及开始/后继符号集合在其中起什么作用。"
+        },
+        {
+          "id": "explain-procedure-map",
+          "text": "解释「每个非终结符对应一个过程」如何构成只向前查看一个符号的递归下降分析器。"
+        },
+        {
+          "id": "read-dependence-graph",
+          "text": "读懂过程依赖图：区分直接与间接调用，指出回路对应的递归、过程嵌套以及唯一入口 Module。"
+        },
+        {
+          "id": "connect-parser-module",
+          "text": "说明 parser 作为模块如何依赖 scanner 交付的终结符，并解释代码结构为何与语法结构一致。"
+        }
+      ],
+      "misconceptions": [
+        "把依赖图中的边理解为数据流依赖，而不是过程之间的直接或间接调用依赖。",
+        "认为递归下降实现必须在候选产生式之间反复试探并回溯。"
+      ],
+      "modules": [
+        {
+          "id": "parser-overview",
+          "title": "先检查，再构造",
+          "role": "problem-setup",
+          "description": "交代 parser 的构造依据与确定性前提。",
+          "outcomeRefs": [
+            "explain-parser-design"
+          ],
+          "order": 0
+        },
+        {
+          "id": "procedures-nonterminals",
+          "title": "每个非终结符一个过程",
+          "role": "core-mechanism",
+          "description": "把语法规则落成一组相互调用的递归下降过程。",
+          "outcomeRefs": [
+            "explain-procedure-map"
+          ],
+          "order": 1
+        },
+        {
+          "id": "dependence-graph",
+          "title": "依赖图与递归结构",
+          "role": "structure-analysis",
+          "description": "用依赖图读出调用关系、递归与嵌套。",
+          "outcomeRefs": [
+            "read-dependence-graph"
+          ],
+          "order": 2
+        },
+        {
+          "id": "module-and-handoff",
+          "title": "模块边界与下一步",
+          "role": "application-transfer",
+          "description": "把 parser 放回编译流水线，连接 scanner 并为错误处理做铺垫。",
+          "outcomeRefs": [
+            "explain-parser-design",
+            "explain-procedure-map",
+            "read-dependence-graph",
+            "connect-parser-module"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-parser-design",
+          "explain-procedure-map",
+          "read-dependence-graph",
+          "connect-parser-module"
+        ],
+        "method": "完成依赖图小练习，并用一段话复述从确定性检查到过程集合的构造顺序。",
+        "successCriteria": [
+          "能指出依赖图中回路、嵌套与入口结点各自的代码对应物",
+          "能说明开始/后继符号检查与「只看一个符号」之间的关系"
+        ],
+        "exerciseBlockId": "check-understanding",
+        "summaryBlockId": "point-summary",
+        "nextPointId": "point-8-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-parser-design",
+        "moduleId": "parser-overview",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：parser 的构造前提",
+        "markdown": "Oberon-0 parser 的构造严格遵循教材第 3、4 章讲解的规则。开始构造之前，必须先检查该语法是否满足保证确定性的限制条件，使得分析只需向前查看一个符号。为此，先构造各非终结符的开始符号集合与后继符号集合，再按确定性规则逐项检查。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "7. A Parser for Oberon-0",
+                "The parser"
+              ],
+              "lineStart": 204,
+              "lineEnd": 208,
+              "assetRefs": [],
+              "excerptSha256": "35b94827ac25314373659962f65fec238b0ade8d803fb3380ce70d0ccc8edbc6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-determinism-check",
+        "moduleId": "parser-overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么先做确定性检查",
+        "markdown": "递归下降过程只根据**当前符号**决定走哪条产生式。只要每个非终结符的候选产生式在开始符号集合与后继符号集合的检查下互不冲突，过程就不需要回溯；一旦存在冲突，就必须修改语法或增加向前查看的符号数，而不是在过程体里临时试探。\n\n因此，开始/后继符号集合不是旁证，而是判断「一个过程能否只看一个符号就作出决定」的依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parser-design"
+          ]
+        }
+      },
+      {
+        "id": "tb-procedure-per-nonterminal",
+        "moduleId": "procedures-nonterminals",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：为每个非终结符构造过程",
+        "markdown": "确定性检查表明，Oberon-0 的语法确实可以用只向前查看一个符号的递归下降方法处理。按照这一方法，为每个非终结符构造一个对应的过程；这些过程相互调用，共同完成对整个语法的识别。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "7. A Parser for Oberon-0",
+                "The parser"
+              ],
+              "lineStart": 204,
+              "lineEnd": 208,
+              "assetRefs": [],
+              "excerptSha256": "35b94827ac25314373659962f65fec238b0ade8d803fb3380ce70d0ccc8edbc6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-procedure-body",
+        "moduleId": "procedures-nonterminals",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：一个非终结符过程怎么工作",
+        "markdown": "一个非终结符过程通常按三步工作：先检查当前符号是否落在该非终结符的合法起始范围内；再按所选产生式的右部依次调用子非终结符的过程，遇到终结符则与当前符号比对并让 scanner 前进到下一个符号；所有成分处理完后返回。\n\n所有过程共享同一份「当前符号」状态，因此任一过程的推进都会影响调用它的过程看到的输入位置。这正是递归下降能被组织成一组相互调用过程的原因：调用栈记录「还没识别完的结构」，当前符号记录「读到哪里」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-procedure-per-nonterminal"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-backtracking",
+        "moduleId": "procedures-nonterminals",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清：递归下降不等于反复试错",
+        "markdown": "常见误解是递归下降一定会在失败时回溯。Oberon-0 的例子恰恰相反：前面的确定性检查正是为了保证每个过程只看一个符号就能选定产生式。这里的一组过程描述的是确定的调用顺序，而不是「猜测—失败—回退」的搜索。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-procedure-per-nonterminal",
+            "model-determinism-check"
+          ]
+        }
+      },
+      {
+        "id": "tb-dependence-graph",
+        "moduleId": "dependence-graph",
+        "depth": "core",
+        "kind": "figure",
+        "title": "教材：过程依赖图",
+        "markdown": "在写出这些过程之前，先设计一张过程依赖图（教材图 7.1）：每个过程是一个结点；若某过程直接或间接调用另一过程，就从前者向后者连一条边。图中并非所有非终结符都会出现，例如 ArrayType 和 RecordType 只以简单方式包含在 type 之中，因此没有单独画出。ident 和 integer 按终结符处理，因为 scanner 正是这样交付它们的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "7. A Parser for Oberon-0",
+                "The parser"
+              ],
+              "lineStart": 204,
+              "lineEnd": 208,
+              "assetRefs": [],
+              "excerptSha256": "35b94827ac25314373659962f65fec238b0ade8d803fb3380ce70d0ccc8edbc6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-graph",
+        "moduleId": "dependence-graph",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：怎样读这张图",
+        "markdown": "把依赖图当成一张调用关系表：从某个过程结点出发沿箭头走，就得到它直接或间接会调用的过程；某个非终结符没有单独出现，说明它被别的非终结符以固定方式吸收，不需要单独画出结点（但语法仍为它保留了对应位置）。\n\n这张图同时是检查实现完整性的清单：图中每个结点都应在 parser 模块里有对应过程，每条边都应能对应到过程体中的一次调用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dependence-graph"
+          ]
+        }
+      },
+      {
+        "id": "tb-recursion-and-module-root",
+        "moduleId": "dependence-graph",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：回路、嵌套与唯一入口",
+        "markdown": "依赖图中的每一个回路都对应一处递归，因此 parser 必须用允许递归过程的语言来书写；这张图还显示过程之间可能如何嵌套。唯一不被其他过程调用的过程是 Module，程序结构应当与这张图一致。与 scanner 一样，parser 也组织成一个模块。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "7. A Parser for Oberon-0",
+                "The parser"
+              ],
+              "lineStart": 204,
+              "lineEnd": 208,
+              "assetRefs": [],
+              "excerptSha256": "35b94827ac25314373659962f65fec238b0ade8d803fb3380ce70d0ccc8edbc6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-graph-to-code",
+        "moduleId": "dependence-graph",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把图翻译成代码骨架",
+        "markdown": "把依赖图翻译成代码时，边的方向就是过程调用的方向，回路就是递归调用环，图的嵌套关系对应过程声明之间的包含关系。由于 Module 不被任何其他过程调用，它自然成为整个 parser 的入口；其余过程都由别的过程调用。\n\n这也解释了为什么 parser 的代码结构与语法结构如此接近：语法规则给出过程集合，依赖图给出调用骨架。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dependence-graph",
+            "tb-recursion-and-module-root"
+          ]
+        }
+      },
+      {
+        "id": "model-scanner-interface",
+        "moduleId": "module-and-handoff",
+        "depth": "support",
+        "kind": "application",
+        "title": "补充：parser 模块与 scanner 的分工",
+        "markdown": "把 parser 写成模块，可以把过程集合与入口封装起来，只向调用者暴露 Module 对应的入口。parser 依赖 scanner 提供当前符号：ident 和 integer 这类词法单元由 scanner 识别后作为终结符交给 parser，因此 parser 的过程只需比对符号类别，不必直接处理字符。\n\n职责边界由此清楚：scanner 决定「读到了什么符号」，parser 决定「这个符号序列下一步该调用哪个过程」。若当前符号不符合任何合法预期，就进入错误处理——这正是下一个知识点要处理的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-procedure-per-nonterminal",
+            "tb-recursion-and-module-root"
+          ]
+        }
+      },
+      {
+        "id": "check-understanding",
+        "moduleId": "module-and-handoff",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：为一个小语法画依赖图",
+        "markdown": "请给出一个只含三个非终结符的局部语法，画出它的过程依赖图，并回答：\n\n1. 图中的哪条边表示直接调用，哪条边只能由间接调用产生？\n2. 如果图中出现一个回路，对应到 parser 代码中会是什么结构？\n3. 为什么入口过程只能是那个不被其他过程调用的结点？\n\n最后用自己的话复述：为什么 Oberon-0 要先完成开始/后继符号检查，再为每个非终结符写过程。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-procedure-per-nonterminal",
+            "tb-dependence-graph",
+            "tb-recursion-and-module-root"
+          ]
+        }
+      },
+      {
+        "id": "point-summary",
+        "moduleId": "module-and-handoff",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "Oberon-0 parser 的构造顺序是「先检查确定性，再为每个非终结符写一个递归下降过程」。依赖图把过程集合组织成可读的调用骨架：图上每条边是调用，每个回路是递归，Module 是唯一入口。最终 parser 与 scanner 一样以模块形式实现，并由 scanner 交付的终结符驱动分析。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parser-design",
+            "tb-procedure-per-nonterminal",
+            "tb-dependence-graph",
+            "tb-recursion-and-module-root"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "parser-structure-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-understanding",
+        "moduleId": "module-and-handoff",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-procedure-map",
+          "read-dependence-graph"
+        ],
+        "learningPurpose": "检查学习者能否把过程集合与依赖图对应起来，并解释递归、嵌套与入口的来源。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-procedure-per-nonterminal",
+            "tb-dependence-graph"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请画出三个非终结符的依赖图，指出回路对应的递归结构，并说明 Module 为什么是唯一入口。"
+        }
+      }
+    ]
+  },
+  "subtitle": "7. A Parser for Oberon-0",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000020"
+      ],
+      "headingPath": [
+        "7. A Parser for Oberon-0",
+        "The parser"
+      ],
+      "lineStart": 204,
+      "lineEnd": 208,
+      "assetRefs": [],
+      "excerptSha256": "35b94827ac25314373659962f65fec238b0ade8d803fb3380ce70d0ccc8edbc6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1050,
+    2397
+  ],
+  "scale": 0.95
+}

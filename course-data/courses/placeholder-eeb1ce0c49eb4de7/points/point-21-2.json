@@ -1,0 +1,622 @@
+{
+  "id": "point-21-2",
+  "title": "辐射度光照模型",
+  "shortSummary": "说明辐射度方法用能量平衡求解漫反射全局光照，并解释其与光线跟踪在视角依赖上的差异。",
+  "keyTerms": [
+    "辐射度",
+    "形状因子",
+    "能量平衡",
+    "全局光照",
+    "逐步求精"
+  ],
+  "animationType": "globalIlluminationLab",
+  "animationSuggestion": "逐步显示场景中的面片，高亮当前发射面片并画出其能量分发方向，同时用柱状或色阶展示各面片辐射度的增长，允许切换到逐步求精与直接求解对比同一收敛结果。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-17-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的能量平衡推导、假设与公式，按“术语—朗伯积分—闭包方程—求解—视无关性”的定量机理顺序重排，补充单位表、矩阵视角、约束含义与对比检查。",
+      "estimatedMinutes": 17,
+      "outcomes": [
+        {
+          "id": "explain-radiometric-terms",
+          "text": "解释光通量、辐射度、强度等辐射能术语的定义与单位，并说明它们之间的关系。"
+        },
+        {
+          "id": "explain-diffuse-integration",
+          "text": "说明朗伯假设下半球积分与投影因子如何导出 $B=\\pi I$。"
+        },
+        {
+          "id": "solve-radiosity-system",
+          "text": "写出辐射度方程及其线性方程组形式，说明形状因子约束与逐步求精的作用。"
+        },
+        {
+          "id": "compare-view-dependence",
+          "text": "比较辐射度与光线跟踪在视角依赖、擅长效果和场景变动上的差异。"
+        }
+      ],
+      "misconceptions": [
+        "把辐射度模型当成能直接产生镜面高光的全局光照算法，忽略其朗伯漫反射假设。",
+        "认为改变观察位置后必须重新求解辐射度方程组。",
+        "把逐步求精当成另一个近似模型，而不是同一方程组的迭代求解顺序重排。",
+        "认为形状因子可以任意取值，忽略能量守恒、互易性和无自入射三条约束。"
+      ],
+      "modules": [
+        {
+          "id": "radiometric-terms",
+          "title": "问题导入与辐射能术语",
+          "role": "foundation",
+          "description": "从基本光照模型的局限出发，统一光通量、辐射度和强度的定义与单位。",
+          "outcomeRefs": [
+            "explain-radiometric-terms"
+          ],
+          "order": 0
+        },
+        {
+          "id": "diffuse-hemisphere",
+          "title": "朗伯假设与半球积分",
+          "role": "derivation",
+          "description": "在理想漫反射体假设下，用投影面积与半球积分导出 B 与 I 的关系。",
+          "outcomeRefs": [
+            "explain-diffuse-integration"
+          ],
+          "order": 1
+        },
+        {
+          "id": "closure-form-factor",
+          "title": "闭包、形状因子与辐射度方程",
+          "role": "model-building",
+          "description": "把表面能量交换写成闭包内的辐射度方程组，并给出形状因子的定义与约束。",
+          "outcomeRefs": [
+            "solve-radiosity-system"
+          ],
+          "order": 2
+        },
+        {
+          "id": "progressive-solve",
+          "title": "求解与逐步求精",
+          "role": "algorithm",
+          "description": "比较直接法与迭代法，说明逐步求精如何只用一个半立方体逐轮分发能量。",
+          "outcomeRefs": [
+            "solve-radiosity-system"
+          ],
+          "order": 3
+        },
+        {
+          "id": "compare-and-check",
+          "title": "视无关性、对比与达成检查",
+          "role": "synthesis",
+          "description": "说明辐射度解的视无关性，并与光线跟踪对比，最后纠正常见误区。",
+          "outcomeRefs": [
+            "compare-view-dependence"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-radiometric-terms",
+          "explain-diffuse-integration",
+          "solve-radiosity-system",
+          "compare-view-dependence"
+        ],
+        "method": "能独立写出辐射度方程，指出形状因子必须满足的约束，并说明逐步求精与视无关性的含义。",
+        "successCriteria": [
+          "能区分光通量、辐射度与强度的定义和单位",
+          "能说明 B=πI 的半球积分来源",
+          "能写出 B_k = E_k + ρ_k∑B_jF_jk 并解释每一项",
+          "能说明辐射度视无关而光线跟踪视相关"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-21-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-radiosity-motivation",
+        "moduleId": "radiometric-terms",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么需要辐射度模型",
+        "markdown": "基本光照模型用局部近似描述表面着色，对许多应用已足够，但无法精确刻画表面之间反复传递的漫反射能量。辐射度模型从**辐射能在对象表面之间的转移**和**能量守恒定律**出发建立更准确的漫反射描述：把场景表面组织成一个封闭的“闭包”，每个表面既可能发射能量，也可能反射并再次发射能量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000706"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "辐射度光照模型"
+              ],
+              "lineStart": 18229,
+              "lineEnd": 18232,
+              "assetRefs": [],
+              "excerptSha256": "7ed8a7c41c753d3c5859a703de8df1745121c56f40c23dbdb2a027281deb4016"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-energy-balance",
+        "moduleId": "radiometric-terms",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么必须联立求解",
+        "markdown": "可以把每个表面想象成一本能量账本：它离开的能量等于自己发出的能量加上反射回来的能量。反射回来的部分取决于其他表面送来多少，而其他表面又取决于它们各自反射多少，于是所有表面互相耦合。这正是辐射度模型必须解方程组、并被称为**全局**光照模型的原因，而不是逐表面的局部着色近似。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-radiosity-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-radiometric-terms",
+        "moduleId": "radiometric-terms",
+        "depth": "core",
+        "kind": "definition",
+        "title": "辐射能术语",
+        "markdown": "教材先统一辐射能术语：\n\n- 光子能量 $E_{\\mathrm{photon},f}=hf$，其中 $h$ 为普朗克常数，$f$ 为频率，频率决定光的颜色特征。\n- 光谱辐射能指某一频率的辐射能量；实际光辐射包含频率范围，总辐射能对所有频率求和。\n- 光通量 $\\Phi=\\dfrac{\\mathrm{d}E}{\\mathrm{d}t}$，单位时间传递的辐射能，单位为瓦特（焦耳/秒），也称辐射功率。\n- 辐射度 $B=\\dfrac{\\mathrm{d}\\Phi}{\\mathrm{d}A}$，单位面积离开表面的光通量，单位为 $\\mathrm{W}/\\mathrm{m}^2$，也称辐出率。\n- 强度 $I$ 描述特定方向、单位立体角、单位投影面积上的光通量，单位为 $\\mathrm{W}/(\\mathrm{m}^2\\cdot\\mathrm{sr})$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000707"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "辐射能术语"
+              ],
+              "lineStart": 18233,
+              "lineEnd": 18272,
+              "assetRefs": [],
+              "excerptSha256": "f1fc31d1561cdb927855284f527c545374c21dc5678adf061a759e20f86ddb33"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-radiometric-ladder",
+        "moduleId": "radiometric-terms",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：量的定义与单位对照",
+        "markdown": "| 量 | 定义 | 单位 |\n|---|---|---|\n| 光通量 $\\Phi$ | 单位时间传递的辐射能 | $\\mathrm{W}$ |\n| 辐射度 $B$ | 单位面积离开的光通量 | $\\mathrm{W}/\\mathrm{m}^2$ |\n| 强度 $I$ | 单位立体角、单位投影面积的光通量 | $\\mathrm{W}/(\\mathrm{m}^2\\cdot\\mathrm{sr})$ |\n\n读表时抓住关键差别：$B$ 对**面积**求导，$I$ 对**立体角与投影面积**求导。对理想漫反射体，两者相差一个 $\\pi$ 因子，后文会由半球积分导出 $B=\\pi I$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-radiometric-terms"
+          ]
+        }
+      },
+      {
+        "id": "tb-diffuse-assumptions",
+        "moduleId": "diffuse-hemisphere",
+        "depth": "core",
+        "kind": "definition",
+        "title": "基本辐射度模型的假设与方向强度",
+        "markdown": "基本辐射度模型为可解性引入几条假设：场景表面足够小、不透明，并且是**理想漫反射器（朗伯体）**。因此它只处理漫反射能量交换，不描述镜面高光。\n\n设 $\\mathrm{d}B$ 是方向 $(\\theta,\\phi)$ 上、立体角 $\\mathrm{d}\\omega$ 内、单位时间单位表面面积发出的可见光通量，则沿该方向的光强可写为\n\n$$I=\\dfrac{\\mathrm{d}B}{\\mathrm{d}\\omega\\cos\\phi}$$\n\n其中 $\\cos\\phi$ 把表面面积投影到垂直于能量传递方向的平面上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000708"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本辐射度模型"
+              ],
+              "lineStart": 18273,
+              "lineEnd": 18413,
+              "assetRefs": [
+                "parts/part-0006/images/06bcfbbfb1b30d5683fb683c70f342d169b45d39c91d96a794edfb6bf2f2928e.jpg",
+                "parts/part-0006/images/f6bbe70afc404bd90ef7b307e9ea5d4c96ba0aeed778afd9f2409be5394e34d8.jpg",
+                "parts/part-0006/images/8c0b81c78a22c83ddd0ef0b8287ef02cb76681cb895c8d535f05d29222ab5f25.jpg",
+                "parts/part-0006/images/e7d64c89968777b6888967f2002d5487efae6d832da6b8220e3f0c6149d6562a.jpg",
+                "parts/part-0006/images/207511b1b3b1647ff75d5824e2d4a1547dec3885b6a4eacd4997dd6cfeeb8790.jpg"
+              ],
+              "excerptSha256": "2a840633e583bc1c3c04651b017a4f3344c4714cc811702b5df67254e0f68fd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-projection",
+        "moduleId": "diffuse-hemisphere",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：投影面积的含义",
+        "markdown": "$\\cos\\phi$ 的作用是把“表面面积”换算成“正对来光方向的投影面积”：斜着看同一块面积，有效截面更小。对朗伯体，各方向的光强 $I$ 相同，因此离开的辐射能按 $\\cos\\phi$ 衰减。这与经验光照模型中的余弦衰减同源，区别在于这里是对整个半球的能量积分，而不是只对单个光源求一次点积。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-diffuse-assumptions"
+          ]
+        }
+      },
+      {
+        "id": "tb-hemisphere-integration",
+        "moduleId": "diffuse-hemisphere",
+        "depth": "core",
+        "kind": "formula",
+        "title": "半球积分与 B=πI",
+        "markdown": "要得到表面点向整个半球发出的总辐射度，需要累加所有方向：$B=\\int_{\\mathrm{hemi}}\\mathrm{d}B$。对朗伯体 $I$ 为常量，代入方向强度定义得到 $B=I\\int_{\\mathrm{hemi}}\\cos\\phi\\,\\mathrm{d}\\omega$。由于立体角可表示为\n\n$$\\mathrm{d}\\omega=\\dfrac{\\mathrm{d}S}{r^2}=\\sin\\phi\\,\\mathrm{d}\\phi\\,\\mathrm{d}\\theta$$\n\n在半球范围内积分得\n\n$$B=I\\int_0^{2\\pi}\\int_0^{\\pi/2}\\cos\\phi\\sin\\phi\\,\\mathrm{d}\\phi\\,\\mathrm{d}\\theta=\\pi I$$\n\n这就是理想漫反射体的辐射度与光强关系。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000708"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本辐射度模型"
+              ],
+              "lineStart": 18273,
+              "lineEnd": 18413,
+              "assetRefs": [
+                "parts/part-0006/images/06bcfbbfb1b30d5683fb683c70f342d169b45d39c91d96a794edfb6bf2f2928e.jpg",
+                "parts/part-0006/images/f6bbe70afc404bd90ef7b307e9ea5d4c96ba0aeed778afd9f2409be5394e34d8.jpg",
+                "parts/part-0006/images/8c0b81c78a22c83ddd0ef0b8287ef02cb76681cb895c8d535f05d29222ab5f25.jpg",
+                "parts/part-0006/images/e7d64c89968777b6888967f2002d5487efae6d832da6b8220e3f0c6149d6562a.jpg",
+                "parts/part-0006/images/207511b1b3b1647ff75d5824e2d4a1547dec3885b6a4eacd4997dd6cfeeb8790.jpg"
+              ],
+              "excerptSha256": "2a840633e583bc1c3c04651b017a4f3344c4714cc811702b5df67254e0f68fd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pi-factor-intuition",
+        "moduleId": "diffuse-hemisphere",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：π 因子的用途",
+        "markdown": "可以把 $\\pi$ 理解为半球上投影因子的加权结果：$\\int_{\\mathrm{hemi}}\\cos\\phi\\,\\mathrm{d}\\omega=\\pi$。它把按方向定义的强度 $I$ 换算成按面积汇总的辐射度 $B$。求解辐射度方程得到的是能耗总量 $B_k$，要用于显示时还需 $I_k=B_k/\\pi$；这一步在讨论视无关性时尤其关键，因为它说明同一组 $B_k$ 可以服务于任意观察方向。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hemisphere-integration"
+          ]
+        }
+      },
+      {
+        "id": "tb-closure-and-equation",
+        "moduleId": "closure-form-factor",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "闭包与辐射度方程",
+        "markdown": "用“闭包”把场景表面组织成一个能量交换系统：闭包内每个表面要么反射、要么发射，或两者兼有。令 $B_k$ 为单位面积离开表面 $k$ 的辐射能总速率，$H_k$ 为单位时间单位面积到达表面 $k$ 的辐射能总和，则\n\n$$H_k=\\sum_j B_jF_{jk}$$\n\n其中形状因子 $F_{jk}$ 是离开表面 $j$ 的辐射能中落到表面 $k$ 的比率。于是表面 $k$ 的辐射度方程为\n\n$$B_k=E_k+\\rho_k\\sum_{j=1}^{n}B_jF_{jk}$$\n\n$E_k$ 是表面自身发射的能量速率（非光源为 0），$\\rho_k$ 是反射因子。平面和凸面看不到自身，因此 $F_{kk}=0$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000708"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本辐射度模型"
+              ],
+              "lineStart": 18273,
+              "lineEnd": 18413,
+              "assetRefs": [
+                "parts/part-0006/images/06bcfbbfb1b30d5683fb683c70f342d169b45d39c91d96a794edfb6bf2f2928e.jpg",
+                "parts/part-0006/images/f6bbe70afc404bd90ef7b307e9ea5d4c96ba0aeed778afd9f2409be5394e34d8.jpg",
+                "parts/part-0006/images/8c0b81c78a22c83ddd0ef0b8287ef02cb76681cb895c8d535f05d29222ab5f25.jpg",
+                "parts/part-0006/images/e7d64c89968777b6888967f2002d5487efae6d832da6b8220e3f0c6149d6562a.jpg",
+                "parts/part-0006/images/207511b1b3b1647ff75d5824e2d4a1547dec3885b6a4eacd4997dd6cfeeb8790.jpg"
+              ],
+              "excerptSha256": "2a840633e583bc1c3c04651b017a4f3344c4714cc811702b5df67254e0f68fd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-matrix-form",
+        "moduleId": "closure-form-factor",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：矩阵形式与求解方法",
+        "markdown": "把 $n$ 个方程整理成线性系统：\n\n$$(1-\\rho_kF_{kk})B_k-\\rho_k\\sum_{j\\ne k}B_jF_{jk}=E_k,\\quad k=1,2,\\dots,n$$\n\n即 $\\mathbf{A}\\mathbf{B}=\\mathbf{E}$，对角元是 $1-\\rho_kF_{kk}$，非对角元是 $-\\rho_kF_{jk}$。矩阵通常稠密且规模随面片数增长，因此教材既给出高斯消解、LU 分解等直接法，也给出 Gauss-Seidel 迭代：用当前的 $B_j$ 反复代入右端更新每个 $B_k$，直到相邻两次结果近似相等。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-closure-and-equation"
+          ]
+        }
+      },
+      {
+        "id": "tb-form-factor",
+        "moduleId": "closure-form-factor",
+        "depth": "core",
+        "kind": "formula",
+        "title": "形状因子的定义与约束",
+        "markdown": "形状因子是求解的前提，其几何定义为\n\n$$F_{jk}=\\dfrac{1}{A_j}\\int_{\\mathrm{surf}_j}\\int_{\\mathrm{surf}_k}\\dfrac{\\cos\\phi_j\\cos\\phi_k}{\\pi r^2}\\,\\mathrm{d}A_k\\,\\mathrm{d}A_j$$\n\n教材给出三条必须满足的性质：能量守恒 $\\sum_{k=1}^{n}F_{jk}=1$；互易性 $A_jF_{jk}=A_kF_{kj}$；仅含平面片和凸面片时 $F_{jj}=0$。实际计算把每个表面细分为许多小多边形，细分越细越真实，但绘制时间越长；常用**半立方体**近似半球以加速形状因子的计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000708"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本辐射度模型"
+              ],
+              "lineStart": 18273,
+              "lineEnd": 18413,
+              "assetRefs": [
+                "parts/part-0006/images/06bcfbbfb1b30d5683fb683c70f342d169b45d39c91d96a794edfb6bf2f2928e.jpg",
+                "parts/part-0006/images/f6bbe70afc404bd90ef7b307e9ea5d4c96ba0aeed778afd9f2409be5394e34d8.jpg",
+                "parts/part-0006/images/8c0b81c78a22c83ddd0ef0b8287ef02cb76681cb895c8d535f05d29222ab5f25.jpg",
+                "parts/part-0006/images/e7d64c89968777b6888967f2002d5487efae6d832da6b8220e3f0c6149d6562a.jpg",
+                "parts/part-0006/images/207511b1b3b1647ff75d5824e2d4a1547dec3885b6a4eacd4997dd6cfeeb8790.jpg"
+              ],
+              "excerptSha256": "2a840633e583bc1c3c04651b017a4f3344c4714cc811702b5df67254e0f68fd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-form-factor-constraints",
+        "moduleId": "closure-form-factor",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：三条约束的工程含义",
+        "markdown": "三条性质各有工程含义：能量守恒让每一行的形状因子之和为 1，可用于校验与归一化；互易性允许用 $A_jF_{jk}=A_kF_{kj}$ 少算一半的因子；无自入射使 $F_{jj}=0$，使方程对角项简化为 1。半立方体把球面换成一小组平面投影，代价是离散化误差与面片划分粒度，这是精度与计算量的典型权衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-form-factor"
+          ]
+        }
+      },
+      {
+        "id": "tb-progressive-refinement",
+        "moduleId": "progressive-solve",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "逐步求精的辐射度方法",
+        "markdown": "直接求解需要保存全部形状因子，存储与计算开销都很大。逐步求精方法重排迭代顺序：由互易性 $A_jF_{jk}=A_kF_{kj}$ 可知，从表面 $k$ 向表面 $j$ 的转移可写成 $\\rho_jB_kF_{kj}\\dfrac{A_j}{A_k}=\\rho_jB_kF_{jk}$，因此只需为**一个**表面计算半立方体与形状因子，就能把它的能量分发给其他所有表面。\n\n算法先令所有 $B_k=E_k$，然后每轮选择 $\\Delta B_kA_k$ 最大的面片作为发射面：\n\n```text\nfor each patch k\n  /* 建立半立方体并计算 F[j][k] */\n  for each patch j {\n    dRad = rho[j] * B[k] * F[j][k] * A[j] / A[k]\n    dB[j] = dB[j] + dRad\n    B[j]  = B[j] + dRad\n  }\n  dB[k] = 0\n```\n\n每步之后画面都得到一次改善，逐步逼近同一辐射度解。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000709"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "逐步求精的辐射度方法"
+              ],
+              "lineStart": 18414,
+              "lineEnd": 18456,
+              "assetRefs": [],
+              "excerptSha256": "a87e10f5581032aabf55ac2015f922429de9d15a77c4db822223e23f401a9916"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-progressive-intuition",
+        "moduleId": "progressive-solve",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：像“最亮的灯先照亮全场”",
+        "markdown": "直觉上，逐步求精像“最亮的灯先照亮全场”：每一轮把当前最亮（$\\Delta B_kA_k$ 最大）面片的能量一次性分发出去，接收面片的 $B_j$ 随之增加，下一轮再由新的最亮面片继续。初始只点亮光源和从光源可见的表面，画面很暗；为得到可用的初始视图，可先设置一个环境光等级，再随迭代逐步减弱。由于始终只保留一个半立方体，它比直接法节省大量存储，并能在迭代过程中渐进显示结果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-progressive-refinement"
+          ]
+        }
+      },
+      {
+        "id": "tb-view-independence",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "视无关性与光线跟踪的对比",
+        "markdown": "一旦求出辐射度解，就可以从任意位置观察场景而**不需要额外计算**，因此辐射度模型被称为**视无关**的（view-independent）；与此相对，光线跟踪需要按视点发射光线，是高度视相关的。代价是：场景中任意对象位置改变都会改变形状因子，从而必须重新求解辐射度方程组。实践中通常把光线跟踪与辐射度算法结合，以同时生成高度真实感的漫反射和镜面反射效果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000709"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "逐步求精的辐射度方法"
+              ],
+              "lineStart": 18414,
+              "lineEnd": 18456,
+              "assetRefs": [],
+              "excerptSha256": "a87e10f5581032aabf55ac2015f922429de9d15a77c4db822223e23f401a9916"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compare-view",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：统一维度对比两种全局光照方法",
+        "markdown": "| 维度 | 辐射度 | 光线跟踪 |\n|---|---|---|\n| 视角依赖 | 视无关，解一次可换视点 | 视相关，每个视点重新跟踪 |\n| 擅长效果 | 漫反射互反射、软阴影 | 镜面反射、折射、硬阴影 |\n| 主要开销 | 形状因子与线性方程组 | 每像素求交与递归 |\n| 几何变动 | 需重算形状因子并重解 | 自然适应，只需重新跟踪 |\n| 典型组合 | 提供漫反射底光 | 叠加镜面与透明效果 |\n\n结论是两者互补而非替代：辐射度负责“面与面之间的漫反射能量如何分配”，光线跟踪负责“从眼睛出发看到什么”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-view-independence"
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：常见误区与纠正",
+        "markdown": "- “辐射度能处理镜面高光”——基本模型假设朗伯漫反射，镜面效果通常交给光线跟踪。\n- “换个视点就要重算辐射度”——辐射度解与视点无关，只有几何或材质改变才需要重解。\n- “逐步求精是另一种近似模型”——它只是重排同一方程组的迭代顺序，收敛到同一解，优势在存储与渐进显示。\n- “形状因子可以随便取”——必须满足能量守恒、互易性和无自入射三条约束，否则解不再代表物理能量平衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-diffuse-assumptions",
+            "tb-view-independence",
+            "tb-progressive-refinement"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "辐射度模型把全局漫反射写成能量平衡方程组 $B_k=E_k+\\rho_k\\sum_jB_jF_{jk}$：形状因子刻画面片之间的几何可见性并受守恒、互易、无自入射约束；直接法解稠密线性系统，逐步求精则用单个半立方体逐轮分发最亮面片的能量；解与视点无关，与视相关的光线跟踪互补。下一知识点转向用环境纹理近似全局反射的环境映射。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-misconceptions",
+            "model-progressive-intuition",
+            "model-matrix-form",
+            "tb-radiosity-motivation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "radiosity-method-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-compare-view",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "title": "选择合适方法并说明理由",
+        "outcomeRefs": [
+          "compare-view-dependence"
+        ],
+        "learningPurpose": "检查学习者能否根据视角依赖、效果类型和场景变动，在辐射度与光线跟踪之间做出有依据的取舍。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-view-independence",
+            "model-compare-view"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "情境：一个静态室内场景需要柔和的全景漫反射与阴影，但用户会不断改变观察视角。请选择主要方法并写出两条依据，再从表中的“视角依赖”和“几何变动”两行说明另一方法为何不适合单独使用。"
+        }
+      }
+    ]
+  },
+  "subtitle": "全局光照",
+  "clusterId": "chapter-21",
+  "clusterIds": [
+    "chapter-21"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000706"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "辐射度光照模型"
+      ],
+      "lineStart": 18229,
+      "lineEnd": 18232,
+      "assetRefs": [],
+      "excerptSha256": "7ed8a7c41c753d3c5859a703de8df1745121c56f40c23dbdb2a027281deb4016"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000707"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "辐射能术语"
+      ],
+      "lineStart": 18233,
+      "lineEnd": 18272,
+      "assetRefs": [],
+      "excerptSha256": "f1fc31d1561cdb927855284f527c545374c21dc5678adf061a759e20f86ddb33"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000708"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "基本辐射度模型"
+      ],
+      "lineStart": 18273,
+      "lineEnd": 18413,
+      "assetRefs": [
+        "parts/part-0006/images/06bcfbbfb1b30d5683fb683c70f342d169b45d39c91d96a794edfb6bf2f2928e.jpg",
+        "parts/part-0006/images/f6bbe70afc404bd90ef7b307e9ea5d4c96ba0aeed778afd9f2409be5394e34d8.jpg",
+        "parts/part-0006/images/8c0b81c78a22c83ddd0ef0b8287ef02cb76681cb895c8d535f05d29222ab5f25.jpg",
+        "parts/part-0006/images/e7d64c89968777b6888967f2002d5487efae6d832da6b8220e3f0c6149d6562a.jpg",
+        "parts/part-0006/images/207511b1b3b1647ff75d5824e2d4a1547dec3885b6a4eacd4997dd6cfeeb8790.jpg"
+      ],
+      "excerptSha256": "2a840633e583bc1c3c04651b017a4f3344c4714cc811702b5df67254e0f68fd5"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000709"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "逐步求精的辐射度方法"
+      ],
+      "lineStart": 18414,
+      "lineEnd": 18456,
+      "assetRefs": [],
+      "excerptSha256": "a87e10f5581032aabf55ac2015f922429de9d15a77c4db822223e23f401a9916"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    911,
+    -70
+  ],
+  "scale": 0.93
+}

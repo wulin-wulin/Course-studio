@@ -1,0 +1,880 @@
+{
+  "id": "point-21-1",
+  "title": "光线跟踪方法",
+  "shortSummary": "讲解光线跟踪的求交、反射、折射和递归终止条件，并说明其如何自然产生阴影与多次反射。",
+  "keyTerms": [
+    "光线跟踪",
+    "求交",
+    "反射",
+    "折射",
+    "从属光线",
+    "空间分割"
+  ],
+  "animationType": "globalIlluminationLab",
+  "animationSuggestion": "逐像素发射主光线，高亮最近交点并分叉出反射与折射从属光线，标出递归深度与终止条件，最后按叶到根的顺序显示强度回填。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-16-10",
+    "point-17-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "algorithm-derivation-and-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于全局光照、基本光线跟踪算法、求交公式与加速/取样扩展的定义和数值边界，按“机制—数学—加速—取样”的学习顺序重排，并补充直觉、算例、流程与自测。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-global",
+          "text": "解释局部光照与全局光照的差别，以及光线跟踪为何从视点反向发射光线。"
+        },
+        {
+          "id": "trace-tree",
+          "text": "描述基本光线跟踪算法的求交、取最近可见交点、生成反射与折射从属光线、递归终止和强度回填过程。"
+        },
+        {
+          "id": "derive-intersection",
+          "text": "由光线方程推导光线与球面、多面体的交点参数，并能判断有效根。"
+        },
+        {
+          "id": "accelerate-intersection",
+          "text": "说明包围体层次、空间分割和方向分割如何减少求交计算量及其代价。"
+        },
+        {
+          "id": "extend-sampling",
+          "text": "说明照相机聚焦、反走样与分布式光线跟踪如何通过多光线取样扩展基本算法。"
+        }
+      ],
+      "misconceptions": [
+        "把光线跟踪理解为从光源向场景发射光线；基本算法实际是从视点经像素反向跟踪。",
+        "认为交点只取方程的一个根即可；必须在有效根中取最小正值，负根位于光线起点背后。",
+        "认为光线树越深越真实；递归深度受最大深度限制，且每次分支都带来成倍计算量。"
+      ],
+      "modules": [
+        {
+          "id": "global-illumination-context",
+          "title": "从局部光照到全局光照",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-global"
+          ],
+          "order": 0
+        },
+        {
+          "id": "basic-ray-tracing",
+          "title": "基本光线跟踪算法",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-global",
+            "trace-tree"
+          ],
+          "order": 1
+        },
+        {
+          "id": "intersection-math",
+          "title": "光线与表面的求交数学",
+          "role": "derivation",
+          "outcomeRefs": [
+            "derive-intersection"
+          ],
+          "order": 2
+        },
+        {
+          "id": "intersection-acceleration",
+          "title": "减少求交计算量",
+          "role": "optimization",
+          "outcomeRefs": [
+            "accelerate-intersection"
+          ],
+          "order": 3
+        },
+        {
+          "id": "camera-and-sampling",
+          "title": "聚焦模拟与反走样",
+          "role": "extension",
+          "outcomeRefs": [
+            "extend-sampling"
+          ],
+          "order": 4
+        },
+        {
+          "id": "distributed-sampling",
+          "title": "分布式光线跟踪与检查",
+          "role": "extension-and-check",
+          "outcomeRefs": [
+            "extend-sampling",
+            "explain-global"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-global",
+          "trace-tree",
+          "derive-intersection",
+          "accelerate-intersection",
+          "extend-sampling"
+        ],
+        "method": "完成自测题并说明所用公式、有效根选择和加速结构的作用。",
+        "successCriteria": [
+          "能说明反向跟踪与从属光线递归的关系",
+          "能对球面求交方程选出正确根并解释负根含义",
+          "能比较不同加速与取样扩展的画质和成本"
+        ],
+        "exerciseBlockId": "check-understanding",
+        "nextPointId": "point-21-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "global-illumination-context",
+        "moduleId": "global-illumination-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "局部光照与全局光照",
+        "markdown": "局部光照只考虑参与相交计算的特定对象以及直接射向它的光线，因此计算量小，但无法表现对象之间反射光的相互影响。全局光照把从其他对象反射出来的光线也计入表面明暗，结果更准确、更逼真，代价是需要大量额外计算。\n\n光线跟踪是一类全局光照方法：它从视点出发，穿过图像平面上每个像素向场景发射光线，再根据光线与表面的交点计算明暗。辐射度算法则从光源与表面之间的辐射能量传递出发，光子映射则跟踪光源发出的光子在场景表面之间的运动。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000695"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "全局光照"
+              ],
+              "lineStart": 17885,
+              "lineEnd": 17892,
+              "assetRefs": [],
+              "excerptSha256": "f07d96826e7635fc5fa2d20a48cba3221712393e168f5ff47d4690363a93b2fb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-local-vs-global",
+        "moduleId": "global-illumination-context",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：为什么反向追光",
+        "markdown": "可以把像素想成窗户上的小孔：现实中物体向各个方向散射光线，能到达眼睛的方向有无穷多；与其正向模拟所有散射，不如从视点沿每个像素反向追踪一条光线，找到它最终来自哪个表面。这样一次求交就确定了该像素的可见面，全局效果再通过交点处的从属光线递归补足。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "global-illumination-context"
+          ]
+        }
+      },
+      {
+        "id": "ray-tracing-definition",
+        "moduleId": "basic-ray-tracing",
+        "depth": "core",
+        "kind": "definition",
+        "title": "光线跟踪是什么",
+        "markdown": "光线跟踪是光线投射思想的延伸。它并不仅仅为每个像素寻找可见面，还跟踪光线在场景中的反射与折射，并计算它们对总光强的贡献，从而以较简单的流程获得全局反射和折射效果。基本光线跟踪算法同时处理可见面判别、明暗效果、透明和多光源照明；它对表面光滑的对象尤其能生成高度真实感的图形，但计算量很大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000696"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线跟踪方法"
+              ],
+              "lineStart": 17893,
+              "lineEnd": 17901,
+              "assetRefs": [
+                "parts/part-0006/images/2985abc9120e204d51b42aba68e769a5139e219ca8022dda536b6acbb6eabf4a.jpg"
+              ],
+              "excerptSha256": "c43e6bb6c9915a4c315bca4df2d18c6252ded699679dcc8bb043a9dd9f1348b5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-backward-tracing",
+        "moduleId": "basic-ray-tracing",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "与光线投射的差别",
+        "markdown": "光线跟踪可以看作两步的重复：第一步沿光线求出最近可见交点，第二步在该交点按材质生成反射光线，透明表面再生成折射光线。与只做一次求交的光线投射相比，差别就在于从属光线的递归分支；也正因如此，光线跟踪才会把其他表面反射来的光计入当前像素。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ray-tracing-definition"
+          ]
+        }
+      },
+      {
+        "id": "basic-algorithm",
+        "moduleId": "basic-ray-tracing",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "基本光线跟踪算法",
+        "markdown": "基本算法先建立投影参考点在 z 轴、像素位于 xy 平面的坐标框架。每条主光线从投影参考点出发，穿过像素中心进入场景；求出与所有表面的交点后，取距离最近者作为该像素的可见面。若表面有镜面反射，则按反射角等于入射角生成反射光线；若表面透明，还要生成折射光线，二者统称从属光线，并递归处理。\n\n镜面反射方向由入射单位方向 $\\mathbf{u}$ 与单位法向量 $\\mathbf{N}$ 给出：\n\n$$\\mathbf{R}=\\mathbf{u}-2(\\mathbf{u}\\cdot\\mathbf{N})\\mathbf{N}$$\n\n透明表面的折射方向由入射与折射材质的折射率 $\\eta_i$、$\\eta_r$ 及 Snell 定律确定：\n\n$$\\mathbf{T}=\\frac{\\eta_i}{\\eta_r}\\mathbf{u}-\\left(\\cos\\theta_r-\\frac{\\eta_i}{\\eta_r}\\cos\\theta_i\\right)\\mathbf{N}$$\n\n其中 $\\cos\\theta_r=\\sqrt{1-\\left(\\frac{\\eta_i}{\\eta_r}\\right)^2(1-\\cos^2\\theta_i)}$。\n\n反射与透射逐次把交点加入一棵二叉光线跟踪树：左分支为反射，右分支为透射。以下任一条件满足时停止跟踪：光线不与任何表面相交；光线与一个非反射面的光源相交；光线树达到最大深度。每个交点的强度由基本光照模型给出：环境项、与 $\\mathbf{N}\\cdot\\mathbf{L}$ 成正比的漫反射项，以及与 $(\\mathbf{H}\\cdot\\mathbf{N})^{n_s}$ 成正比的镜面项。沿 $\\mathbf{L}$ 发出阴影光线，若它在表面与点光源之间被任何对象遮挡，该表面就处于阴影中。像素树建好后从叶节点向根累加，各节点强度按离开父节点表面的距离衰减；若主光线不与任何对象相交，光线树为空，用背景光强度赋值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000697"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本光线跟踪算法"
+              ],
+              "lineStart": 17902,
+              "lineEnd": 17949,
+              "assetRefs": [
+                "parts/part-0006/images/10d0779a2c171f819d776954796bba83cdc3fd31578df5dbd5257d823c65187e.jpg",
+                "parts/part-0006/images/6a88deda7f8be7e0673dff90878f8dc9d27670333a77597a697301cbb1cc0b22.jpg",
+                "parts/part-0006/images/1eace12e17ca3638a13fe5f8c73be163926a5007d74992aadfe73f0d902f92ea.jpg",
+                "parts/part-0006/images/14a1ab982cb91b4ff5d54e50bd0ae1e4c3008d68943d61d60062693c70d9fba1.jpg"
+              ],
+              "excerptSha256": "9d972eef8be31f7f9a154add6a4d54993a80eea69152f4a0d535005cefa5c20f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-algorithm-steps",
+        "moduleId": "basic-ray-tracing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把算法整理成流程",
+        "markdown": "1. 为像素构造主光线，起点取投影参考点，方向指向像素中心并单位化。\n2. 对所有候选表面求交，取最小正 $s$ 对应的交点作为可见面。\n3. 在交点处用基本光照模型计算局部贡献，并沿指向光源的方向发出阴影光线判断遮挡。\n4. 若材质有反射，按反射公式生成从属光线；若透明，再按折射公式生成透射光线。\n5. 对每条从属光线递归执行第 2 至第 4 步，把交点挂到光线树对应分支。\n6. 遇到无交点、命中非反射光源或达到最大深度时停止，然后从叶到根按距离衰减累加强度。\n\n注意第 2 步和第 6 步的方向相反：求交是“由眼向场景”，累积是“由树叶向树根”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "basic-algorithm"
+          ]
+        }
+      },
+      {
+        "id": "ray-equation",
+        "moduleId": "intersection-math",
+        "depth": "core",
+        "kind": "formula",
+        "title": "光线方程与求交思路",
+        "markdown": "一束光线可用初始位置 $\\mathbf{P}_0$ 和单位方向向量 $\\mathbf{u}$ 描述。沿光线方向距起点为 $s$ 的任意点满足光线方程：\n\n$$\\mathbf{P}=\\mathbf{P}_0+s\\mathbf{u}$$\n\n初始位置可取投影平面上的像素点或投影参考点；方向由投影参考点指向像素位置并单位化：\n\n$$\\mathbf{u}=\\frac{\\mathbf{P}_{\\mathrm{pix}}-\\mathbf{P}_{\\mathrm{prp}}}{\\lvert\\mathbf{P}_{\\mathrm{pix}}-\\mathbf{P}_{\\mathrm{prp}}\\rvert}$$\n\n求交即联立光线方程与表面方程，解出参数 $s$，也就是从起点到交点的距离。每次求交后，用交点位置和新的从属方向（反射 $\\mathbf{R}$ 或折射 $\\mathbf{T}$）更新 $\\mathbf{P}_0$ 与 $\\mathbf{u}$，再生成下一组光线。多数形状都有专门的求交算法；对于复杂对象，常把光线变换到对象局部坐标系中，例如把光线与椭球求交转化为光线与球面求交。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000698"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线与对象表面的求交计算"
+              ],
+              "lineStart": 17950,
+              "lineEnd": 17977,
+              "assetRefs": [
+                "parts/part-0006/images/05b17b7ce1565aea41171a231ea9336f82c6258fa7647965fc0b4223a57c2403.jpg"
+              ],
+              "excerptSha256": "96b15e6fbdf9b0ca35094725fea815f6c60ba558f5705da0649ec8a0b0d838f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ray-equation",
+        "moduleId": "intersection-math",
+        "depth": "support",
+        "kind": "note",
+        "title": "有效根与局部坐标",
+        "markdown": "参数 $s$ 有符号含义：$s<0$ 的点在起点背后，通常不在可见方向上，因此要在有效根中取最小正值。把光线转换到局部坐标系，相当于同时变换起点和方向，能让球、长方体等标准形状共用同一套解析解，避免为每种世界空间姿态单独推导。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ray-equation"
+          ]
+        }
+      },
+      {
+        "id": "ray-sphere",
+        "moduleId": "intersection-math",
+        "depth": "core",
+        "kind": "formula",
+        "title": "光线-球面求交",
+        "markdown": "半径 $r$、球心 $\\mathbf{P}_c$ 的球面满足\n\n$$\\lvert\\mathbf{P}-\\mathbf{P}_c\\rvert^2-r^2=0$$\n\n把光线方程代入并令 $\\Delta\\mathbf{P}=\\mathbf{P}_c-\\mathbf{P}_0$，展开点积得到关于 $s$ 的二次方程：\n\n$$s^2-2(\\mathbf{u}\\cdot\\Delta\\mathbf{P})s+(\\lvert\\Delta\\mathbf{P}\\rvert^2-r^2)=0$$\n\n解得\n\n$$s=\\mathbf{u}\\cdot\\Delta\\mathbf{P}\\pm\\sqrt{(\\mathbf{u}\\cdot\\Delta\\mathbf{P})^2-\\lvert\\Delta\\mathbf{P}\\rvert^2+r^2}$$\n\n若两根均为负，说明球面位于起点背后或光线背离球面，可不再考虑该球面；否则取非负根中较小者，再代回光线方程得到交点。当球体很小且离光线起点很远时，$r^2\\ll\\lvert\\Delta\\mathbf{P}\\rvert^2$，直接计算易丢失 $r^2$ 项，可用\n\n$$s=\\mathbf{u}\\cdot\\Delta\\mathbf{P}\\pm\\sqrt{r^2-\\lvert\\Delta\\mathbf{P}-(\\mathbf{u}\\cdot\\Delta\\mathbf{P})\\mathbf{u}\\rvert^2}$$\n\n减轻舍入误差。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000699"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线-球面求交"
+              ],
+              "lineStart": 17978,
+              "lineEnd": 18027,
+              "assetRefs": [
+                "parts/part-0006/images/51125bfb6d1202612ad8e3213491270ea649cd8ecb5fe238253a38063385743b.jpg"
+              ],
+              "excerptSha256": "feab39acdc0863590dec5cee1ea2a61719401d3ac9b4c87635c139c25e953577"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sphere-worked-example",
+        "moduleId": "intersection-math",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：求球面交点",
+        "markdown": "设光线起点 $\\mathbf{P}_0=(0,0,0)$、方向 $\\mathbf{u}=(0,0,-1)$，球心 $\\mathbf{P}_c=(0,0,-5)$、半径 $r=1$。则 $\\Delta\\mathbf{P}=(0,0,-5)$，$\\mathbf{u}\\cdot\\Delta\\mathbf{P}=5$，$\\lvert\\Delta\\mathbf{P}\\rvert^2=25$，判别式为 $25-25+1=1$。于是 $s=5\\pm 1$，两根为 4 和 6，都为正；取较小者 $s=4$，代回光线方程得交点 $(0,0,-4)$，它正是光线上先遇到球面的位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ray-sphere"
+          ]
+        }
+      },
+      {
+        "id": "ray-polyhedron",
+        "moduleId": "intersection-math",
+        "depth": "core",
+        "kind": "formula",
+        "title": "光线-多面体求交",
+        "markdown": "多面体求交比球面复杂，通常先用包围球加速：若光线与包围球无交点，就不必测试多面体。通过包围体测试后，先用法向量筛出朝向光线的前表面：\n\n$$\\mathbf{u}\\cdot\\mathbf{N}<0$$\n\n对每个前表面，把光线方程代入平面方程 $\\mathbf{N}\\cdot\\mathbf{P}=-D$，解得\n\n$$s=-\\frac{D+\\mathbf{N}\\cdot\\mathbf{P}_0}{\\mathbf{N}\\cdot\\mathbf{u}}$$\n\n该 $s$ 只给出所在无穷平面上的点，还须用多边形内外测试判断交点是否落在面内。逐个测试所有前表面，取落在面内且距离最小的交点；若没有任何交点落在面内，则光线与多面体不相交。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000700"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线-多面体求交"
+              ],
+              "lineStart": 18028,
+              "lineEnd": 18061,
+              "assetRefs": [
+                "parts/part-0006/images/e938b524e8b08ef453c12f9c5101e8c525cedf4111b5f8c5a11c10ebcec713ad.jpg",
+                "parts/part-0006/images/96eddcd04e6ba44365cf4332fc23699278dc671fbab2943d45266858dbd12518.jpg"
+              ],
+              "excerptSha256": "c9c17b61cb2d58fa12268c1075fb25abd2387f0fc262aecbf431d34c4b4a127a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-polyhedron-steps",
+        "moduleId": "intersection-math",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "两道筛子的含义",
+        "markdown": "多面体求交可以理解成两道筛：先用包围体和 $\\mathbf{u}\\cdot\\mathbf{N}<0$ 排除背面，再用内外测试排除平面延长线上的点。只有同时通过两道筛的候选才参与最小 $s$ 的比较。这也是空间加速结构能大幅减少求交量的原因——大部分对象在更早、更便宜的测试中就被排除了。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ray-polyhedron"
+          ]
+        }
+      },
+      {
+        "id": "reducing-intersections",
+        "moduleId": "intersection-acceleration",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "用包围体减少求交",
+        "markdown": "在光线跟踪中，约 95% 的时间用于光线与表面的求交，而且大量时间花在沿光线方向根本不可见的对象上。一种简单办法是用包围体（盒或球）把相邻对象包起来，先测试光线与包围体是否相交；无交点就整组跳过。该思想可扩展成包围体层次：几个小包围体再被更大的包围体包住，先测最外层，再按需逐层向下测试。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000701"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "减少对象求交计算量"
+              ],
+              "lineStart": 18062,
+              "lineEnd": 18072,
+              "assetRefs": [
+                "parts/part-0006/images/81dcaeacacd633d1360799d2e5cb42751828c05e7d0a67d59b23d197a3dd184c.jpg"
+              ],
+              "excerptSha256": "e33c0a26c0a31a64333387e1f2628d30085ac761859cddddd89e11ccb92d9cf5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bounding-hierarchy",
+        "moduleId": "intersection-acceleration",
+        "depth": "support",
+        "kind": "note",
+        "title": "层次结构的取舍",
+        "markdown": "包围体层次把“逐个测试所有对象”变成“先排除整棵子树”。包围体应尽量紧贴对象，否则会引入大量误判；层次结构还应随场景组织方式建立，静态场景可以预先计算，动态场景则需要更新或重建。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "reducing-intersections"
+          ]
+        }
+      },
+      {
+        "id": "space-subdivision",
+        "moduleId": "intersection-acceleration",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "空间分割方法",
+        "markdown": "空间分割把整个场景装进一个立方体并逐次细分，直到每个体元包含的表面数不超过给定上限（例如至多一个表面）。分割结果可存成八叉树或二叉分割树；均匀分割每次把立方体分成 8 个同样大小的体元，自适应细分只细分包含对象的区域。\n\n跟踪时让光线依次穿过体元，只对包含表面的体元做求交，光线遇到的第一个表面即为可见面。体元越小，单次求交越少，但光线穿越体元的开销越大，需要在体元大小与每体元表面数之间权衡。\n\n给定方向 $\\mathbf{u}$ 与体元入口 $\\mathbf{P}_{\\mathrm{in}}$，候选出口面满足 $\\mathbf{u}\\cdot\\mathbf{N}_k>0$；若体元表面与坐标轴对齐，只需检查 $\\mathbf{u}$ 各分量的符号即可确定候选面，再由\n\n$$s_k=\\frac{-D_k-\\mathbf{N}_k\\cdot\\mathbf{P}_{\\mathrm{in}}}{\\mathbf{N}_k\\cdot\\mathbf{u}}$$\n\n求出到各候选面的距离，最小的 $s_k$ 标识真正的出口面。还可选择与 $\\mathbf{u}$ 最大分量垂直的面作为待定出口面，再按交点所在分区确定真正出口，以减少计算。光线缓存与方向分割进一步按方向区域预排序对象，降低阴影光线和成组光线的求交量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000702"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "空间分割方法"
+              ],
+              "lineStart": 18073,
+              "lineEnd": 18136,
+              "assetRefs": [
+                "parts/part-0006/images/892c2f98cecf94280c99625feb331013bffc8840932ef0fc15fff87b554c93a4.jpg",
+                "parts/part-0006/images/ee366a75575042b51d54e8ee3a4ad1443b76d44b18c169e87443c9f230ec30da.jpg",
+                "parts/part-0006/images/fa42ee3c0694fa55aeb6403b72e7574a9220e66a2cef0ca115efd958bdb11748.jpg",
+                "parts/part-0006/images/d328d96e862f9193b2f0373d2905bcbd95f62441e45c9fb9933dd1957a59061c.jpg"
+              ],
+              "excerptSha256": "2617e45e983a2b6453adfba6c49cc620ac9209402d7d945b78218c5d92799d4d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-voxel-traversal",
+        "moduleId": "intersection-acceleration",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "体元遍历的要点",
+        "markdown": "1. 先让光线与场景包围盒求交，得到入口体元。\n2. 计算当前体元的出口面与对应 $s_k$，步进到相邻体元。\n3. 空体元直接跳过，只有包含表面的体元才做求交。\n4. 找到第一个交点或光线射出包围盒时停止。\n\n关键是不能漏掉体元边界上的表面，否则画面会出现孔洞；同时体元不能过小，否则穿越开销会抵消减少求交的收益。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "space-subdivision"
+          ]
+        }
+      },
+      {
+        "id": "camera-focus",
+        "moduleId": "camera-and-sampling",
+        "depth": "core",
+        "kind": "formula",
+        "title": "模拟照相机的聚焦效果",
+        "markdown": "模拟照相机时，在投影平面前放置一片凸透镜（光圈），为其指定聚焦长度等参数，使场景中某些对象聚焦、另一些落在焦点之外。聚焦长度 $f$ 是透镜中心到焦点 $F$ 的距离，普通 35mm 照相机的 $f$ 约为 50mm；光圈用 f 数 $n$ 描述，它是聚焦长度与光圈直径之比：\n\n$$n=\\frac{f}{2r}$$\n\n薄透镜满足\n\n$$\\frac{1}{d}+\\frac{1}{d_i}=\\frac{1}{f}$$\n\n其中 $d$ 是透镜中心到物点的距离，$d_i$ 是透镜中心到成像平面的距离。要把距离为 $d$ 的对象聚焦，就把像素平面放在透镜后 $d_i$ 处。对于 $d'\\ne d$ 的位置，投影点不会聚焦在图像平面上，而是形成直径如下的模糊圆：\n\n$$2r_c=\\frac{\\lvert d'-d\\rvert f}{n d}$$\n\n使一定距离范围内模糊圆足够小的区间称为景深。为每个像素在透镜区域上追踪多条光线，就可以得到真实的景深效果，这正是分布式光线跟踪的做法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000703"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "模拟照相机的聚焦效果"
+              ],
+              "lineStart": 18137,
+              "lineEnd": 18168,
+              "assetRefs": [
+                "parts/part-0006/images/aaf9794b88315b79e2d4a48a4cbc853b6a79da81926a9daf5a0472372470f9a3.jpg",
+                "parts/part-0006/images/49cd07578bf4167b5a29eb03b12f728c31c95387cb75a5496969ecb9ea925c41.jpg"
+              ],
+              "excerptSha256": "d2af3252f103357fee39ca3000c8cd1cef10b20830ee1425115f2f33db59d7c7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-depth-of-field",
+        "moduleId": "camera-and-sampling",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "景深的直觉",
+        "markdown": "光圈越大（$n$ 越小），同样的离焦距离会产生越大的模糊圆，景深越浅；把像素光线分散到透镜的不同位置，相当于让同一像素看到略微不同的视点，离焦物体因此在像素内被平均成模糊。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "camera-focus"
+          ]
+        }
+      },
+      {
+        "id": "antialiasing",
+        "moduleId": "camera-and-sampling",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "光线跟踪反走样",
+        "markdown": "光线跟踪中两种最基本的反走样技术是过取样和适应性取样。它们都不再把像素当作一个点，而是当作有限大小的正方形区域取样。过取样在像素内均匀布置多束光线，例如在四角各发一条；若四条光线强度差异较大或其间存在小对象，就把像素继续细分，例如分成 9 个子区域、在子像素角点发出 16 条光线。适应性取样只在四角强度不同或遇到小对象的子像素上继续细分，直到子像素强度近似相等或达到光线数上限（如 256）。像素强度取各光线强度的平均。另一种方法把像素光线视为一个锥体，只发一条光线但计算锥体与表面的相交面积，从而估计对象覆盖像素的比例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000704"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线跟踪反走样"
+              ],
+              "lineStart": 18169,
+              "lineEnd": 18190,
+              "assetRefs": [
+                "parts/part-0006/images/7716a96136f27cf4e30f5b815436d9f8ede06d33d76b0778fa9517979d43003e.jpg",
+                "parts/part-0006/images/64366b7745976b5db2af905d577649971bead7f307c4b074ed6e16f63ebbc315.jpg",
+                "parts/part-0006/images/3dacf0737d1d9df0eebb87d488e10cf4cc9e1c136f6e1a7c610b3e8641879ebd.jpg",
+                "parts/part-0006/images/4d12142976242f8ac6c86d9072075ee016cbdfd7dcce6c90ddcbb647f83e786a.jpg"
+              ],
+              "excerptSha256": "a3b9d60e7fadc2dd181d19f70051c7fdc95e922ed123fe996a0acfbd4c94915b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sampling-compare",
+        "moduleId": "camera-and-sampling",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "三种反走样思路的取舍",
+        "markdown": "过取样实现简单、采样位置规则，但均匀区域也会付出全部采样成本；适应性取样把光线集中在边缘和细节处，质量相近时更省，但需要额外的差异判断和细分逻辑；锥体法把抗锯齿转化为面积估计，能减少光线数，但精确求交更复杂。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "antialiasing"
+          ]
+        }
+      },
+      {
+        "id": "distributed-ray-tracing",
+        "moduleId": "distributed-sampling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "分布式光线跟踪",
+        "markdown": "分布式光线跟踪按光照模型中的多种参数随机分布光线，包括像素区域、反射与折射方向、镜头区域和时间等，用 Monte Carlo 方法估计表面光照所需的多重积分。\n\n像素取样常采用抖动：把像素划分为 16 个子区域，在每个子区域中心坐标上叠加 $\\delta_x$、$\\delta_y$，其中 $-0.5<\\delta_x,\\delta_y<0.5$，以抖动位置代替规则网格。给 16 条光线分配整数代码，再查表决定反射角、时间等参数，最后平均各光线强度。\n\n镜头效果通过把子像素光线分布到光圈上获得；反射方向在镜面方向 $\\mathbf{R}$ 附近分布以模拟光泽；透明材质则沿折射方向 $\\mathbf{T}$ 分布；在有限大小光源上分布阴影光线可产生半影和本影；在时间上分布光线可产生运动模糊。对象移动时配合包围体求交可减少计算量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000705"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "分布式光线跟踪"
+              ],
+              "lineStart": 18191,
+              "lineEnd": 18228,
+              "assetRefs": [
+                "parts/part-0006/images/57b88e8c24b443dc992f2d1f09eae79c9dddf7541161ac5e89e51f61bf21ce84.jpg",
+                "parts/part-0006/images/ba2f57addf96f5ab09cd261c682f391d575b8045621aec175788d54fd5343a9a.jpg",
+                "parts/part-0006/images/f7a3f9e5f0ee744b84247c8de8f3ae2d90c174b24ddfd0ee4769743ab7518588.jpg",
+                "parts/part-0006/images/f404a6f645fda466e8aba3c6180adfd1c9365915974ef6502c43d4ba90f5430c.jpg",
+                "parts/part-0006/images/d45f73d470d7c51e8e6f0975baabe86715545033587719f89edaeb6cf659dce1.jpg"
+              ],
+              "excerptSha256": "f10ff3df2bb00c7738313eafebf642aef2b223c1387eec80bb38c91748f0c6e1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-distributed-summary",
+        "moduleId": "distributed-sampling",
+        "depth": "support",
+        "kind": "summary",
+        "title": "扩展之间的关系",
+        "markdown": "可以把本节内容看成同一条主线的不同层次：基础算法决定“一条光线怎么走”，求交数学决定“在哪里停”，加速结构决定“少测哪些对象”，取样扩展决定“一个像素发多少条、往哪里发”。四者共同决定光线跟踪的画质与成本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "distributed-ray-tracing"
+          ]
+        }
+      },
+      {
+        "id": "check-understanding",
+        "moduleId": "distributed-sampling",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自测",
+        "markdown": "1. 一条主光线与球面交于 $s=-2$ 和 $s=3$，应取哪个根，为什么？\n2. 若光线树为空，像素强度如何确定？\n3. 为什么空间分割能减少求交，却可能因体元过小反而变慢？\n\n参考答案要点：取 $s=3$，因为 $s=-2$ 位于光线起点背后；光线树为空说明主光线不与任何对象相交，用背景光强度赋值；体元过小会增加光线穿越体元的开销，抵消减少求交带来的收益。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-distributed-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "ray-tracing-self-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-understanding",
+        "moduleId": "distributed-sampling",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-tree",
+          "derive-intersection",
+          "accelerate-intersection"
+        ],
+        "learningPurpose": "检查学习者能否把光线树终止条件、有效根选择与空间分割代价迁移到具体问题。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "basic-algorithm",
+            "ray-sphere",
+            "space-subdivision"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别说明：负根为何通常不取；空光线树对应的像素强度；体元过小为什么会让空间分割变慢。"
+        }
+      }
+    ]
+  },
+  "subtitle": "全局光照",
+  "clusterId": "chapter-21",
+  "clusterIds": [
+    "chapter-21"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000695"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "全局光照"
+      ],
+      "lineStart": 17885,
+      "lineEnd": 17892,
+      "assetRefs": [],
+      "excerptSha256": "f07d96826e7635fc5fa2d20a48cba3221712393e168f5ff47d4690363a93b2fb"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000696"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "光线跟踪方法"
+      ],
+      "lineStart": 17893,
+      "lineEnd": 17901,
+      "assetRefs": [
+        "parts/part-0006/images/2985abc9120e204d51b42aba68e769a5139e219ca8022dda536b6acbb6eabf4a.jpg"
+      ],
+      "excerptSha256": "c43e6bb6c9915a4c315bca4df2d18c6252ded699679dcc8bb043a9dd9f1348b5"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000697"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "基本光线跟踪算法"
+      ],
+      "lineStart": 17902,
+      "lineEnd": 17949,
+      "assetRefs": [
+        "parts/part-0006/images/10d0779a2c171f819d776954796bba83cdc3fd31578df5dbd5257d823c65187e.jpg",
+        "parts/part-0006/images/6a88deda7f8be7e0673dff90878f8dc9d27670333a77597a697301cbb1cc0b22.jpg",
+        "parts/part-0006/images/1eace12e17ca3638a13fe5f8c73be163926a5007d74992aadfe73f0d902f92ea.jpg",
+        "parts/part-0006/images/14a1ab982cb91b4ff5d54e50bd0ae1e4c3008d68943d61d60062693c70d9fba1.jpg"
+      ],
+      "excerptSha256": "9d972eef8be31f7f9a154add6a4d54993a80eea69152f4a0d535005cefa5c20f"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000698"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "光线与对象表面的求交计算"
+      ],
+      "lineStart": 17950,
+      "lineEnd": 17977,
+      "assetRefs": [
+        "parts/part-0006/images/05b17b7ce1565aea41171a231ea9336f82c6258fa7647965fc0b4223a57c2403.jpg"
+      ],
+      "excerptSha256": "96b15e6fbdf9b0ca35094725fea815f6c60ba558f5705da0649ec8a0b0d838f3"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000699"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "光线-球面求交"
+      ],
+      "lineStart": 17978,
+      "lineEnd": 18027,
+      "assetRefs": [
+        "parts/part-0006/images/51125bfb6d1202612ad8e3213491270ea649cd8ecb5fe238253a38063385743b.jpg"
+      ],
+      "excerptSha256": "feab39acdc0863590dec5cee1ea2a61719401d3ac9b4c87635c139c25e953577"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000700"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "光线-多面体求交"
+      ],
+      "lineStart": 18028,
+      "lineEnd": 18061,
+      "assetRefs": [
+        "parts/part-0006/images/e938b524e8b08ef453c12f9c5101e8c525cedf4111b5f8c5a11c10ebcec713ad.jpg",
+        "parts/part-0006/images/96eddcd04e6ba44365cf4332fc23699278dc671fbab2943d45266858dbd12518.jpg"
+      ],
+      "excerptSha256": "c9c17b61cb2d58fa12268c1075fb25abd2387f0fc262aecbf431d34c4b4a127a"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000701"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "减少对象求交计算量"
+      ],
+      "lineStart": 18062,
+      "lineEnd": 18072,
+      "assetRefs": [
+        "parts/part-0006/images/81dcaeacacd633d1360799d2e5cb42751828c05e7d0a67d59b23d197a3dd184c.jpg"
+      ],
+      "excerptSha256": "e33c0a26c0a31a64333387e1f2628d30085ac761859cddddd89e11ccb92d9cf5"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000702"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "空间分割方法"
+      ],
+      "lineStart": 18073,
+      "lineEnd": 18136,
+      "assetRefs": [
+        "parts/part-0006/images/892c2f98cecf94280c99625feb331013bffc8840932ef0fc15fff87b554c93a4.jpg",
+        "parts/part-0006/images/ee366a75575042b51d54e8ee3a4ad1443b76d44b18c169e87443c9f230ec30da.jpg",
+        "parts/part-0006/images/fa42ee3c0694fa55aeb6403b72e7574a9220e66a2cef0ca115efd958bdb11748.jpg",
+        "parts/part-0006/images/d328d96e862f9193b2f0373d2905bcbd95f62441e45c9fb9933dd1957a59061c.jpg"
+      ],
+      "excerptSha256": "2617e45e983a2b6453adfba6c49cc620ac9209402d7d945b78218c5d92799d4d"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000703"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "模拟照相机的聚焦效果"
+      ],
+      "lineStart": 18137,
+      "lineEnd": 18168,
+      "assetRefs": [
+        "parts/part-0006/images/aaf9794b88315b79e2d4a48a4cbc853b6a79da81926a9daf5a0472372470f9a3.jpg",
+        "parts/part-0006/images/49cd07578bf4167b5a29eb03b12f728c31c95387cb75a5496969ecb9ea925c41.jpg"
+      ],
+      "excerptSha256": "d2af3252f103357fee39ca3000c8cd1cef10b20830ee1425115f2f33db59d7c7"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000704"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "光线跟踪反走样"
+      ],
+      "lineStart": 18169,
+      "lineEnd": 18190,
+      "assetRefs": [
+        "parts/part-0006/images/7716a96136f27cf4e30f5b815436d9f8ede06d33d76b0778fa9517979d43003e.jpg",
+        "parts/part-0006/images/64366b7745976b5db2af905d577649971bead7f307c4b074ed6e16f63ebbc315.jpg",
+        "parts/part-0006/images/3dacf0737d1d9df0eebb87d488e10cf4cc9e1c136f6e1a7c610b3e8641879ebd.jpg",
+        "parts/part-0006/images/4d12142976242f8ac6c86d9072075ee016cbdfd7dcce6c90ddcbb647f83e786a.jpg"
+      ],
+      "excerptSha256": "a3b9d60e7fadc2dd181d19f70051c7fdc95e922ed123fe996a0acfbd4c94915b"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000705"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "分布式光线跟踪"
+      ],
+      "lineStart": 18191,
+      "lineEnd": 18228,
+      "assetRefs": [
+        "parts/part-0006/images/57b88e8c24b443dc992f2d1f09eae79c9dddf7541161ac5e89e51f61bf21ce84.jpg",
+        "parts/part-0006/images/ba2f57addf96f5ab09cd261c682f391d575b8045621aec175788d54fd5343a9a.jpg",
+        "parts/part-0006/images/f7a3f9e5f0ee744b84247c8de8f3ae2d90c174b24ddfd0ee4769743ab7518588.jpg",
+        "parts/part-0006/images/f404a6f645fda466e8aba3c6180adfd1c9365915974ef6502c43d4ba90f5430c.jpg",
+        "parts/part-0006/images/d45f73d470d7c51e8e6f0975baabe86715545033587719f89edaeb6cf659dce1.jpg"
+      ],
+      "excerptSha256": "f10ff3df2bb00c7738313eafebf642aef2b223c1387eec80bb38c91748f0c6e1"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1001,
+    -131
+  ],
+  "scale": 1.2
+}

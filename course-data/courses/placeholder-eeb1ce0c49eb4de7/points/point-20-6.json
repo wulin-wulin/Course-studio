@@ -1,0 +1,859 @@
+{
+  "id": "point-20-6",
+  "title": "OpenGL 支持交互式输入设备的函数",
+  "shortSummary": "介绍 OpenGL 回调、设备查询和输入事件处理函数，并说明事件循环与重绘的协作。",
+  "keyTerms": [
+    "OpenGL",
+    "回调",
+    "输入事件"
+  ],
+  "animationType": "interactionEventLoop",
+  "animationSuggestion": "用环形流程动画展示事件入队、按设备分派到回调、状态更新和重绘请求：鼠标事件走按钮/移动回调，键盘事件走普通键或特殊键回调，拾取事件额外展示名称栈与拾取缓冲区被写入。",
+  "difficulty": "中等",
+  "importance": 0.6,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 GLUT 回调与拾取步骤的定义和顺序，围绕“登记—分派—状态更新—重绘”重排讲解，并补充速查表、流程与检查练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-glut-dispatch",
+          "text": "解释 GLUT 如何按设备登记回调，并说明登记语句在 main 中、回调由事件循环触发。"
+        },
+        {
+          "id": "trace-mouse-keyboard",
+          "text": "根据回调参数判断鼠标按钮、动作、窗口坐标以及普通键与特殊键的编码方式。"
+        },
+        {
+          "id": "choose-device-callback",
+          "text": "为数据板、空间球、按钮盒和拨号盘选择对应的回调函数与设备查询方式。"
+        },
+        {
+          "id": "apply-picking",
+          "text": "按选择模式、名称栈、拾取窗口与拾取缓冲区解释并组织一次对象拾取。"
+        }
+      ],
+      "misconceptions": [
+        "把鼠标、键盘输入当成 OpenGL 核心库直接提供的功能，忽略 GLUT 等窗口工具库的中介作用。",
+        "以为进入选择模式后场景仍会显示在窗口上，实际上对象只写入拾取缓冲区。",
+        "直接使用鼠标回调返回的 yMouse 绘图，忽略它相对窗口左上角、需要按窗口高度翻转。"
+      ],
+      "modules": [
+        {
+          "id": "event-dispatch",
+          "title": "从设备到回调的分派模型",
+          "role": "concept-model",
+          "outcomeRefs": [
+            "explain-glut-dispatch"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mouse-input",
+          "title": "鼠标按钮与移动回调",
+          "role": "procedure",
+          "outcomeRefs": [
+            "explain-glut-dispatch",
+            "trace-mouse-keyboard"
+          ],
+          "order": 1
+        },
+        {
+          "id": "keyboard-input",
+          "title": "普通键与特殊键",
+          "role": "procedure",
+          "outcomeRefs": [
+            "trace-mouse-keyboard"
+          ],
+          "order": 2
+        },
+        {
+          "id": "special-devices",
+          "title": "数据板、空间球、按钮盒与拨号盘",
+          "role": "procedure",
+          "outcomeRefs": [
+            "choose-device-callback"
+          ],
+          "order": 3
+        },
+        {
+          "id": "picking-pipeline",
+          "title": "拾取流程与缓冲区",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "apply-picking"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "检查、易错点与迁移",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-glut-dispatch",
+            "trace-mouse-keyboard",
+            "choose-device-callback",
+            "apply-picking"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-glut-dispatch",
+          "trace-mouse-keyboard",
+          "choose-device-callback",
+          "apply-picking"
+        ],
+        "method": "完成拾取步骤排序练习，并说明每一步依赖的状态。",
+        "successCriteria": [
+          "排序结果符合教材给出的拾取过程",
+          "能指出拾取缓冲区必须在进入选择模式前设置",
+          "能说明选择模式不写帧缓冲、需要恢复绘制模式后重绘"
+        ],
+        "exerciseBlockId": "check-picking-steps",
+        "summaryBlockId": "summary-device-map",
+        "nextPointId": "point-20-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-glut-input-overview",
+        "moduleId": "event-dispatch",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材定义：输入由 GLUT 子程序处理",
+        "markdown": "教材指出，OpenGL 本身不直接处理交互设备输入，**交互设备输入由 GLUT（OpenGL Utility Toolkit）中的子程序处理**，因为这些子程序需要与窗口系统连接。\n\nGLUT 为鼠标、键盘、数据板、空间球、按钮盒和拨号盘等标准输入设备提供接受输入的函数。基本用法是为每一种设备指定一个**回调函数**来处理该设备产生的输入，并把对应的 GLUT 登记语句与其他 GLUT 语句一起放在 `main` 程序中。\n\n此外，基本库与 GLU 库函数的组合也可以与 GLUT 的鼠标函数配合，完成拾取（picking）输入。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000669"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 支持交互式输入设备的函数"
+              ],
+              "lineStart": 16863,
+              "lineEnd": 16866,
+              "assetRefs": [],
+              "excerptSha256": "f18b8d6a4ed1967b0cb8832a748789a2d8114f4149f4f222d8e322805924b15e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-device-callback-map",
+        "moduleId": "event-dispatch",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充速查表：设备与登记函数",
+        "markdown": "把教材列出的设备与登记函数整理成一张表，便于在 `main` 中逐项登记：\n\n| 设备 | 登记函数 | 回调参数要点 |\n|---|---|---|\n| 鼠标按钮 | `glutMouseFunc` | 按钮、动作、窗口坐标 |\n| 鼠标拖动 | `glutMotionFunc` | 窗口坐标 |\n| 鼠标移动（无按键） | `glutPassiveMotionFunc` | 窗口坐标 |\n| 普通键盘 | `glutKeyboardFunc` | 字符/ASCII、窗口坐标 |\n| 功能键与方向键 | `glutSpecialFunc` | GLUT 特殊键常量、窗口坐标 |\n| 数据板 | `glutTabletButtonFunc` / `glutTabletMotionFunc` | 数据板按钮与坐标 |\n| 空间球 | `glutSpaceballButtonFunc` / `glutSpaceballMotionFunc` / `glutSpaceballRotateFunc` | 按钮、平移、旋转 |\n| 按钮盒 | `glutButtonBoxFunc` | 按钮、动作 |\n| 拨号盘 | `glutDialsFunc` | 拨号盘编号、角度 |\n\n表中每一项都只是登记，真正被调用的时机由事件循环决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-glut-input-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-mouse-callback",
+        "moduleId": "mouse-input",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：鼠标按钮回调",
+        "markdown": "鼠标按钮事件用 `glutMouseFunc(mouseFcn)` 登记。当鼠标指针位于窗口之内、且某个鼠标按钮被按下或松开时，GLUT 调用 `mouseFcn`：\n\n```c\nvoid mouseFcn (GLint button, GLint action, GLint xMouse, GLint yMouse)\n```\n\n- `button` 取 `GLUT_LEFT_BUTTON`、`GLUT_MIDDLE_BUTTON` 或 `GLUT_RIGHT_BUTTON`；两键鼠标只有左、右，一键鼠标只有左键。\n- `action` 取 `GLUT_DOWN` 或 `GLUT_UP`，用于区分按下与松开。\n- 返回坐标 `(xMouse, yMouse)` 相对于**窗口左上角**：`xMouse` 是到左边界、`yMouse` 是到上边界的像素距离。\n\n教材的第一个例子在左键按下时于光标处画一个大小为 3 的红点；由于返回坐标以窗口左上角为基准，示例在回调里用 `winHeight - yMouse` 翻转 y 值后再调用绘图函数。第二个例子用左键连续选点、首尾相连构造折线，用右键退出程序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000670"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT 鼠标函数"
+              ],
+              "lineStart": 16867,
+              "lineEnd": 17013,
+              "assetRefs": [],
+              "excerptSha256": "3eb1a7d23f6925a398e9f9a2bc141f73f07da93924d3b5a463f5d1a4f36832b6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mouse-coords",
+        "moduleId": "mouse-input",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：鼠标回调的两个常见疏忽",
+        "markdown": "写鼠标回调时，先判断 `button` 与 `action` 再做动作，否则按下和松开会被重复处理。教材的示例都写成 `button == GLUT_LEFT_BUTTON && action == GLUT_DOWN` 的组合条件。\n\n另一个高频错误是直接使用 `yMouse` 绘图：回调坐标以窗口左上角为基准、向下为正，而绘图坐标的朝向不同，示例统一用 `winHeight - yMouse` 转换。窗口尺寸会随重定形回调变化，所以转换应使用当前的 `winHeight`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mouse-callback"
+          ]
+        }
+      },
+      {
+        "id": "tb-motion-callbacks",
+        "moduleId": "mouse-input",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：拖动与被动移动回调",
+        "markdown": "除了按钮事件，GLUT 还区分两种鼠标移动：\n\n- `glutMotionFunc(fcnDoSomething)`：鼠标在窗口内移动**且一个或多个按钮被激活**时调用，回调参数为 `(xMouse, yMouse)`。\n- `glutPassiveMotionFunc(fcnDoSomethingElse)`：鼠标在窗口内移动**而鼠标键并未被按下**时调用，参数同样是相对窗口左上角的 `(xMouse, yMouse)`。\n\n这两种回调把位置当作连续输入，适合拖拽、悬停提示与自由绘制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000670"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT 鼠标函数"
+              ],
+              "lineStart": 16867,
+              "lineEnd": 17013,
+              "assetRefs": [],
+              "excerptSha256": "3eb1a7d23f6925a398e9f9a2bc141f73f07da93924d3b5a463f5d1a4f36832b6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-keyboard-callback",
+        "moduleId": "keyboard-input",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：普通键盘回调",
+        "markdown": "普通键盘输入用 `glutKeyboardFunc(keyFcn)` 登记，当键盘上的一个键被按下时调用：\n\n```c\nvoid keyFcn (GLubyte key, GLint xMouse, GLint yMouse)\n```\n\n参数 `key` 是字符值或其 ASCII 编码，同时返回当前鼠标位置 `(xMouse, yMouse)`，因此可以“按住某键 + 移动鼠标”完成组合交互。\n\n教材的曲线绘制例子在按住 `c` 键并移动鼠标时，把记录到的鼠标位置画成一串红点；鼠标移动缓慢时这些点连成近似实曲线，鼠标按钮在此例中不起作用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000671"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT 键盘函数"
+              ],
+              "lineStart": 17014,
+              "lineEnd": 17181,
+              "assetRefs": [],
+              "excerptSha256": "5c7c3bcf7a5dfb5c9ac4f0923e9067433f71bf7144caa71981fca2a53ba0409f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-key-routing",
+        "moduleId": "keyboard-input",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：三类按键走不同入口",
+        "markdown": "三类键走不同入口，混用会导致某些键收不到事件：\n\n| 输入 | 登记函数 | 判定依据 |\n|---|---|---|\n| 字母、数字、标点 | `glutKeyboardFunc` | `key` 为字符或其 ASCII 编码 |\n| 功能键、方向键、翻页/首尾等 | `glutSpecialFunc` | `specialKey` 为整型 GLUT 符号常量 |\n| backspace、delete、escape | `glutKeyboardFunc` | ASCII 8、127、27 |\n\n注意最后一行：这三个键虽然“特殊”，但教材明确用 `glutKeyboardFunc` 与它们的 ASCII 编码接收，而不是 `glutSpecialFunc`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-keyboard-callback"
+          ]
+        }
+      },
+      {
+        "id": "tb-special-keys",
+        "moduleId": "keyboard-input",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：功能键、方向键与特殊键",
+        "markdown": "功能键、方向键及其他特殊键用 `glutSpecialFunc(specialKeyFcn)` 登记，回调为：\n\n```c\nvoid specialKeyFcn (GLint specialKey, GLint xMouse, GLint yMouse)\n```\n\n`specialKey` 是整型 GLUT 符号常量：功能键 `GLUT_KEY_F1` 到 `GLUT_KEY_F12`，方向键如 `GLUT_KEY_UP`、`GLUT_KEY_RIGHT`，翻页与首尾键如 `GLUT_KEY_PAGE_DOWN`、`GLUT_KEY_HOME`。\n\n教材的综合例子同时使用鼠标、键盘和功能键：左键为红色正方形选择左下角位置，数字键 2、3、4 按倍率放大边长，功能键按 1/2、1/4 的比例缩小边长。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000671"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT 键盘函数"
+              ],
+              "lineStart": 17014,
+              "lineEnd": 17181,
+              "assetRefs": [],
+              "excerptSha256": "5c7c3bcf7a5dfb5c9ac4f0923e9067433f71bf7144caa71981fca2a53ba0409f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-tablet",
+        "moduleId": "special-devices",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：数据板函数",
+        "markdown": "数据板通常在鼠标光标位于窗口内时才被激活。它的按钮事件用 `glutTabletButtonFunc(tabletFcn)` 登记：\n\n```c\nvoid tabletFcn (GLint tabletButton, GLint action, GLint xTablet, GLint yTablet)\n```\n\n`tabletButton` 是 1、2、3 等整型标识，`action` 取 `GLUT_UP` 或 `GLUT_DOWN`，`(xTablet, yTablet)` 为数据板坐标。有效按钮数目通过 `glutDeviceGet(GLUT_NUM_TABLET_BUTTONS)` 查询。数据板光笔或光标的移动用 `glutTabletMotionFunc(tabletMotionFcn)` 登记，回调接收 `(xTablet, yTablet)`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000672"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT 数据板函数"
+              ],
+              "lineStart": 17182,
+              "lineEnd": 17207,
+              "assetRefs": [],
+              "excerptSha256": "ada60affc73ee789a85c5c3951908e521656f80d86baf0b75d4a1a902194f343"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-spaceball",
+        "moduleId": "special-devices",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：空间球函数",
+        "markdown": "空间球按钮用 `glutSpaceballButtonFunc(spaceballFcn)` 登记，回调为 `void spaceballFcn (GLint spaceballButton, GLint action)`，按钮标识方式与数据板相同，`action` 同样取 `GLUT_UP` 或 `GLUT_DOWN`；按钮数目用 `glutDeviceGet(GLUT_NUM_SPACEBALL_BUTTONS)` 查询。\n\n当鼠标光标位于窗口内时，空间球的平移用 `glutSpaceballMotionFunc(spaceballTranslFcn)` 记录，回调接收三维平移 `(tx, ty, tz)`，规范化后的取值范围是 -1000 到 1000。旋转用 `glutSpaceballRotateFunc(spaceballRotFcn)` 记录，回调接收三维旋转角 `(thetaX, thetaY, thetaZ)`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000673"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT空间球函数"
+              ],
+              "lineStart": 17208,
+              "lineEnd": 17243,
+              "assetRefs": [],
+              "excerptSha256": "60fca7275c07e4922c8da0ea2924ce67384e157b78d561002e81a2d7caec94e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-button-box",
+        "moduleId": "special-devices",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：按钮盒函数",
+        "markdown": "按钮盒输入通过 `glutButtonBoxFunc(buttonBoxFcn)` 获取，回调为 `void buttonBoxFcn (GLint button, GLint action)`。按钮用整数值标识，动作分为 `GLUT_UP` 与 `GLUT_DOWN` 两种。它不携带坐标，适合把一组独立按键映射为命令或模式切换。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000674"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT按钮盒函数"
+              ],
+              "lineStart": 17244,
+              "lineEnd": 17255,
+              "assetRefs": [],
+              "excerptSha256": "1eee7ceeb175ebb0023d44a410683825bbd5703496f1b2e96797238199b3bd45"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-dials",
+        "moduleId": "special-devices",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：拨号盘函数",
+        "markdown": "旋转拨号盘产生的输入由 `glutDialsFunc(dialsFcn)` 处理，回调为 `void dialsFcn (GLint dial, GLint degreeValue)`。拨号盘用整数值标识，旋转量表示为整数角度值。与按钮盒类似，它提供的是离散的增量式参数，而不是屏幕坐标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000675"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "GLUT拨号盘函数"
+              ],
+              "lineStart": 17256,
+              "lineEnd": 17269,
+              "assetRefs": [],
+              "excerptSha256": "5e112b623b433b4401407716a08815559683aa6a04eec667b6698be8e4cf24ff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-device-query",
+        "moduleId": "special-devices",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：先查设备能力，再解释按钮编号",
+        "markdown": "数据板、空间球、按钮盒和拨号盘的回调都只给出“哪个控件 + 动作/增量”，并不告诉你设备上到底有多少个控件。教材用 `glutDeviceGet` 配合 `GLUT_NUM_TABLET_BUTTONS`、`GLUT_NUM_SPACEBALL_BUTTONS` 等常量查询有效按钮数，据此可以动态生成提示文字或建立“按钮编号到功能”的映射表，而不是把编号写死。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tablet",
+            "tb-spaceball",
+            "tb-dials"
+          ]
+        }
+      },
+      {
+        "id": "tb-picking-overview",
+        "moduleId": "picking-pipeline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：拾取的基本思路与完整过程",
+        "markdown": "在 OpenGL 程序中可以用指点屏幕位置的方式交互选择对象，但拾取操作并不直接。它的基本思路是：构造一个由指定**拾取窗口**形成的**修正观察体**，给场景内对象分配整数标识符，然后把所有与该观察体相交的对象的标识符保存到**拾取缓冲区**数组中。\n\n教材给出的完整过程是：\n\n1. 创建并显示一个场景；\n2. 在鼠标回调函数内部拾取一个屏幕位置，并依次：设置拾取缓冲区、激活拾取操作（选择模式）、初始化对象标识符的 ID 名称栈、保存当前观察与几何变换矩阵、指定鼠标输入的拾取窗口、给对象分配标识符后用观察体再处理一次场景、恢复原来的观察与几何变换矩阵、确定被拾取对象数目并返回正常绘制模式、处理拾取信息。\n\n也可以改变这个过程，用指定修正观察体顶点代替拾取窗口，从而不依赖鼠标输入来选择对象。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 拾取操作"
+              ],
+              "lineStart": 17270,
+              "lineEnd": 17460,
+              "assetRefs": [],
+              "excerptSha256": "2d6b8212d4c1f31ffb6b9b2a27a58e8838bb5eddda4c9efe7f19dedd909fc208"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-picking-lifecycle",
+        "moduleId": "picking-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：按状态有效性重排拾取步骤",
+        "markdown": "把教材那串步骤按“状态必须在何时有效”重新排列，更容易在代码中落实：\n\n```text\n设置拾取缓冲区 → 进入选择模式 → 初始化名称栈\n→ 保存投影矩阵 → 设置拾取窗口 → 重绘场景并压入对象名称\n→ 恢复投影矩阵 → 退出选择模式（同时得到拾取数量）\n→ 处理拾取记录 → 请求重绘\n```\n\n两条不变式：`glSelectBuffer` 必须在进入选择模式**之前**调用；进入选择模式前保存、结束后恢复当前的观察与几何变换矩阵，否则拾取时构造的修正观察体会污染后续正常绘制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-picking-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-select-mode",
+        "moduleId": "picking-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：拾取缓冲区与渲染模式",
+        "markdown": "拾取缓冲区与模式切换由以下命令完成：\n\n- `glSelectBuffer(pickBuffSize, pickBuffer)`：`pickBuffer` 是含 `pickBuffSize` 个元素的整型数组；必须在激活拾取操作之前调用。每拾取到一个对象就向缓冲区追加一条整数记录。\n- `glRenderMode(GL_SELECT)`：进入选择模式。场景照常经过观察流水线，但**不写入帧缓冲区**，而是把对象信息记录放进拾取缓冲区；该命令返回拾取到的对象个数。\n- `glRenderMode(GL_RENDER)`：回到正常的绘制模式（默认模式）。\n- `glRenderMode(GL_FEEDBACK)`：反馈模式，也不显示对象，而是把对象坐标及其他信息写入反馈缓冲区，用于查询元素类型、属性等信息。\n\n每条拾取记录包含四项：对象在名称栈中的位置（位于该对象之下并包括该对象的标识符数目）、最小深度、最大深度，以及从名称栈底部第一个标识符到该对象标识符之间的全部标识符列表。缓冲区中的整型深度值范围对应 0 到 1.0，乘以 $2^{32}-1$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 拾取操作"
+              ],
+              "lineStart": 17270,
+              "lineEnd": 17460,
+              "assetRefs": [],
+              "excerptSha256": "2d6b8212d4c1f31ffb6b9b2a27a58e8838bb5eddda4c9efe7f19dedd909fc208"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-name-stack",
+        "moduleId": "picking-pipeline",
+        "depth": "advanced",
+        "kind": "procedure",
+        "title": "教材：ID 名称栈",
+        "markdown": "对象标识符存放在只在选择模式下使用的 ID 名称栈中，初始为空：\n\n- `glInitNames()`：初始化名称栈。\n- `glPushName(ID)`：把无符号整数 `ID` 放到栈顶，已有元素依次下压。\n- `glLoadName(ID)`：替换栈顶元素，但**不能**用它向空栈放入元素。\n- `glPopName()`：弹出栈顶元素。\n\n绘制每个可拾取对象前压入它的 ID，就形成了“从根到当前对象”的命名路径，这也是拾取记录中标识符列表的来源。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 拾取操作"
+              ],
+              "lineStart": 17270,
+              "lineEnd": 17460,
+              "assetRefs": [],
+              "excerptSha256": "2d6b8212d4c1f31ffb6b9b2a27a58e8838bb5eddda4c9efe7f19dedd909fc208"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pick-record",
+        "moduleId": "picking-pipeline",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：一条拾取记录的解析顺序",
+        "markdown": "一条拾取记录可以按固定顺序拆开读取：\n\n| 顺序 | 内容 | 用途 |\n|---|---|---|\n| 1 | 名称栈位置（含该对象在内的标识符数目） | 决定这条记录要读取多少个 ID |\n| 2 | 最小深度 | 该对象在窗口内的最近深度 |\n| 3 | 最大深度 | 该对象在窗口内的最远深度 |\n| 4 | 从栈底到被拾取对象的 ID 列表 | 还原对象的层次命名 |\n\n因此解析时要先读第一个整数确定 ID 个数，再按“2 个深度值 + 该个数个 ID”推进指针，不能当作定长记录处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-select-mode",
+            "tb-name-stack"
+          ]
+        }
+      },
+      {
+        "id": "tb-pick-matrix",
+        "moduleId": "picking-pipeline",
+        "depth": "advanced",
+        "kind": "procedure",
+        "title": "教材：用 gluPickMatrix 定义拾取窗口",
+        "markdown": "拾取窗口由 GLU 函数定义：\n\n```c\ngluPickMatrix (xPick, yPick, widthPick, heightPick, vpArray);\n```\n\n- `xPick`、`yPick`：拾取窗口中心相对**视区左下角**的双精度屏幕坐标。若坐标来自鼠标，因为鼠标坐标相对视区左上角，需要翻转 `yMouse`。\n- `widthPick`、`heightPick`：拾取窗口的宽和高。\n- `vpArray`：包含当前视区位置与尺寸的整型数组，可用 `glGetIntegerv` 取得。\n\n拾取窗口作为裁剪窗口构造观察变换的修正观察体，与它相交的对象信息被放入拾取缓冲区。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000676"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 拾取操作"
+              ],
+              "lineStart": 17270,
+              "lineEnd": 17460,
+              "assetRefs": [],
+              "excerptSha256": "2d6b8212d4c1f31ffb6b9b2a27a58e8838bb5eddda4c9efe7f19dedd909fc208"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pick-example",
+        "moduleId": "picking-pipeline",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：把 pickrects 流程走一遍",
+        "markdown": "教材的 `pickrects` 例子把上面的步骤串成一个完整流程：\n\n- 场景中有红、蓝、绿三个矩形，ID 依次为 **30、10、20**，并按这个顺序压入名称栈。\n- 鼠标回调在左键按下时调用 `glSelectBuffer` 与 `glRenderMode(GL_SELECT)`，用 `glGetIntegerv(GL_VIEWPORT, vpArray)` 读取视口，再用 `vpArray[3] - yMouse` 翻转 y 坐标，以光标为中心建立 **5×5** 的拾取窗口。\n- 设置 `gluOrtho2D(0, 300, 0, 300)` 后以选择模式重绘矩形，随后恢复投影矩阵并调用 `glRenderMode(GL_RENDER)` 取得拾取数量。\n- 回调最后调用 `glutPostRedisplay()` 请求重绘，再在正常绘制模式下把矩形显示出来。\n\n因为矩形都在 xy 平面上，它们的深度值都为 0。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-picking-overview",
+            "tb-pick-matrix"
+          ]
+        }
+      },
+      {
+        "id": "model-common-mistakes",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：三个来自机制的常见错误",
+        "markdown": "三个常见错误直接来自回调与拾取的机制：\n\n1. **在 OpenGL 核心库里找鼠标/键盘函数**：教材明确输入由 GLUT 等窗口工具库的子程序处理，登记语句要放进 `main`。\n2. **忘记 `action` 条件**：只判断 `button` 会让按下和松开都触发同一动作，通常应同时判断 `GLUT_DOWN`。\n3. **在选择模式下就期待画面更新**：选择模式只写拾取缓冲区、不写帧缓冲，所以拾取结束后要恢复绘制模式并请求重绘。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mouse-callback",
+            "tb-select-mode",
+            "tb-pick-matrix"
+          ]
+        }
+      },
+      {
+        "id": "check-picking-steps",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：给拾取步骤排序",
+        "markdown": "请按正确顺序排列下列动作，并指出哪一步必须在进入选择模式之前完成：\n\nA. 用 `glRenderMode(GL_RENDER)` 退出选择模式并取得拾取数量\n\nB. 调用 `glSelectBuffer` 指定拾取缓冲区\n\nC. 保存当前投影矩阵并调用 `gluPickMatrix` 建立拾取窗口\n\nD. 调用 `glRenderMode(GL_SELECT)` 进入选择模式\n\nE. 恢复投影矩阵，并处理拾取缓冲区中的记录\n\nF. 调用 `glInitNames`，然后重绘场景并为每个对象 `glPushName`\n\n提示：缓冲区必须在选择模式生效前就绪；矩阵的保存与恢复应成对出现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-picking-overview",
+            "tb-select-mode",
+            "tb-name-stack",
+            "tb-pick-matrix"
+          ]
+        }
+      },
+      {
+        "id": "tb-pick-output",
+        "moduleId": "picking-pipeline",
+        "depth": "support",
+        "kind": "table",
+        "title": "教材：例 20.1 的拾取输出",
+        "markdown": "例 20.1 给出鼠标位于红色与绿色矩形边界处时的输出，共拾取到 2 个对象：\n\n| 记录 | 栈位置 | 最小/最大深度 | 栈中 ID |\n|---|---|---|---|\n| 1 | 1 | 0 / 0 | 30 |\n| 2 | 3 | 0 / 0 | 30, 10, 20 |\n\n第二行的栈位置为 3，说明被拾取的对象处于红色、蓝色、绿色三个名称依次压栈之后，记录末尾列出了这三个标识符。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000677"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "例 20.1 程序 pickrects 的输出"
+              ],
+              "lineStart": 17461,
+              "lineEnd": 17472,
+              "assetRefs": [],
+              "excerptSha256": "0548b0571488e1d8e45430886b392d2d283411d8d21ac54b1830a0486f16deb7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pick-output-reading",
+        "moduleId": "picking-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：怎样读这段拾取输出",
+        "markdown": "读这段输出时要注意两件事：\n\n- **栈位置不是对象 ID**。第二行“栈位置 = 3”只说明需要读取 3 个标识符，真正的对象身份要看列表最后一项，即绿色矩形 20。\n- 位置 1 的记录只含一个 ID 30，说明蓝色与绿色矩形的名称此时还没有压在栈上。这与“先压红色、再压蓝色、最后压绿色”的绘制顺序一致。\n\n若改用 ID 本身判断对象，就要读记录最后一项；若用栈位置判断，则要结合绘制顺序理解它代表哪一层。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pick-output",
+            "model-pick-record"
+          ]
+        }
+      },
+      {
+        "id": "summary-device-map",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：设备、回调与一次完整拾取",
+        "markdown": "这一节把“设备 → 回调 → 事件 → 状态变化 → 重绘”的链条落实为具体函数：鼠标与键盘通过 `glutMouseFunc`、`glutMotionFunc`、`glutPassiveMotionFunc`、`glutKeyboardFunc`、`glutSpecialFunc` 登记；数据板、空间球、按钮盒和拨号盘各有专用回调，并用 `glutDeviceGet` 查询按钮数；需要选择对象时，用选择模式、名称栈、`gluPickMatrix` 与拾取缓冲区构成一次完整拾取。\n\n下一步的菜单功能同样依赖回调与当前窗口状态，可把本节的事件驱动模型直接迁移过去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-glut-input-overview",
+            "tb-mouse-callback",
+            "tb-keyboard-callback",
+            "tb-select-mode",
+            "tb-pick-output"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pick-steps-check",
+        "type": "formative-check",
+        "anchorBlockId": "check-picking-steps",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "title": "拾取步骤排序自检",
+        "outcomeRefs": [
+          "apply-picking"
+        ],
+        "learningPurpose": "检查学习者能否按状态有效性排出完整拾取流程，并识别缓冲区与矩阵保存的时机约束。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-picking-overview",
+            "tb-select-mode",
+            "tb-name-stack",
+            "tb-pick-matrix"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "interaction": "ordering"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写下你排出的步骤顺序，并说明为什么 `glSelectBuffer` 必须早于 `glRenderMode(GL_SELECT)`，以及投影矩阵为什么要在拾取前后成对保存、恢复。"
+        }
+      }
+    ]
+  },
+  "subtitle": "图形用户界面和交互输入方法",
+  "clusterId": "chapter-20",
+  "clusterIds": [
+    "chapter-20"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000669"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 支持交互式输入设备的函数"
+      ],
+      "lineStart": 16863,
+      "lineEnd": 16866,
+      "assetRefs": [],
+      "excerptSha256": "f18b8d6a4ed1967b0cb8832a748789a2d8114f4149f4f222d8e322805924b15e"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000670"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLUT 鼠标函数"
+      ],
+      "lineStart": 16867,
+      "lineEnd": 17013,
+      "assetRefs": [],
+      "excerptSha256": "3eb1a7d23f6925a398e9f9a2bc141f73f07da93924d3b5a463f5d1a4f36832b6"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000671"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLUT 键盘函数"
+      ],
+      "lineStart": 17014,
+      "lineEnd": 17181,
+      "assetRefs": [],
+      "excerptSha256": "5c7c3bcf7a5dfb5c9ac4f0923e9067433f71bf7144caa71981fca2a53ba0409f"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000672"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLUT 数据板函数"
+      ],
+      "lineStart": 17182,
+      "lineEnd": 17207,
+      "assetRefs": [],
+      "excerptSha256": "ada60affc73ee789a85c5c3951908e521656f80d86baf0b75d4a1a902194f343"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000673"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLUT空间球函数"
+      ],
+      "lineStart": 17208,
+      "lineEnd": 17243,
+      "assetRefs": [],
+      "excerptSha256": "60fca7275c07e4922c8da0ea2924ce67384e157b78d561002e81a2d7caec94e8"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000674"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLUT按钮盒函数"
+      ],
+      "lineStart": 17244,
+      "lineEnd": 17255,
+      "assetRefs": [],
+      "excerptSha256": "1eee7ceeb175ebb0023d44a410683825bbd5703496f1b2e96797238199b3bd45"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000675"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "GLUT拨号盘函数"
+      ],
+      "lineStart": 17256,
+      "lineEnd": 17269,
+      "assetRefs": [],
+      "excerptSha256": "5e112b623b433b4401407716a08815559683aa6a04eec667b6698be8e4cf24ff"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000676"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 拾取操作"
+      ],
+      "lineStart": 17270,
+      "lineEnd": 17460,
+      "assetRefs": [],
+      "excerptSha256": "2d6b8212d4c1f31ffb6b9b2a27a58e8838bb5eddda4c9efe7f19dedd909fc208"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000677"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "例 20.1 程序 pickrects 的输出"
+      ],
+      "lineStart": 17461,
+      "lineEnd": 17472,
+      "assetRefs": [],
+      "excerptSha256": "0548b0571488e1d8e45430886b392d2d283411d8d21ac54b1830a0486f16deb7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    480,
+    505
+  ],
+  "scale": 0.9
+}

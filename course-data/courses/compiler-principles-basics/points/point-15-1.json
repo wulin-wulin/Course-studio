@@ -1,0 +1,498 @@
+{
+  "id": "point-15-1",
+  "title": "Open arrays",
+  "shortSummary": "介绍开放数组参数的类型描述与运行时长度传递，说明下标检查和地址计算的实现方式。",
+  "keyTerms": [
+    "开放数组",
+    "open array",
+    "数组参数",
+    "运行时长度",
+    "下标检查",
+    "地址计算"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-13-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于描述符、值/引用传递和帧指针的结论与数值边界，按“问题—描述符—传递方式—栈与帧”重排讲解，并补充地址计算检查表与自测。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-open-array",
+          "text": "解释开放数组参数为何在编译期长度未知，以及数组描述符如何携带地址与各维长度。"
+        },
+        {
+          "id": "trace-passing-modes",
+          "text": "说明引用传递与值传递在描述符、副本空间和过程序言上的差别。"
+        },
+        {
+          "id": "apply-descriptor-address",
+          "text": "利用描述符中的长度完成下标检查，并推导多维开放数组的元素地址。"
+        }
+      ],
+      "misconceptions": [
+        "认为开放数组在编译期完全不需要长度信息，忽略了下标检查与地址计算必须依赖运行时长度。",
+        "认为值传递与引用传递的调用点代码模式差别很大，实际上差别只体现在过程序言是否插入复制。",
+        "认为仍可只用一个地址寄存器 SP 定位形参与局部变量，忽略了 SP 在运行期按编译期未知量移动这一事实。"
+      ],
+      "modules": [
+        {
+          "id": "opening-and-context",
+          "title": "章节定位与驱动问题",
+          "role": "concept-intro",
+          "outcomeRefs": [
+            "explain-open-array"
+          ],
+          "order": 0
+        },
+        {
+          "id": "open-array-basics",
+          "title": "开放数组的定义与引用传递",
+          "role": "concept-and-example",
+          "outcomeRefs": [
+            "explain-open-array"
+          ],
+          "order": 1
+        },
+        {
+          "id": "descriptor-and-bounds",
+          "title": "数组描述符、下标检查与地址计算",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-open-array",
+            "apply-descriptor-address"
+          ],
+          "order": 2
+        },
+        {
+          "id": "passing-modes",
+          "title": "值传递、引用传递与过程序言",
+          "role": "comparison",
+          "outcomeRefs": [
+            "trace-passing-modes"
+          ],
+          "order": 3
+        },
+        {
+          "id": "stack-and-frame",
+          "title": "栈空间、SP 与帧指针 FP",
+          "role": "mechanism-and-tradeoff",
+          "outcomeRefs": [
+            "trace-passing-modes",
+            "apply-descriptor-address"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "check-and-transfer",
+          "outcomeRefs": [
+            "explain-open-array",
+            "trace-passing-modes",
+            "apply-descriptor-address"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-open-array",
+          "trace-passing-modes",
+          "apply-descriptor-address"
+        ],
+        "method": "完成描述符自测并用一句话复述“地址 + 各维长度”与 FP 必要性之间的因果链。",
+        "successCriteria": [
+          "能说明长度为何必须随地址一起传递",
+          "能区分引用传递与值传递在序言中的差别",
+          "能解释为什么 SP 单独不足以定位形参"
+        ],
+        "exerciseBlockId": "model-descriptor-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-15-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-chapter-context",
+        "moduleId": "opening-and-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材章节位置",
+        "markdown": "本知识点出自教材第 14 章“Open Arrays, Pointers and Procedure Types”（本书编排为第 15 章）。该章把三类与编译期不完全确定的大小或类型有关的对象放在一起讨论：开放数组参数、指针和过程类型；这里只处理其中的开放数组参数，指针与过程类型留到后续知识点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types"
+              ],
+              "lineStart": 538,
+              "lineEnd": 539,
+              "assetRefs": [],
+              "excerptSha256": "85ef4ef3226551b50d7c1cc6dac4f42066286246fd8653851a45f5058aec1736"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reading-question",
+        "moduleId": "opening-and-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "带着一个矛盾读下去",
+        "markdown": "阅读时可以先抓住一个矛盾：编译器翻译过程体时既不知道开放数组有多长，也不知道要为它预留多少存储，那它靠什么生成正确的下标检查和元素地址？下文引入的数组描述符正是对这个问题的回答。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-chapter-context"
+          ]
+        }
+      },
+      {
+        "id": "tb-open-array-definition",
+        "moduleId": "open-array-basics",
+        "depth": "core",
+        "kind": "definition",
+        "title": "开放数组是什么",
+        "markdown": "开放数组（open array）是长度在编译时未知（open）的数组形参。教材指出，这是第一次遇到所需存储块大小在编译期没有给出的情况。对引用参数而言解法相对简单：本来就不需要分配存储，只需把指向实参数组的引用传给被调过程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Open arrays"
+              ],
+              "lineStart": 540,
+              "lineEnd": 549,
+              "assetRefs": [],
+              "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lending-analogy",
+        "moduleId": "open-array-basics",
+        "depth": "support",
+        "kind": "example",
+        "title": "类比：报书架位置而不是搬书",
+        "markdown": "一个有用的类比是“报书架位置而不是搬整排书”：被调过程收到的不是一份数组副本，而是“数据在哪里、每个维度有多宽”的信息；只有确实需要副本时，才真的把内容搬过去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-open-array-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-descriptor",
+        "moduleId": "descriptor-and-bounds",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "数组地址与各维长度打包成描述符",
+        "markdown": "为了在访问元素时能检查下标越界，长度必须已知，因此除了数组地址还要传递长度。多维开放数组还需要各维长度来计算元素地址，所以每一维的长度都要给出。教材把“数组地址 + 各维长度”这个整体称为数组描述符（array descriptor）。例如声明 `VAR a: ARRAY 10 OF ARRAY 20 OF INTEGER;` 时，描述符要携带数组地址以及 10 和 20 这两个维度长度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Open arrays"
+              ],
+              "lineStart": 540,
+              "lineEnd": 549,
+              "assetRefs": [],
+              "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-address-computation",
+        "moduleId": "descriptor-and-bounds",
+        "depth": "core",
+        "kind": "formula",
+        "title": "用描述符长度做检查与地址计算",
+        "markdown": "教材只说明描述符必须带各维长度，具体用法可以整理成两步。设数组按行主序存放、元素大小为 $s$，声明为 `ARRAY n1 OF ARRAY n2 OF ...` 时，访问 $a[i][j]$ 需要：\n\n1. 用描述符中的长度检查 $0 \\le i < n1$ 且 $0 \\le j < n2$（Oberon 下标从 0 开始）；\n2. 计算地址 $addr(a[i][j]) = base + (i \\cdot n2 + j) \\cdot s$。\n\n对 $k$ 维数组，某一维的步长是它右侧各维长度的乘积；这也解释了为什么每一维长度都必须随描述符传入，而不能只传总元素个数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-descriptor"
+          ]
+        }
+      },
+      {
+        "id": "tb-value-copy",
+        "moduleId": "passing-modes",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "值传递必须复制数组",
+        "markdown": "若开放数组形参按值传递，它的值必须像标量一样被复制到为形参准备的位置。数组很大时，这个复制操作代价可能相当可观。教材因此建议：对结构化参数，程序员应始终使用 VAR 选项，除非确实需要一份副本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Open arrays"
+              ],
+              "lineStart": 540,
+              "lineEnd": 549,
+              "assetRefs": [],
+              "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-passing-comparison",
+        "moduleId": "passing-modes",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "引用传递与值传递对照",
+        "markdown": "把两种方式放在同一组维度上比较，差别就只剩“传什么”和“谁付复制代价”：\n\n| 维度 | 引用传递（VAR） | 值传递 |\n|---|---|---|\n| 传给被调过程的内容 | 指向实参数组的引用 | 形参位置上的一份数组副本 |\n| 描述符的作用 | 提供地址与各维长度，供下标检查和地址计算 | 同样需要描述符，副本大小由它确定 |\n| 存储代价 | 不必为数组本身分配存储 | 在栈上按数组大小分配副本，大数组代价显著 |\n| 修改的影响 | 通过引用作用于实参 | 只修改副本，实参保持不变 |\n| 教材建议 | 结构化参数的默认选择 | 仅在确实需要副本时使用 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-open-array-definition",
+            "tb-value-copy"
+          ]
+        }
+      },
+      {
+        "id": "tb-prologue",
+        "moduleId": "passing-modes",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "复制代码放在过程序言里",
+        "markdown": "复制操作的代码更适合插在过程序言（prologue）之后，而不是放在调用点。这样，值参数与引用参数的调用代码模式相同，差别只体现在序言中是否插入复制这一步。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Open arrays"
+              ],
+              "lineStart": 540,
+              "lineEnd": 549,
+              "assetRefs": [],
+              "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-stack-layout",
+        "moduleId": "stack-and-frame",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "形参位置放的是描述符，副本在栈顶",
+        "markdown": "形参位置并不存放数组本身，而是存放数组描述符，描述符的大小是已知的。按值传递时，副本空间分配在栈顶，栈指针按数组大小增减；多维数组的大小在运行期按“各维长度之积 × 元素大小”计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Open arrays"
+              ],
+              "lineStart": 540,
+              "lineEnd": 549,
+              "assetRefs": [],
+              "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-frame-pointer",
+        "moduleId": "stack-and-frame",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "为什么必须引入帧指针 FP",
+        "markdown": "由于栈指针在运行期按编译期未知的量移动，一般情况下不可能只用一个地址寄存器（SP）完成寻址；教材由此强调帧指针 FP 是必需的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Open arrays"
+              ],
+              "lineStart": 540,
+              "lineEnd": 549,
+              "assetRefs": [],
+              "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-frame-why",
+        "moduleId": "stack-and-frame",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把因果链补齐",
+        "markdown": "这里的因果链是：值传递要复制 → 复制空间在栈顶按数组大小调整 → 大小到运行期才由各维长度算出 → SP 的位移量编译期不可知 → 局部变量和形参的偏移必须相对一个稳定的基准，因此用 FP 而不是 SP 来定位。教材的结论不是“SP 不能用”，而是“不能只靠 SP 一般地完成寻址”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stack-layout",
+            "tb-frame-pointer"
+          ]
+        }
+      },
+      {
+        "id": "model-descriptor-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自测：描述符、下标检查与帧指针",
+        "markdown": "设过程 `PROCEDURE P(VAR x: ARRAY OF INTEGER);` 的实参是 `a: ARRAY 10 OF INTEGER`。请判断并说明理由：\n\n1. 若把 `x` 改成值参数 `x: ARRAY OF INTEGER`，调用点的代码模式是否改变？\n2. 访问 `x[i]` 时，编译器凭什么生成下标检查？\n3. 若被调过程在运行期改变栈指针，为什么只靠 SP 定位形参可能出问题？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-descriptor",
+            "tb-prologue",
+            "tb-frame-pointer"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "把本知识点的链条压成一句话：开放数组形参在编译期不知道长度，于是编译器把“地址 + 各维长度”打包成描述符传递；引用传递只传引用，值传递在序言后复制一份，副本大小到运行期才由各维长度算出；也正因为栈指针的移动量在编译期未知，帧指针 FP 才能稳定地定位形参与局部变量。下一节转向同样在运行期才确定大小的动态数据结构与指针。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-chapter-context",
+            "tb-prologue",
+            "tb-frame-pointer"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "descriptor-bounds-check",
+        "type": "formative-check",
+        "title": "描述符与下标检查自测",
+        "anchorBlockId": "model-descriptor-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-descriptor-address",
+          "trace-passing-modes"
+        ],
+        "learningPurpose": "检查学习者能否用描述符中的长度完成下标检查，并区分引用传递与值传递在序言和栈空间上的差别。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-descriptor",
+            "model-address-computation"
+          ]
+        },
+        "config": {
+          "questions": 3,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "参考答案要点：(1) 调用点代码模式不变，差别只在过程序言中是否插入复制；(2) 描述符携带的维度长度用于生成下标越界检查；(3) 栈指针在运行期按数组大小移动，位移量编译期未知，因此需要用帧指针 FP 作为稳定基准来定位形参与局部变量。"
+        }
+      }
+    ]
+  },
+  "subtitle": "14. Open Arrays, Pointers and Procedure Types",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000064"
+      ],
+      "headingPath": [
+        "14. Open Arrays, Pointers and Procedure Types"
+      ],
+      "lineStart": 538,
+      "lineEnd": 539,
+      "assetRefs": [],
+      "excerptSha256": "85ef4ef3226551b50d7c1cc6dac4f42066286246fd8653851a45f5058aec1736"
+    },
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000065"
+      ],
+      "headingPath": [
+        "14. Open Arrays, Pointers and Procedure Types",
+        "Open arrays"
+      ],
+      "lineStart": 540,
+      "lineEnd": 549,
+      "assetRefs": [],
+      "excerptSha256": "f5b472ec0e5c47d728e64426adda01e70ba989197169a96e621540d7136417f7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1120,
+    104
+  ],
+  "scale": 1.27
+}

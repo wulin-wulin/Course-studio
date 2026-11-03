@@ -1,0 +1,470 @@
+{
+  "id": "point-22-4",
+  "title": "着色器效果",
+  "shortSummary": "说明用顶点和片元着色器实现光照、纹理和程序化效果的方法，并讨论性能与可移植性。",
+  "keyTerms": [
+    "着色器效果",
+    "光照",
+    "纹理"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-17-3",
+    "point-18-2",
+    "point-18-3",
+    "point-22-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-walkthrough-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的变量名、计算顺序和坐标空间约束，围绕三类效果的共同数据流补充逐项核对、取舍比较与自检题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-shader-effects",
+          "text": "说明着色器效果如何由顶点阶段与片元阶段分工实现。"
+        },
+        {
+          "id": "implement-phong",
+          "text": "描述用 GLSL 实现 Phong 光照的关键变量、计算步骤与输出。"
+        },
+        {
+          "id": "implement-texture-bump",
+          "text": "说明纹理映射和凹凸映射着色器各自的数据流与坐标要求。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "评估阶段选择、资源限制与接口版本对实现效果的影响。"
+        }
+      ],
+      "misconceptions": [
+        "把顶点着色器算出的颜色经过插值后直接当成逐片元光照。",
+        "认为着色器中的取样器变量保存的是纹理图像本身。",
+        "在凹凸映射中混用对象坐标系与切空间中的法向量、光线和观察向量。"
+      ],
+      "modules": [
+        {
+          "id": "shader-effect-overview",
+          "title": "着色器效果的共同数据流",
+          "role": "orientation",
+          "outcomeRefs": [
+            "explain-shader-effects"
+          ],
+          "order": 0
+        },
+        {
+          "id": "phong-shader",
+          "title": "在着色器中实现 Phong 光照",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "implement-phong",
+            "explain-shader-effects"
+          ],
+          "order": 1
+        },
+        {
+          "id": "texture-mapping",
+          "title": "纹理映射着色器",
+          "role": "procedure",
+          "outcomeRefs": [
+            "implement-texture-bump"
+          ],
+          "order": 2
+        },
+        {
+          "id": "bump-mapping",
+          "title": "凹凸映射与切空间",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "implement-texture-bump"
+          ],
+          "order": 3
+        },
+        {
+          "id": "synthesis-check",
+          "title": "取舍比较与达成检查",
+          "role": "synthesis",
+          "outcomeRefs": [
+            "evaluate-tradeoffs",
+            "implement-phong",
+            "implement-texture-bump",
+            "explain-shader-effects"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-shader-effects",
+          "implement-phong",
+          "implement-texture-bump",
+          "evaluate-tradeoffs"
+        ],
+        "method": "完成三项情境判断题，并为每种效果说明输入、执行阶段与代价。",
+        "successCriteria": [
+          "能指出每个效果的主输入与输出变量",
+          "能说明顶点阶段与片元阶段各自必须完成的工作",
+          "能指出一个性能或可移植性限制"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-22-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-overview",
+        "moduleId": "shader-effect-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：着色器效果的定位",
+        "markdown": "教材在讲完 GLSL 的结构和能力后，用几个仍然相对简单的例子展示着色器可以实现的效果：用着色器重写 Phong 光照、用纹理图决定表面颜色、再用纹理信息扰动法向量来模拟凹凸。教材同时提醒，这些例子远未覆盖着色器的全部能力。\n\n三类效果共享同一条数据流：输入来自光源、材质、顶点属性和纹理，计算在着色器中完成，最终写入片元的颜色。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000738"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "着色器效果"
+              ],
+              "lineStart": 19058,
+              "lineEnd": 19061,
+              "assetRefs": [],
+              "excerptSha256": "6deb8143d02f5a8f81a4d3b7e1281bbec569a466920c8559db392dd000952e92"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-overview-scope",
+        "moduleId": "shader-effect-overview",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：读本节要抓住的三问",
+        "markdown": "可以用三问来读本节每个例子：\n\n1. **输入是什么**：光源与材质参数、顶点位置与法向量、纹理坐标与纹理图像。\n2. **在哪个阶段算**：顶点着色器负责逐顶点可得的量，片元着色器负责逐片元的采样与颜色决定。\n3. **输出到哪里**：位置写入 `gl_Position`，颜色最终写入 `gl_FragColor`。\n\n带着这条数据流去看后面的 Phong、纹理映射和凹凸映射示例，就能分清每个变量是在哪个阶段产生和使用的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-phong",
+        "moduleId": "phong-shader",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：在顶点着色器中实现 Phong 光照",
+        "markdown": "教材用一对简单着色器实现 Phong 渲染，并把主要颜色计算放在顶点着色器中，片元着色器只把结果复制到 `gl_FragColor`。\n\n光源信息位于 uniform 数组 `gl_LightSource` 中。以 `gl_LightSource[0]` 为例，`ambient`、`diffuse`、`specular` 和 `position` 都是 `vec4`；`gl_FrontMaterial` 记录对象的 `ambient`、`diffuse`、`specular` 和 `shininess`。计算步骤如下：\n\n1. 环境光项：`gl_FrontMaterial.ambient * gl_LightSource[0].ambient`。\n2. 法向量转换：`normal = normalize(gl_NormalMatrix * gl_Normal)`。\n3. 方向光源方向：`lightdir = normalize(vec3(gl_LightSource[0].position))`；若为点光源，则改用顶点位置与光源位置之差。\n4. 漫反射：`NdotL = max(dot(normal, lightdir), 0.0)`，再乘以材质与光源的 `diffuse`。\n5. 镜面反射：仅当 `NdotL > 0.0` 时，取 `view = vec3(-normalize(gl_ModelViewMatrix * gl_Vertex))`、`reflection = normalize(reflect(-lightdir, normal))`，用 `pow(RdotV, gl_FrontMaterial.shininess)` 加权 `specular`。\n6. 输出：颜色赋给 `gl_FrontColor`，位置由 `gl_Position = ftransform()` 得到。\n\n教材还指出，也可以在片元着色器中进行颜色计算，但法向量、光线方向和观察方向仍需在顶点阶段计算，再传给片元阶段。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000739"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "一个 Phong 着色器"
+              ],
+              "lineStart": 19062,
+              "lineEnd": 19169,
+              "assetRefs": [],
+              "excerptSha256": "a951aeb313d999cf9b455dee3ceffc72717fa7326de94564abe9bcbd768cb299"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-phong-walkthrough",
+        "moduleId": "phong-shader",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：逐项核对 Phong 计算",
+        "markdown": "逐项核对时，最容易出错的是向量所在空间和是否单位化：\n\n- **法向量**必须先经 `gl_NormalMatrix` 转换再 `normalize`，否则点积没有几何意义。\n- **光线方向**的指向必须统一：教材先取方向光源的位置并规范化，镜面项再对 `lightdir` 取反后传给 `reflect`。\n- **观察向量**在观察坐标系中由顶点位置取反得到，因为观察位置就是原点。\n- **限制非负**：`max(..., 0.0)` 保证背向光源时不会出现负的漫反射或镜面贡献。\n- **镜面项的条件**：`NdotL > 0.0` 才计算高光，避免背光面出现不合逻辑的亮斑。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-phong"
+          ]
+        }
+      },
+      {
+        "id": "model-phong-stage-tradeoff",
+        "moduleId": "phong-shader",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：顶点阶段算光照的取舍",
+        "markdown": "教材的例子在顶点着色器里算完整颜色，再经光栅化插值到片元。这样每个顶点只算一次光照，开销小，但高光等变化较快的项会被插值抹平。若把颜色计算移到片元着色器，可以得到更平滑的逐片元光照，代价是每个片元都要重复计算；无论放在哪个阶段，法向量、光线方向和观察方向都要先在顶点阶段准备好并传递下去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-phong"
+          ]
+        }
+      },
+      {
+        "id": "textbook-texture",
+        "moduleId": "texture-mapping",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：在着色器中做纹理映射",
+        "markdown": "教材给出两种纹理映射思路：把表面每个位置映射到纹理上的一点；或者修改 Phong 着色器，把原来取材质颜色的地方改为取纹理图像的颜色。\n\n在 OpenGL 程序中先按常规建立纹理对象、设置参数并定义图像数据，然后还要多做两件事：告诉着色器纹理在哪里，并让着色器获得访问纹理数据的权利。OpenGL 支持多重纹理，通过纹理单元实现；可用 `GL_MAX_TEXTURE_UNITS` 查询可用单元数，用 `glActiveTexture(GL_TEXTURE0)` 选择活动单元。\n\n着色器用取样器变量表示访问哪个纹理单元，例如片元着色器中的 `uniform sampler2D textureID;`。取样器对 GLSL 代码是不透明的，只能作为参数传给纹理访问函数。OpenGL 侧用 `glGetUniformLocation` 找到取样器位置，再用 `glUniform1i` 分配纹理单元编号，例如 `0`，而不是符号常量 `GL_TEXTURE0`。\n\n顶点着色器把当前顶点的纹理坐标写入 `gl_TexCoord[0]` 以便插值；片元着色器用 `texture2D(textureID, gl_TexCoord[0].st)` 采样，并把得到的 `vec4` 直接作为片元颜色。这样同一对着色器可以对任何定义了纹理坐标的对象做纹理映射。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000740"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "纹理映射"
+              ],
+              "lineStart": 19170,
+              "lineEnd": 19235,
+              "assetRefs": [],
+              "excerptSha256": "d1683437463de2aff59015cb0399acafd42db888d994df50e1fe2705a5b96d6a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-texture-dataflow",
+        "moduleId": "texture-mapping",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：从纹理对象到片元颜色的三步",
+        "markdown": "把过程压缩成三步更好记：\n\n1. **绑定**：把纹理对象绑定到某个纹理单元，并把该单元设为活动单元。\n2. **登记**：把纹理单元编号写入着色器的 `sampler2D` uniform，着色器由此知道去哪个单元取样。\n3. **采样**：顶点阶段输出纹理坐标，光栅化插值后，片元阶段用 `texture2D` 以插值坐标取颜色。\n\n注意取样器存的是单元编号而不是纹理对象本身；纹理对象与单元的绑定在 OpenGL 侧完成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-texture"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bump",
+        "moduleId": "bump-mapping",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：凹凸映射与切空间",
+        "markdown": "凹凸映射用一个函数扰动表面某点处的法向量，再用基本光照模型计算颜色，因此能在不增加几何的前提下表现粗糙感。扰动可以逐片元计算，也可以预先把法向量信息存进法向图。\n\n难点在于坐标系：颜色计算的输入通常在对象坐标系或观察坐标系中，而扰动法向量的计算要在纹理空间（切空间）中完成。教材的做法是先求偏导向量并规范化得到切向量，再把切向量与表面法向量叉乘得到副法线向量，用切向量、副法线向量和法向量构成矩阵 $M = [T; B; N]$。对象坐标系中的向量乘以该矩阵即可转到切空间。切空间是围绕待渲染点构建的局部坐标系，会随表面点变化。\n\n在一对着色器中，顶点着色器负责计算光线矢量和观察向量，并用点积把它们转换到切空间；片元着色器用纹理颜色的红色与绿色分量的平均值估计高度偏移，在纹理坐标附近按 0°、120°、240° 三个方向取三个点，构造三个带高度分量的向量，两两相减后叉乘得到扰动后的法向量，最后用纹理颜色与新法向量计算环境光和漫反射。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000741"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "凹凸映射"
+              ],
+              "lineStart": 19236,
+              "lineEnd": 19351,
+              "assetRefs": [],
+              "excerptSha256": "14cf0c28354ecdcc7dc79c46c8f3e536d1e2c1f12d6a3ae974a15b71274e890d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bump-steps",
+        "moduleId": "bump-mapping",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：凹凸片元着色的计算顺序",
+        "markdown": "把凹凸片元着色器的计算顺序拆开：\n\n1. **估高度**：`avg = (color.r + color.g) / 2.0`，再用 `mix(avg, 0.5, 0.985)` 平滑，得到该纹理点的表面高度。\n2. **取三点**：在纹理坐标上加三个偏移量，落在以当前点为中心的 0°、120°、240° 方向上。\n3. **建向量**：每个点写成 `vec3(dx, dy, height)`，把纹理平面内的偏移和高度合在一起。\n4. **求法向量**：`cross(v1 - v0, v2 - v0)` 后规范化，得到扰动后的法向量。\n5. **再着色**：用纹理颜色与扰动法向量计算环境光和漫反射。\n\n可以看出，纹理在这里同时承担两个角色：提供表面颜色，以及通过颜色变化提供高度信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bump"
+          ]
+        }
+      },
+      {
+        "id": "model-comparison",
+        "moduleId": "synthesis-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：三种效果的输入、阶段与代价",
+        "markdown": "| 效果 | 主要输入 | 顶点阶段职责 | 片元阶段职责 | 主要代价 |\n|---|---|---|---|---|\n| Phong 光照 | 光源、材质、法向量、位置 | 转换法向量，计算光线方向与观察方向，可算完整颜色 | 可直接输出插值颜色，或逐片元重算 | 逐片元重算提高质量但增加计算量 |\n| 纹理映射 | 纹理对象、纹理坐标、取样器 | 输出纹理坐标供插值 | 用 `texture2D` 采样决定颜色 | 纹理单元数量与采样带宽 |\n| 凹凸映射 | 纹理颜色、切向量、副法线、法向量 | 求切空间基并把光线、观察向量转入切空间 | 由纹理颜色估高度并扰动法向量，再着色 | 逐片元额外采样与叉乘 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-phong",
+            "textbook-texture",
+            "textbook-bump"
+          ]
+        }
+      },
+      {
+        "id": "model-tradeoffs",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：性能与可移植性提醒",
+        "markdown": "实现取舍可以从三点判断：\n\n- **质量与开销**：逐顶点光照便宜，但高光会被插值拉平；逐片元光照更细，但每个片元都要重复计算。\n- **资源限制**：同时使用多个纹理受纹理单元数量限制，需要先查询可用单元数。\n- **可移植性**：教材例子使用了 `gl_LightSource`、`gl_FrontMaterial`、`gl_MultiTexCoord0` 等内置全局变量，它们属于旧式固定功能兼容接口；在更现代的核心模式中，这些数据通常改为由应用程序显式传入的 uniform 和 attribute。移植时要先确认目标 OpenGL/GLSL 版本与可用接口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison",
+            "textbook-phong",
+            "textbook-texture"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "自检：为效果选择着色器阶段",
+        "markdown": "**练习**：一个场景需要柔和的高光，并要在不增加三角形的前提下表现砖墙缝隙。请回答：\n\n1. 高光应该在哪个阶段计算更合适，为什么？\n2. 表现缝隙时，纹理除了提供颜色还提供什么信息？\n3. 若把凹凸映射的向量混用了坐标系，最可能出现什么现象？\n\n**参考要点**：高光变化快，逐片元计算更平滑；缝隙由纹理颜色的变化估计高度，从而扰动法向量；坐标系混用会让光线方向与法向量不匹配，表现为明暗方向错误或高光位置异常。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison",
+            "model-bump-steps"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "本节点睛",
+        "markdown": "本节三类效果可以统一看成“输入 → 着色器计算 → 片元颜色”的数据流：Phong 示例示范如何把光照模型改写成着色器，纹理映射示范如何用取样器取外部图像，凹凸映射示范如何用纹理扰动法向量。掌握阶段分工与坐标空间，比记住某段具体代码更重要。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview",
+            "textbook-phong",
+            "textbook-texture",
+            "textbook-bump"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "shader-effect-stage-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "outcomeRefs": [
+          "evaluate-tradeoffs",
+          "implement-phong",
+          "implement-texture-bump"
+        ],
+        "learningPurpose": "检查学习者能否把三类效果的输入、阶段分工与坐标系要求迁移到新的渲染需求。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-phong",
+            "textbook-texture",
+            "textbook-bump",
+            "model-comparison"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别说明：Phong 光照、纹理映射、凹凸映射各自的主输入、在哪个着色器阶段完成什么工作，以及一个性能或可移植性限制。"
+        }
+      }
+    ]
+  },
+  "subtitle": "可编程着色器",
+  "clusterId": "chapter-22",
+  "clusterIds": [
+    "chapter-22"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000738"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "着色器效果"
+      ],
+      "lineStart": 19058,
+      "lineEnd": 19061,
+      "assetRefs": [],
+      "excerptSha256": "6deb8143d02f5a8f81a4d3b7e1281bbec569a466920c8559db392dd000952e92"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000739"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "一个 Phong 着色器"
+      ],
+      "lineStart": 19062,
+      "lineEnd": 19169,
+      "assetRefs": [],
+      "excerptSha256": "a951aeb313d999cf9b455dee3ceffc72717fa7326de94564abe9bcbd768cb299"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000740"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "纹理映射"
+      ],
+      "lineStart": 19170,
+      "lineEnd": 19235,
+      "assetRefs": [],
+      "excerptSha256": "d1683437463de2aff59015cb0399acafd42db888d994df50e1fe2705a5b96d6a"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000741"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "凹凸映射"
+      ],
+      "lineStart": 19236,
+      "lineEnd": 19351,
+      "assetRefs": [],
+      "excerptSha256": "14cf0c28354ecdcc7dc79c46c8f3e536d1e2c1f12d6a3ae974a15b71274e890d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1913,
+    -95
+  ],
+  "scale": 0.89
+}

@@ -1,0 +1,629 @@
+{
+  "id": "point-4-11",
+  "title": "OpenGL 像素阵列函数",
+  "shortSummary": "介绍 OpenGL 读写像素阵列的参数、像素格式和光栅位置控制，并说明数据布局的影响。",
+  "keyTerms": [
+    "像素阵列",
+    "光栅操作",
+    "OpenGL"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.55,
+  "prerequisites": [
+    "point-4-10"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "api-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的函数名、参数顺序与数值示例，围绕“参数→落点→存储布局→目标缓存→组合规则”的数据通路重排，并补充检查表与位宽推导。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "o-api-role",
+          "text": "区分位图、像素图、读回、复制与缓存选择函数的职责与主要参数。"
+        },
+        {
+          "id": "o-raster-position",
+          "text": "说明当前光栅位置、位图原点与偏移如何共同决定像素阵列的落点。"
+        },
+        {
+          "id": "o-data-layout",
+          "text": "解释位图行的位打包、存储对齐以及像素格式与数据类型如何影响阵列组织。"
+        },
+        {
+          "id": "o-block-transfer",
+          "text": "描述在两个缓存区域之间读写或复制像素值并选择逻辑组合规则的方法。"
+        }
+      ],
+      "misconceptions": [
+        "把位图原点 x0、y0 当作阵列左上角；教材规定原点取阵列左下角。",
+        "以为位图颜色会随之后设置的颜色改变；颜色在引用当前光栅位置时就已经确定。",
+        "以为 9 列位图每行只占 9 位；教材按 8 位为单位组织，示例每行用 16 位。",
+        "以为 glDrawPixels 会自行选择颜色缓存；目标缓存需要由 glDrawBuffer 指定。"
+      ],
+      "modules": [
+        {
+          "id": "api-overview",
+          "title": "入口与函数分工",
+          "role": "orientation",
+          "description": "建立位图与像素图两个写入入口，并给出配套函数的职责地图。",
+          "outcomeRefs": [
+            "o-api-role"
+          ],
+          "order": 0
+        },
+        {
+          "id": "bitmap-path",
+          "title": "位图绘制与落点控制",
+          "role": "core-explanation",
+          "description": "拆解 glBitmap 的参数、原点、当前光栅位置、偏移与颜色锁定。",
+          "outcomeRefs": [
+            "o-api-role",
+            "o-raster-position"
+          ],
+          "order": 1
+        },
+        {
+          "id": "data-layout",
+          "title": "位打包与存储对齐",
+          "role": "core-explanation",
+          "description": "解释行按字节组织、补齐位被忽略，以及对齐如何决定实际字节数。",
+          "outcomeRefs": [
+            "o-data-layout"
+          ],
+          "order": 2
+        },
+        {
+          "id": "pixmap-and-buffers",
+          "title": "像素图与目标缓存",
+          "role": "core-explanation",
+          "description": "说明 glDrawPixels 的数据格式、数据类型，以及 glDrawBuffer 的缓存选择。",
+          "outcomeRefs": [
+            "o-api-role",
+            "o-data-layout"
+          ],
+          "order": 3
+        },
+        {
+          "id": "block-transfer",
+          "title": "读回与块复制",
+          "role": "application",
+          "description": "组织 glReadPixels、glCopyPixels 与源/目标缓存选择的完整流程。",
+          "outcomeRefs": [
+            "o-block-transfer"
+          ],
+          "order": 4
+        },
+        {
+          "id": "logic-ops",
+          "title": "像素值的逻辑组合",
+          "role": "application",
+          "description": "说明启用颜色逻辑操作后，源值与目标值如何按位组合。",
+          "outcomeRefs": [
+            "o-block-transfer"
+          ],
+          "order": 5
+        },
+        {
+          "id": "check",
+          "title": "达成检查与通路总结",
+          "role": "assessment",
+          "description": "用参数计算和情境选择题检查理解，并把函数串成一条数据通路。",
+          "outcomeRefs": [
+            "o-api-role",
+            "o-raster-position",
+            "o-data-layout",
+            "o-block-transfer"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-api-role",
+          "o-raster-position",
+          "o-data-layout",
+          "o-block-transfer"
+        ],
+        "method": "完成参数计算与缓存选择练习，并说明每一步依赖的状态。",
+        "successCriteria": [
+          "能算出一行位图的字节数与阵列总字节数",
+          "能根据原点与偏移推出位图落点和后续光栅位置",
+          "能说出读回与复制所需的源、目标缓存选择函数"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-4-12"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "api-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "两个入口与一组配套函数",
+        "markdown": "OpenGL 用两个函数分别定义矩形阵列的两种形态：定义二值阵列的位图函数，和定义彩色阵列的像素图函数。除此之外，OpenGL 还提供一组函数用于存储、复制和管理像素值阵列，它们共同构成像素级绘制与缓存操作的接口。\n\n本点按“参数 → 落点 → 存储布局 → 目标缓存 → 组合规则”的次序组织：先看两个写入阵列的函数如何摆放阵列，再看阵列在内存中如何组织，最后看如何从缓存读回、在缓存间复制并用逻辑操作组合像素值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000107"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 像素阵列函数"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2384,
+              "assetRefs": [],
+              "excerptSha256": "53bc2b1a48a7e0bfee0c69452c8505f13d4249d9e490642a8f9267066aef6c90"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-overview-map",
+        "moduleId": "api-overview",
+        "depth": "support",
+        "kind": "table",
+        "title": "函数分工速览",
+        "markdown": "可以把本节的函数按职责分成五组：\n\n| 职责 | 代表函数 | 作用 |\n| --- | --- | --- |\n| 写入二值阵列 | `glBitmap` | 用 0/1 掩模在帧缓存上着色 |\n| 写入彩色阵列 | `glDrawPixels` | 把彩色像素阵列送入指定缓存 |\n| 定位 | `glRasterPos*` | 设置当前光栅位置，作为阵列左下角锚点 |\n| 读回与复制 | `glReadPixels`、`glCopyPixels` | 从缓存取出一块像素值，或在缓存间搬运 |\n| 缓存与组合 | `glDrawBuffer`、`glReadBuffer`、`glLogicOp` | 选择源/目标缓存，并决定新旧像素如何组合 |\n\n这张表是模型补充的整理，函数名和职责都来自教材正文；具体参数顺序与默认值以各函数的教材说明为准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-bitmap",
+        "moduleId": "bitmap-path",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "glBitmap 的参数与落点",
+        "markdown": "位图函数的形式为 `glBitmap(width, height, x0, y0, xOffset, yOffset, bitShape)`。`width` 和 `height` 给出阵列 `bitShape` 的列数与行数；`bitShape` 的每个元素取 0 或 1，取 1 表示对应像素用此前设定的颜色显示，取 0 表示该像素不受这个位图影响。\n\n`x0`、`y0` 指定矩形阵列“原点”的位置，而原点取 `bitShape` 的左下角，取值可正可负。位图显示时把这个原点放到当前光栅位置（current raster position）上；显示结束后，`xOffset`、`yOffset` 用来更新当前光栅位置。\n\n当前光栅位置由 `glRasterPos*` 设定，其参数和后缀与 `glVertex` 相同，因此它先在世界坐标系中给出，再经观察变换到屏幕坐标；默认值是世界坐标系原点 $(0,0,0)$。位图使用的颜色是调用 `glRasterPos` 时的有效颜色，之后改变颜色不会影响已经引用过该位置的位图。\n\n这些坐标以浮点数给出，而位图本身仍落在整数像素位置上，因此可以把一组位图按任意间隔排布，例如把位图字符拼接成字符串。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 位图函数"
+              ],
+              "lineStart": 2385,
+              "lineEnd": 2422,
+              "assetRefs": [
+                "parts/part-0001/images/388003cc8a7becc7a14b0ecf94ee40b5f087550cb7b6d23a6b3a363312ebfa3b.jpg"
+              ],
+              "excerptSha256": "f54880be4ff2891a377b2d0da615b276488760f44c1afdeabac48c766a45fad2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bitmap-trace",
+        "moduleId": "bitmap-path",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "追踪一次位图绘制",
+        "markdown": "跟踪教材中的例子：先用 `glPixelStorei(GL_UNPACK_ALIGNMENT, 1)` 把存储对齐设为字节边界，再用 `glRasterPos2i(30, 40)` 把当前光栅位置设到屏幕坐标 (30, 40)，最后调用 `glBitmap(9, 10, 0.0, 0.0, 20.0, 15.0, bitShape)`。\n\n- 9 列、10 行说明这是一个 9×10 的位图；\n- 原点 (0.0, 0.0) 位于阵列左下角，所以位图左下角落在 (30, 40)；\n- 显示后光栅位置按偏移 (20.0, 15.0) 移动，供下一个阵列继续使用。\n\n这个例子里偏移没有实际用途，但如果连续绘制多个位图，就可以靠它控制下一个阵列的起点，而不必每次都重新调用 `glRasterPos`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bitmap"
+          ]
+        }
+      },
+      {
+        "id": "model-bitmap-color",
+        "moduleId": "bitmap-path",
+        "depth": "support",
+        "kind": "warning",
+        "title": "颜色在引用光栅位置时锁定",
+        "markdown": "颜色锁定是位图最容易出错的地方：`glBitmap` 与 `glDrawPixels` 不同，位图本身不携带颜色，它只是 0/1 的掩模。像素用什么颜色，取决于调用 `glRasterPos` 那一刻的有效颜色状态。\n\n因此稳妥的顺序是：先设置颜色，再调用 `glRasterPos` 记录颜色与位置，最后调用 `glBitmap`。如果先 `glRasterPos` 再改颜色，位图仍然使用引用位置时的旧颜色。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bitmap"
+          ]
+        }
+      },
+      {
+        "id": "tb-bitmap-storage",
+        "moduleId": "data-layout",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "行的位打包与存储对齐",
+        "markdown": "位图的每一行并不按“列数”逐位紧密存放，而是以 8 位为单位组织，即按一组 8 位无符号字符（字节）排列。因此阵列仍可按方便的网格大小描述形状，但存储时每行会向上取整到完整的字节。\n\n教材的例子用 10 行、9 列的网格定义位阵列：9 列需要 2 个字节，所以每行用 16 个二进制位描述，共 10 行。真正映射到帧缓存时，第 9 列之后的所有位值都被忽略，它们只是补齐字节的填充位。\n\n正因为存在这种补齐，像素存储模式会改变行与行之间是否有额外对齐填充，从而决定数据从哪里开始读；教材示例用 `glPixelStorei(GL_UNPACK_ALIGNMENT, 1)` 指定按字节边界对齐。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 位图函数"
+              ],
+              "lineStart": 2385,
+              "lineEnd": 2422,
+              "assetRefs": [
+                "parts/part-0001/images/388003cc8a7becc7a14b0ecf94ee40b5f087550cb7b6d23a6b3a363312ebfa3b.jpg"
+              ],
+              "excerptSha256": "f54880be4ff2891a377b2d0da615b276488760f44c1afdeabac48c766a45fad2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layout-calc",
+        "moduleId": "data-layout",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "9 列位图为什么每行占 16 位",
+        "markdown": "算一算字节数：9 列需要 $\\lceil 9/8 \\rceil = 2$ 个字节，即每行 16 位，其中只有低 9 位有意义。把对齐设为 1 字节后，10 行就是 $10 \\times 2 = 20$ 字节，正好对应教材 `GLubyte bitShape[20]` 的声明。\n\n如果对齐值不是 1，行与行之间可能按该边界补齐，有效位数不变但每行占用的字节数增加；示例先把对齐设为 1，就是为了让每行恰好占 2 字节、可直接按顺序读取。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bitmap-storage"
+          ]
+        }
+      },
+      {
+        "id": "tb-pixmap",
+        "moduleId": "pixmap-and-buffers",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "glDrawPixels 的参数与数据格式",
+        "markdown": "像素图函数的形式为 `glDrawPixels(width, height, dataFormat, dataType, pixMap)`。`width` 和 `height` 分别是阵列 `pixMap` 的列数和行数。与位图的 0/1 掩模不同，像素图的每个元素是一个颜色值，因此需要两个参数来描述它：\n\n- `dataFormat` 用一个 OpenGL 常量说明阵列中值的含义与分量次序，例如 `GL_BLUE` 表示所有像素都用蓝色，`GL_BGR` 表示按蓝、绿、红次序给出颜色分量；\n- `dataType` 用 `GL_BYTE`、`GL_INT` 或 `GL_FLOAT` 等常量说明每个分量的数据类型。\n\n颜色阵列的左下角仍然映射到由 `glRasterPos` 设定的当前光栅位置。例如 `glDrawPixels(128, 128, GL_RGB, GL_UNSIGNED_BYTE, colorShape)` 会显示一个 128×128 的 RGB 彩色阵列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000109"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 像素图函数"
+              ],
+              "lineStart": 2423,
+              "lineEnd": 2447,
+              "assetRefs": [],
+              "excerptSha256": "14718a54552f42ee317da70f52c900b0a6f62343edf66bf0fa455f5fef2f203d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pixmap-compare",
+        "moduleId": "pixmap-and-buffers",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "位图与像素图的区别",
+        "markdown": "把两者放在一起看：\n\n| 维度 | 位图 `glBitmap` | 像素图 `glDrawPixels` |\n| --- | --- | --- |\n| 阵列内容 | 0 或 1 的掩模 | 每个元素是一个颜色值 |\n| 颜色来源 | 引用光栅位置时的当前颜色 | 阵列自身携带 |\n| 典型用途 | 形状、图案、字符掩模 | 图像块、彩色图案 |\n| 落点 | 左下角对到当前光栅位置 | 左下角对到当前光栅位置 |\n| 附加参数 | 原点与偏移 | 数据格式与数据类型 |\n\n两者的共同点是都依赖当前光栅位置定位，所以都受 `glRasterPos*` 影响；区别在于信息量的来源：位图只回答“哪些像素要着色”，像素图回答“每个像素是什么颜色”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pixmap",
+            "tb-bitmap"
+          ]
+        }
+      },
+      {
+        "id": "tb-drawbuffer",
+        "moduleId": "pixmap-and-buffers",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "用 glDrawBuffer 选择目标缓存",
+        "markdown": "`glDrawPixels` 写入哪个缓存由 `glDrawBuffer(buffer)` 指定。`buffer` 取不同的 OpenGL 符号常量可选择单一颜色缓存或辅助缓存，也可以选择组合：\n\n- `GL_FRONT_LEFT`、`GL_FRONT_RIGHT`、`GL_BACK_LEFT`、`GL_BACK_RIGHT` 选择单个缓存；\n- `GL_FRONT` 或 `GL_BACK` 选择一对前缓存或一对后缓存；\n- `GL_LEFT`、`GL_RIGHT` 选择一对左缓存或一对右缓存；\n- `GL_FRONT_AND_BACK` 选择所有可用的颜色缓存；\n- `GL_AUX` 加下标选择辅助缓存。\n\n这些组合中有些以立体显示有效为前提；若实现不支持立体显示或双缓存，符号常量的实际含义会退化为单一缓存。\n\n除颜色缓存外，像素阵列也可以送往深度缓存或模板缓存，这由 `glDrawPixels` 的 `dataFormat` 取 `GL_DEPTH_COMPONENT` 或 `GL_STENCIL_INDEX` 指定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000109"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 像素图函数"
+              ],
+              "lineStart": 2423,
+              "lineEnd": 2447,
+              "assetRefs": [],
+              "excerptSha256": "14718a54552f42ee317da70f52c900b0a6f62343edf66bf0fa455f5fef2f203d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-buffer-choice",
+        "moduleId": "pixmap-and-buffers",
+        "depth": "support",
+        "kind": "note",
+        "title": "先决定写到哪里，再决定写什么",
+        "markdown": "选择缓存的直觉是“先说要写到哪，再说写什么”。对于普通彩色图案，目标通常是刷新用的颜色缓存；对于深度或模板信息，则先在 `dataFormat` 里说明数据种类，再由 `glDrawBuffer` 决定落到哪个缓存。\n\n教材还指出，若立体显示与双缓存都不支持，实现会退化为仅有一个前-左颜色缓存；双缓存有效时默认可能是后-左与后-右，或仅后-左。因此不能假设某组缓存常量在所有实现上都可用，程序应查询实际能力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-drawbuffer"
+          ]
+        }
+      },
+      {
+        "id": "tb-readpixels",
+        "moduleId": "block-transfer",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "glReadPixels 与 glReadBuffer",
+        "markdown": "反向操作是读取。`glReadPixels(xmin, ymin, width, height, dataFormat, dataType, array)` 把指定缓存中一个矩形块的像素值取出，放进 `array`。\n\n- 矩形块左下角是屏幕坐标 `(xmin, ymin)`，`width` 与 `height` 是列数与行数；\n- `dataFormat` 与 `dataType` 的含义与 `glDrawPixels` 相同；\n- `dataFormat` 取 `GL_DEPTH_COMPONENT` 或 `GL_STENCIL_INDEX` 时可选择深度缓存或模板缓存。\n\n读来源用 `glReadBuffer(buffer)` 选择，它的常量与 `glDrawBuffer` 相同，但不能一次选择全部四个颜色缓存；默认选择由立体观察状态决定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 光栅操作"
+              ],
+              "lineStart": 2448,
+              "lineEnd": 2486,
+              "assetRefs": [],
+              "excerptSha256": "b952ec89b6a1335e000e6daebe846a3ba844df59373e14e4dc9cdc45afc9d37d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-copypixels",
+        "moduleId": "block-transfer",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "glCopyPixels 的源与目标",
+        "markdown": "如果目标只是把一块像素值从一个位置搬到另一个位置，用 `glCopyPixels(xmin, ymin, width, height, pixelValues)` 更直接。\n\n- 块左下角为屏幕坐标 `(xmin, ymin)`，`width`、`height` 为正整数；\n- `pixelValues` 取 `GL_COLOR`、`GL_DEPTH` 或 `GL_STENCIL`，说明复制的是颜色值、深度值还是模板值；\n- 源缓存由 `glReadBuffer` 选择，目标缓存由 `glDrawBuffer` 选择，目标块左下角映射到当前光栅位置；\n- 提供方与接受方的两个区域都必须落在屏幕坐标边界内。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 光栅操作"
+              ],
+              "lineStart": 2448,
+              "lineEnd": 2486,
+              "assetRefs": [],
+              "excerptSha256": "b952ec89b6a1335e000e6daebe846a3ba844df59373e14e4dc9cdc45afc9d37d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-checklist",
+        "moduleId": "block-transfer",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "块传输检查表",
+        "markdown": "把读写与复制串成一条可检查的流程：\n\n1. 用 `glReadBuffer` 选定源缓存；\n2. 决定是取出数据（`glReadPixels`）还是原地搬运（`glCopyPixels`）；\n3. 若搬运，用 `glDrawBuffer` 选定目标缓存，并把当前光栅位置设为目标块左下角；\n4. 核对源矩形与目标矩形都在屏幕坐标范围内，宽度与高度为正；\n5. 用 `dataFormat` 或 `pixelValues` 确认数据类型是颜色、深度还是模板。\n\n最容易漏掉的是第 1 步和第 3 步：`glCopyPixels` 本身不带源和目标的缓存参数，缓存完全由 `glReadBuffer` 与 `glDrawBuffer` 的当前状态决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-readpixels",
+            "tb-copypixels"
+          ]
+        }
+      },
+      {
+        "id": "tb-logicop",
+        "moduleId": "logic-ops",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "逻辑操作组合像素值",
+        "markdown": "把像素值写进缓存时，新值不一定要直接覆盖旧值。先调用 `glEnable(GL_COLOR_LOGIC_OP)` 启用颜色逻辑操作，再用 `glLogicOp(logicOp)` 选择规则，取来的源值与目标缓存中原有值按位组合。\n\n`logicOp` 可取 `GL_AND`、`GL_OR`、`GL_XOR`，分别做按位与、或、异或。教材还给出几种整块处理方式：`GL_COPY_INVERTED` 把取来值的位取反后取代目标值，`GL_INVERT` 只取反目标值而不使用取来的值，`GL_CLEAR` 把目标位清 0，`GL_SET` 把目标位全置 1。\n\n`glLogicOp` 的默认值是 `GL_COPY`，即直接用取来的值替代目标值；这也解释了为什么未启用逻辑操作时写入就是普通覆盖。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 光栅操作"
+              ],
+              "lineStart": 2448,
+              "lineEnd": 2486,
+              "assetRefs": [],
+              "excerptSha256": "b952ec89b6a1335e000e6daebe846a3ba844df59373e14e4dc9cdc45afc9d37d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-logic-truth",
+        "moduleId": "logic-ops",
+        "depth": "support",
+        "kind": "table",
+        "title": "常用逻辑操作的效果",
+        "markdown": "把常用规则的效果列成表，便于对照。记目标位为 D、源位为 S：\n\n| `logicOp` | 结果位 | 直观含义 |\n| --- | --- | --- |\n| `GL_COPY` | S | 直接覆盖，默认值 |\n| `GL_AND` | S 与 D | 只在两者都为 1 处保留 |\n| `GL_OR` | S 或 D | 两者任一为 1 即置 1 |\n| `GL_XOR` | S 异或 D | 相同为 0、相异为 1 |\n| `GL_CLEAR` | 0 | 目标全清 0 |\n| `GL_SET` | 1 | 目标全置 1 |\n| `GL_INVERT` | 取反 D | 只翻目标位，不看源 |\n| `GL_COPY_INVERTED` | 取反 S | 先翻源位再覆盖目标 |\n\n使用异或的常见效果是“同一图案画两次就擦除”：第一次把目标位翻转，第二次再翻转回来，目标位恢复原值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-logicop"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "用下面的题目检查是否真正理解参数与状态的关系：\n\n1. 一个 9 列、10 行的位图，按字节组织时每行至少需要多少位？若对齐为 1，放进 `GLubyte` 数组一共多少字节？\n2. 调用 `glRasterPos2i(30, 40)` 后调用 `glBitmap(9, 10, 0, 0, 20, 15, shape)`，位图左下角落在哪里？下一次绘制会从哪个光栅位置开始？\n3. 如果先调用 `glRasterPos2i(30, 40)`，再改变当前颜色，然后才调用 `glBitmap`，位图用什么颜色？\n4. 想把一块颜色值搬到当前光栅位置，需要哪些函数？源缓存和目标缓存分别由谁决定？\n\n参考要点：9 列向上取整为 2 字节，10 行共 20 字节；左下角在 (30, 40)，之后光栅位置移到 (50, 55)；位图使用引用光栅位置时的颜色，后改的颜色不生效；需要 `glReadBuffer`、`glDrawBuffer` 和 `glCopyPixels`，并把 `pixelValues` 设为 `GL_COLOR`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bitmap",
+            "tb-bitmap-storage",
+            "tb-drawbuffer",
+            "tb-readpixels",
+            "tb-copypixels",
+            "tb-logicop"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "把函数串成一条数据通路",
+        "markdown": "这些函数其实是同一条数据通路的不同环节：`glRasterPos*` 决定“画在哪”，`glBitmap` 或 `glDrawPixels` 决定“拿什么画”，`glReadPixels` 与 `glCopyPixels` 把缓存内容取出或搬运，`glLogicOp` 决定新值如何与旧值结合。\n\n判断该用哪个函数，只需回答两个问题：阵列是二值掩模还是彩色值？像素值是写入、读出还是复制？把这两个答案与缓存选择（`glDrawBuffer` / `glReadBuffer`）对齐，参数就不会配错。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pixel-array-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check",
+        "depth": "core",
+        "title": "像素阵列函数自测",
+        "outcomeRefs": [
+          "o-api-role",
+          "o-raster-position",
+          "o-data-layout",
+          "o-block-transfer"
+        ],
+        "learningPurpose": "检查学习者能否把落点、字节布局和缓存选择规则应用到新的参数组合上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-bitmap",
+            "tb-bitmap-storage",
+            "tb-drawbuffer",
+            "tb-readpixels",
+            "tb-copypixels",
+            "tb-logicop"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别说明：9×10 位图的字节数、给定光栅位置与偏移后的落点、位图颜色的确定时机，以及块复制时选择源与目标缓存的函数。"
+        }
+      }
+    ]
+  },
+  "subtitle": "输出图元",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000107"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 像素阵列函数"
+      ],
+      "lineStart": 2381,
+      "lineEnd": 2384,
+      "assetRefs": [],
+      "excerptSha256": "53bc2b1a48a7e0bfee0c69452c8505f13d4249d9e490642a8f9267066aef6c90"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000108"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 位图函数"
+      ],
+      "lineStart": 2385,
+      "lineEnd": 2422,
+      "assetRefs": [
+        "parts/part-0001/images/388003cc8a7becc7a14b0ecf94ee40b5f087550cb7b6d23a6b3a363312ebfa3b.jpg"
+      ],
+      "excerptSha256": "f54880be4ff2891a377b2d0da615b276488760f44c1afdeabac48c766a45fad2"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000109"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 像素图函数"
+      ],
+      "lineStart": 2423,
+      "lineEnd": 2447,
+      "assetRefs": [],
+      "excerptSha256": "14718a54552f42ee317da70f52c900b0a6f62343edf66bf0fa455f5fef2f203d"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000110"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 光栅操作"
+      ],
+      "lineStart": 2448,
+      "lineEnd": 2486,
+      "assetRefs": [],
+      "excerptSha256": "b952ec89b6a1335e000e6daebe846a3ba844df59373e14e4dc9cdc45afc9d37d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2380,
+    3150
+  ],
+  "scale": 0.91
+}

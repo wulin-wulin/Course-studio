@@ -1,0 +1,582 @@
+{
+  "id": "point-22-6",
+  "title": "顶点与片元阶段的协作",
+  "shortSummary": "梳理顶点着色器到片元着色器的数据传递、插值和职责边界，并说明常见跨阶段变量的设计。",
+  "keyTerms": [
+    "顶点着色器",
+    "片元着色器",
+    "插值"
+  ],
+  "animationType": "shaderPipelineLab",
+  "animationSuggestion": "用三角形从线框逐步铺满片元的过程，同时用颜色渐变展示三个顶点颜色如何按重心权重插值到每个片元，并高亮一个片元，标出它收到的插值结果与顶点原始值的区别。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-22-2",
+    "point-22-3"
+  ],
+  "origin": "llm-extension",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-design-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于流水线阶段与着色器职责的表述，围绕数据流补充插值解释、跨阶段变量设计清单和误区检查。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-stage-roles",
+          "text": "说明顶点着色器与片元着色器各自的处理对象、最低输出和执行次数。"
+        },
+        {
+          "id": "explain-interpolation",
+          "text": "解释顶点着色器写出的变量如何在光栅化后按片元位置插值，成为片元着色器的输入。"
+        },
+        {
+          "id": "design-cross-stage",
+          "text": "为一个渲染任务选择跨阶段变量，并判断哪些计算应放在顶点阶段、哪些应放在片元阶段。"
+        }
+      ],
+      "misconceptions": [
+        "认为顶点着色器算出的颜色就是最终像素颜色，忽略光栅化与插值。",
+        "认为片元着色器可以直接访问图元的全部原始顶点数据。",
+        "认为把所有计算都放进顶点着色器一定更快，忽略逐片元精度与执行次数的取舍。"
+      ],
+      "modules": [
+        {
+          "id": "pipeline-map",
+          "title": "流水线位置与片元来源",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-stage-roles"
+          ],
+          "order": 0
+        },
+        {
+          "id": "programmable-stages",
+          "title": "可编程阶段替代固定功能",
+          "role": "concept",
+          "outcomeRefs": [
+            "explain-stage-roles"
+          ],
+          "order": 1
+        },
+        {
+          "id": "stage-roles",
+          "title": "顶点与片元的职责与数据交接",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-stage-roles",
+            "explain-interpolation"
+          ],
+          "order": 2
+        },
+        {
+          "id": "cross-stage-design",
+          "title": "跨阶段变量的设计",
+          "role": "application",
+          "outcomeRefs": [
+            "design-cross-stage"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pitfalls-check",
+          "title": "常见误区与检查",
+          "role": "check",
+          "outcomeRefs": [
+            "design-cross-stage"
+          ],
+          "order": 4
+        },
+        {
+          "id": "extra-stages",
+          "title": "几何与曲面细分阶段的影响",
+          "role": "extension",
+          "outcomeRefs": [
+            "explain-stage-roles"
+          ],
+          "order": 5
+        },
+        {
+          "id": "summary-bridge",
+          "title": "协作要点回顾",
+          "role": "summary",
+          "outcomeRefs": [
+            "explain-stage-roles",
+            "explain-interpolation",
+            "design-cross-stage"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-stage-roles",
+          "explain-interpolation",
+          "design-cross-stage"
+        ],
+        "method": "用一条数据流复述顶点到片元的交接过程，并对给定任务划分顶点阶段与片元阶段的计算。",
+        "successCriteria": [
+          "能指出顶点着色器的最低输出与片元着色器的处理对象",
+          "能说明逐顶点变量经过插值才成为片元输入",
+          "能为跨阶段变量给出有依据的取舍理由"
+        ],
+        "summaryBlockId": "model-summary"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-pipeline-overview",
+        "moduleId": "pipeline-map",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：OpenGL 流水线与着色语言的关系",
+        "markdown": "OpenGL 自 1992 年以来多次修订，各版本或增加功能，或更好地配合图形硬件的发展，其中变化最明显的是 OpenGL 着色语言（GLSL）。要理解 GLSL 如何与 OpenGL 内部流程结合，需要先看 OpenGL 如何分别处理几何信息和像素信息。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000721"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 渲染流水线"
+              ],
+              "lineStart": 18630,
+              "lineEnd": 18635,
+              "assetRefs": [],
+              "excerptSha256": "7798b9b89726f18200be645a20c352688808d8ec7b303cdb56f4e9203e0e90da"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-fixed-pipeline",
+        "moduleId": "pipeline-map",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：固定功能流水线的几何通道与像素通道",
+        "markdown": "最初的 OpenGL 内部流程是一组有序处理步骤，被组织成双通道的固定功能渲染流水线。\n\n几何图元走几何流水线：图元由一组顶点以及材质、纹理坐标、法向量等额外属性描述，顶点操作与图元装配阶段完成建模和观察变换、纹理坐标生成、裁剪与阴影计算、光照计算，最后通过光栅化确定图元转换为哪些位置的像素。\n\n像素信息走像素流水线：像素数据从主存、像素缓存、纹理内存或帧缓存取得，处理后写入纹理内存或重新光栅化。\n\n完全光栅化的几何和像素数据被合并成一组片元。片元记录每个像素，包含需要随时更新并记入帧缓存的信息；片元进入片元处理阶段后完成纹理映射、雾气、反走样和深度缓存测试，最终写入帧缓存。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000722"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "固定功能流水线"
+              ],
+              "lineStart": 18636,
+              "lineEnd": 18650,
+              "assetRefs": [
+                "parts/part-0006/images/268c7c2ca069df4e110e11f82fdcde9c459b8902cfcd2381608e35adf261fbba.jpg"
+              ],
+              "excerptSha256": "f14ceee30470921d25e5b0661e8ba1a2ebec106292ca40c0775b4f9e0236a0f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fragments-bridge",
+        "moduleId": "pipeline-map",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：几何与像素两路如何汇合",
+        "markdown": "把固定功能流水线看成两条并行通道，有助于理解后面为什么要跨阶段传递数据：几何通道最终被光栅化为像素位置上的覆盖信息，像素通道提供纹理、颜色等逐像素素材，两者汇合后才产生片元。\n\n因此，顶点阶段算出的数值不会直接变成屏幕颜色，它必须先经过光栅化，再在片元阶段被使用或与像素通道的数据结合。教材所说的片元，正是这条汇合路径的产物。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fixed-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "textbook-programmable-pipeline",
+        "moduleId": "programmable-stages",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：用着色器替代固定功能阶段",
+        "markdown": "传统固定功能流水线不能很好地配合现代图形硬件的工作方式，硬件提供的处理能力可能因固定功能限制而无法充分利用。修改后的流水线用可由用户编程控制的处理阶段替代固定的顶点操作和片元操作阶段，应用程序因此可以决定这些点如何被处理。\n\n应用程序通过着色器控制这些阶段。着色器是较短的程序段，被加载到 OpenGL 程序中，最终加入流水线适当的处理单元，替换掉原来的固定功能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000723"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "改变流水线结构"
+              ],
+              "lineStart": 18651,
+              "lineEnd": 18665,
+              "assetRefs": [
+                "parts/part-0006/images/5103e5950f3c1fd098caf20e143c4eca665ff46f1f04390b5bd5f62876fb3fb7.jpg"
+              ],
+              "excerptSha256": "2e815f5615a37527cff7f38f4c962889f3362102af893108ee0aa27121ff19ac"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stage-boundaries",
+        "moduleId": "programmable-stages",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：可编程不等于阶段消失",
+        "markdown": "需要强调，可编程并不等于原有阶段消失。被替换的是阶段内部的固定操作，阶段之间的先后顺序和数据向前传递的关系仍然保留：顶点处理的结果要交给图元装配和光栅化，片元处理则接收光栅化后的片元。\n\n只有把这一点和片元着色器的执行对象放在一起，才能理解为什么顶点着色器写出的数据必须一直传递到片元阶段。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-programmable-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "textbook-vertex-shader",
+        "moduleId": "stage-roles",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：顶点着色器的职责与最低输出",
+        "markdown": "顶点着色器是用来替代原流水线中固定顶点操作阶段的着色程序。它对每一个送入流水线的顶点执行一次，并负责生成所有后续阶段需要的信息。\n\n最低要求是输出每个顶点经过建模、观察和投影变换后在裁剪空间中的坐标。裁剪空间是 OpenGL 流水线中后续部分一直使用的坐标系空间，所有顶点都必须先转换到该坐标系。\n\n除基本功能外，顶点着色器还可以为顶点赋颜色值，生成或转换纹理坐标，甚至可以在顶点上使用光照和表面法向信息进行计算。它通过特定的内置全局变量获取所需信息，这些变量由 OpenGL 实现负责初始化，再通过另外一些全局变量把修改后的数据传递给流水线后续部分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000724"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "顶点着色器"
+              ],
+              "lineStart": 18666,
+              "lineEnd": 18671,
+              "assetRefs": [],
+              "excerptSha256": "f0eb67944cf45706a0d492bb5ccf1d907a78da3607cf070e3abe393e7b79b31f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vertex-payload",
+        "moduleId": "stage-roles",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：跨阶段变量的来源",
+        "markdown": "从职责划分看，顶点着色器既要完成必须做的坐标变换，也要决定往后带什么。最低输出是裁剪空间坐标，但后续阶段真正用到的往往还有颜色、纹理坐标、法向量等逐顶点量。\n\n这些由顶点着色器写出的量，就是本点所说的跨阶段变量：它们不是顶点着色器自己消费的中间结果，而是为光栅化和片元阶段准备的数据。设计时应先列出片元阶段需要的输入，再反推顶点阶段要写出哪些变量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-vertex-shader"
+          ]
+        }
+      },
+      {
+        "id": "textbook-fragment-shader",
+        "moduleId": "stage-roles",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：片元着色器的职责与执行次数",
+        "markdown": "片元着色器与顶点着色器类似，负责在流水线中某个阶段的数据基础上进行处理，并把处理后的数据传递给后续阶段。顾名思义，它操作的是光栅化后的顶点和像素信息，也就是片元。\n\n片元着色器对流水线中的每个片元执行一次。由于一个图元经过光栅化会产生许多片元，它的执行次数可能远远多于顶点着色器，具体取决于图元是如何被光栅化的。\n\n一个片元着色器至少需要根据对象的颜色来分配片元颜色值，此外还要能够进行纹理应用和凹凸映射等操作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000725"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "片元着色器"
+              ],
+              "lineStart": 18672,
+              "lineEnd": 18677,
+              "assetRefs": [],
+              "excerptSha256": "1df5797201986f9908fee0b78663c86f7dacde6c917dbafe4b4efca019fdef8e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-interpolation",
+        "moduleId": "stage-roles",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：顶点值如何变成片元输入",
+        "markdown": "顶点着色器按顶点执行，片元着色器按片元执行，两者的数量差异正是插值存在的原因。光栅化先把图元离散成片元，再根据片元在图元中的位置，对顶点着色器写出的同名变量求加权平均：沿一条边可以用 $c = (1 - t)c_0 + t c_1$ 描述，在三角形内部则按三个顶点的重心权重组合。\n\n因此，片元着色器收到的是插值后的颜色、纹理坐标或法向量，而不是某个顶点的原始值。顶点级计算能产生平滑渐变，但也可能抹平高频细节；需要逐片元精度的效果通常留到片元着色器计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-vertex-shader",
+            "textbook-fragment-shader"
+          ]
+        }
+      },
+      {
+        "id": "model-cross-stage-design",
+        "moduleId": "cross-stage-design",
+        "depth": "core",
+        "kind": "application",
+        "title": "模型补充：跨阶段变量的设计清单",
+        "markdown": "设计跨阶段变量时，可以按下面的顺序判断：\n\n1. 先列出片元着色器完成工作所必需的输入，例如颜色、纹理坐标、法向量和观察空间位置。\n2. 只把片元阶段确实需要的量写入顶点着色器的输出，避免为了可能有用而增加传递负担。\n3. 对每个顶点计算一次即可、结果又能平滑过渡的量放在顶点阶段，例如不随像素快速变化的变换结果；对每个像素都可能不同、需要高精度的量放在片元阶段。\n4. 需要保持平面而不是渐变的量，要在片元阶段以不插值的方式取得，不能指望插值后仍是原值。\n\n一个典型分工是：顶点着色器输出世界空间法向量和纹理坐标，片元着色器据此采样纹理并逐片元计算光照。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-vertex-shader",
+            "textbook-fragment-shader"
+          ]
+        }
+      },
+      {
+        "id": "model-pitfalls-check",
+        "moduleId": "pitfalls-check",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "模型补充：常见误区与纠正",
+        "markdown": "常见误区及纠正：\n\n- 顶点着色器算出的颜色就是最终像素颜色。纠正：顶点值要经过光栅化插值，片元着色器拿到的是插值后的值，还可能再被纹理和光照修改。\n- 片元着色器能访问图元的全部原始顶点数据。纠正：片元阶段处理的是光栅化后的片元，逐顶点数据已经被插值或转换为片元输入。\n- 所有计算都放进顶点着色器更快。纠正：顶点执行次数少，但把需要逐片元精度的效果前移会损失细节或产生错误。\n- 跨阶段变量越多越好。纠正：多余变量增加传递和插值开销，只保留片元阶段真正需要的量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-vertex-shader",
+            "textbook-fragment-shader",
+            "model-interpolation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-other-stages",
+        "moduleId": "extra-stages",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：几何与曲面细分阶段的位置",
+        "markdown": "顶点与片元之间还可能存在其他可编程阶段。几何着色器对流水线中图元装配阶段的输出进一步处理，对每个图元执行一次，并可以获取该图元有关的所有顶点信息；与顶点、片元着色器不同，它不仅能修改输入数据后输出，还可能创建新的图元交给后续流水线。\n\n曲面细分处理由一对着色器控制：曲面细分控制着色器和曲面细分评价着色器专门处理称为块（patch）的图元。块是顶点、每个顶点的属性及块属性的总称；这对着色器拿到一个输入的块，把它分为一组点、线和三角形的集合，再输出块信息传递给后续阶段。\n\n因此，从顶点着色器到片元着色器之间传递的数据和几何数量，还可能被这些阶段改变。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000726"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "几何着色器"
+              ],
+              "lineStart": 18678,
+              "lineEnd": 18681,
+              "assetRefs": [],
+              "excerptSha256": "edec256bea2bfe0f9f622ed29392445268c0f7c43e9fa134cd96b474d0f6727f"
+            },
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000727"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "曲面细分着色器"
+              ],
+              "lineStart": 18682,
+              "lineEnd": 18685,
+              "assetRefs": [],
+              "excerptSha256": "64b194eddbc408e7b3d9f03619e37044c2ebbd5931a807b33745720b8a6170fa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-extra-stages-flow",
+        "moduleId": "extra-stages",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：新增阶段如何影响协作",
+        "markdown": "几何和曲面细分阶段改变的是进入光栅化的图元数量和形状，但上一阶段输出、下一阶段输入的协作方式没有变：顶点着色器仍要提供变换后的顶点和属性，几何或曲面细分阶段可能生成新图元，光栅化再把结果变成片元，片元着色器使用插值后的输入完成逐像素处理。\n\n分析任意一段着色器代码时，都可以用这条数据流定位它处在哪个职责边界内。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-other-stages"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "summary-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：协作要点回顾",
+        "markdown": "把本点压缩成一条数据流：顶点着色器逐顶点执行，至少输出裁剪空间坐标，并可按需输出颜色、纹理坐标、法向量等跨阶段变量；图元装配和光栅化把图元变成片元，并把逐顶点变量按片元位置插值；片元着色器逐片元执行，用插值后的输入完成颜色、纹理和光照等逐像素工作；几何与曲面细分阶段则可能在光栅化前改变图元数量和属性。\n\n职责边界的判断方法是：需要逐顶点且可平滑过渡的计算放在顶点阶段，需要逐片元精度或依赖纹理采样的计算放在片元阶段，跨阶段变量只传递片元真正需要的量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fixed-pipeline",
+            "textbook-vertex-shader",
+            "textbook-fragment-shader",
+            "textbook-other-stages"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "cross-stage-boundary-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-pitfalls-check",
+        "moduleId": "pitfalls-check",
+        "depth": "core",
+        "title": "职责边界判断练习",
+        "outcomeRefs": [
+          "design-cross-stage"
+        ],
+        "learningPurpose": "检查学习者能否根据职责边界和精度需求，把一项计算安排到顶点阶段或片元阶段，并为跨阶段变量给出理由。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-vertex-shader",
+            "textbook-fragment-shader",
+            "model-pitfalls-check"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定一个需要平滑渐变颜色并逐像素采样纹理的三角形，请说明哪些量应由顶点着色器输出、哪些计算应放在片元着色器，并写出判断依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "可编程着色器",
+  "clusterId": "chapter-22",
+  "clusterIds": [
+    "chapter-22"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000721"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 渲染流水线"
+      ],
+      "lineStart": 18630,
+      "lineEnd": 18635,
+      "assetRefs": [],
+      "excerptSha256": "7798b9b89726f18200be645a20c352688808d8ec7b303cdb56f4e9203e0e90da"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000722"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "固定功能流水线"
+      ],
+      "lineStart": 18636,
+      "lineEnd": 18650,
+      "assetRefs": [
+        "parts/part-0006/images/268c7c2ca069df4e110e11f82fdcde9c459b8902cfcd2381608e35adf261fbba.jpg"
+      ],
+      "excerptSha256": "f14ceee30470921d25e5b0661e8ba1a2ebec106292ca40c0775b4f9e0236a0f5"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000723"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "改变流水线结构"
+      ],
+      "lineStart": 18651,
+      "lineEnd": 18665,
+      "assetRefs": [
+        "parts/part-0006/images/5103e5950f3c1fd098caf20e143c4eca665ff46f1f04390b5bd5f62876fb3fb7.jpg"
+      ],
+      "excerptSha256": "2e815f5615a37527cff7f38f4c962889f3362102af893108ee0aa27121ff19ac"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000724"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "顶点着色器"
+      ],
+      "lineStart": 18666,
+      "lineEnd": 18671,
+      "assetRefs": [],
+      "excerptSha256": "f0eb67944cf45706a0d492bb5ccf1d907a78da3607cf070e3abe393e7b79b31f"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000725"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "片元着色器"
+      ],
+      "lineStart": 18672,
+      "lineEnd": 18677,
+      "assetRefs": [],
+      "excerptSha256": "1df5797201986f9908fee0b78663c86f7dacde6c917dbafe4b4efca019fdef8e"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000726"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "几何着色器"
+      ],
+      "lineStart": 18678,
+      "lineEnd": 18681,
+      "assetRefs": [],
+      "excerptSha256": "edec256bea2bfe0f9f622ed29392445268c0f7c43e9fa134cd96b474d0f6727f"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000727"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "曲面细分着色器"
+      ],
+      "lineStart": 18682,
+      "lineEnd": 18685,
+      "assetRefs": [],
+      "excerptSha256": "64b194eddbc408e7b3d9f03619e37044c2ebbd5931a807b33745720b8a6170fa"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1791,
+    -3
+  ],
+  "scale": 0.94
+}

@@ -1,0 +1,673 @@
+{
+  "id": "point-18-2",
+  "title": "纹理映射",
+  "shortSummary": "讲解纹理空间与纹理坐标如何把一维、二维和三维图案映射到表面，并说明像素次序扫描与纹理缩减图。",
+  "keyTerms": [
+    "纹理空间",
+    "纹理坐标",
+    "纹理元",
+    "像素次序扫描",
+    "MIP 图"
+  ],
+  "animationType": "textureMappingLab",
+  "animationSuggestion": "逐像素展示投影区域落到纹理空间、采样颜色并写回像素的过程，支持暂停与重播，并可在最近邻与区域加权两种采样之间切换以对比边缘质量。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-to-pipeline-with-worked-example",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于纹理空间、纹理数组与两种扫描次序的定义和数值，围绕映射流程补充直觉、可计算的索引例子与迁移练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-texture-space",
+          "text": "用纹理空间和纹理坐标解释纹理映射如何把图案对应到物体表面。"
+        },
+        {
+          "id": "interpret-texture-arrays",
+          "text": "读懂一维与二维纹理数组的坐标约定，并说明采样时颜色如何赋给线段或表面区域。"
+        },
+        {
+          "id": "trace-pixel-order",
+          "text": "按像素次序扫描复述从像素到纹理空间的映射步骤，并说明其抗走样处理。"
+        },
+        {
+          "id": "distinguish-texture-forms",
+          "text": "区分体纹理、纹理缩减图案和过程式纹理的适用情境与代价。"
+        }
+      ],
+      "misconceptions": [
+        "把纹理映射当成增加几何细节的方法，忽略它只改变表面着色结果。",
+        "认为纹理坐标必须落在 0 到 1 之间，越界时只有截断一种处理。",
+        "把纹理元的两种含义混为一谈，分不清纹理位置与单个颜色分量。"
+      ],
+      "modules": [
+        {
+          "id": "texture-space-basics",
+          "title": "纹理空间与坐标",
+          "role": "concept-introduction",
+          "description": "从纹理映射的目的进入纹理空间、纹理坐标与纹理元。",
+          "outcomeRefs": [
+            "explain-texture-space"
+          ],
+          "order": 0
+        },
+        {
+          "id": "pattern-arrays",
+          "title": "一维与二维图案的表示",
+          "role": "representation",
+          "description": "说明颜色数组的存储约定与坐标到数组位置的对应。",
+          "outcomeRefs": [
+            "interpret-texture-arrays"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mapping-pipeline",
+          "title": "映射方向与实例",
+          "role": "worked-example-sequence",
+          "description": "按像素次序扫描走一遍像素到纹理空间的映射，并以圆柱为例核对。",
+          "outcomeRefs": [
+            "trace-pixel-order"
+          ],
+          "order": 2
+        },
+        {
+          "id": "texture-variants",
+          "title": "体纹理、MIP 与过程式纹理",
+          "role": "extension",
+          "description": "比较三维图案、缩减图案和过程式定义的使用边界。",
+          "outcomeRefs": [
+            "distinguish-texture-forms"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-connect",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "用三个问题检验映射、缩放与缩减选择，并引出凹凸映射。",
+          "outcomeRefs": [
+            "explain-texture-space",
+            "interpret-texture-arrays",
+            "trace-pixel-order",
+            "distinguish-texture-forms"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-texture-space",
+          "interpret-texture-arrays",
+          "trace-pixel-order",
+          "distinguish-texture-forms"
+        ],
+        "method": "完成三道检查题，并为每道题引用正文中的坐标约定或数值作为依据。",
+        "successCriteria": [
+          "能说出纹理空间坐标范围与数组位置的对应关系",
+          "能解释例 18.1 中两个缩放因子的来源",
+          "能说明 MIP 图解决的变形问题与额外存储代价"
+        ],
+        "exerciseBlockId": "model-texture-check",
+        "summaryBlockId": "model-texture-summary",
+        "nextPointId": "point-18-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-texture-mapping-definition",
+        "moduleId": "texture-space-basics",
+        "depth": "core",
+        "kind": "definition",
+        "title": "纹理映射与纹理空间",
+        "markdown": "纹理映射（texture mapping，也称图案映射）把一个纹理图案贴到物体表面上，用图案的值改变表面外观，而不必增加几何细节。纹理可以由一个矩形数组定义，也可以由一个修改表面光强值的过程定义；它既可以是一维、二维图案，也可以是三维图案。\n\n任一种纹理描述所在的坐标称为**纹理空间**（texture space），位置用 0 到 1.0 范围的**纹理坐标**（texture coordinates）表示。纹理图案中每个位置的颜色描述可以包含不同的分量：4 个 RGBA 分量、3 个 RGB 分量、单个用于蓝色明暗的强度值、指向颜色表的索引，或一个亮度值（RGB 加权平均）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000584"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "纹理映射"
+              ],
+              "lineStart": 15596,
+              "lineEnd": 15601,
+              "assetRefs": [],
+              "excerptSha256": "1e00de1374bd4951c5cc71f0dc85e82eda65b78636f4beff2637129aff1ca8a4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-texture-intuition",
+        "moduleId": "texture-space-basics",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：改变的是取色，不是几何",
+        "markdown": "可以把它理解为给表面“刷一层有图案的漆”：物体几何保持不变，改变的是每个表面位置取到的颜色。与第 18.1 节用大量小多边形堆出图案相比，纹理映射把细节存进一张图案，绘制时再查询，因此大而规则的图案通常更省几何。\n\n这一区别也解释了为什么纹理映射通常与光照计算配合：图案提供表面颜色，光照模型决定这个颜色最终有多亮。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-texture-mapping-definition"
+          ]
+        }
+      },
+      {
+        "id": "model-texel-ambiguity",
+        "moduleId": "texture-space-basics",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清“纹理元”的两种用法",
+        "markdown": "“纹理元”这个词在教材里对应两种说法：有时指纹理空间中与一组颜色分量对应的一个位置（例如一个 RGB 三元组），有时指纹理数组中的单个元素（例如红色分量的值）。读文献或代码时，应先确认它指位置还是指分量，而不是默认两者等价。\n\n另一个常见误解是认为纹理坐标必须落在 $[0,1]$。教材在 18.2.1 节说明，部分纹理映射允许坐标越界，越界时的处理方式取决于系统：可以忽略整数部分，也可以截断到边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-texture-mapping-definition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-linear-texture-pattern",
+        "moduleId": "pattern-arrays",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "线性纹理图案",
+        "markdown": "一维纹理图案用颜色值的单下标数组描述，用来定义线性纹理空间中的一串颜色。例如用下标 0 到 95 的数组存放 32 个 RGB 颜色：最前面三个元素是第一个颜色的 RGB 分量，接着三个元素是第二个颜色，依此类推。这组颜色或其中连续的子集，可以形成穿过多边形的条纹、围绕圆柱的色带，或给一条线段着色。\n\n对线性图案，纹理空间只需一个 $s$ 坐标：$s=0.0$ 指向数组第一组 RGB 颜色，$s=1.0$ 指向最后一组，$s=0.5$ 指向中间那组。把图案映射到场景时，给一个空间位置赋 $s$ 值、另一个空间位置赋另一 $s$ 值，两个位置之间就按指定的颜色数组部分生成多色线。\n\n沿线段通常用线性函数计算像素对应的数组位置。当映射的颜色很少时，每种颜色会占据一整块像素；当许多颜色映射到线段上时，每种颜色只占若干像素。若像素落到两个颜色之间的数组位置，可以用最近的颜色赋值，也可以对相邻两种颜色做线性混合。\n\n部分纹理映射允许坐标超出 $[0,1.0]$：允许越界时可以忽略整数部分，例如 $-3.6$ 与 $0.6$、$12.6$ 表示同一纹理位置；不允许越界时则把小于 0 的值截到 0，把大于 1.0 的值截到 1.0。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000585"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "线性纹理图案"
+              ],
+              "lineStart": 15602,
+              "lineEnd": 15611,
+              "assetRefs": [],
+              "excerptSha256": "f65fc6fd854d6d528f8b554cdf27191982cca14b22714fbc525f4e54550229b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-linear-index-calculation",
+        "moduleId": "pattern-arrays",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "把 s 坐标换算成数组下标",
+        "markdown": "设颜色数 $N=32$，连续坐标 $s\\in[0,1]$ 对应颜色下标\n\n$$i = s \\cdot (N-1) = 31s$$\n\n当 $s=0.5$ 时 $i=15.5$，落在第 15 与第 16 个颜色之间：最近邻取四舍五入后的第 16 个颜色，线性混合则用第 15 与第 16 个颜色各取一半合成。若纹理允许重复，先把 $s$ 减去整数部分再代入；若采用截断，则先把 $s$ 限制在 $[0,1]$ 内。\n\n注意下标与 $s$ 的换算依赖数组长度，$s=0.5$ 只在“中间那组颜色”的意义上对应数组中部。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-linear-texture-pattern"
+          ]
+        }
+      },
+      {
+        "id": "textbook-surface-texture-space",
+        "moduleId": "pattern-arrays",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "表面纹理图案与二维数组",
+        "markdown": "表面纹理通常用矩形颜色图案定义，纹理空间中的位置用二维 $(s,t)$ 坐标指定。图案中每个颜色的描述可以存放在三下标数组里：若图案用 $16\\times16$ 个 RGB 颜色定义，数组共含 $16\\times16\\times3=768$ 个元素。\n\n图 18.1 的二维纹理空间中，$s$ 与 $t$ 都在 0 到 1.0 之间。数组第一行列出了矩形图案底部的颜色，最后一行列出顶部的颜色；坐标 $(0,0)$ 指向第一行第一个位置的第一组颜色分量，$(1.0,1.0)$ 指向最后一行最后一个位置的最后一组颜色分量。若改为自顶向下存储，纹理空间原点就落在左上角；把原点安排在左下角通常会简化空间坐标系的映射。\n\n把图案映射到对象表面的过程与线性纹理映射相同：把图案四角的 $(s,t)$ 赋给场景中的四个空间位置，再用线性变换把颜色值赋给指定空间区域的投影位置；也可以把三个纹理空间坐标赋给一个三角形。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "表面纹理图案"
+              ],
+              "lineStart": 15612,
+              "lineEnd": 15639,
+              "assetRefs": [
+                "parts/part-0005/images/8fbfea84646942734aeec778a69c8675e0fe87f0fd5743b358218d14f97b4f59.jpg",
+                "parts/part-0005/images/37c7f084e9229c720401e4754a1605a1e8b1ffc9cda33d6fe6b9d60e435b2ff7.jpg",
+                "parts/part-0005/images/f7dff7b2d250d72a34e73a32f3f3b1c20288a0d64cb3c20abdfa9b189993bda2.jpg"
+              ],
+              "excerptSha256": "cd5ed49c841655e149130c65f6d9da51be9275364a7ba727e7655930cd354df4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-corner-bilinear-mapping",
+        "moduleId": "pattern-arrays",
+        "depth": "support",
+        "kind": "example",
+        "title": "四角赋值之后如何补中间位置",
+        "markdown": "四角赋值给出的是一组对应关系，中间位置需要插值。若四边形四角分别对应纹理坐标 $(0,0)$、$(1,0)$、$(1,1)$、$(0,1)$，那么表面参数 $(u,v)$ 上的点可以按双线性方式对应回纹理坐标：\n\n$$s=(1-u)(1-v)s_{00}+u(1-v)s_{10}+uv\\,s_{11}+(1-u)v\\,s_{01}$$\n\n$t$ 同理。这样只需知道四个角的纹理坐标，就能为四边形内任意一点算出采样位置；若四角不是单位正方形的角，把对应坐标替换成实际值即可。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-surface-texture-space"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scan-order-directions",
+        "moduleId": "mapping-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "两种映射方向与反走样",
+        "markdown": "表面位置可以用 uv 对象空间坐标描述，投影像素位置用 $x,y$ 笛卡儿坐标指定。纹理映射有两种实现方向：先把纹理映射到对象表面再投影到投影平面，或者先把像素区域映射到对象表面、再映射到纹理空间。前一种常称为**纹理扫描**（texture scanning），后一种称为**像素次序扫描**（pixel-order scanning）、逆扫描或图像次序扫描。\n\n参数线性变换（式 18.1）给出了从纹理空间到对象空间的简单映射：\n\n$$u=a_u s+b_u t+c_u,\\qquad v=a_v s+b_v t+c_v$$\n\n对象到像空间的变换由观察变换与投影变换合并实现。从纹理空间到像素空间映射的缺点是，选定的纹理片往往不能与像素边界完全吻合，因此实际更常用像素空间到纹理空间的映射，它避免了像素分割计算，也更容易做反走样。\n\n一种有效的反走样处理是：把覆盖到邻近像素中心的、稍大的像素投影到纹理空间，再用四棱锥函数对纹理图案中的强度值加权。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000586"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "表面纹理图案"
+              ],
+              "lineStart": 15612,
+              "lineEnd": 15639,
+              "assetRefs": [
+                "parts/part-0005/images/8fbfea84646942734aeec778a69c8675e0fe87f0fd5743b358218d14f97b4f59.jpg",
+                "parts/part-0005/images/37c7f084e9229c720401e4754a1605a1e8b1ffc9cda33d6fe6b9d60e435b2ff7.jpg",
+                "parts/part-0005/images/f7dff7b2d250d72a34e73a32f3f3b1c20288a0d64cb3c20abdfa9b189993bda2.jpg"
+              ],
+              "excerptSha256": "cd5ed49c841655e149130c65f6d9da51be9275364a7ba727e7655930cd354df4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scan-order-tradeoff",
+        "moduleId": "mapping-pipeline",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "为什么像素次序扫描更常用",
+        "markdown": "两种方向解决的是不同问题。纹理扫描按纹理片去覆盖像素，一个像素可能被多个纹理片部分覆盖，需要额外的像素分割来计算最终颜色；像素次序扫描则对每个像素只问一次“它落在纹理的哪里”，每个像素天然得到一个采样区域。\n\n代价转移到了滤波上：最近邻采样保留硬边，但缩小或倾斜时容易走样；把覆盖区域投影到纹理空间再按面积加权（教材中的四棱锥函数），则能得到更平滑的颜色。这也是教材把像素次序扫描与反走样放在一起讨论的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scan-order-directions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-cylinder-texture-example",
+        "moduleId": "mapping-pipeline",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "例 18.1：把图案映射到圆柱",
+        "markdown": "教材例 18.1 把单位正方形中的图案映射到圆柱表面。圆柱表面参数取\n\n$$u=\\theta,\\qquad v=z,\\qquad 0\\le\\theta\\le\\pi/2,\\qquad 0\\le z\\le 1$$\n\n在笛卡儿坐标系中，参数表示为\n\n$$x=r\\cos u,\\qquad y=r\\sin u,\\qquad z=v$$\n\n图案原点映射到表面元素 $(x,y,z)=(r,0,0)$ 的左下角，用线性变换\n\n$$u=s\\pi/2,\\qquad v=t$$\n\n把图案数组映射到对象表面。接下来选择观察位置，并执行从像素坐标到圆柱笛卡儿坐标系的逆观察变换，再用\n\n$$u=\\arctan(y/x),\\qquad v=z$$\n\n把笛卡儿表面坐标换成表面参数，最后用\n\n$$s=2u/\\pi,\\qquad t=v$$\n\n把投影像素位置映射到纹理空间。每个投影像素区域覆盖的图案数组颜色值取平均后赋给该像素。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000587"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "例18.1 表面纹理映射"
+              ],
+              "lineStart": 15640,
+              "lineEnd": 15689,
+              "assetRefs": [
+                "parts/part-0005/images/2cff0a536481674b22268efe1e985fb43ee41fafe88bd1595d48f9c1bc854a35.jpg",
+                "parts/part-0005/images/2822e820e390325f2a1168ad69177bf81100439fdbd0ae72d5ddafc6d5eea0bf.jpg",
+                "parts/part-0005/images/d9edd80b1d43c7f9c9e9ef2ca6fd4ac447654f9f4fc824eea761079b0b0f6e9f.jpg"
+              ],
+              "excerptSha256": "c358bf63b83560150ab9dfbc158363a8964e14a8ca380e8b022be4a9de0bf7cc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cylinder-range-scaling",
+        "moduleId": "mapping-pipeline",
+        "depth": "support",
+        "kind": "note",
+        "title": "看清两个缩放因子的来源",
+        "markdown": "这里的 $s=2u/\\pi$ 是一个把区间搬到单位区间的比例因子：$\\theta$ 从 0 到 $\\pi/2$ 时，$2u/\\pi$ 正好从 0 走到 1，因此整张图案刚好铺满四分之一圆柱面，不需要裁掉或重复。\n\n如果圆柱参数范围换成 $0\\le\\theta\\le2\\pi$，按同样的思路应改为 $s=u/(2\\pi)$；若仍写 $2u/\\pi$，$s$ 就会超出 $[0,1]$，只能依赖重复或截断寻址。$t$ 不需要缩放，是因为 $z$ 本身已经定义在 $[0,1]$ 内。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cylinder-texture-example"
+          ]
+        }
+      },
+      {
+        "id": "textbook-volume-texture",
+        "moduleId": "texture-variants",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "体纹理图案",
+        "markdown": "除线性与表面图案外，还可以给空间三维区域中的位置指定一组颜色，这类纹理称为**体纹理图案**（volume texture patterns）或**实体纹理**（solid textures）。实体纹理用三维纹理空间 $(s,t,r)$ 指定，并在单位立方体内定义，三个纹理坐标范围都是 0 到 1.0。\n\n一个体纹理图案可用四下标数组存储：前三个下标给出行位置、列位置和深度位置，第四个下标指向图案中的特定颜色。例如 16 行、16 列、16 个深度平面的 RGB 实体纹理，共需 $16\\times16\\times16\\times3=12288$ 个元素。\n\n把整个纹理空间映射到一个三维块时，把纹理空间八个角的坐标赋给场景中的空间位置；也可以只把一个深度平面或纹理立方体的一个面映射到场景中的平面区域。实体纹理还能提供剖切显示和切片等内部视图，因此砖块、炉渣或木头等材料可以在对象的整个空间范围内使用同一图案。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000588"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "体纹理图案"
+              ],
+              "lineStart": 15690,
+              "lineEnd": 15699,
+              "assetRefs": [],
+              "excerptSha256": "8910b6e609f2fe4b16573caaf82e7ad5e36245306aeb1c053b984347ecd348d7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-volume-interior-view",
+        "moduleId": "texture-variants",
+        "depth": "support",
+        "kind": "application",
+        "title": "体纹理为什么能显示内部",
+        "markdown": "体纹理的价值在于对象被切开后图案仍然存在：表面纹理只定义了外壳的一层颜色，剖开内部就无颜色可查；体纹理的每个空间点都有颜色，所以切面、钻孔或任意截面都能显示出连续的材料纹理。\n\n代价是存储量按三维增长：同样是 16 个采样位置，二维图案有 $16\\times16$ 个，体纹理有 $16\\times16\\times16$ 个，多一维就多乘一个 16。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-volume-texture"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mip-reduction",
+        "moduleId": "texture-variants",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "纹理缩减图案与 MIP 图",
+        "markdown": "在动画等应用中对象大小经常变化，带纹理的对象缩小时，原图案被应用到更小的区域会导致纹理变形。为避免变形，可以预先创建一系列**纹理缩减图案**（texture reduction patterns），在显示尺寸变小时选用合适的尺寸。\n\n一般情况下，每一级缩减图案都是前一级的一半：若已有 $16\\times16$ 图案，可以再建立 $8\\times8$、$4\\times4$、$2\\times2$ 和 $1\\times1$ 四级。对对象的任意视图，选用与屏幕覆盖面积匹配的缩减图案即可让变形最小。这些图案常称为 MIP 图（MIP maps），术语 mip 来自拉丁语 multum in parvo，意为“包含丰富信息的小对象”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000589"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "纹理缩减图案"
+              ],
+              "lineStart": 15700,
+              "lineEnd": 15705,
+              "assetRefs": [],
+              "excerptSha256": "66455d6b4a9c44eed43faba6cd84211f094995bc6da8d2706107bdfb4d7c38ce"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mip-storage-cost",
+        "moduleId": "texture-variants",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算一遍 MIP 的额外存储",
+        "markdown": "把各级纹素数相加：$16^2+8^2+4^2+2^2+1^2=256+64+16+4+1=341$，比单独一张 $16\\times16$ 图案的 256 个纹素多出约 33%。\n\n这解释了 MIP 的取舍：多存约三分之一的数据，换来按像素覆盖率直接选层，避免远处表面因纹理缩小而产生的闪烁和摩尔纹；代价是额外内存，以及相邻两层之间可能还需要插值过渡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mip-reduction"
+          ]
+        }
+      },
+      {
+        "id": "textbook-procedural-texture",
+        "moduleId": "texture-variants",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "过程式纹理映射方法",
+        "markdown": "另一种添加表面纹理的方法，是把过程式定义直接作用于场景中对象的颜色变量。过程式纹理映射省去了把二维图案映射到表面的变换计算，也消除了对存储容量的需求——当场景使用许多很大的纹理图案、尤其是体纹理时，这一点尤其重要。\n\n过程纹理通过计算表示对象材质或特征的变量生成。例如，可以用定义在三维空间中的调和函数（如正弦曲线）在整个对象上建立木纹或大理石图案，再用随机扰动加到调和变量上，打乱原本对称的图案。教材指出第 22 章会讨论更多细节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000590"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "过程式纹理映射方法"
+              ],
+              "lineStart": 15706,
+              "lineEnd": 15713,
+              "assetRefs": [],
+              "excerptSha256": "9f242e812c25394ce55d2fe20980b6212959961c5743c89b1ebe44bd0fba4998"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-procedural-cost-tradeoff",
+        "moduleId": "texture-variants",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "存储与计算的交换",
+        "markdown": "两种做法交换的是存储与计算：图像纹理把颜色预先存进数组，采样时只需按坐标查表并滤波，代价是内存；过程式纹理不存图案，采样时现算函数值，代价是每个像素都要执行一次或多次函数求值，图案越复杂计算越贵。\n\n因此过程式纹理适合大范围、可用解析式描述的材料（木纹、大理石、噪声起伏），而当需要精确对应某张照片或手绘图案时，仍应使用图像纹理。教材提到的随机扰动是为了让规则函数不那么规整，但扰动幅度过大会破坏图案的可辨识性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-procedural-texture"
+          ]
+        }
+      },
+      {
+        "id": "model-texture-check",
+        "moduleId": "check-and-connect",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "三问自检",
+        "markdown": "试着不看正文回答下面三问，再回到对应块核对。\n\n1. 一个 32 色的线性纹理数组，$s=0.25$ 大约落在第几个颜色上？若采用最近邻采样，你取哪一个？\n2. 为什么例 18.1 中 $s=2u/\\pi$，而 $t$ 直接等于 $v$？如果圆柱只占总圆周的四分之一，这个缩放是否仍然合适？\n3. 对一个从近到远缩小的带纹理表面，为什么固定使用最高分辨率图案会出现问题？改用 MIP 图解决了什么、又付出了什么代价？若不想存任何图案，教材给出的替代方案是什么，它的代价又在哪里？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-linear-texture-pattern",
+            "textbook-cylinder-texture-example",
+            "textbook-mip-reduction",
+            "textbook-procedural-texture"
+          ]
+        }
+      },
+      {
+        "id": "model-texture-summary",
+        "moduleId": "check-and-connect",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "纹理映射的骨架可以概括为三件事：定义纹理空间中的图案，建立纹理坐标与表面位置之间的对应，按屏幕像素决定采样哪一处图案并写回颜色。一维图案用 $s$、二维图案用 $(s,t)$、三维图案用 $(s,t,r)$；越界时用重复或截断，尺寸变化时用 MIP 缩减，存储吃紧时可用过程式定义现算。\n\n下一个知识点转向凹凸映射：纹理映射改变的是表面颜色，而粗糙表面的明暗起伏需要扰动法向量，这已超出颜色图案能表达的范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-texture-mapping-definition",
+            "textbook-scan-order-directions",
+            "textbook-volume-texture",
+            "textbook-mip-reduction",
+            "textbook-procedural-texture"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "texture-coordinate-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-texture-check",
+        "moduleId": "check-and-connect",
+        "depth": "core",
+        "title": "纹理坐标与缩减选择自检",
+        "outcomeRefs": [
+          "interpret-texture-arrays",
+          "trace-pixel-order",
+          "distinguish-texture-forms"
+        ],
+        "learningPurpose": "检查学习者能否把纹理坐标换算、像素次序映射和 MIP 选择迁移到新的数值情境，并说明依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-linear-texture-pattern",
+            "textbook-cylinder-texture-example",
+            "textbook-mip-reduction"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写下三问的答案：32 色数组中 $s=0.25$ 对应的下标、例 18.1 两个缩放因子的来源、以及 MIP 图与过程式纹理各自解决什么问题并付出什么代价。"
+        }
+      }
+    ]
+  },
+  "subtitle": "纹理与表面细节添加方法",
+  "clusterId": "chapter-18",
+  "clusterIds": [
+    "chapter-18"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000584"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "纹理映射"
+      ],
+      "lineStart": 15596,
+      "lineEnd": 15601,
+      "assetRefs": [],
+      "excerptSha256": "1e00de1374bd4951c5cc71f0dc85e82eda65b78636f4beff2637129aff1ca8a4"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000585"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "线性纹理图案"
+      ],
+      "lineStart": 15602,
+      "lineEnd": 15611,
+      "assetRefs": [],
+      "excerptSha256": "f65fc6fd854d6d528f8b554cdf27191982cca14b22714fbc525f4e54550229b4"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000586"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "表面纹理图案"
+      ],
+      "lineStart": 15612,
+      "lineEnd": 15639,
+      "assetRefs": [
+        "parts/part-0005/images/8fbfea84646942734aeec778a69c8675e0fe87f0fd5743b358218d14f97b4f59.jpg",
+        "parts/part-0005/images/37c7f084e9229c720401e4754a1605a1e8b1ffc9cda33d6fe6b9d60e435b2ff7.jpg",
+        "parts/part-0005/images/f7dff7b2d250d72a34e73a32f3f3b1c20288a0d64cb3c20abdfa9b189993bda2.jpg"
+      ],
+      "excerptSha256": "cd5ed49c841655e149130c65f6d9da51be9275364a7ba727e7655930cd354df4"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000587"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "例18.1 表面纹理映射"
+      ],
+      "lineStart": 15640,
+      "lineEnd": 15689,
+      "assetRefs": [
+        "parts/part-0005/images/2cff0a536481674b22268efe1e985fb43ee41fafe88bd1595d48f9c1bc854a35.jpg",
+        "parts/part-0005/images/2822e820e390325f2a1168ad69177bf81100439fdbd0ae72d5ddafc6d5eea0bf.jpg",
+        "parts/part-0005/images/d9edd80b1d43c7f9c9e9ef2ca6fd4ac447654f9f4fc824eea761079b0b0f6e9f.jpg"
+      ],
+      "excerptSha256": "c358bf63b83560150ab9dfbc158363a8964e14a8ca380e8b022be4a9de0bf7cc"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000588"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "体纹理图案"
+      ],
+      "lineStart": 15690,
+      "lineEnd": 15699,
+      "assetRefs": [],
+      "excerptSha256": "8910b6e609f2fe4b16573caaf82e7ad5e36245306aeb1c053b984347ecd348d7"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000589"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "纹理缩减图案"
+      ],
+      "lineStart": 15700,
+      "lineEnd": 15705,
+      "assetRefs": [],
+      "excerptSha256": "66455d6b4a9c44eed43faba6cd84211f094995bc6da8d2706107bdfb4d7c38ce"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000590"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "过程式纹理映射方法"
+      ],
+      "lineStart": 15706,
+      "lineEnd": 15713,
+      "assetRefs": [],
+      "excerptSha256": "9f242e812c25394ce55d2fe20980b6212959961c5743c89b1ebe44bd0fba4998"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1822,
+    645
+  ],
+  "scale": 0.9
+}

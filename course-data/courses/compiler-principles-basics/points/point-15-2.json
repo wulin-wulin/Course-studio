@@ -1,0 +1,472 @@
+{
+  "id": "point-15-2",
+  "title": "Dynamic data structures and pointers",
+  "shortSummary": "说明指针类型、动态分配与堆管理，讨论类型安全检查和解引用代码生成。",
+  "keyTerms": [
+    "指针",
+    "pointer",
+    "动态数据结构",
+    "堆分配",
+    "解引用",
+    "类型安全"
+  ],
+  "animationType": "pointerHeapAllocation",
+  "animationSuggestion": "分步展示 p 从 NIL 到 NEW(p) 获得地址、再到 p↑ 按地址访问字段的过程，高亮堆块的类型标签与指针箭头，最后对照静态图说明指针值是地址而非记录本身。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-13-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于指针、解引用、基类型绑定与垃圾回收的术语和结论，按理解顺序重排为定义、解引用、类型安全、分配回收四段，并补充直觉、分步推演与检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-pointer-model",
+          "text": "解释指针即地址、解引用与间接寻址之间的机制关系。"
+        },
+        {
+          "id": "apply-pointer-safety",
+          "text": "说明把指针绑定到基类型如何保证类型安全，并区分它与 NIL 测试各自的作用。"
+        },
+        {
+          "id": "trace-allocation",
+          "text": "描述 NEW 分配、类型标签与垃圾回收所需编译期信息的协作过程。"
+        }
+      ],
+      "misconceptions": [
+        "把指针变量当成它所指记录本身，而不是一个存放地址的值。",
+        "认为指针绑定基类型后就不再需要 NIL 测试或初始化约定。",
+        "认为回收动态存储只需要知道块的大小，不需要块内指针字段的偏移。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-and-definition",
+          "title": "动态结构与指针的定义",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "explain-pointer-model"
+          ],
+          "order": 0
+        },
+        {
+          "id": "dereference-and-mode",
+          "title": "解引用与间接寻址",
+          "role": "mechanism-walkthrough",
+          "outcomeRefs": [
+            "explain-pointer-model"
+          ],
+          "order": 1
+        },
+        {
+          "id": "type-safety",
+          "title": "指针类型安全",
+          "role": "concept-and-check",
+          "outcomeRefs": [
+            "apply-pointer-safety"
+          ],
+          "order": 2
+        },
+        {
+          "id": "allocation-and-reclamation",
+          "title": "动态分配与存储回收",
+          "role": "mechanism-walkthrough",
+          "outcomeRefs": [
+            "trace-allocation"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与迁移",
+          "role": "formative-check",
+          "outcomeRefs": [
+            "explain-pointer-model",
+            "apply-pointer-safety",
+            "trace-allocation"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pointer-model",
+          "apply-pointer-safety",
+          "trace-allocation"
+        ],
+        "method": "完成指针访问分步推演，并回答分配与回收的检查题，说明每一步的依据。",
+        "successCriteria": [
+          "能区分指针值、被引用记录与字段访问",
+          "能说明基类型绑定与 NIL 测试各自的作用",
+          "能列出垃圾回收器所需的三类编译期信息"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-gc-summary",
+        "nextPointId": "point-15-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-dynamic-structures",
+        "moduleId": "motivation-and-definition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "动态数据结构的来历",
+        "markdown": "Oberon 提供的基本数据结构只有两种：数组是元素类型相同的同构结构，记录是异构结构。更复杂的结构必须在程序执行期间逐个生成组件，并为每个组件单独分配存储；这些组件不必位于连续的存储位置，组件之间的关系用指针显式表示，因此称为动态数据结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dynamic-motivation",
+        "moduleId": "motivation-and-definition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么需要动态结构",
+        "markdown": "可以把动态结构想成一列随时可增删的车厢：每节车厢在需要时才制造，彼此靠显式的挂钩（指针）连接，而不像数组那样预先排成一段连续座位。这样做的代价是，编译器无法在编译期知道结构的最终形状和存储需求，必须把管理工作交给运行期。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-dynamic-structures"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pointer-address",
+        "moduleId": "dereference-and-mode",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "指针就是地址",
+        "markdown": "实现动态结构需要运行期分配存储的机制。在 Oberon 中，标准过程 NEW(x) 为动态变量分配存储，并把所分配块的地址赋给指针变量 x。由此可见指针就是地址；通过指针访问被引用变量必然是间接的，这一点与 VAR 参数相同——事实上，VAR 参数可以看作一个隐藏的指针。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pointer-intuition",
+        "moduleId": "dereference-and-mode",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把指针理解成门牌号",
+        "markdown": "一个有用的直觉是：指针变量里存放的不是记录本身，而是记录所在存储块的门牌号。VAR 参数和指针在实现上共享同一套间接寻址思路，区别只在于指针的地址由程序显式保存和传递。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pointer-address"
+          ]
+        }
+      },
+      {
+        "id": "textbook-dereference",
+        "moduleId": "dereference-and-mode",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "解引用与显式、隐式形式",
+        "markdown": "设 a、b 为指针变量，赋值 a.x := b.y 需要经指针访问记录字段。从引用指针变量到被引用记录变量的这一步称为解引用（dereferencing）。Oberon 的显式解引用操作符是 ↑，因此 a.x 是更显式形式 a↑.x 的缩写；当选择符（点号）前的不是记录而是指针变量时，就发生了隐式解引用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dereference-walkthrough",
+        "moduleId": "dereference-and-mode",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "分步读 a.x := b.y",
+        "markdown": "分三步读 a.x := b.y：\n\n1. 取 b 的值，得到一条记录块的地址；因为 b 是记录指针，b.y 自动按 b↑.y 解释，先解引用再取字段 y。\n2. 取 a 的值，得到另一条记录的地址；a.x 按 a↑.x 解释，定位目标字段。\n3. 把第 1 步读到的值写入第 2 步定位的字段。\n\n关键点在于每个点号前的指针都要先跟随地址，而不是把指针变量本身当成记录。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-dereference",
+            "textbook-pointer-address"
+          ]
+        }
+      },
+      {
+        "id": "textbook-item-mode",
+        "moduleId": "dereference-and-mode",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "符号表与 item 模式",
+        "markdown": "引入指针需要在符号表中增加一类对象，并为 item 增加一种模式，二者都表示间接寻址。由于 VAR 参数本来就要求间接寻址，表示间接的模式已经存在，直接复用即可，只是把名字从 Par 改成 Ind 更贴切。于是，通常隐含的解引用操作把 item 的模式从 Var 转换为 Ind。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-type-binding",
+        "moduleId": "type-safety",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "基类型绑定与 NIL 测试",
+        "markdown": "大量使用指针的程序很容易出现后果严重的错误：若 a 指向类型 T0 的记录、b 指向类型 T1 的记录，则 a.z 表示一个不存在变量的未定义值，而 a.z := b.x 会向未定义位置写入、可能破坏该位置上的其他变量。解决办法是把指针绑定到数据类型，即其基类型（base type），使编译器能在编译期校验指针值而不损失运行效率。这一思想由 C. A. R. Hoare 提出，并首次在 Algol W 中实现（Hoare, 1972）。绑定后，编译器可以保证只有指向 p 的基类型变量的指针值才能赋给 p；NIL 不指向任何变量，被视为属于所有指针类型。若每个指针变量都初始化为 NIL，则在每次通过指针访问前测试 NIL 即可发现错误；这种测试简单但频繁，会降低效率，也可借助存储保护机制，把对 a = NIL 的检查转换为检查 a.z 是否为有效且未受保护的地址。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-type-safety-scope",
+        "moduleId": "type-safety",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清：基类型绑定不等于全部安全",
+        "markdown": "需要澄清一个常见误解：基类型绑定解决的是这个字段是否属于该指针所指向的类型，它在编译期消除了越界字段访问；它并不能自动防止空指针、悬垂指针或已释放存储的访问。NIL 测试和初始化约定仍然是必要的运行期保护，存储保护只是用地址合法性间接实现同类检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-binding"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pointer-summary",
+        "moduleId": "type-safety",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材对指针机制的三点归纳",
+        "markdown": "教材把指针的整合归纳为三点：\n\n1. 每个指针类型都绑定一个基类型，即被引用变量的类型，因此指针容易纳入类型兼容性检查。\n2. x↑ 表示解引用，用间接寻址实现。\n3. 若指针变量初始化为 NIL，且每次访问前都做 NIL 测试，则指针是类型安全的。\n\n通过指针引用的变量由 NEW(p) 分配，其块大小由 p 的基类型决定；NEW 作为运行期支持由操作系统提供。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-allocation",
+        "moduleId": "allocation-and-reclamation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "垃圾回收需要的编译期数据",
+        "markdown": "存储回收问题对抽象程序无关紧要，但对具体程序至关重要，因为存储总是有限的。现代操作系统提供集中式存储管理并带有垃圾回收。对编译器设计者而言，关键问题是：必须向垃圾回收器提供哪些数据，才能在任何时刻安全识别并回收不再相关的存储块？一个变量在没有任何来自已声明指针变量的引用时就不再相关。为此垃圾回收器需要：\n\n1. 所有已声明指针变量的地址；\n2. 动态分配记录中所有指针字段的偏移；\n3. 每个动态分配变量的大小。\n\n这些信息在编译期已知，必须以某种方式传递给运行期的垃圾回收器，因此编译器和系统（含 NEW 分配器与垃圾回收器）必须集成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-type-tag",
+        "moduleId": "allocation-and-reclamation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "类型标签与类型描述符",
+        "markdown": "为使上述信息在运行期可用，过程 NEW 不仅分配存储块，还为所分配变量附带类型描述。这样的描述对同一类型只需一份，因此块中只保存一个指向类型描述符的指针，这个指针对程序员不可见，称为类型标签（type tag）。类型描述符是编译器符号表中类型对象的精简形式，只保留存储回收所需的数据。由此产生三点后果：\n\n1. 编译器必须为每个记录类型生成描述符并放入目标文件；\n2. NEW(p) 除 p 的地址外，还接收一个隐藏参数，给出 p 的基类型描述符地址；\n3. 程序加载器必须解释目标文件中的附加信息并生成类型描述符。\n\n类型描述符说明变量大小和所有指针字段的偏移。此外，为了能遍历数据结构，必须知道其根，因此目标文件还带有所有已声明指针变量的列表，加载时复制到内存，列表中也要包含指向类型描述符的隐藏指针。为免为所有数据类型生成描述符，Oberon 限制指针只能指向记录。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "14. Open Arrays, Pointers and Procedure Types",
+                "Dynamic data structures and pointers"
+              ],
+              "lineStart": 550,
+              "lineEnd": 578,
+              "assetRefs": [],
+              "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gc-summary",
+        "moduleId": "allocation-and-reclamation",
+        "depth": "support",
+        "kind": "summary",
+        "title": "把分配与回收串起来",
+        "markdown": "把分配与回收连起来看：NEW 在堆上划出一块大小由基类型决定的存储，并在块头挂上类型标签；垃圾回收器借助类型描述符知道块内哪些偏移是指针字段、块有多大，再借助已声明指针变量列表（根集合）判断哪些块仍可达。于是分配时写入类型信息正是回收时能安全扫描的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-allocation",
+            "textbook-type-tag"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：安全、回收与限制",
+        "markdown": "判断并说明理由：\n\n1. 把指针 p 绑定到记录类型 T 之后，是否还需要在每次 p↑ 访问前测试 p = NIL？\n2. 垃圾回收器若只知道每个动态块的大小，却不知道块内指针字段的偏移，能否安全回收？\n3. 为什么 Oberon 限制指针只能指向记录，而不允许指向任意类型？\n\n参考要点：第 1 题仍需测试，基类型只保证字段合法；第 2 题不能，缺少指针字段偏移就无法追踪引用；第 3 题因为只需为记录类型生成类型描述符，且记录正是动态结构的组成部分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-binding",
+            "textbook-allocation",
+            "textbook-type-tag"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "通向过程类型",
+        "markdown": "本点把指针即地址一路推进到分配时记录类型信息、回收时据此扫描。下一节的过程类型延续同一主题：过程值同样可以用一个入口地址表示，调用变成间接调用，只是类型检查的依据从基类型换成了过程签名。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-type-tag"
+          ]
+        }
+      }
+    ]
+  },
+  "subtitle": "14. Open Arrays, Pointers and Procedure Types",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000066"
+      ],
+      "headingPath": [
+        "14. Open Arrays, Pointers and Procedure Types",
+        "Dynamic data structures and pointers"
+      ],
+      "lineStart": 550,
+      "lineEnd": 578,
+      "assetRefs": [],
+      "excerptSha256": "3a5f41eabacd6a2e48ae9c025ed7a73104010830484a27515aae568c89a1f897"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1208,
+    -19
+  ],
+  "scale": 0.97
+}

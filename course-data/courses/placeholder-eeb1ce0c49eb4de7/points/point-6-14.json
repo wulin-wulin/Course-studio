@@ -1,0 +1,544 @@
+{
+  "id": "point-6-14",
+  "title": "填充模式的实现方法",
+  "shortSummary": "说明扫描线与内点两类填充过程，以及图案掩码映射、参考点对齐和线性软填充的实现方法。",
+  "keyTerms": [
+    "图案填充",
+    "掩码",
+    "对齐"
+  ],
+  "animationType": "rasterAlgorithmLab",
+  "animationSuggestion": "让一个矩形填充区在固定图案背景上左右平移，同步高亮当前覆盖像素及其掩码下标，直观显示屏幕锚定平铺产生的“透明”效果；并提供切换到对象锚定参考点的对照，让学习者看到图案随对象一起移动的差异。",
+  "difficulty": "中等",
+  "importance": 0.55,
+  "prerequisites": [
+    "point-6-10",
+    "point-6-13"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "implementation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于两类填充过程、图案掩码与线性软填充的定义和公式，并按实现步骤重排：补入图案相位的取模形式、参考点取舍、数值算例与常见错误检查表。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-fill-processes",
+          "text": "区分扫描线区间填充与内点种子填充两类基本过程，并说明各自的输入和适用场景。"
+        },
+        {
+          "id": "apply-pattern-mask",
+          "text": "描述图案矩阵与掩码如何沿扫描线映射和重复，并把像素坐标换算为掩码下标。"
+        },
+        {
+          "id": "analyze-alignment",
+          "text": "分析参考点选择对图案相位、平铺接缝和移动对象外观的影响。"
+        },
+        {
+          "id": "compute-soft-fill",
+          "text": "用透明因子和逻辑操作实现颜色调和填充，并用线性软填充公式求解 t 与混合后的像素颜色。"
+        }
+      ],
+      "misconceptions": [
+        "把图案参考点固定在坐标系原点只是让平铺计算更简单，并不表示图案会自动跟随对象移动；这样做反而会让移动对象看起来是透明的。",
+        "以为只要有两个 RGB 方程就一定能解出多背景色的透明比例；当颜色值非常接近或相互成比例时，方程可能无解。"
+      ],
+      "modules": [
+        {
+          "id": "intro-two-processes",
+          "title": "两类基本填充过程",
+          "role": "orientation",
+          "description": "先建立扫描线区间填充与内点种子填充的分工，再进入填充模式的细节。",
+          "outcomeRefs": [
+            "explain-fill-processes"
+          ],
+          "order": 0
+        },
+        {
+          "id": "pattern-mapping",
+          "title": "图案掩码与扫描线映射",
+          "role": "mechanism",
+          "description": "说明图案矩阵如何映射到像素位置、如何重复，并以影线填充作为同一机制的另一种表达。",
+          "outcomeRefs": [
+            "apply-pattern-mask"
+          ],
+          "order": 1
+        },
+        {
+          "id": "alignment-and-tiling",
+          "title": "参考点与平铺对齐",
+          "role": "analysis",
+          "description": "比较不同参考点策略造成的图案相位、接缝与移动外观差异。",
+          "outcomeRefs": [
+            "analyze-alignment"
+          ],
+          "order": 2
+        },
+        {
+          "id": "blend-logical",
+          "title": "逻辑操作调和填充区",
+          "role": "concept",
+          "description": "用二值系统的逻辑组合建立颜色调和的直观入口。",
+          "outcomeRefs": [
+            "compute-soft-fill"
+          ],
+          "order": 3
+        },
+        {
+          "id": "linear-soft-fill",
+          "title": "线性软填充的求值与混合",
+          "role": "worked-example",
+          "description": "推导透明度系数 t 的求法，并用数值算例走完一次重新填充。",
+          "outcomeRefs": [
+            "compute-soft-fill"
+          ],
+          "order": 4
+        },
+        {
+          "id": "synthesis-and-check",
+          "title": "多背景色扩展、错误排查与小结",
+          "role": "synthesis",
+          "description": "把单背景结论推广到多背景色，整理常见错误、检查表与下一点桥接。",
+          "outcomeRefs": [
+            "analyze-alignment",
+            "compute-soft-fill"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-fill-processes",
+          "apply-pattern-mask",
+          "analyze-alignment",
+          "compute-soft-fill"
+        ],
+        "method": "完成软填充参数求解练习，并说明参考点选择对图案外观的影响。",
+        "successCriteria": [
+          "能按分量差选择用于求 t 的分量并给出数值结果",
+          "能解释屏幕锚定平铺下移动对象为何看起来透明",
+          "能指出多背景色求解无解的条件"
+        ],
+        "exerciseBlockId": "model-soft-fill-exercise",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-6-15"
+      }
+    },
+    "blocks": [
+      {
+        "id": "two-fill-processes",
+        "moduleId": "intro-two-processes",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：填充一个区域的两个基本过程",
+        "markdown": "教材把光栅系统中填充一个区域归结为两个基本过程。第一个过程先确定穿过区域的扫描线与区域的重叠段，再把这些重叠段的位置设定为填充色。第二个过程从区域内的一个给定内点出发，逐个像素向外“绘画”，直到碰到指定的边界条件。\n\n扫描线方法常用于圆、折线边界等较简单的形状，一般的图形软件包都使用这一填充方法；从起始内点出发的填充方法则用于边界较复杂的填充区以及交互式绘画系统。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000203"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "填充模式的实现方法"
+              ],
+              "lineStart": 5307,
+              "lineEnd": 5310,
+              "assetRefs": [],
+              "excerptSha256": "3d6699d9bd1be8bda1e70b9cae0a5b10d9ec6433f3fde54ca82a20f7fb2cbcfc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-choose-fill-process",
+        "moduleId": "intro-two-processes",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：按边界与交互需求选择实现路线",
+        "markdown": "把两个基本过程对照起来，可以按区域边界和交互需求选择实现路线。\n\n| 维度 | 扫描线区间填充 | 内点种子填充 |\n|---|---|---|\n| 主要输入 | 区域边界与各条扫描线 | 内点、内部色或边界色条件 |\n| 工作方式 | 扫描线与边求交得到重叠段，再按段写入填充色 | 从内点逐像素向外扩散，直到满足边界条件 |\n| 典型场景 | 圆、折线等简单边界，一般图形软件包 | 复杂边界填充区、交互式绘画系统 |\n| 主要风险 | 边表维护、水平边与自交处理 | 连通性假设不符导致漏填或溢出，递归深度大 |\n\n这条对照不是教材原文，而是把教材给出的两类过程按实现约束并列，便于在写填充例程前先确定输入与终止条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "two-fill-processes"
+          ]
+        }
+      },
+      {
+        "id": "pattern-mask-mapping",
+        "moduleId": "pattern-mapping",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：图案填充如何覆盖扫描线",
+        "markdown": "图案填充可以通过确定图案在何处覆盖穿过填充区的扫描线来实现。从一个为图案填充指定的起始位置出发，把矩形图案按与扫描线垂直的方向以及沿扫描线水平方向的像素位置进行映射；图案矩阵按掩模的宽度和高度所确定的间隔重复使用。\n\n在图案覆盖到填充区的地方，像素的颜色按掩模中存储的值来设定。也就是说，填充色的来源不是单一颜色，而是掩模在当前位置给出的那一格颜色值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000204"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "填充模式"
+              ],
+              "lineStart": 5311,
+              "lineEnd": 5318,
+              "assetRefs": [],
+              "excerptSha256": "686524ed851859f41918b15afdfc4e2b3cdeab3ad61d543a3c14fa45769423f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pattern-index-formula",
+        "moduleId": "pattern-mapping",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：把像素坐标换算成掩模下标",
+        "markdown": "把像素坐标与掩模格子对应起来，可以把图案下标写成\n\n$$i_x=(x-x_p)\\bmod n_x,\\qquad i_y=(y-y_p)\\bmod n_y$$\n\n其中 $(x_p,y_p)$ 是图案参考点，$n_x$、$n_y$ 是图案矩阵的列数和行数。若采用教材中参考点在坐标系原点、行列从 1 开始自下而上计数的约定，则像素 $(x,y)$ 取图案位置 $(y\\bmod n_y+1,\\ x\\bmod n_x+1)$ 的颜色值。\n\n这个写法把“图案按掩模宽高重复”落成可执行的取模运算：像素坐标减去参考点后取模，得到它在掩模中的位置；参考点改变时，整个图案相位随之平移。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pattern-mask-mapping"
+          ]
+        }
+      },
+      {
+        "id": "hatch-fill-pattern",
+        "moduleId": "pattern-mapping",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "教材：影线填充的两种指定方式",
+        "markdown": "影线填充通过在区域内绘制一组线段来显示单影线或交叉影线。影线的间隔和斜率可以作为影线表的参数来设定；作为一种选择，影线填充也可以当作一个生成一组对角线的图案矩阵来指定。\n\n因此影线并不是单独的填充类别，而是图案填充的一种特例：既可以按线段的间隔与斜率直接绘制，也可以把同样的对角线规则编码进掩模，交给图案映射过程执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000204"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "填充模式"
+              ],
+              "lineStart": 5311,
+              "lineEnd": 5318,
+              "assetRefs": [],
+              "excerptSha256": "686524ed851859f41918b15afdfc4e2b3cdeab3ad61d543a3c14fa45769423f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reference-point-alignment",
+        "moduleId": "alignment-and-tiling",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：图案起始位置的选择及其后果",
+        "markdown": "图案开始位置的参考点 $(x_p,y_p)$ 可以设定在填充区内的任意位置，例如多边形的一个端点，或由区域坐标范围确定的包围盒左下角。为了简化参考点的选择，有些软件包总是把显示窗口坐标系的原点作为图案起始位置。\n\n把 $(x_p,y_p)$ 总是设在原点还简化了图案每一元素映射到单个像素时的平铺操作：例如图案中行的位置从 1 开始、自下而上计数，则图案位置 $(y\\bmod n_y+1,\\ x\\bmod n_x+1)$ 的颜色值赋给屏幕像素 $(x,y)$，这里 $n_y$、$n_x$ 是图案矩阵的行数和列数。\n\n然而，把图案起始点设在坐标系原点时，图案是贴到屏幕背景上，而不是贴到填充区上，这样更高效；使用同一图案的相邻或重叠填充不会在区域之间生成边界；但使用同一图案重新定位或重新填充一个对象，可能导致对象内部像素赋值的移位。相对于静止的图案背景，移动的对象表现为透明的，而不是带着固定的内部图案一起移动。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000204"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "填充模式"
+              ],
+              "lineStart": 5311,
+              "lineEnd": 5318,
+              "assetRefs": [],
+              "excerptSha256": "686524ed851859f41918b15afdfc4e2b3cdeab3ad61d543a3c14fa45769423f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-alignment-tradeoff",
+        "moduleId": "alignment-and-tiling",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：屏幕锚定与对象锚定的取舍",
+        "markdown": "教材指出原点锚定会让图案贴在背景上，这一结论可以整理成两种策略的取舍。\n\n| 参考点策略 | 优点 | 代价 |\n|---|---|---|\n| 固定在显示窗口原点或世界原点 | 平铺计算简单，可以直接复用屏幕缓存；相邻或重叠的同图案区域之间没有接缝 | 图案不随对象移动；重新定位或重新填充对象时内部图案会“流动”，看起来透明 |\n| 锚定到对象（包围盒左下角、多边形端点等） | 图案随对象一起移动，对象外观稳定 | 每个对象都要单独换算图案相位；重叠区域的相位可能不一致，需要额外规则 |\n\n选择依据是：若希望图案像屏幕纹理一样高效平铺，就用固定原点；若希望图案像对象材质一样跟随移动，就必须把参考点绑定到对象并在移动时重算相位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pattern-mask-mapping",
+            "reference-point-alignment"
+          ]
+        }
+      },
+      {
+        "id": "logical-blend",
+        "moduleId": "blend-logical",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用逻辑操作与替代操作组合图案和背景",
+        "markdown": "颜色调和填充区可以通过使用透明因子控制背景和对象颜色的调和来实现，也可以使用简单的逻辑操作或替代操作来实现。教材的图 6.57 在一个二值（黑和白）系统中，展示了这些操作如何把 $2\\times 2$ 的填充图案与背景图案相组合。\n\n具体操作包括与（and）、或（or）、异或（xor）以及简单替代：逐像素比较图案位与背景位，按所选运算得到合成位。二值系统让每种运算的语义可以直接从真值表读出，这也是它适合作为调和填充入门示例的原因。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000205"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "颜色调和填充区"
+              ],
+              "lineStart": 5319,
+              "lineEnd": 5353,
+              "assetRefs": [
+                "parts/part-0002/images/fe43b6bb52e1907fb947867ad6af6843fbc77df7de71bfac1d9a3f94fc2dd30c.jpg"
+              ],
+              "excerptSha256": "911b3c76bfbe615d8674a8db084a80576057d75f441d6563f45612df8386bab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-blend-conditions",
+        "moduleId": "blend-logical",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：逻辑操作能表达什么、不能表达什么",
+        "markdown": "逻辑操作只在二值或有限色值集合上表达明确的布尔合成，适合掩模、选区和图案遮罩等场景；它并不描述真实的光学混合。异或这类运算的结果依赖运算顺序与初值，不能当作物理上的颜色叠加来解读。\n\n当需要表现半透明、抗锯齿边缘或多色混合时，应改用透明因子与线性软填充；此时每个像素的当前颜色是前景与背景的加权组合，权重反映的是覆盖比例，而不是位的真假。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "logical-blend"
+          ]
+        }
+      },
+      {
+        "id": "linear-soft-fill-formula",
+        "moduleId": "linear-soft-fill",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：线性软填充的透明度系数",
+        "markdown": "线性软填充算法将一种前景色 $\\mathbf{F}$ 与单一背景色 $\\mathbf{B}$（$\\mathbf{F}\\neq\\mathbf{B}$）合并后重新绘制一个区域。假如 $\\mathbf{F}$ 和 $\\mathbf{B}$ 的值已知，那么通过检测帧缓存中当前的颜色内容，就可确定这些颜色原来是怎样组合的。区域内将要重新填充的每个像素的当前 RGB 颜色 $\\mathbf{P}$ 是 $\\mathbf{F}$ 和 $\\mathbf{B}$ 的线性组合：\n\n$$\\mathbf{P}=t\\mathbf{F}+(1-t)\\mathbf{B}$$\n\n其中，对于每个像素，透明度系数 $t$ 的值在 0 与 1 之间；$t$ 值小于 0.5，则背景色对区域内部颜色的作用比填充颜色大。\n\n用分离的红色、绿色和蓝色分量描述颜色值，则式中的 $\\mathbf{P}$、$\\mathbf{F}$、$\\mathbf{B}$ 各自包含 RGB 三个分量。于是可以用一个 RGB 颜色分量来计算 $t$：\n\n$$t=\\frac{P_k-B_k}{F_k-B_k},\\qquad k=R,G,B,\\quad F_k\\neq B_k$$\n\n理论上参数 $t$ 对每个 RGB 分量具有相同的值，但取整到整数会使 $t$ 对不同分量得到不同的值。可以选择 $\\mathbf{F}$ 与 $\\mathbf{B}$ 之间具有最大差值的分量，使取整误差最小，然后采用修改的泛滥填充或边界填充程序，根据这个 $t$ 值把新的填充颜色 $\\mathbf{NF}$ 与背景色相混合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000205"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "颜色调和填充区"
+              ],
+              "lineStart": 5319,
+              "lineEnd": 5353,
+              "assetRefs": [
+                "parts/part-0002/images/fe43b6bb52e1907fb947867ad6af6843fbc77df7de71bfac1d9a3f94fc2dd30c.jpg"
+              ],
+              "excerptSha256": "911b3c76bfbe615d8674a8db084a80576057d75f441d6563f45612df8386bab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-soft-fill-worked-example",
+        "moduleId": "linear-soft-fill",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：一次完整的软填充数值算例",
+        "markdown": "设当前像素颜色 $\\mathbf{P}=(140,80,50)$，已知前景 $\\mathbf{F}=(200,100,50)$、背景 $\\mathbf{B}=(50,50,50)$，且 $\\mathbf{F}\\neq\\mathbf{B}$。三个分量的差值分别为 $F_R-B_R=150$、$F_G-B_G=50$、$F_B-B_B=0$，因此蓝色分量不能用于求 $t$，应选差值最大的红色分量：\n\n$$t=\\frac{P_R-B_R}{F_R-B_R}=\\frac{140-50}{200-50}=0.6$$\n\n用绿色分量校验得到 $t=(80-50)/(100-50)=0.6$，与理论值一致；红色分量差值最大，因此取整误差也最小。若新的填充色为 $\\mathbf{NF}=(20,120,200)$，则重新填充后的像素颜色为\n\n$$t\\,\\mathbf{NF}+(1-t)\\mathbf{B}=0.6\\times(20,120,200)+0.4\\times(50,50,50)=(32,92,140)$$\n\n整个过程中，$t$ 由旧像素反推，混合时才代入新填充色；混淆这两步会把新颜色也算进 $t$ 的求解里。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "linear-soft-fill-formula"
+          ]
+        }
+      },
+      {
+        "id": "multi-background-and-limits",
+        "moduleId": "synthesis-and-check",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：多背景色软填充及其求解限制",
+        "markdown": "类似的软填充过程可以用于前景色与多个背景色相混合的区域，例如检测板图案。当两种背景色 $\\mathbf{B}_1$ 和 $\\mathbf{B}_2$ 与前景色 $\\mathbf{F}$ 相混合时，产生的像素颜色 $\\mathbf{P}$ 为\n\n$$\\mathbf{P}=t_0\\mathbf{F}+t_1\\mathbf{B}_1+(1-t_0-t_1)\\mathbf{B}_2$$\n\n其中颜色项系数 $t_0$、$t_1$ 与 $(1-t_0-t_1)$ 的和必须等于 1。可用 RGB 三个分量中的两个建立两个联立方程，解出两个比例参数 $t_0$ 和 $t_1$，再用这些参数把新的填充色与两种背景色混合。\n\n对于三个背景色加一个前景色、或两个背景色加两个前景色的情形，需要全部三个 RGB 方程才能得到四种颜色的相对量。然而，对于有些前景色与背景色的混合，使用两个或三个 RGB 方程都无法求解；当颜色值非常类似或相互成比例时，就会出现这种情况。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000205"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "颜色调和填充区"
+              ],
+              "lineStart": 5319,
+              "lineEnd": 5353,
+              "assetRefs": [
+                "parts/part-0002/images/fe43b6bb52e1907fb947867ad6af6843fbc77df7de71bfac1d9a3f94fc2dd30c.jpg"
+              ],
+              "excerptSha256": "911b3c76bfbe615d8674a8db084a80576057d75f441d6563f45612df8386bab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-soft-fill-errors",
+        "moduleId": "synthesis-and-check",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：软填充实现中的常见错误",
+        "markdown": "教材的公式隐含了几个容易被忽略的前提，实现时对应三类常见错误。\n\n1. **用了零差值的分量。** 求 $t$ 需要 $F_k\\neq B_k$；若某分量前景与背景相同，该式分母为零，必须换用其他分量。\n2. **默认三个分量给出同一个 $t$。** 教材明确说明这只是理论上的性质，整数化后各分量结果会不同，应按分量差最大者取值，或用多个分量互相校验。\n3. **认为多背景色总能求解。** 当颜色值接近或成比例时，方程接近线性相关，两个或三个 RGB 方程都可能无解；此时应放弃软填充反推，改用显式记录覆盖率或分层合成。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "linear-soft-fill-formula",
+            "multi-background-and-limits"
+          ]
+        }
+      },
+      {
+        "id": "model-soft-fill-exercise",
+        "moduleId": "synthesis-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "练习：求透明度系数并混合新填充色",
+        "markdown": "已知前景 $\\mathbf{F}=(180,60,60)$、背景 $\\mathbf{B}=(60,60,60)$，帧缓存中当前像素为 $\\mathbf{P}=(120,60,60)$；现在要用新填充色 $\\mathbf{NF}=(40,140,220)$ 重新填充该像素。\n\n1. 应使用哪个分量求 $t$？为什么？\n2. 求出 $t$。\n3. 写出重新填充后的像素颜色。\n\n参考解答：绿色与蓝色分量差值为 0，只能用红色分量，$t=(120-60)/(180-60)=0.5$；重新填充后为 $0.5\\times(40,140,220)+0.5\\times(60,60,60)=(50,100,140)$。若算出的 $t$ 不在 $[0,1]$ 内，说明当前像素并非由这一前景与背景组合而成，应检查输入假设。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "linear-soft-fill-formula",
+            "model-soft-fill-errors"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "synthesis-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "本点的实现流程可以压缩成一张检查表：\n\n- 先按边界复杂度和交互需求选择扫描线区间填充或内点种子填充；\n- 图案填充时，用参考点和掩模宽高把像素坐标换算成掩模下标，确定每个像素取哪一格颜色；\n- 影线填充既可参数化线段间隔与斜率，也可写成对角线图案矩阵；\n- 参考点固定在原点会简化平铺并让相邻区域无缝，但图案贴在背景上，移动对象会显得透明；需要图案随对象移动时，把参考点锚定到对象并重算相位；\n- 颜色调和可用逻辑操作处理二值掩模，用透明因子与线性软填充处理半透明；求 $t$ 时选分量差最大的通道，多背景色则需检查方程是否有解。\n\n下一节转向反走样：那里的问题是取样频率不足导致的锯齿，而本点的图案映射已经展示了像素级赋值如何决定最终外观，二者共同决定了光栅图像的质量与代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "pattern-mask-mapping",
+            "reference-point-alignment",
+            "linear-soft-fill-formula",
+            "model-soft-fill-exercise"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "soft-fill-t-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-soft-fill-exercise",
+        "moduleId": "synthesis-and-check",
+        "depth": "core",
+        "title": "软填充参数自检",
+        "outcomeRefs": [
+          "compute-soft-fill"
+        ],
+        "learningPurpose": "检查学习者能否按分量差选择通道、正确求出 t，并把新填充色与背景按权混合。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "linear-soft-fill-formula",
+            "model-soft-fill-exercise"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "checks": [
+            "所选分量满足 F_k ≠ B_k 且差值最大",
+            "t 在 [0,1] 内",
+            "混合结果按 t·NF + (1-t)·B 计算"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定 $\\mathbf{F}=(180,60,60)$、$\\mathbf{B}=(60,60,60)$、$\\mathbf{P}=(120,60,60)$，先说明用哪个分量求 $t$，再求出 $t$ 并写出新填充色 $\\mathbf{NF}=(40,140,220)$ 混合后的像素值。"
+        }
+      }
+    ]
+  },
+  "subtitle": "实现图元及属性的算法",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000203"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "填充模式的实现方法"
+      ],
+      "lineStart": 5307,
+      "lineEnd": 5310,
+      "assetRefs": [],
+      "excerptSha256": "3d6699d9bd1be8bda1e70b9cae0a5b10d9ec6433f3fde54ca82a20f7fb2cbcfc"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000204"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "填充模式"
+      ],
+      "lineStart": 5311,
+      "lineEnd": 5318,
+      "assetRefs": [],
+      "excerptSha256": "686524ed851859f41918b15afdfc4e2b3cdeab3ad61d543a3c14fa45769423f3"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000205"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "颜色调和填充区"
+      ],
+      "lineStart": 5319,
+      "lineEnd": 5353,
+      "assetRefs": [
+        "parts/part-0002/images/fe43b6bb52e1907fb947867ad6af6843fbc77df7de71bfac1d9a3f94fc2dd30c.jpg"
+      ],
+      "excerptSha256": "911b3c76bfbe615d8674a8db084a80576057d75f441d6563f45612df8386bab5"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3567,
+    2396
+  ],
+  "scale": 0.87
+}

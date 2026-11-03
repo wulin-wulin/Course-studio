@@ -1,0 +1,632 @@
+{
+  "id": "point-6-10",
+  "title": "通用扫描线填充算法",
+  "shortSummary": "讲解扫描线与多边形边求交、活性边表和奇偶规则的填充流程，并说明自交与水平边的处理。",
+  "keyTerms": [
+    "扫描线填充",
+    "活性边表",
+    "奇偶规则"
+  ],
+  "animationType": "rasterAlgorithmLab",
+  "animationSuggestion": "用同一多边形演示扫描线逐行上移：左侧显示有序边表，右侧显示当前扫描线上的交点、排序配对和填充区段；在顶点处高亮“计一次/计两次”的判定，并让计数器随扫描线推进更新，支持重播。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-4-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "algorithm-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的求交、排序配对、顶点处理、增量求交和边表流程为主线，补充奇偶规则直觉、数值追踪表和检查题，不改变教材的定义、公式与示例数值。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-scanline-fill",
+          "text": "解释扫描线填充的求交、排序、配对与填充流程，并说明奇偶规则的作用。"
+        },
+        {
+          "id": "handle-vertex-cases",
+          "text": "判断扫描线经过顶点时该顶点应计一次还是两次，并说明缩短边的实现方式。"
+        },
+        {
+          "id": "compute-incremental-intersections",
+          "text": "用斜率倒数增量与整数计数器计算相邻扫描线的交点。"
+        },
+        {
+          "id": "build-edge-tables",
+          "text": "描述有序边表与活化边表的组织方式及逐扫描线填充流程。"
+        }
+      ],
+      "misconceptions": [
+        "把扫描线经过顶点时产生的两个边交点都计入，导致内部区段配对错位。",
+        "认为增量公式 x_{k+1}=x_k+1/m 会改变边的斜率或交点位置，而不是只做逐行递推。",
+        "以为有序边表需要保存水平边，忽略水平边斜率为零、无法用斜率倒数求交。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-evenodd",
+          "title": "问题导入与奇偶规则",
+          "role": "concept-intuition",
+          "description": "从求交和内部判定出发，建立扫描线填充的基本图景。",
+          "outcomeRefs": [
+            "explain-scanline-fill"
+          ],
+          "order": 0
+        },
+        {
+          "id": "intersection-and-spans",
+          "title": "交点排序与内部区段",
+          "role": "mechanism",
+          "description": "说明交点从左到右排序后两两配对并填充的规则。",
+          "outcomeRefs": [
+            "explain-scanline-fill"
+          ],
+          "order": 1
+        },
+        {
+          "id": "vertex-handling",
+          "title": "顶点相交与缩短边",
+          "role": "procedure",
+          "description": "区分顶点计数情形，并给出预先缩短边的实现规则。",
+          "outcomeRefs": [
+            "handle-vertex-cases"
+          ],
+          "order": 2
+        },
+        {
+          "id": "incremental-intersection",
+          "title": "增量求交与整数化",
+          "role": "quantitative-trace",
+          "description": "推导斜率倒数递推，并用整数计数器追踪交点变化。",
+          "outcomeRefs": [
+            "compute-incremental-intersections"
+          ],
+          "order": 3
+        },
+        {
+          "id": "edge-tables",
+          "title": "有序边表与活化边表",
+          "role": "procedure",
+          "description": "组织非水平边并按扫描线维护当前活动边。",
+          "outcomeRefs": [
+            "build-edge-tables"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "流程复核、练习与下一点桥接",
+          "role": "check-and-transfer",
+          "description": "整合全流程，用检查题验证顶点计数和整数增量，并连接后续内容。",
+          "outcomeRefs": [
+            "explain-scanline-fill",
+            "handle-vertex-cases",
+            "compute-incremental-intersections",
+            "build-edge-tables"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-scanline-fill",
+          "handle-vertex-cases",
+          "compute-incremental-intersections",
+          "build-edge-tables"
+        ],
+        "method": "完成顶点计数与整数增量的自测题，并用检查表复述完整填充流程。",
+        "successCriteria": [
+          "能正确配对扫描线交点并写出填充区段",
+          "能根据相邻边端点的 y 值判断顶点计数",
+          "能用整数计数器算出交点 x 何时增加",
+          "能按顺序说明有序边表和活化边表的作用"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-pipeline-summary",
+        "nextPointId": "point-6-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "problem-and-evenodd",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "扫描线填充的基本思路",
+        "markdown": "扫描线填充的基本流程是：先用水平扫描线与填充区边界求交，再确定每条扫描线上属于区域内部的像素区段并涂色。对多边形而言，每条扫描线可写成 $y=\\text{常数}$，它与一条边的交点由一对联立线性方程求出，因此求交计算可以很高效。判断哪些区段在内部依赖奇偶规则：从区域外开始沿扫描线向右移动，每穿过一条边界就把“内部/外部”状态翻转一次；于是排序后第 1 与第 2 个交点之间、第 3 与第 4 个交点之间是内部，依此类推。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-evenodd-parity",
+        "moduleId": "problem-and-evenodd",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：一条从左到右的检测线",
+        "markdown": "可以把扫描线想成一条从左向右推进的检测线：它初始位于区域外，状态为“外部”。每遇到一个边界交点就翻转状态，第一次翻转进入内部，第二次翻转离开内部。这个视角说明为什么交点必须从左到右排序后两两配对，也说明只要能正确统计穿越次数，就不需要先知道多边形顶点的整体形状。真正的难点在于扫描线恰好穿过顶点时，这个顶点究竟算一次还是两次穿越，下文会单独处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-span-pairs",
+        "moduleId": "intersection-and-spans",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "交点排序后两两配对填充",
+        "markdown": "对每条与多边形相交的扫描线，先求出它与各边的全部交点，再从左到右排序；随后对每一对相邻交点，把两交点之间（包括两个端点）的像素位置置为指定颜色。图 6.46 的示例中，四个交点定义了两组内部像素：$x=10$ 到 $x=14$ 的 5 个像素，以及 $x=18$ 到 $x=24$ 的 7 个像素。如果使用图案填充，扫描线上每个像素的颜色由填充图案在该像素位置的重叠结果决定，而不是简单地取单一颜色。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-span-walkthrough",
+        "moduleId": "intersection-and-spans",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：四个交点如何配对",
+        "markdown": "设某条扫描线与多边形的交点排序后为 $x=3,9,14,20$。按奇偶配对得到两组内部区段：$[3,9]$ 与 $[14,20]$，填充时包含端点。若忘记排序，把交点按求交顺序直接两两配对，就可能把真正的内部区段和外部区域互换。实际操作顺序是：求交、排序、配对、填色；本例填充像素 3 至 9 和 14 至 20。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-span-pairs",
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-vertex-issue",
+        "moduleId": "vertex-handling",
+        "depth": "core",
+        "kind": "warning",
+        "title": "顶点相交为什么需要特殊处理",
+        "markdown": "当扫描线恰好经过多边形的一个顶点时，顶点连接的两条边都会与这条扫描线相交；若不加区分地把两个交点都计入，交点列表的配对就会出错。图 6.47 展示了两种情形：扫描线 $y'$ 与偶数条边相交，两对交点正确标出内部像素；扫描线 $y$ 却与 5 条边相交。区分依据是共享顶点的两条边相对扫描线的位置：两条边分居扫描线两侧时，该顶点只计为一个边界交点；两条边位于扫描线同侧时，顶点是多边形边界上的局部极值（最大或最小），这两条边的交点都要加入列表。也可以沿多边形边界按顺时针或逆时针方向检查相邻边的三个端点 y 值：y 值单调递增或递减就把中间顶点计为一个交点，否则按局部极值处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vertex-decision",
+        "moduleId": "vertex-handling",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充整理：顶点计数的判断表",
+        "markdown": "判断顶点计数的规则可以整理为下表（只考虑非水平边）：\n\n| 相邻三条边的端点 y 值 | 几何含义 | 扫描线穿过共享顶点时的交点计数 |\n|---|---|---|\n| 单调递增或单调递减 | 两条边分居扫描线两侧 | 计 1 个交点 |\n| 先增后减 | 顶点是局部最大 | 两条边的交点都计入 |\n| 先减后增 | 顶点是局部最小 | 两条边的交点都计入 |\n\n表中“单调”针对共享顶点前后两条非水平边的三个端点 y 值；水平边不参与这个判断，也不进入有序边表。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vertex-issue"
+          ]
+        }
+      },
+      {
+        "id": "tb-edge-shortening",
+        "moduleId": "vertex-handling",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "预先缩短边以消除重复交点",
+        "markdown": "实现时可以不做逐点分类，而是按统一方向（顺时针或逆时针）处理多边形边界上的非水平边，并预先缩短某些边，使本应计为一个交点的顶点在求交时自然只产生一个交点。处理当前边时，检查它与下一条非水平边的三个端点 y 值是否单调。若单调递增，把当前边的较高端点 y 值减去 1（图 6.48(a)）；若单调递减，把紧随当前边的那条边的较高端点 y 值减去 1（图 6.48(b)）。这样得到的边表仍按原始多边形语义工作，只是把共享顶点拆成了两个错开一行的端点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shortening-example",
+        "moduleId": "vertex-handling",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：单调递增与单调递减的缩短",
+        "markdown": "设当前非水平边从 $(x_1,2)$ 到 $(x_2,5)$，下一条非水平边从 $(x_2,5)$ 到 $(x_3,8)$。三个端点的 y 值 2、5、8 单调递增，说明扫描线 $y=5$ 会穿过共享顶点。按规则把当前边的较高端点从 $y=5$ 缩短到 $y=4$ 后，扫描线 $y=5$ 只与下一条边相交，顶点处只留下一个交点，交点列表的奇偶配对不会被破坏。若三个端点的 y 值为 8、5、2（单调递减），则缩短下一条边的较高端点，效果同样是消除多余的重复交点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vertex-issue",
+            "tb-edge-shortening"
+          ]
+        }
+      },
+      {
+        "id": "tb-incremental",
+        "moduleId": "incremental-intersection",
+        "depth": "core",
+        "kind": "formula",
+        "title": "利用相关性的增量交点计算",
+        "markdown": "一条边与相邻两条扫描线的交点满足斜率关系。设第 $k$ 条和第 $k+1$ 条扫描线上的交点分别为 $(x_k,y_k)$ 与 $(x_{k+1},y_{k+1})$，边斜率为\n\n$$m=\\frac{y_{k+1}-y_k}{x_{k+1}-x_k}$$\n\n相邻扫描线的 y 坐标只差 1，即\n\n$$y_{k+1}-y_k=1$$\n\n于是下一条扫描线的交点 x 值可由前一条递推得到：\n\n$$x_{k+1}=x_k+\\frac{1}{m}$$\n\n因此沿同一条边逐条扫描线计算时，只需反复加上斜率倒数 $1/m$，不必每次重新解联立方程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-incremental-intuition",
+        "moduleId": "incremental-intersection",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：斜率倒数是什么",
+        "markdown": "斜率倒数 $1/m$ 的几何含义是：扫描线每向上移动 1 个单位，它与这条边的交点就向右（或向左）移动 $1/m$ 个像素。因此沿一条边逐行求交时，交点 x 值的更新是纯加法。若边很陡，$1/m$ 很小，交点逐行只移动一点点；若边很平缓，$1/m$ 很大，交点会一次跳过很多像素。特别地，垂直边的 $1/m=0$，交点 x 保持不变。水平边的斜率为 0，$1/m$ 无定义，这也解释了为什么边表只保存非水平边。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-incremental"
+          ]
+        }
+      },
+      {
+        "id": "tb-parallel-formula",
+        "moduleId": "incremental-intersection",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "并行实现中的直接交点公式",
+        "markdown": "在并行实现中，可以把每条与多边形相交的扫描线分配给一个独立处理器，各自计算与该扫描线的交点。沿斜率为 $m$ 的边，第 $k$ 条扫描线相对初始扫描线的交点 x 值可直接写成\n\n$$x_k=x_0+\\frac{k}{m}$$\n\n其中 $x_0$ 是初始扫描线上的交点。这样各扫描线的计算互不依赖，适合并行；代价是不能像顺序算法那样复用上一条扫描线的结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parallel-note",
+        "moduleId": "incremental-intersection",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充说明：两种公式的分工",
+        "markdown": "并行公式 $x_k=x_0+k/m$ 与顺序递推 $x_{k+1}=x_k+1/m$ 描述的是同一条边上的交点，只是前者从初始扫描线一次跳到第 $k$ 条，后者一步一步累加。选择哪种形式取决于任务划分：按扫描线切分到多个处理器时用并行公式；单处理器逐行推进时用递推，并可进一步用整数计数器避免浮点运算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parallel-formula",
+            "tb-incremental"
+          ]
+        }
+      },
+      {
+        "id": "tb-integer-increment",
+        "moduleId": "incremental-intersection",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "用整数计数器完成增量求交",
+        "markdown": "顺序填充中把斜率写成两整数之比 $m=\\frac{\\Delta y}{\\Delta x}$，则沿边的交点递推为\n\n$$x_{k+1}=x_k+\\frac{\\Delta x}{\\Delta y}$$\n\n整数实现用一个计数器代替小数：计数器从 0 开始，每移到一条新扫描线就加上 $\\Delta x$；当计数器值大于等于 $\\Delta y$ 时，交点 x 加 1，并把计数器减去 $\\Delta y$。这等价于保留交点的小数部分并累加，直到凑满一个整数。以 $m=7/3$ 为例，增量取 3，计数器依次为 3、6、9；在初始扫描线以上的第三条扫描线上，9 大于 7，于是 x 加 1，计数器重置为 $9-7=2$。负斜率的边可用同样计算。若要把 x 取整到最近像素，可令每步计数器增加 $2\\Delta x$ 并与 $\\Delta y$ 比较，凑满时 x 加 1 且计数器减去 $2\\Delta y$；这样在 $m=7/3$ 时，x 会在初始扫描线以上的第 2、4、6、9 条扫描线上增加。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-integer-walkthrough",
+        "moduleId": "incremental-intersection",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充数值追踪：m=5/2 的计数器",
+        "markdown": "以 $m=\\Delta y/\\Delta x=5/2$ 的边为例，取增量 $\\Delta x=2$、阈值 $\\Delta y=5$，计数器从 0 开始。每移到下一条扫描线就加 2，达到或超过 5 时令交点 x 加 1 并减去 5：\n\n| 初始扫描线以上的行号 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |\n|---|---|---|---|---|---|---|---|---|\n| 累加后的计数器 | 2 | 4 | 6→1 | 3 | 5→0 | 2 | 4 | 6→1 |\n| x 是否加 1 | 否 | 否 | 是 | 否 | 是 | 否 | 否 | 是 |\n\n检查：每行 x 平均增加 $\\Delta x/\\Delta y=2/5=0.4$ 个像素；3 行累计 1.2 个像素，因此第 3 行发生第 1 次进位，第 5 行累计 2.0 个像素发生第 2 次进位，第 8 行累计 3.2 个像素发生第 3 次进位，与表格一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-integer-increment"
+          ]
+        }
+      },
+      {
+        "id": "tb-edge-tables",
+        "moduleId": "edge-tables",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "有序边表与活化边表",
+        "markdown": "为了高效填充，先把多边形边界存入有序边表（sorted edge table）。按每条非水平边的最小 y 值做桶排序，把边放到对应的扫描线位置；表中每个入口记录该边的最大 y 值、边在较低顶点处的 x 交点，以及斜率倒数。对同一条扫描线上的边，按从左到右的顺序排列。教材图 6.50 的多边形示例中，边 DC 在 y 方向被缩短了一个单位，以解决顶点相交。填充从多边形底部向顶部逐条扫描线进行：对每条与边界相交的扫描线生成活化边表（active edge list，也译作活性边表），它包含当前与该扫描线相交的所有边，并用增量相关计算得到交点。为便于计算，也可把 $\\Delta x$、$\\Delta y$ 存入有序边表。对每条扫描线，填充从最左边交点值到最右边交点值之间每一对交点之间的像素区段；每条多边形边在顶部端点 y 方向缩短一个单位，还能保证相邻多边形填充的像素不会相互覆盖。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000197"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "通用扫描线填充算法"
+              ],
+              "lineStart": 5133,
+              "lineEnd": 5214,
+              "assetRefs": [
+                "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+                "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+                "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+                "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+                "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+                "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+              ],
+              "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "全流程检查表",
+        "markdown": "把本节算法串成可执行的检查表：\n\n1. 只取非水平边，按最小 y 值桶排序建立有序边表，每项记录最大 y、较低端交点 x 与斜率倒数；必要时先用缩短边规则处理共享顶点。\n2. 扫描线从多边形底部向顶部推进；把最小 y 已到达当前扫描线的边加入活化边表，把最大 y 已越过的边移出。\n3. 对活化边表中的边按当前交点 x 排序，并按增量规则更新每个交点。\n4. 从左到右两两配对交点，填充每对交点之间的像素区段。\n5. 处理完最高顶点、活化边表清空时结束。\n\n顶点计数、增量更新和边表维护是三个最容易出错的环节，分别对应前面的顶点规则、整数计数器和有序边表。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-span-pairs",
+            "tb-vertex-issue",
+            "tb-edge-shortening",
+            "tb-incremental",
+            "tb-integer-increment",
+            "tb-edge-tables"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查题：交点配对、顶点计数与整数增量",
+        "markdown": "先独立作答，再对照参考答案。\n\n1. 一条扫描线与多边形有四个交点 $x=2,7,11,16$，应填充哪些像素区段？\n2. 某共享顶点的相邻三条边端点 y 值为 4、7、10，扫描线 $y=7$ 通过该顶点时，这个顶点应计几个交点？\n3. 边斜率 $m=4/3$，整数计数器采用增量 $\\Delta x$、阈值 $\\Delta y$，x 会在初始扫描线以上的第几条扫描线上增加 1？\n4. 有序边表中每条边的记录需要哪三项信息？为什么只保存非水平边？\n\n参考答案：\n\n1. 排序后两两配对，填充 $[2,7]$ 与 $[11,16]$，包含端点。\n2. y 值 4、7、10 单调递增，顶点计 1 个交点。\n3. $\\Delta y=4$、$\\Delta x=3$，计数器依次为 3、6（进位后 2）、5（进位后 1）、4（进位后 0），所以 x 在第 2、3、4 条扫描线上增加 1。\n4. 记录该边的最大 y、较低端交点 x 与斜率倒数（实现时也可另存 $\\Delta x$、$\\Delta y$）；水平边斜率为 0、斜率倒数无定义，无法用增量法求交，因此只保存非水平边。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-span-pairs",
+            "tb-vertex-issue",
+            "tb-integer-increment",
+            "tb-edge-tables"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "下一点桥接",
+        "markdown": "本节的通用扫描线算法是后续区域填充的基础。下一知识点会在凸多边形的特殊条件下，讨论哪些求交、配对与顶点处理步骤可以简化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-edge-tables"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "vertex-and-counter-check",
+        "type": "formative-check",
+        "title": "顶点计数与整数增量自测",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "handle-vertex-cases",
+          "compute-incremental-intersections"
+        ],
+        "learningPurpose": "检查学习者能否把顶点计数规则和整数计数器规则应用到新数值。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-vertex-issue",
+            "tb-integer-increment"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用一句话说明顶点计数的判断依据，并写出整数计数器在什么条件下让交点 x 加 1。"
+        }
+      }
+    ]
+  },
+  "subtitle": "实现图元及属性的算法",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000197"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "通用扫描线填充算法"
+      ],
+      "lineStart": 5133,
+      "lineEnd": 5214,
+      "assetRefs": [
+        "parts/part-0002/images/70ac41d89af4eee3bf2113f265919f97d8fa1750bf937766dd4075b3300be2c2.jpg",
+        "parts/part-0002/images/4b73c0cacb904fac106e46135ab9a931980dfb2995f65e1dd832ef189af00fc1.jpg",
+        "parts/part-0002/images/fa05186cc70c72b00dbfa81e0cb57adc465dce62152c7ac5a3d2ea58e6ead5da.jpg",
+        "parts/part-0002/images/f08b8c8f554d592f10daae81e603a340f186e90345b36567d1299da3ac672945.jpg",
+        "parts/part-0002/images/1565e9688305d15a0b512c6a42afd0beb80c711017677beda39ba6626791331a.jpg",
+        "parts/part-0002/images/e1bb22cf8078fce10ec8defd5c9a7948b29906fa63df45434006c8c0840a3bb1.jpg"
+      ],
+      "excerptSha256": "fa57f39ade927fb7b111b768d5340b803333071d7c02afabbeb2b792df519dcf"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3833,
+    2408
+  ],
+  "scale": 0.95
+}

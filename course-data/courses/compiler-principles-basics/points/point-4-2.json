@@ -1,0 +1,478 @@
+{
+  "id": "point-4-2",
+  "title": "Table-driven Top-down Parsing",
+  "shortSummary": "借助分析表与显式栈实现自顶向下语法分析，说明预测分析表如何由 grammar 构造并在运行时分派产生式。",
+  "keyTerms": [
+    "表驱动分析",
+    "table-driven parsing",
+    "预测分析表",
+    "分析栈",
+    "grammar",
+    "first 集",
+    "follow 集"
+  ],
+  "animationType": "tableDrivenParsing",
+  "animationSuggestion": "用可步进或自动播放的示意展示语法结构图：高亮当前节点与当前输入符号，用箭头标出选择 next、alt 还是进入 header 子结构，并在侧栏显示已识别的非终结符与当前候选判断，最后停在接受或失败状态；提供重播回到同一初始输入。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-4-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于语法数据结构、指针遍历和单符号前瞻的定义与约束，围绕遍历过程补充对比、追踪示例与检查任务，模型补充单独标注来源。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "o-idea",
+          "text": "解释表驱动分析把语法作为数据参数、由通用程序解释的核心思想，并说明它与递归下降的差别。"
+        },
+        {
+          "id": "o-represent",
+          "text": "说明 next 与 alt 指针、终结符与非终结符记录以及 header 如何共同表示 EBNF 语法。"
+        },
+        {
+          "id": "o-trace",
+          "text": "依据当前输入符号和指针结构，逐步跟踪一次表驱动自顶向下分析过程。"
+        },
+        {
+          "id": "o-lookahead",
+          "text": "说明单符号前瞻所需语法假设、Empty 的作用，以及假设被破坏时的边界。"
+        }
+      ],
+      "misconceptions": [
+        "把表驱动分析理解为必须使用由 FIRST/FOLLOW 计算出的二维预测表，而忽略本节把语法本身组织成可遍历的图或表。",
+        "认为表驱动与递归无关，因此分析过程中不需要记录进入的子结构位置。",
+        "忽略单符号前瞻的语法前提，误以为任意上下文无关文法都能只靠一个输入符号直接选择候选。"
+      ],
+      "modules": [
+        {
+          "id": "m-idea",
+          "title": "从递归下降到表驱动",
+          "role": "motivation",
+          "description": "先建立“语法作为数据”的问题意识，再展开数据结构与算法。",
+          "outcomeRefs": [
+            "o-idea"
+          ],
+          "order": 0
+        },
+        {
+          "id": "m-representation",
+          "title": "语法的数据表示",
+          "role": "concept",
+          "description": "用 next/alt 指针、终结符与非终结符记录和 header 表示 EBNF。",
+          "outcomeRefs": [
+            "o-represent"
+          ],
+          "order": 1
+        },
+        {
+          "id": "m-algorithm",
+          "title": "通用分析算法的遍历过程",
+          "role": "procedure",
+          "description": "说明通用过程如何沿结构前进、比较符号并进入非终结符子结构。",
+          "outcomeRefs": [
+            "o-trace",
+            "o-idea"
+          ],
+          "order": 2
+        },
+        {
+          "id": "m-lookahead",
+          "title": "单符号前瞻的条件与边界",
+          "role": "assumption",
+          "description": "解释单次比较得以成立的前提，以及 Empty 在重复结构中的作用。",
+          "outcomeRefs": [
+            "o-lookahead"
+          ],
+          "order": 3
+        },
+        {
+          "id": "m-check",
+          "title": "追踪练习与小结",
+          "role": "check",
+          "description": "用具体语法片段检验遍历与假设判断，并收束本点。",
+          "outcomeRefs": [
+            "o-trace",
+            "o-lookahead"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-idea",
+          "o-represent",
+          "o-trace",
+          "o-lookahead"
+        ],
+        "method": "完成一次从语法结构到输入串的逐步追踪，并判断给定语法是否满足单符号前瞻的前提。",
+        "successCriteria": [
+          "能指出 next 与 alt 各自指向什么",
+          "能说明进入非终结符子结构后如何继续",
+          "能依据起始符号是否互异判断单符号前瞻是否足够",
+          "能说明 Empty 标记重复出口的作用"
+        ],
+        "exerciseBlockId": "md-practice",
+        "summaryBlockId": "md-summary",
+        "nextPointId": "point-4-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-two-techniques",
+        "moduleId": "m-idea",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：表驱动分析是自顶向下原则的另一实现",
+        "markdown": "递归下降只是实现自顶向下分析原则的多种技术之一。表驱动分析把这一原则推广为通用算法：具体语法不再写进各个过程的代码，而是作为一种参数以数据结构的形式提供，通常表示为图或表，再由通用分析程序解释执行。解释的方向由待分析的源文本引导。\n\n因此，分析器的行为不再由手写代码的分支结构决定，而由它读入并解释的语法数据结构决定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-code-vs-data",
+        "moduleId": "m-idea",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：语法放在代码里还是数据里",
+        "markdown": "两种技术的差别可以概括为“语法放在哪里”：递归下降把每个非终结符的识别逻辑固化为一组相互调用的过程，语法分散在控制流中；表驱动分析把语法集中为一张可供遍历的结构，通用过程只负责按指针行走。\n\n这一对比解释了为什么表驱动把具体语法称为“参数”：换一门语言的语法，不必重写通用遍历逻辑，只需换掉它解释的那份数据结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-techniques"
+          ]
+        }
+      },
+      {
+        "id": "tb-syntax-data",
+        "moduleId": "m-representation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用 next 与 alt 串起 EBNF 结构",
+        "markdown": "在数据结构层面，EBNF 有两种重复构造：因子的序列与项的序列。它们自然被表示为链表。结构中的每个元素代表一个（终结）符号，因此每个元素必须能指出两个后继：next 指向下一个连续的因子，alt 指向下一个可选的项。用 Oberon 表达时，终结符与非终结符的元素共享这一基础表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-next-alt-intuition",
+        "moduleId": "m-representation",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：把两种指针看成两种边",
+        "markdown": "把 next 与 alt 想成图中的两种边会更直观：沿 next 走，是在同一个候选内部继续读下一个因子；沿 alt 走，是在当前候选不匹配时改试下一个候选项。教材的 Figure 4.1 正是用水平边表示 next、垂直边表示 alt。\n\n以 EBNF 片段 `E = T { '+' T }` 为例，重复部分会被展开成项序列，最后接到表示空序列的 Empty 上：\n\n```text\nT --next--> '+' --next--> T --alt--> Empty\n```\n\n读这个片段时，先沿 next 连续走过因子 `T`、`'+'`、`T`；重复结束后再沿 alt 到达 `Empty`，离开重复结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-syntax-data"
+          ]
+        }
+      },
+      {
+        "id": "tb-node-kinds",
+        "moduleId": "m-representation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：终结符记录、非终结符记录与 header",
+        "markdown": "两类元素用类型扩展区分。表示终结符的记录用附加属性 `sym` 指明是哪个符号；表示非终结符的元素则保存一个指向该符号对应数据结构的引用。教材在此引入一次间接引用：指针先指向额外的 header 元素，header 再指向真正的结构，同时记录该非终结符的名字。\n\n教材明确说明：严格说来这层间接并非必需，其用途会在后面的算法中显现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-header-purpose",
+        "moduleId": "m-representation",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：header 让识别过程可被观察",
+        "markdown": "header 的实际用途之一是报告分析进展：通用分析过程在识别某个非终结符时输出它的名字，而名字正保存在 header 中。这就把“正在识别哪个语法成分”变成可观察的信息，便于跟踪和调试分析过程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-algorithm",
+        "moduleId": "m-algorithm",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：通用分析过程的遍历规则",
+        "markdown": "通用分析算法以一个具体过程的形式给出。它接收语法数据结构与源文本，从起始符号对应的结构开始：在当前候选中，用下一个输入符号与候选的首符号比较，决定是沿 next 继续、沿 alt 换候选，还是进入某个非终结符的子结构。\n\n教材强调，遍历候选列表时每一步只需做一次比较；这一性质依赖随后列出的语法假设。遇到非终结符时，算法按其 header 指向的结构继续下降，识别完成后再回到原来的位置继续。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-trace",
+        "moduleId": "m-algorithm",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：一次完整的遍历追踪",
+        "markdown": "设语法片段如下，且输入为 `x + y`：\n\n```text\nE = T { '+' T }\nT = 'x' | 'y'\n```\n\n1. 从 `E` 的结构入手，当前输入符号为 `x`；候选 `T` 是非终结符，进入其 header 指向的结构。\n2. 在 `T` 的候选中，`x` 与第一个候选项匹配，沿 next 走过 `'x'` 后到达候选末尾，返回 `E`。\n3. 回到 `E` 后当前输入为 `+`；重复结构沿 alt 进入 `'+' T` 分支，匹配 `+`。\n4. 再进入 `T` 识别 `y`。重复结构的下一轮遇到不属于该重复首符号的输入，此时由 `Empty` 标记退出循环。\n5. 源文本读完且结构走到接受位置，分析成功。\n\n整个过程只用了当前一个输入符号来决定走哪条边。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-algorithm",
+            "tb-node-kinds"
+          ]
+        }
+      },
+      {
+        "id": "tb-lookahead",
+        "moduleId": "m-lookahead",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：单次比较所依赖的语法假设",
+        "markdown": "上述单次比较的可行性有前提：假定项总是形如若干因子相连，且除最后一个因子外，所有因子都必须以一个互不相同的终结符开头；只有最后一个因子可以以终结符或非终结符开头。\n\n满足这一条件时，遍历候选列表并在每一步只做一次比较才是安全的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-why-one-lookahead",
+        "moduleId": "m-lookahead",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：条件为何能让一个符号够用",
+        "markdown": "为什么“互不相同的起始符号”能让一次比较就够用？因为候选之间的区分信息已经被压缩到首符号上：看到当前输入符号，就能唯一确定该走哪条 alt 边。若两个候选可以以同一符号开头，首符号无法再区分它们，仅凭一个前瞻符号就会走错分支，只能增加前瞻或引入回溯。\n\n`Empty` 的作用也要放在这个框架里理解：它不是普通字符，而是表示空序列的特殊终结符，用来标记重复结构的出口；没有它，循环就缺少明确的终止条件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-lookahead",
+            "tb-algorithm"
+          ]
+        }
+      },
+      {
+        "id": "tb-automation-empty",
+        "moduleId": "m-lookahead",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：结构可自动生成，Empty 标记循环出口",
+        "markdown": "教材还指出两点实现事实。第一，语法数据结构可以从 EBNF 语法自动导出，也就是由一个“编译语法”的程序生成，而不必手工搭建指针。第二，`Empty` 是表示空序列的特殊终结符，其元素用于标记重复（循环）的出口。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-babef9366a304ec14e46e038",
+              "blockIds": [
+                "block-000008"
+              ],
+              "headingPath": [
+                "4. Analysis of Context-free Languages",
+                "Table-driven Top-down Parsing"
+              ],
+              "lineStart": 113,
+              "lineEnd": 127,
+              "assetRefs": [],
+              "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+            }
+          ]
+        }
+      },
+      {
+        "id": "md-practice",
+        "moduleId": "m-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：用一个小语法检验遍历与假设",
+        "markdown": "练习：给定语法片段 `S = 'a' S | 'b'`，回答以下问题。\n\n1. 若把 `S` 的候选组织为 next/alt 结构，`'a'` 与 `'b'` 分别应挂在哪个方向？\n2. 对输入 `a a b`，写出每一步是沿 next、沿 alt，还是进入子结构。\n3. 若把语法改成 `S = 'a' S | 'a' 'b'`，单符号前瞻是否仍足够？说明理由。\n\n提示：第 3 问要回到“除最后一个因子外，各因子以互不相同终结符开头”的假设。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-syntax-data",
+            "tb-algorithm",
+            "tb-lookahead",
+            "tb-automation-empty"
+          ]
+        }
+      },
+      {
+        "id": "md-summary",
+        "moduleId": "m-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：本点收束",
+        "markdown": "表驱动自顶向下分析把语法从代码搬到数据：交替结构用 next 与 alt 指针串成可遍历的图，终结符记录用 `sym` 标明符号，非终结符记录经 header 指向子结构并保留名字。通用分析过程按当前输入符号沿这些指针前进，在候选之间做单次比较，并在进入非终结符时下降。\n\n它的适用边界由语法假设决定：除最后一个因子外，各因子要以互不相同的终结符开头；`Empty` 标记重复的出口。满足这些条件时，一个前瞻符号就足以驱动整条分析路径。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-techniques",
+            "tb-syntax-data",
+            "tb-algorithm",
+            "tb-lookahead",
+            "tb-automation-empty",
+            "md-practice"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "table-driven-trace-check",
+        "type": "formative-check",
+        "title": "语法结构遍历检查",
+        "anchorBlockId": "md-practice",
+        "moduleId": "m-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "o-trace",
+          "o-lookahead"
+        ],
+        "learningPurpose": "检查学习者能否依据 next/alt 指针和单符号前瞻走完一次表驱动分析，并判断语法假设被破坏时的后果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-syntax-data",
+            "tb-algorithm",
+            "tb-lookahead"
+          ]
+        },
+        "config": {
+          "questions": 3,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请对给定的语法片段写出 next/alt 结构，并逐步说明输入串的遍历路径；若两个候选共享首符号，说明单符号前瞻为何失效。"
+        }
+      }
+    ]
+  },
+  "subtitle": "4. Analysis of Context-free Languages",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-babef9366a304ec14e46e038",
+      "blockIds": [
+        "block-000008"
+      ],
+      "headingPath": [
+        "4. Analysis of Context-free Languages",
+        "Table-driven Top-down Parsing"
+      ],
+      "lineStart": 113,
+      "lineEnd": 127,
+      "assetRefs": [],
+      "excerptSha256": "f944a5c477de1fe585ea82e0375351c4b96d8070213a580d65b12c2c19bd5b41"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2867,
+    3118
+  ],
+  "scale": 0.92
+}

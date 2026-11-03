@@ -1,0 +1,549 @@
+{
+  "id": "point-8-8",
+  "title": "多边形填充区裁剪",
+  "shortSummary": "介绍 Sutherland-Hodgman 等多边形裁剪算法的逐边处理流程，并说明凹多边形与退化边问题。",
+  "keyTerms": [
+    "多边形裁剪",
+    "Sutherland-Hodgman",
+    "逐边处理"
+  ],
+  "animationType": "viewing2dPipeline",
+  "animationSuggestion": "让顶点队列从左侧裁剪器流入，逐步高亮当前顶点对与判定结果，并把产生的交点或端点送入下一阶段；四个阶段同时显示各自队列，最后按顺序连接顶点形成裁剪后的封闭多边形。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-4-7",
+    "point-8-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-edge-cases",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对四种端点情形、逐边界顶点队列和凹多边形多余连线的原始结论，围绕算法执行顺序补充对照表、手算示例和选型检查表。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-why-polygon-clip",
+          "text": "解释为什么不能直接对多边形的每条边调用线段裁剪，以及为什么填充区裁剪必须输出封闭的边界。"
+        },
+        {
+          "id": "trace-sutherland-hodgman",
+          "text": "按四条裁剪边界的顺序追踪 Sutherland-Hodgman 算法，依据四种端点情形写出每一步的输出顶点队列。"
+        },
+        {
+          "id": "handle-concave",
+          "text": "判断凹多边形裁剪何时会产生多余连线，并选择分割凸多边形、拆分顶点队列或改用通用算法等对策。"
+        },
+        {
+          "id": "choose-general-clipper",
+          "text": "针对凸或凹的矩形窗口、任意多边形窗口与曲线边界窗口，选择合适的多边形裁剪策略。"
+        }
+      ],
+      "misconceptions": [
+        "认为对多边形的每条边分别做线段裁剪就能直接得到可填充的结果。",
+        "认为 Sutherland-Hodgman 算法对任意凹多边形都能自动输出多个分离的填充区。",
+        "把裁剪后的顶点队列当作无序的点集，忽略顶点顺序才定义了填充区的边界。"
+      ],
+      "modules": [
+        {
+          "id": "why-not-segment-clip",
+          "title": "为什么不能逐边套用线段裁剪",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-why-polygon-clip"
+          ],
+          "order": 0
+        },
+        {
+          "id": "boundary-by-boundary",
+          "title": "Sutherland-Hodgman 的逐边界流程",
+          "role": "procedure",
+          "outcomeRefs": [
+            "trace-sutherland-hodgman"
+          ],
+          "order": 1
+        },
+        {
+          "id": "concave-degeneracy",
+          "title": "凹多边形与多余连线",
+          "role": "edge-case",
+          "outcomeRefs": [
+            "handle-concave"
+          ],
+          "order": 2
+        },
+        {
+          "id": "general-clippers",
+          "title": "通用多边形裁剪与非常规窗口",
+          "role": "comparison",
+          "outcomeRefs": [
+            "choose-general-clipper"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与下一步",
+          "role": "check",
+          "outcomeRefs": [
+            "explain-why-polygon-clip",
+            "trace-sutherland-hodgman",
+            "handle-concave",
+            "choose-general-clipper"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why-polygon-clip",
+          "trace-sutherland-hodgman",
+          "handle-concave",
+          "choose-general-clipper"
+        ],
+        "method": "完成一次逐边界追踪，并对一个凹多边形裁剪结果判断是否需要拆分或改用通用算法。",
+        "successCriteria": [
+          "能说明填充区必须保持封闭边界的原因",
+          "四种端点情形对应的输出全部正确",
+          "能指出单一输出队列在凹多边形上的局限并给出至少一种对策",
+          "能按窗口类型选出合适的裁剪算法"
+        ],
+        "summaryBlockId": "model-summary-check",
+        "nextPointId": "point-8-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-polygon-vs-segment",
+        "moduleId": "why-not-segment-clip",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：填充区裁剪的目标是封闭边界",
+        "markdown": "图形软件包通常需要裁剪填充凸多边形。教材明确指出，不能直接使用线段裁剪算法对多边形的每一条边逐一裁剪，因为这样一般不能生成封闭的折线：边界会显示为一系列不连接的线段，缺少如何形成裁剪后封闭边界的完整信息。\n\n我们需要的是一个或多个封闭的裁剪后填充区边界，这样多边形才能被扫描转换成用指定颜色或图案填充的图形。思路与线段裁剪一致，但始终把填充区当作一个整体：依次用裁剪窗口的每条边界处理多边形，得到每次处理后的新形状；在最后的裁剪边界确定之前，不需要填充多边形内部。\n\n实现时可以借鉴线段裁剪的范围测试：如果填充区的最小、最大坐标值都落在四条裁剪边界之内，就保留该填充区继续处理；如果坐标范围完全落在某条裁剪边界之外，就把该多边形整体从场景中清除。只有无法判定完全在内或完全在外时，才需要定位多边形与裁剪窗口的交点。为每条裁剪边界建立一个新的顶点队列并传递给下一条边界，最后一次裁剪的输出就是定义裁剪后多边形的顶点队列。对凹多边形，这一基本方法需要改造成支持多个顶点队列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000290"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "多边形填充区裁剪"
+              ],
+              "lineStart": 7878,
+              "lineEnd": 7929,
+              "assetRefs": [
+                "parts/part-0003/images/fe4d863e445b094d7f5f80e5887b917cc81e202b2272509d0ea44a547774daa0.jpg",
+                "parts/part-0003/images/1eed11487bf0b132ebdbef50656eba0e5b983d88f288f8dc60c228a8478c7c2a.jpg",
+                "parts/part-0003/images/c1f27fd1e42d531bd205f085269d14788a4f5396bd6e824bcc0baa69da04183e.jpg",
+                "parts/part-0003/images/20df0ffe3d00e78c12d1d6e3b43dbe1f2690bf5e99d19e63c098633940d16106.jpg",
+                "parts/part-0003/images/544068cef1c14ba6138bd465c1d5756240d59220bc50495a32a9edd851e37ed4.jpg",
+                "parts/part-0003/images/4a52dc24152f5e375c0766ae125ce464ff44ab77e03a359bcf6ca98b18ee2bba.jpg",
+                "parts/part-0003/images/2a9736aab643b506fe4b47063f430069d9a4a81a7480f88725872e3c8fcb483c.jpg",
+                "parts/part-0003/images/513609168b14e6cdd6de7e78c1f35955d0f1d404a6ce96bcf226a1ba8191a750.jpg",
+                "parts/part-0003/images/bdb545d8a838df47bdfca6bcba2a66dacc596fa0dfa621e6962a6a292f852a64.jpg",
+                "parts/part-0003/images/b4a220fcd74f2a895d993181f3c86b3e2b14a3630f91c47d29038ad65a99a7df.jpg",
+                "parts/part-0003/images/05944467d7f95d4f48dcbcc9ef50ee16b26d8a05d5f7782af396d8cbe1724115.jpg",
+                "parts/part-0003/images/2991f45e1c23ed5922118e00d518462097d42ed7262dd63a86430acafeb15d0d.jpg"
+              ],
+              "excerptSha256": "c7cf936d4ed578deeb830557b90365e9ce2f254aa629902ed6c6a8b3696d71bb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-closed-boundary-intuition",
+        "moduleId": "why-not-segment-clip",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么“断开”就不能填充",
+        "markdown": "填充算法要判断某个像素在边界围成的区域内部还是外部。若裁剪只留下一堆互不相连的线段，就缺少顶点顺序和闭合关系，扫描线无法判断某段区间应当填色还是留空，也无法知道哪一侧属于内部。\n\n因此这里追求的不是“每条边都被裁短”，而是“整块区域被裁出一个仍然闭合的轮廓”。顶点队列的顺序本身就是信息：按队列依次连接顶点，闭合边由最后一个顶点回到第一个顶点自动形成。这解释了为什么后面所有算法都围绕顶点队列的生成和传递展开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-polygon-vs-segment"
+          ]
+        }
+      },
+      {
+        "id": "tb-suth-hodgman",
+        "moduleId": "boundary-by-boundary",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：Sutherland-Hodgman 算法与四种情形",
+        "markdown": "Sutherland 和 Hodgman 提出的高效算法把多边形顶点依次传递给每一裁剪阶段，每个裁剪后的顶点可以立即传给下一阶段。这取消了对成组顶点的需求，使各边界裁剪子程序能够并行执行，最终输出是描述裁剪后填充区边界的顶点队列。总体策略是把多边形每条线段的一对顶点顺序送给左、右、下、上四个裁剪器；一个裁剪器处理完一对顶点后，结果立即送给下一个裁剪器，第一个裁剪器随即处理下一对顶点。\n\n每对端点通过某一裁剪器时，按四种测试结果生成输出：\n\n1. 第一端点在边界外、第二端点在边界内：把边与窗口边的交点和第二端点一起送给下一裁剪器。\n2. 两个端点都在边界内：只把第二端点送给下一裁剪器。\n3. 第一端点在边界内、第二端点在边界外：只把边与窗口边的交点送给下一裁剪器。\n4. 两个端点都在边界外：不传递任何顶点。\n\n这一组裁剪器最后生成的顶点队列就是裁剪后的填充区。教材的三角形例子中，顶点集 {1,2,3} 依次经过四个裁剪器后，输出顶点队列为 {1',2,2',2\"}。由于算法只生成一个输出顶点队列，它不能直接生成凹多边形被裁成两个分离区域时的那种双区域结果；但可以通过增加处理获得多个输出队列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000291"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "Sutherland-Hodgman多边形裁剪"
+              ],
+              "lineStart": 7930,
+              "lineEnd": 8076,
+              "assetRefs": [
+                "parts/part-0003/images/a7d759244adff3ab54073458ec234292883508790fd350282d2a1ba5b4520a04.jpg",
+                "parts/part-0003/images/07cbf0d73449807b42b108a2170242f896802eafd36e2c52962dbb38f123e926.jpg",
+                "parts/part-0003/images/f358e6283f8a617d21b5d1602545039311d9e08832bd6ceba051b0b1aa5c59f9.jpg",
+                "parts/part-0003/images/dd17384aab9659368dc03156eed3bde207e5797b313562f92c1b597e34ed1448.jpg"
+              ],
+              "excerptSha256": "c2dd69cd57e7a6bd12786adf5a0b937d942029274ca512dc8b5e742535983c80"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-four-cases",
+        "moduleId": "boundary-by-boundary",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充：四种端点情形对照表",
+        "markdown": "把教材的四条规则整理成一张可逐行核对的表，其中“内/外”指端点相对于当前正在处理的这条裁剪边界：\n\n| 情形 | 第一端点 | 第二端点 | 送给下一裁剪器的顶点 |\n|---|---|---|---|\n| 进入 | 外 | 内 | 交点，然后第二端点 |\n| 完全在内 | 内 | 内 | 仅第二端点 |\n| 离开 | 内 | 外 | 仅交点 |\n| 完全在外 | 外 | 外 | 不传递 |\n\n注意输出顺序：进入时先交点后端点，离开时只剩交点。因为每条边只处理一次，处理完整条闭合边链后得到的顺序才与多边形绕行方向一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-suth-hodgman"
+          ]
+        }
+      },
+      {
+        "id": "model-trace-example",
+        "moduleId": "boundary-by-boundary",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：对一个三角形手算一遍",
+        "markdown": "设裁剪窗口为 0 ≤ x ≤ 4、0 ≤ y ≤ 4，待裁剪三角形顶点依次为 A(2,2)、B(6,2)、C(6,6)。先处理右边界 x ≤ 4：\n\n- 边 A→B：A 在内、B 在外，属于“离开”，输出交点 (4,2)。\n- 边 B→C：B、C 都在外，属于“完全在外”，不输出。\n- 边 C→A：C 在外、A 在内，属于“进入”，输出交点 (4,4) 和 A(2,2)。\n\n右边界处理后得到队列 (4,2)、(4,4)、(2,2)。继续用左边界 x ≥ 0、下边界 y ≥ 0、上边界 y ≤ 4 处理时，这三个顶点的坐标都满足条件，队列不再变化。最终裁剪结果就是由 (4,2)、(4,4)、(2,2) 围成的三角形。\n\n追踪时始终按“当前边界的四种情形”逐对判断，不要先算全部交点再排序；顶点队列的顺序正是由逐对处理累积出来的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-suth-hodgman",
+            "model-four-cases"
+          ]
+        }
+      },
+      {
+        "id": "tb-concave-extra-line",
+        "moduleId": "concave-degeneracy",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材：凹多边形可能产生多余直线",
+        "markdown": "凹多边形使用 Sutherland-Hodgman 算法裁剪时，可能显示出一条多余的直线。这种情况出现在裁剪后的多边形有两个或多个分离部分的时候：因为只有一个输出顶点队列，队列中最后一个顶点总是连着第一个顶点，于是本应分离的两块区域被这条闭合边错误地连接起来。\n\n教材给出三类处理方向：\n\n1. 把凹多边形分割成两个或更多的凸多边形，再分别用 Sutherland-Hodgman 算法处理各个凸多边形。\n2. 修改 Sutherland-Hodgman 算法，沿着任一条裁剪窗口边界检查顶点队列；如果发现某条裁剪边界上有两个以上顶点位置，就把顶点队列分成两个或多个，从而正确地分割裁剪后的填充区。这可能需要更多分析来判断边界上的某些顶点是否应配对，或是否代表被裁掉的单个顶点。\n3. 使用更一般的、本身就能处理凹多边形的裁剪算法。\n\n需要注意，基本算法仍能处理裁剪结果可以用单个顶点队列描述的凹多边形，问题只出现在结果本应分成多块时。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000291"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "Sutherland-Hodgman多边形裁剪"
+              ],
+              "lineStart": 7930,
+              "lineEnd": 8076,
+              "assetRefs": [
+                "parts/part-0003/images/a7d759244adff3ab54073458ec234292883508790fd350282d2a1ba5b4520a04.jpg",
+                "parts/part-0003/images/07cbf0d73449807b42b108a2170242f896802eafd36e2c52962dbb38f123e926.jpg",
+                "parts/part-0003/images/f358e6283f8a617d21b5d1602545039311d9e08832bd6ceba051b0b1aa5c59f9.jpg",
+                "parts/part-0003/images/dd17384aab9659368dc03156eed3bde207e5797b313562f92c1b597e34ed1448.jpg"
+              ],
+              "excerptSha256": "c2dd69cd57e7a6bd12786adf5a0b937d942029274ca512dc8b5e742535983c80"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-concave-checklist",
+        "moduleId": "concave-degeneracy",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "补充：凹多边形裁剪的诊断清单",
+        "markdown": "遇到凹多边形裁剪结果时，可以按下面的顺序排查：\n\n1. 先判断结果应当是一个连通区域还是多个分离区域。这一步只能依据原多边形与窗口的位置关系，不能看算法输出。\n2. 若期望多块却只得到一条队列，就检查队列首尾相连是否穿过了窗口内部不应填充的区域；若是，这正是多余连线。\n3. 统计每条裁剪边界与多边形产生的交点：同一条边界上出现两个以上顶点位置时，通常意味着需要把队列拆分。\n4. 若拆分后难以判断交点配对，改用“先分割成凸多边形”的方案，牺牲一次预处理换取结果的确定性。\n5. 若窗口本身也是凹多边形，直接改用通用算法，避免在 Sutherland-Hodgman 上叠加过多补丁。\n\n检验标准不是“交点算得对不对”，而是“闭合后围出的区域是否与两平面区域求交的结果一致”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-suth-hodgman",
+            "tb-concave-extra-line"
+          ]
+        }
+      },
+      {
+        "id": "tb-weiler-atherton",
+        "moduleId": "general-clippers",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：Weiler-Atherton 通用多边形裁剪",
+        "markdown": "Weiler-Atherton 算法是一种通用的多边形裁剪方法，可用于裁剪凸多边形或凹多边形，并能用任意形状的裁剪窗口去裁剪任意的多边形填充区域。它最初是作为识别可见面的方法提出的。与只裁剪填充区各条边的 Sutherland-Hodgman 不同，Weiler-Atherton 还要跟踪填充多边形，并寻找使裁剪后填充区封闭的边界，因此能把多个填充区识别并显示为分开的、不相连的多边形。\n\n为找到封闭边，必须沿填充区边界（顺时针或逆时针）前进，并在每次离开裁剪窗口时沿着裁剪窗口边界走；窗口边界上的路线方向与填充区边界上的方向一致。处理方向取决于定义填充区的顶点顺序。多数情况下前向面用逆时针顶点队列描述，可用相邻边向量的叉积确定法向量方向，也可用找内点的方法判断：顺序处理各边时若内点始终在左侧则为逆时针，否则为顺时针。\n\n对逆时针的填充区，过程为：\n\n1. 按逆时针方向处理多边形，直到一对“内—外”顶点与某裁剪边界相遇，即第一顶点在窗口内而第二顶点在窗口外。\n2. 在窗口边界上从“出”交点沿逆时针方向走到另一个与多边形的交点；若该点已处理则进入下一步，若是新交点则继续按逆时针处理多边形直到遇见已处理的顶点。\n3. 形成裁剪后该区域的顶点队列。\n4. 回到“出”交点，继续按逆时针处理多边形的边。\n\n教材的凹多边形例子中，顶点队列 {1,2,3,4,5,6} 被裁成两个分离多边形 {1,1',1\",1\"'} 与 {4',5,5'}。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000292"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "Weiler-Atherton 多边形裁剪"
+              ],
+              "lineStart": 8077,
+              "lineEnd": 8105,
+              "assetRefs": [
+                "parts/part-0003/images/73b2a13fd8b46729a5e3e765ab515ba0b1f553c0acac91253ceed4c8daf551c7.jpg",
+                "parts/part-0003/images/a8f16eed49cb267ee5fe3355c7fb8d8ee9e9929954bff96b705dce3bae5dd7c2.jpg"
+              ],
+              "excerptSha256": "41d56d5b6f294aefcef8dcd0becd51c012133604455ef3f1e44e9c1fecf11eb5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-choose-clipper",
+        "moduleId": "general-clippers",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：三种方案的选型对比",
+        "markdown": "| 方案 | 适用窗口 | 适用填充区 | 输出特点 | 主要代价 |\n|---|---|---|---|---|\n| Sutherland-Hodgman | 矩形或凸多边形窗口 | 凸多边形，以及结果仍为单队列的凹多边形 | 单个顶点队列 | 凹多边形多块结果会出现多余连线 |\n| 参数化裁剪（如梁友栋-Barsky 的扩展） | 凸多边形窗口 | 填充区（窗口为凸多边形时） | 由参数区间确定交点 | 需要凸窗口假设 |\n| Weiler-Atherton | 任意凸或凹多边形窗口 | 任意多边形，含带洞情形 | 多个分离的封闭多边形 | 需要维护两侧顶点队列与交点配对 |\n\n选型时可以按三个问题决策：窗口是否凸？填充区裁剪后是否可能分成多块？是否需要支持带洞区域或布尔运算？只要后两问任一为“是”，就应优先考虑 Weiler-Atherton 一类通用方法；若窗口和目标都简单，Sutherland-Hodgman 的流水线结构最直接，也最容易并行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-polygon-vs-segment",
+            "tb-suth-hodgman",
+            "tb-concave-extra-line",
+            "tb-weiler-atherton"
+          ]
+        }
+      },
+      {
+        "id": "tb-nonrect-window",
+        "moduleId": "general-clippers",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：非矩形多边形窗口的裁剪",
+        "markdown": "梁友栋-Barsky 算法和其他参数化线段裁剪算法特别适合用凸多边形裁剪窗口去裁剪填充区。在该方法中，填充区和裁剪窗口都用参数法表示，并用顶点队列描述。先比较填充区与裁剪窗口的包围矩形；如果不能确认填充区完全在裁剪窗口外部，就用内—外测试处理参数边方程；完成所有边的测试后，解联立参数线方程来确定窗口交点的位置。\n\n也可以用 Weiler-Atherton 算法中的边遍历方法，用任意多边形裁剪窗口（凸或凹）处理任意多边形填充区。此时需要像维护填充区顶点队列一样，按逆时针（或顺时针）方向维护一个裁剪窗口的顶点队列，并用内—外测试确定填充区顶点在特定窗口边界之内还是之外。这一方法对填充区或裁剪窗口中包含已用边界定义的洞时同样适用。在构造实体几何中，这种基本方法可用于确认两个多边形操作的并、交、差结果；实际上，定位一个填充区裁剪后的区域等价于确定两个平面区域的交。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000293"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "非矩形的多边形窗口的多边形裁剪"
+              ],
+              "lineStart": 8106,
+              "lineEnd": 8114,
+              "assetRefs": [
+                "parts/part-0003/images/4260a66abaee532d8d31585f43b390cd4e2eb559acda8b4330e5d72836e38bc6.jpg"
+              ],
+              "excerptSha256": "f2a4fadc94edf5c67bd515247bb2d1e0b09ea18f29dbe737923f36bc003cccec"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-nonlinear-window",
+        "moduleId": "general-clippers",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：非线性裁剪窗口边界的多边形裁剪",
+        "markdown": "处理用曲线边界裁剪窗口的一种方法是先用直线段逼近边界，然后使用一般的多边形裁剪窗口算法。也可以沿用线段裁剪中讨论的通用算法：先比较填充区与裁剪窗口的坐标范围；根据裁剪窗口的形状，可能还可以做其他基于对称考虑的区域测试；对于那些不能确认完全在窗口内部或外部的填充区，都要计算窗口与填充区的相交位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000294"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "非线性裁剪窗口边界的多边形裁剪"
+              ],
+              "lineStart": 8115,
+              "lineEnd": 8118,
+              "assetRefs": [],
+              "excerptSha256": "906ba202811700c22cc1437a63fc10d91fc71d3621394b2bc0f931c858cfc74a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "补充：整条流程与自检",
+        "markdown": "把本知识点串成一条可执行的流程：先用坐标范围测试整体保留或整体舍弃；无法判定时，用裁剪窗口的每条边界依次处理顶点队列；矩形窗口可用 Sutherland-Hodgman 的左、右、下、上流水线；若填充区是凹的且结果可能分成多块，改用分割凸多边形、拆分队列或 Weiler-Atherton 等通用算法；窗口不是矩形时，凸窗口可扩展参数化裁剪，任意凸或凹窗口用 Weiler-Atherton 一类边遍历方法；曲线窗口先用线段逼近再套用多边形裁剪。\n\n自检三问：\n\n1. 给定四种端点情形中的任意一种，能否立刻写出该对端点应向下一裁剪器输出什么？\n2. 一条输出队列首尾相连时穿过了不应填充的区域，最可能的原因是什么，有哪三种处理方向？\n3. 当裁剪窗口本身是凹多边形时，为什么参数化线段裁剪的扩展不再直接适用？\n\n下一知识点把裁剪对象从多边形边界换到曲线：曲线可以先离散成直线段复用多边形裁剪，也可以保留曲线方程做精确求交，二者的取舍与本节“逼近还是通用方法”的判断是同一条思路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-polygon-vs-segment",
+            "tb-suth-hodgman",
+            "tb-concave-extra-line",
+            "tb-weiler-atherton",
+            "tb-nonlinear-window"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "polygon-clip-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-summary-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-sutherland-hodgman",
+          "handle-concave"
+        ],
+        "learningPurpose": "检查学习者能否把四种端点情形和凹多边形拆分策略迁移到具体裁剪结果上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-suth-hodgman",
+            "tb-concave-extra-line"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": [
+            "第一端点在边界外、第二端点在边界内时应输出什么？",
+            "凹多边形裁剪后只得到一条首尾相连的队列，可能出了什么问题？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出四种端点情形各自的输出，并说明凹多边形出现多余连线时的两种处理方向。"
+        }
+      }
+    ]
+  },
+  "subtitle": "二维观察",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000290"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "多边形填充区裁剪"
+      ],
+      "lineStart": 7878,
+      "lineEnd": 7929,
+      "assetRefs": [
+        "parts/part-0003/images/fe4d863e445b094d7f5f80e5887b917cc81e202b2272509d0ea44a547774daa0.jpg",
+        "parts/part-0003/images/1eed11487bf0b132ebdbef50656eba0e5b983d88f288f8dc60c228a8478c7c2a.jpg",
+        "parts/part-0003/images/c1f27fd1e42d531bd205f085269d14788a4f5396bd6e824bcc0baa69da04183e.jpg",
+        "parts/part-0003/images/20df0ffe3d00e78c12d1d6e3b43dbe1f2690bf5e99d19e63c098633940d16106.jpg",
+        "parts/part-0003/images/544068cef1c14ba6138bd465c1d5756240d59220bc50495a32a9edd851e37ed4.jpg",
+        "parts/part-0003/images/4a52dc24152f5e375c0766ae125ce464ff44ab77e03a359bcf6ca98b18ee2bba.jpg",
+        "parts/part-0003/images/2a9736aab643b506fe4b47063f430069d9a4a81a7480f88725872e3c8fcb483c.jpg",
+        "parts/part-0003/images/513609168b14e6cdd6de7e78c1f35955d0f1d404a6ce96bcf226a1ba8191a750.jpg",
+        "parts/part-0003/images/bdb545d8a838df47bdfca6bcba2a66dacc596fa0dfa621e6962a6a292f852a64.jpg",
+        "parts/part-0003/images/b4a220fcd74f2a895d993181f3c86b3e2b14a3630f91c47d29038ad65a99a7df.jpg",
+        "parts/part-0003/images/05944467d7f95d4f48dcbcc9ef50ee16b26d8a05d5f7782af396d8cbe1724115.jpg",
+        "parts/part-0003/images/2991f45e1c23ed5922118e00d518462097d42ed7262dd63a86430acafeb15d0d.jpg"
+      ],
+      "excerptSha256": "c7cf936d4ed578deeb830557b90365e9ce2f254aa629902ed6c6a8b3696d71bb"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000291"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "Sutherland-Hodgman多边形裁剪"
+      ],
+      "lineStart": 7930,
+      "lineEnd": 8076,
+      "assetRefs": [
+        "parts/part-0003/images/a7d759244adff3ab54073458ec234292883508790fd350282d2a1ba5b4520a04.jpg",
+        "parts/part-0003/images/07cbf0d73449807b42b108a2170242f896802eafd36e2c52962dbb38f123e926.jpg",
+        "parts/part-0003/images/f358e6283f8a617d21b5d1602545039311d9e08832bd6ceba051b0b1aa5c59f9.jpg",
+        "parts/part-0003/images/dd17384aab9659368dc03156eed3bde207e5797b313562f92c1b597e34ed1448.jpg"
+      ],
+      "excerptSha256": "c2dd69cd57e7a6bd12786adf5a0b937d942029274ca512dc8b5e742535983c80"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000292"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "Weiler-Atherton 多边形裁剪"
+      ],
+      "lineStart": 8077,
+      "lineEnd": 8105,
+      "assetRefs": [
+        "parts/part-0003/images/73b2a13fd8b46729a5e3e765ab515ba0b1f553c0acac91253ceed4c8daf551c7.jpg",
+        "parts/part-0003/images/a8f16eed49cb267ee5fe3355c7fb8d8ee9e9929954bff96b705dce3bae5dd7c2.jpg"
+      ],
+      "excerptSha256": "41d56d5b6f294aefcef8dcd0becd51c012133604455ef3f1e44e9c1fecf11eb5"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000293"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "非矩形的多边形窗口的多边形裁剪"
+      ],
+      "lineStart": 8106,
+      "lineEnd": 8114,
+      "assetRefs": [
+        "parts/part-0003/images/4260a66abaee532d8d31585f43b390cd4e2eb559acda8b4330e5d72836e38bc6.jpg"
+      ],
+      "excerptSha256": "f2a4fadc94edf5c67bd515247bb2d1e0b09ea18f29dbe737923f36bc003cccec"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000294"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "非线性裁剪窗口边界的多边形裁剪"
+      ],
+      "lineStart": 8115,
+      "lineEnd": 8118,
+      "assetRefs": [],
+      "excerptSha256": "906ba202811700c22cc1437a63fc10d91fc71d3621394b2bc0f931c858cfc74a"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1685,
+    2131
+  ],
+  "scale": 0.93
+}

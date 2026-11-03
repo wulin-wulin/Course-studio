@@ -1,0 +1,574 @@
+{
+  "id": "point-3-7",
+  "title": "图形 API 与渲染状态机的组织方式",
+  "shortSummary": "把图形 API 抽象为状态机，说明状态设置、资源绑定和绘制调用之间的顺序关系及常见状态泄漏问题。",
+  "keyTerms": [
+    "状态机",
+    "渲染状态",
+    "绘制调用"
+  ],
+  "animationType": "graphicsApiLifecycle",
+  "animationSuggestion": "逐步高亮每条调用，同步更新状态寄存器面板与画面；在泄漏场景中让被继承的颜色槽位保持高亮，重播后从同一初始状态重新执行并展示修复后的调用顺序。",
+  "difficulty": "中等",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-3-5"
+  ],
+  "origin": "llm-extension",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "state-machine-trace-and-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的 OpenGL 程序结构和出错处理为事实边界，围绕状态机执行顺序补充追踪方法与状态泄漏诊断，教材示例保持原意。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "describe-state-machine",
+          "text": "能把图形 API 解释为由状态变量、状态设置命令和绘制调用组成的状态机。"
+        },
+        {
+          "id": "trace-call-order",
+          "text": "能按调用顺序追踪一次绘制前的状态配置、资源绑定与绘制调用，并指出顺序为何影响结果。"
+        },
+        {
+          "id": "diagnose-state-leak",
+          "text": "能识别状态泄漏的症状、提出假设、用查询与隔离实验取证并给出修复方案。"
+        }
+      ],
+      "misconceptions": [
+        "认为每条绘制函数都会自动重置它用到的所有状态，因此不必关心调用顺序。",
+        "把一次调用返回无错误当作状态设置正确的证据。",
+        "认为窗口创建、回调注册和主循环可以任意交换顺序而结果不变。"
+      ],
+      "modules": [
+        {
+          "id": "api-and-state-model",
+          "title": "API 角色与状态机模型",
+          "role": "concept",
+          "description": "从核心库的职责出发建立状态机抽象。",
+          "outcomeRefs": [
+            "describe-state-machine"
+          ],
+          "order": 0
+        },
+        {
+          "id": "command-and-binding",
+          "title": "命令约定与库分层",
+          "role": "concept",
+          "description": "用命名约定、常量和库分层解释状态设置命令的编码方式。",
+          "outcomeRefs": [
+            "describe-state-machine"
+          ],
+          "order": 1
+        },
+        {
+          "id": "program-structure",
+          "title": "程序结构与回调顺序",
+          "role": "procedure",
+          "description": "按教材示例梳理初始化、窗口创建、回调注册与绘制函数的先后关系。",
+          "outcomeRefs": [
+            "trace-call-order"
+          ],
+          "order": 2
+        },
+        {
+          "id": "frame-state-and-leak",
+          "title": "逐帧状态与状态泄漏",
+          "role": "diagnosis",
+          "description": "对比每帧应重建的状态与遗留状态，定位泄漏来源。",
+          "outcomeRefs": [
+            "trace-call-order"
+          ],
+          "order": 3
+        },
+        {
+          "id": "error-feedback",
+          "title": "出错反馈与修复取证",
+          "role": "diagnosis",
+          "description": "利用错误查询与隔离实验区分非法操作和状态遗留。",
+          "outcomeRefs": [
+            "diagnose-state-leak"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "summary",
+          "description": "用检查表固化状态管理习惯并衔接坐标系统。",
+          "outcomeRefs": [
+            "describe-state-machine",
+            "trace-call-order",
+            "diagnose-state-leak"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-state-machine",
+          "trace-call-order",
+          "diagnose-state-leak"
+        ],
+        "method": "给出一个含状态泄漏的调用序列，完成顺序标注与修复。",
+        "successCriteria": [
+          "能指出每个调用改变了哪项状态",
+          "能说明绘制调用读取的是哪一时刻的状态",
+          "修复方案保留了教材规定的事实与调用边界"
+        ],
+        "summaryBlockId": "model-completion-check",
+        "nextPointId": "point-4-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-core-library-role",
+        "moduleId": "api-and-state-model",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：核心库的职责",
+        "markdown": "教材指出，OpenGL 基本函数库用来描述图元、属性、几何变换、观察变换以及许多其他操作。它被设计成与硬件无关，因此输入和输出等操作并不包含在基本库中，而由为 OpenGL 开发的辅助库提供相应函数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 简介"
+              ],
+              "lineStart": 1405,
+              "lineEnd": 1408,
+              "assetRefs": [],
+              "excerptSha256": "759d1be2e3dfb496982e1b5ccf6d279008ae4dd1337ad58a9c3ee0b1310dba37"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-machine-view",
+        "moduleId": "api-and-state-model",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把 API 读成状态机",
+        "markdown": "教材描述的是一组函数，但使用它们的正确方式可以用状态机来概括：API 内部持有一组渲染状态，状态设置命令只修改状态，不立即产生画面；绘制调用才读取当前状态并生成图元。\n\n因此一次绘制的结果由“绘制那一刻的状态快照”和“传入的几何数据”共同决定。理解这一点后，调用顺序不再是书写习惯，而是程序语义的一部分：先设置再绘制与先绘制再设置会得到不同画面。\n\n需要区分三类动作：修改状态的命令（如设置颜色、选择投影模式）、注册或绑定资源的动作（如把显示回调交给窗口系统）、以及真正触发绘制的调用。只有最后一类会把前两类的结果“兑现”成像素。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-core-library-role"
+          ]
+        }
+      },
+      {
+        "id": "textbook-command-conventions",
+        "moduleId": "command-and-binding",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材：函数名、常量与数据类型约定",
+        "markdown": "OpenGL 核心库函数以 `gl` 为前缀，函数名中每个组成词的第一个字母大写，例如 `glBegin`、`glClear`、`glCopyPixels`。要求用符号常量赋值的参数，其常量以大写 `GL` 开头、各组成词大写并用下划线分隔，如 `GL_2D`、`GL_RGB`、`GL_POLYGON`。\n\nOpenGL 还使用专门的内置数据类型名描述参数类型，如 `GLbyte`、`GLshort`、`GLint`、`GLfloat`、`GLdouble`、`GLboolean`，以避免不同机器上整数范围差异带来的问题。有些参数可以用指向数组的指针一次列出一组数值，坐标值就是典型例子。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "基本的 OpenGL 语法"
+              ],
+              "lineStart": 1409,
+              "lineEnd": 1430,
+              "assetRefs": [],
+              "excerptSha256": "7eb21cfabeb644e57ead43b4d77779afc048f86e462157f4a969b66802e3e737"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-command-encoding",
+        "moduleId": "command-and-binding",
+        "depth": "support",
+        "kind": "note",
+        "title": "命名约定如何服务状态管理",
+        "markdown": "命名约定与状态机抽象直接相关：`gl` 前缀把“会改变状态的命令”归入同一命名空间，大写常量则充当状态取值的枚举，例如颜色模型、图元类型和比较模式都是有限选项。专门的数据类型保证同一状态在不同机器上的解释一致，避免状态被错误宽度写入。\n\n读代码时可以据此快速分类：看到 `gl` 函数就先判断它是“设置”还是“绘制”，看到 `GL_` 常量就判断它给哪项状态赋了什么值。这个分类习惯是后面追踪调用顺序的基础。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-command-conventions",
+            "model-state-machine-view"
+          ]
+        }
+      },
+      {
+        "id": "textbook-auxiliary-libraries",
+        "moduleId": "command-and-binding",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：GLU 与窗口系统库",
+        "markdown": "除核心库外还有专门用途的附加库。GLU 提供设置观察和投影矩阵、用线条和多边形近似复杂对象、以线性近似显示二次曲线和样条曲线、处理表面绘制等例程，函数名以 `glu` 开头。\n\n创建显示窗口不能直接使用基本 OpenGL 函数，因为基本库只含设备无关函数，而窗口管理依赖具体计算机。GLX 提供 `glX` 前缀函数，Apple GL 用 `agl`，WGL 用 `wgl`，PGL 用 `pgl`。GLUT 是与任意屏幕窗口系统交互的工具包，函数以 `glut` 开头，使程序可以与设备无关。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000075"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "相关库"
+              ],
+              "lineStart": 1431,
+              "lineEnd": 1440,
+              "assetRefs": [],
+              "excerptSha256": "916b699d11a8daf24e97b762dcae83092aa8842e47dab583b434578c86ab1520"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-headers",
+        "moduleId": "command-and-binding",
+        "depth": "support",
+        "kind": "code",
+        "title": "教材：头文件与库边界",
+        "markdown": "教材的示例程序需要包含头文件来引入 OpenGL 基本库，许多应用还要引入 GLU 和窗口系统头文件。在 Windows 系统中，`windows.h` 必须列在 OpenGL 与 GLU 头文件之前，因为其中包含 OpenGL 库的 Microsoft 版本所需的宏：\n\n```c\n#include <windows.h>\n#include <GL/gl.h>\n#include <GL/glu.h>\n```\n\n若使用 GLUT 处理窗口管理，则不必再引入 `gl.h` 与 `glu.h`，因为 GLUT 保证它们的正确引入，可直接写 `#include <GL/glut.h>`。Apple OS X 使用 `#include <GLUT/glut.h>`。教材还提醒，重复引入会造成冗余并影响可移植性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000076"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "头文件"
+              ],
+              "lineStart": 1441,
+              "lineEnd": 1472,
+              "assetRefs": [],
+              "excerptSha256": "0cb89179f1912ec7e4bf4d1063e685bedc993630d0d37a325ca5428abdd6a617"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-api-layers",
+        "moduleId": "command-and-binding",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "库分层与状态作用域",
+        "markdown": "把教材中的库划分映射到状态机上，可以形成三层：核心库负责渲染状态与绘制命令，GLU 负责把常用参数组合成便利调用，窗口系统库或 GLUT 负责创建窗口、绑定当前上下文并分发事件。头文件决定编译期能看到哪些声明，窗口库决定运行时哪一份状态真正生效。\n\n由此得到一个实用结论：状态是“当前上下文”的属性，而不是全局常量。切换窗口或上下文后，不能假设之前的设置仍然有效；同理，跨库调用时先确认自己面对的是同一份状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-auxiliary-libraries",
+            "textbook-headers"
+          ]
+        }
+      },
+      {
+        "id": "textbook-glut-window",
+        "moduleId": "program-structure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：GLUT 窗口管理步骤",
+        "markdown": "教材给出的最少步骤如下：先用 `glutInit(&argc, argv)` 初始化 GLUT；再用 `glutCreateWindow(\"An Example OpenGL Program\")` 创建带标题的显示窗口；接着把描述图形的函数交给 `glutDisplayFunc`，例如 `glutDisplayFunc(lineSegment)`，相当于把图赋给窗口；最后调用 `glutMainLoop()`。该函数必须是程序中的最后一个，它显示初始图形并使程序进入检查鼠标或键盘输入的无穷循环。\n\n窗口的位置和大小可在创建时设定：`glutInitWindowPosition(50, 100)` 指定左上角相对屏幕左上角的位置，`glutInitWindowSize(400, 300)` 指定宽高像素数。`glutInitDisplayMode(GLUT_SINGLE | GLUT_RGB)` 用逻辑或组合符号常量来设定缓存和颜色模型等选项，单缓存与 RGB 颜色模型是默认选项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000077"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "使用GLUT 进行显示窗口管理"
+              ],
+              "lineStart": 1473,
+              "lineEnd": 1521,
+              "assetRefs": [
+                "parts/part-0001/images/53b4c760afeaa31c9cb8d5d6de5b598f743fab19d4e4f7d48eae3434be15612f.jpg"
+              ],
+              "excerptSha256": "23054a3a87bab4b31776d4c7881ea6972da352732abe0b97bd24a2aed385f450"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-callback-order",
+        "moduleId": "program-structure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "顺序语义：配置期、注册期与运行期",
+        "markdown": "教材的步骤隐含三个不同阶段，交换它们会破坏程序语义：初始化建立运行环境，创建窗口建立绘制目标，注册回调只是登记“将来由谁绘制”，主循环才开始反复触发绘制。若在注册之前就期望画面出现，或把 `glutMainLoop` 放在中间，后续配置就再也得不到执行。\n\n主循环并不一次性画完就结束，而是在窗口需要重绘时调用已注册的显示回调。于是状态管理的关键位置落在回调内部：每次进入回调，都应当显式建立本次绘制需要的状态，而不是依赖上一次调用留下的、或别处顺手设置的状态。这条规则与“状态在绘制那一刻被读取”是同一件事的两种说法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-glut-window"
+          ]
+        }
+      },
+      {
+        "id": "textbook-complete-program",
+        "moduleId": "program-structure",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：完整程序的三个过程",
+        "markdown": "教材把示例程序组织为三个过程：`init` 集中放置初始化与一次性参数设定，包括 `glClearColor(1.0, 1.0, 1.0, 0.0)` 设置白色背景、`glMatrixMode(GL_PROJECTION)` 选择投影模式、`gluOrtho2D(0.0, 200.0, 0.0, 150.0)` 设定世界坐标矩形；`lineSegment` 是显示回调，依次执行 `glClear(GL_COLOR_BUFFER_BIT)` 清屏、`glColor3f(0.0, 0.4, 0.2)` 设置颜色、`glBegin(GL_LINES)` 与两个 `glVertex2i` 端点、`glEnd()`，最后 `glFlush()` 强制处理缓存中的 OpenGL 函数；`main` 负责 GLUT 的窗口设定、调用 `init`、注册 `lineSegment` 并进入主循环。\n\n教材还说明，显示回调函数由 `glutDisplayFunc` 注册，在显示窗口需要重新显示时被引入，例如窗口移动时就会出现这种情况；一般情况下，OpenGL 程序组织成一组在一定行为发生时的回调函数集合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000078"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "一个完整的OpenGL 程序"
+              ],
+              "lineStart": 1522,
+              "lineEnd": 1601,
+              "assetRefs": [
+                "parts/part-0001/images/9b9d0061c1027b6b481a8e4960cbe4189ee119c0bfe17060aa2680c1afca27f7.jpg"
+              ],
+              "excerptSha256": "7468d940d8f32720ec7ba7d432a890cbdde7e04385989f8eef8d80606fba649a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-frame-state",
+        "moduleId": "frame-state-and-leak",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "逐帧状态重建与状态泄漏",
+        "markdown": "把教材示例按状态机重读：`glClear` 本身也读取状态，它使用 `glClearColor` 先前设定的清除色来写颜色缓存；`glColor3f` 修改的是持久的当前颜色状态；`glBegin` 与 `glVertex2i` 在绘制时才消费这个颜色。于是回调内部形成一个固定序列：清屏使用清除色状态，设置颜色，发出绘制，最后刷新。\n\n状态泄漏就发生在这个序列被破坏的时候。例如某个分支设置了特殊颜色却未恢复，或在 `glBegin` 之外漏掉了必要的状态设置，后续对象就会继承上一次的颜色或模式。因为状态是持久的，泄漏往往不报错，只在画面或不同调用顺序下表现为“颜色不对”“结果随绘制顺序变化”。\n\n一个可执行的纪律是：每帧开始时清楚列出本次绘制依赖的状态，逐项显式设置；修改状态的分支在结束前恢复，或把设置集中在绘制之前。这与教材把一次性设定放入 `init`、把绘制相关设置放入回调的组织方式一致，但更强调回调内部的可重复性。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-complete-program",
+            "model-callback-order"
+          ]
+        }
+      },
+      {
+        "id": "textbook-error-handling",
+        "moduleId": "error-feedback",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：OpenGL 的出错处理",
+        "markdown": "OpenGL 和 GLU 记录错误的方法比较简单。当 OpenGL 发现在对基本库子程序或 GLU 子程序的一次调用中有错误时，就在内部记录一个出错编码，而造成出错的子程序被忽略，因此该错误不影响 OpenGL 的内部状态，也不影响帧缓存的内容。但 OpenGL 每次只记录一个出错编码：一旦出现编码，在程序明确查询之前不会再记录另外的编码。\n\n查询方式是 `GLenum code = glGetError();`，它返回当前出错编码并清除内部出错标志；返回值等于 `GL_NO_ERROR` 表示没有问题。常见编码包括 `GL_INVALID_ENUM`（GLenum 参数超出范围）、`GL_INVALID_VALUE`（数值参数超出范围）、`GL_INVALID_OPERATION`（当前 OpenGL 状态中操作非法）、`GL_STACK_OVERFLOW`、`GL_STACK_UNDERFLOW` 与 `GL_OUT_OF_MEMORY`。GLU 的 `gluErrorString` 可返回描述性字符串，教材建议把它嵌入通用出错报告函数，并至少在每一个显示回调子程序中检查一次出错情况。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000079"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "OpenGL 的出错处理"
+              ],
+              "lineStart": 1602,
+              "lineEnd": 1654,
+              "assetRefs": [],
+              "excerptSha256": "26e2dcc51b483bb483be2d3e93ee56b8d1aabd1675d7e5b82032da707e71bfd4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-leak-diagnosis",
+        "moduleId": "error-feedback",
+        "depth": "advanced",
+        "kind": "worked-example",
+        "title": "状态泄漏的诊断链",
+        "markdown": "按教材的出错机制，可以把诊断拆成五步。症状：某些对象颜色异常，或同一对象在不同绘制顺序下外观变化。假设：要么调用了非法操作被忽略，要么合法调用留下了不该继承的状态。证据：在显示回调内按教材建议调用 `glGetError`，并用 `gluErrorString` 读出描述；再把可疑调用逐段注释隔离，观察画面是否恢复。定位：找出最近一次成功改变该状态、却未在本次绘制前重新设定的调用。修复：在绘制前显式设置所需状态，或在分支结束处恢复。\n\n需要注意两个边界。第一，教材说明出错子程序会被忽略且不影响内部状态与帧缓存，所以“查询无错误”只证明没有非法调用，不能证明状态语义正确，状态泄漏通常是合法调用造成的。第二，错误编码每次只保留一个且查询即清除，因此要把查询放在合适的粒度上，避免一次查询掩盖多个问题。诊断顺序应先用查询排除非法操作，再用隔离实验检查状态遗留。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-error-handling",
+            "model-frame-state"
+          ]
+        }
+      },
+      {
+        "id": "model-completion-check",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "状态管理检查表",
+        "markdown": "在提交一段绘制代码前，按顺序自检：\n\n1. 列出本次绘制依赖的状态项，并确认每一项都在绘制调用之前被设置。\n2. 确认窗口、上下文与回调的建立顺序符合教材的三阶段结构，主循环位于最后。\n3. 检查每个修改状态的分支是否恢复，或是否在回调入口统一重置。\n4. 在显示回调中至少查询一次错误，区分“非法调用”与“状态遗留”。\n5. 用改变绘制顺序或增删对象的方式复现问题，确认修复不是偶然结果。\n\n掌握这套组织方式后，下一知识点将从坐标系统出发，说明这些状态设置最终如何影响坐标的解释与映射。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-state-machine-view",
+            "model-leak-diagnosis"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "state-leak-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-leak-diagnosis",
+        "moduleId": "error-feedback",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-state-leak"
+        ],
+        "learningPurpose": "检查学习者能否把教材的出错查询与状态机顺序结合，定位状态泄漏而非误判为非法调用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-error-handling",
+            "textbook-complete-program"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给出一个回调：先绘制红色线段，再在未恢复颜色的情况下绘制另一对象。请指出哪个状态被泄漏、为什么 `glGetError` 可能返回 `GL_NO_ERROR`，并写出修复后的调用顺序。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机图形软件",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000073"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 简介"
+      ],
+      "lineStart": 1405,
+      "lineEnd": 1408,
+      "assetRefs": [],
+      "excerptSha256": "759d1be2e3dfb496982e1b5ccf6d279008ae4dd1337ad58a9c3ee0b1310dba37"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000074"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "基本的 OpenGL 语法"
+      ],
+      "lineStart": 1409,
+      "lineEnd": 1430,
+      "assetRefs": [],
+      "excerptSha256": "7eb21cfabeb644e57ead43b4d77779afc048f86e462157f4a969b66802e3e737"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000075"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "相关库"
+      ],
+      "lineStart": 1431,
+      "lineEnd": 1440,
+      "assetRefs": [],
+      "excerptSha256": "916b699d11a8daf24e97b762dcae83092aa8842e47dab583b434578c86ab1520"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000076"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "头文件"
+      ],
+      "lineStart": 1441,
+      "lineEnd": 1472,
+      "assetRefs": [],
+      "excerptSha256": "0cb89179f1912ec7e4bf4d1063e685bedc993630d0d37a325ca5428abdd6a617"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000077"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "使用GLUT 进行显示窗口管理"
+      ],
+      "lineStart": 1473,
+      "lineEnd": 1521,
+      "assetRefs": [
+        "parts/part-0001/images/53b4c760afeaa31c9cb8d5d6de5b598f743fab19d4e4f7d48eae3434be15612f.jpg"
+      ],
+      "excerptSha256": "23054a3a87bab4b31776d4c7881ea6972da352732abe0b97bd24a2aed385f450"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000078"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "一个完整的OpenGL 程序"
+      ],
+      "lineStart": 1522,
+      "lineEnd": 1601,
+      "assetRefs": [
+        "parts/part-0001/images/9b9d0061c1027b6b481a8e4960cbe4189ee119c0bfe17060aa2680c1afca27f7.jpg"
+      ],
+      "excerptSha256": "7468d940d8f32720ec7ba7d432a890cbdde7e04385989f8eef8d80606fba649a"
+    },
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000079"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "OpenGL 的出错处理"
+      ],
+      "lineStart": 1602,
+      "lineEnd": 1654,
+      "assetRefs": [],
+      "excerptSha256": "26e2dcc51b483bb483be2d3e93ee56b8d1aabd1675d7e5b82032da707e71bfd4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2018,
+    3003
+  ],
+  "scale": 0.86
+}

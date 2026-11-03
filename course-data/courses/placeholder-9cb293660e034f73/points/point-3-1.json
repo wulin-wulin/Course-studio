@@ -1,0 +1,457 @@
+{
+  "id": "point-3-1",
+  "title": "SPI 总线的LED 控制应用",
+  "shortSummary": "在 μC/OS-II 环境下通过 SPI 总线控制 LED，说明任务划分、驱动调用与运行调度过程。",
+  "keyTerms": [
+    "SPI",
+    "LED",
+    "μC/OS-II",
+    "任务"
+  ],
+  "animationType": "spiTaskFrame",
+  "animationSuggestion": "以时间轴展示移位寄存器 8 个格子被逐位填满，再出现锁存脉冲使数码管段码更新；同时用两条任务条显示 0.5 秒与 1 秒的周期，突出一次传输完成后才轮到另一任务。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-2-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的硬件前提、配置代码与双任务范例，按“链路—前提—配置—运行—排错”的实验流程重排，补足代码含义解释与检查表。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-chain",
+          "text": "说明 SPI1 经 J5 到 74HC595 再到数码管的硬件链路，以及 P0.20 必须上拉这一前提。"
+        },
+        {
+          "id": "configure-spi-isr",
+          "text": "按步骤完成中间件文件、中断入口、VIC 向量初始化、SPIInit 与配置头文件的工程接入。"
+        },
+        {
+          "id": "analyze-two-tasks",
+          "text": "解释两个周期不同的任务如何共享同一个 SPI 中间件刷新数码管而不互相破坏数据。"
+        },
+        {
+          "id": "diagnose-display",
+          "text": "依据上拉、接线、供电与中断通道等条件定位数码管不显示的环节。"
+        }
+      ],
+      "misconceptions": [
+        "认为 P0.20（SSEL1）悬空也能工作，实际上教材明确要求上拉至 3.3V，否则 SPI1 不能工作。",
+        "把“两个任务都能刷新显示”归因于 SPI 硬件天然支持多任务，忽略中间件对一次完整传输的保护。",
+        "以为移位结束数码管就立刻更新，忽略 74HC595 还需要锁存输出这一环节。"
+      ],
+      "modules": [
+        {
+          "id": "goal-and-setup",
+          "title": "实验定位与目标",
+          "role": "orientation",
+          "description": "说清本章把总线应用放进 μC/OS-II 多任务环境的用意，以及本实验的目的、设备与预习要求。",
+          "outcomeRefs": [
+            "explain-chain"
+          ],
+          "order": 0
+        },
+        {
+          "id": "hardware-chain",
+          "title": "硬件链路与使能前提",
+          "role": "precondition",
+          "description": "SPI1 的引出方式、子板连接与 SSEL1 上拉要求，以及由此推导的排错顺序。",
+          "outcomeRefs": [
+            "explain-chain",
+            "diagnose-display"
+          ],
+          "order": 1
+        },
+        {
+          "id": "software-config",
+          "title": "工程接入与中断配置",
+          "role": "procedure",
+          "description": "从中间件文件、irq.s 入口到 VIC 向量、SPIInit 与 config.h 的配置步骤及其含义。",
+          "outcomeRefs": [
+            "configure-spi-isr"
+          ],
+          "order": 2
+        },
+        {
+          "id": "task-scheduling",
+          "title": "双任务分工与共享驱动",
+          "role": "mechanism",
+          "description": "两个不同周期的任务如何同时控制数码管，中间件在其中承担什么保护职责。",
+          "outcomeRefs": [
+            "analyze-two-tasks"
+          ],
+          "order": 3
+        },
+        {
+          "id": "verification-and-transfer",
+          "title": "结果验证与迁移",
+          "role": "check",
+          "description": "运行观察、思考题落点与可复用的检查表。",
+          "outcomeRefs": [
+            "diagnose-display",
+            "analyze-two-tasks",
+            "configure-spi-isr"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-chain",
+          "configure-spi-isr",
+          "analyze-two-tasks",
+          "diagnose-display"
+        ],
+        "method": "接通子板运行程序，确认两个任务的显示节拍与内容，并回答教材思考题。",
+        "successCriteria": [
+          "能画出 SPI1 到数码管的链路并指出 P0.20 上拉的作用",
+          "配置步骤与 VIC 通道、使能位、irq.s 入口名三者一致",
+          "能说明中间件为何必须保护一次完整传输",
+          "数码管不显示时能按硬件前提逐项定位"
+        ],
+        "summaryBlockId": "model-summary-check",
+        "nextPointId": "point-3-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-chapter-context",
+        "moduleId": "goal-and-setup",
+        "depth": "support",
+        "kind": "note",
+        "title": "这一章在验证什么",
+        "markdown": "第 3 章把总线驱动放进 μC/OS-II 多任务环境里验证。3.1 是本章第一个实验：用 SPI 总线驱动中间件控制 LED 数码管。它的落点不只是“数码管亮起来”，而是确认中间件在实时操作系统下能被多个任务正常调用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000018"
+              ],
+              "headingPath": [
+                "基于 $\\mu$ C/OS-II 的基础实验"
+              ],
+              "lineStart": 468,
+              "lineEnd": 469,
+              "assetRefs": [],
+              "excerptSha256": "baa1443dc69c332d9744b77b7ab6d930785bd8ab95da7c7cf50b8dae63a672c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-goal-devices",
+        "moduleId": "goal-and-setup",
+        "depth": "core",
+        "kind": "table",
+        "title": "实验目的、设备与预习要求",
+        "markdown": "| 项目 | 内容 |\n|---|---|\n| 实验目的 | 掌握 SPI 总线驱动中间件在 LED 数码管上的应用 |\n| 硬件 | PC 机一台、SmartARM2200 教学实验开发平台一套、自备 LED 显示 SPI 接口板一个 |\n| 软件 | Windows 98/XP/2000、ADS 1.2 集成开发环境、μC/OS-II 操作系统（V2.52）、SPI 总线驱动中间件 |\n| 实验内容 | 使用硬件 SPI 接口与 74HC595 连接，任务 0 和任务 1 同时分别控制 74HC595 驱动一个数码管显示 |\n| 预习要求 | 阅读 SPI 接口相关说明；在平台上找出 SPI1 的引出口；阅读 74HC595 数据手册，了解数据移位与锁存输出；了解 SPI 中间件的函数调用方法 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "基于 $\\mu$ C/OS-II 的基础实验",
+                "SPI 总线的LED 控制应用"
+              ],
+              "lineStart": 470,
+              "lineEnd": 511,
+              "assetRefs": [],
+              "excerptSha256": "fc8747ede01cc9a9f77daa9f607132f9b0ebb9cc4d76394695b3312091831ce8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-middleware",
+        "moduleId": "goal-and-setup",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么用“中间件 + 双任务”来验证",
+        "markdown": "如果只是点亮数码管，裸机程序写一次移位就够了。教材要求把两个任务分别接到同一个 SPI 驱动上，验证目标就从“能移位出数据”提升为“多任务共享同一条总线时行为仍然正确”。\n\n中间件把一次完整的 SPI 收发封装成任务可调用的函数：任务只决定显示内容，时钟产生与串行移位交给 SPI 外设。74HC595 是串入并出的移位寄存器，因此一次显示更新包含“串行移入 8 位”和“锁存输出”两个动作，课前读数据手册正是为了弄清这两步。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-chapter-context",
+            "tb-goal-devices"
+          ]
+        }
+      },
+      {
+        "id": "tb-hardware-chain",
+        "moduleId": "hardware-chain",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "硬件连接与 SSEL1 上拉前提",
+        "markdown": "SmartARM2210 提供了一个 GPIO 跳线座，SPI1 的信号可以从 J5 引出至子板；用户也可以按原理图自制一块 SPI 接口子板，通过 SPI 接口与 LPC2210 相连。\n\n必须注意：P0.20（SSEL1）要上拉至高电平（3.3V），否则 SPI1 不能工作。教材中图 3.1 与图 3.2 分别给出跳线引出与子板连接的示意。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "基于 $\\mu$ C/OS-II 的基础实验",
+                "SPI 总线的LED 控制应用"
+              ],
+              "lineStart": 470,
+              "lineEnd": 511,
+              "assetRefs": [],
+              "excerptSha256": "fc8747ede01cc9a9f77daa9f607132f9b0ebb9cc4d76394695b3312091831ce8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-diagnose-hardware",
+        "moduleId": "hardware-chain",
+        "depth": "core",
+        "kind": "warning",
+        "title": "模型补充：按症状逐项定位",
+        "markdown": "数码管全灭而程序仍在运行时，按“链路从芯片往外”的顺序排查，比反复改代码更快：\n\n1. 量 P0.20 是否为 3.3V —— 悬空或为低时 SPI1 根本不工作，这是教材点名的前提。\n2. 查 J5 的 SPI1 信号是否真正接到子板，排线是否插反。\n3. 确认子板由平台 3.3V 供电。\n4. 确认 74HC595 收到锁存信号，否则数据只在移位寄存器里打转，输出端不会更新。\n\n任何一步不成立，软件配置再正确也看不到预期显示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hardware-chain"
+          ]
+        }
+      },
+      {
+        "id": "tb-config-steps",
+        "moduleId": "software-config",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "实验步骤：从新建工程到中断接入",
+        "markdown": "1. 利用光盘提供的模板新建 ARM μC/OS-II 工程，把 SPI 总线驱动中间件的 `spi.c`、`spi.h` 加入工程。\n2. 在工程的 target 组 `irq.s` 文件最后增加 SPI 中断服务程序的汇编入口：\n\n```asm\nSPI_Handler HANDLER SPI_Exception\n```\n\n3. 在 target 组 `target.c` 的 `VICInit` 函数中添加 SPI 向量中断初始化代码：\n\n```c\nextern void SPI_Handler(void);\nVICVectAddr13 = (uint32)SPI_Handler;\nVICVectCntl13 = (0x20 | 11);\nVICIntEnable = 1 << 11;\n```\n\n4. 在 `target.c` 的 `TargetInit()` 函数中添加初始化 SPI 的代码 `SPIInit();`。\n5. 在 `config.h` 文件中添加 SPI 配置代码，内容见教材程序清单 3.3。\n6. 将 SmartARM2200 平台上 J5 的 SPI1 信号与 LED 子板的 SPI 接口相连，并用平台上的 3.3V 电源给子板供电。\n7. 选择【Project】->【Debug】启动 AXD 进行 JTAG 仿真调试，全速运行程序，观察 LED 显示是否正确、两个任务是否都达到显示目的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "基于 $\\mu$ C/OS-II 的基础实验",
+                "SPI 总线的LED 控制应用"
+              ],
+              "lineStart": 470,
+              "lineEnd": 511,
+              "assetRefs": [],
+              "excerptSha256": "fc8747ede01cc9a9f77daa9f607132f9b0ebb9cc4d76394695b3312091831ce8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vic-explained",
+        "moduleId": "software-config",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：三行 VIC 代码各管什么",
+        "markdown": "这段初始化分别回答三个问题：\n\n- `VICVectAddr13`：把服务程序入口地址写进 13 号向量槽。\n- `VICVectCntl13`：高位 `0x20` 表示该向量槽使能，低位 `11` 指定使用第 11 号中断源。\n- `VICIntEnable = 1 << 11`：在中断使能寄存器中打开第 11 号中断。\n\n三处必须与 `irq.s` 里的入口名、以及 SPI 实际占用的中断号对应；任何一处差一位，中断就永远进不来，现象同样是数码管不更新。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-config-steps"
+          ]
+        }
+      },
+      {
+        "id": "tb-two-tasks",
+        "moduleId": "task-scheduling",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "双任务范例的时间参数",
+        "markdown": "范例程序有 2 个任务：任务 0 每 0.5 秒更新一次，循环显示字符 `0~F`；任务 1 每秒显示一次字符 `8`。两者同时分别控制 74HC595 驱动数码管，用两个不同周期的任务访问同一条 SPI 总线，来验证 SPI 中间件在 μC/OS-II 下能正常运行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "基于 $\\mu$ C/OS-II 的基础实验",
+                "SPI 总线的LED 控制应用"
+              ],
+              "lineStart": 470,
+              "lineEnd": 511,
+              "assetRefs": [],
+              "excerptSha256": "fc8747ede01cc9a9f77daa9f607132f9b0ebb9cc4d76394695b3312091831ce8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-task-sharing",
+        "moduleId": "task-scheduling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：共享驱动的临界区",
+        "markdown": "两个任务共享一份 SPI 驱动，意味着任一时刻只能有一个任务处在“移位输出到 74HC595”的临界区里：中间件让一次完整传输不可被打断，另一个任务发起调用时等待前一帧结束。\n\n若缺少这层保护，0.5 秒任务与 1 秒任务的数据会交错进入同一串行通道，数码管会出现错乱段码。因此“两个任务都显示正常”本身就是中间件行为正确的证据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-tasks"
+          ]
+        }
+      },
+      {
+        "id": "tb-run-verify",
+        "moduleId": "verification-and-transfer",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "运行观察与教材思考题",
+        "markdown": "1. 通过【Project】->【Debug】进入 AXD，全速运行程序。\n2. 观察数码管是否按两个任务各自的节拍与内容刷新。\n3. 判断两个任务是否都达到了显示目的。\n4. 回答教材思考题：SPI 中间件在两个任务中可以正确运行说明了什么？\n\n参考程序见教材程序清单 3.4（LED 控制主程序和任务程序）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-05387b5e0cf2e9137fce3889",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "基于 $\\mu$ C/OS-II 的基础实验",
+                "SPI 总线的LED 控制应用"
+              ],
+              "lineStart": 470,
+              "lineEnd": 511,
+              "assetRefs": [],
+              "excerptSha256": "fc8747ede01cc9a9f77daa9f607132f9b0ebb9cc4d76394695b3312091831ce8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary-check",
+        "moduleId": "verification-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：收束与检查表",
+        "markdown": "这次实验把四层串起来：硬件链路（SPI1 → J5 → 74HC595 → 数码管）、使能前提（P0.20 上拉至 3.3V）、软件接入（中断入口 + VIC 向量 + `SPIInit` + 配置头文件）、运行验证（两个不同周期的任务）。思考题应落到“中间件在 RTOS 下可被多任务共享调用且访问受控”，而不是“SPI 硬件本身支持多任务”。\n\n试验前逐项打勾：\n\n- [ ] P0.20 已上拉至 3.3V\n- [ ] J5 的 SPI1 已接到子板，子板由 3.3V 供电\n- [ ] `spi.c`、`spi.h` 已加入工程且 `SPIInit()` 已被调用\n- [ ] `irq.s` 入口名、`VICVectCntl` 通道号、`VICIntEnable` 位号三者一致\n- [ ] 两个任务的显示节拍与内容符合预期",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-goal-devices",
+            "tb-hardware-chain",
+            "tb-config-steps",
+            "tb-two-tasks",
+            "tb-run-verify"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "spi-led-run-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-summary-check",
+        "moduleId": "verification-and-transfer",
+        "depth": "core",
+        "title": "上板前自检",
+        "outcomeRefs": [
+          "explain-chain",
+          "configure-spi-isr",
+          "diagnose-display"
+        ],
+        "learningPurpose": "在通电前检查硬件前提与中断配置是否齐备，避免把接线问题误判为驱动问题。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-hardware-chain",
+            "tb-config-steps"
+          ]
+        },
+        "config": {
+          "items": [
+            {
+              "id": "ssel1-pullup",
+              "text": "P0.20（SSEL1）是否已上拉至 3.3V",
+              "hint": "未上拉时 SPI1 不能工作"
+            },
+            {
+              "id": "j5-wiring",
+              "text": "J5 的 SPI1 信号是否接到 LED 子板并由 3.3V 供电",
+              "hint": "检查排线方向与电源"
+            },
+            {
+              "id": "vic-consistency",
+              "text": "irq.s 入口名、VIC 向量通道号、中断使能位是否一致",
+              "hint": "三处错一处，中断就不会进入"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "通电前请核对三项：P0.20 是否上拉至 3.3V；J5 的 SPI1 是否接到子板并由 3.3V 供电；`irq.s` 入口名、`VICVectCntl13` 的通道号与 `VICIntEnable` 的位号是否一致。"
+        }
+      }
+    ]
+  },
+  "subtitle": "基于 $\\mu$ C/OS-II 的基础实验",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-3-2"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-05387b5e0cf2e9137fce3889",
+      "blockIds": [
+        "block-000018"
+      ],
+      "headingPath": [
+        "基于 $\\mu$ C/OS-II 的基础实验"
+      ],
+      "lineStart": 468,
+      "lineEnd": 469,
+      "assetRefs": [],
+      "excerptSha256": "baa1443dc69c332d9744b77b7ab6d930785bd8ab95da7c7cf50b8dae63a672c2"
+    },
+    {
+      "materialId": "doc-05387b5e0cf2e9137fce3889",
+      "blockIds": [
+        "block-000019"
+      ],
+      "headingPath": [
+        "基于 $\\mu$ C/OS-II 的基础实验",
+        "SPI 总线的LED 控制应用"
+      ],
+      "lineStart": 470,
+      "lineEnd": 511,
+      "assetRefs": [],
+      "excerptSha256": "fc8747ede01cc9a9f77daa9f607132f9b0ebb9cc4d76394695b3312091831ce8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1979,
+    1148
+  ],
+  "scale": 0.63
+}

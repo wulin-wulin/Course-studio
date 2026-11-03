@@ -1,0 +1,571 @@
+{
+  "id": "point-8-5",
+  "title": "无用单元收集",
+  "shortSummary": "介绍引用计数与标记-清除等无用单元收集方法，说明收集时机和回收过程的关键问题。",
+  "keyTerms": [
+    "无用单元",
+    "垃圾回收",
+    "引用计数",
+    "标记清除",
+    "可达性"
+  ],
+  "animationType": "markSweep",
+  "animationSuggestion": "逐步高亮遍历前沿与结点标记变化，再播放清扫阶段把未标记结点串成空闲表，并对比收集前后的可达状态与可用空间。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-5-5",
+    "point-8-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-quantitative-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于无用单元、悬挂访问与三类标记算法的定义和结论，围绕可达性主线重排讲解，并补充易混点、算例与达成检查。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-garbage-and-dangling",
+          "text": "能说明无用单元与悬挂访问的成因，并解释共享结构为何让释放时机变得困难。"
+        },
+        {
+          "id": "compare-reclamation-strategies",
+          "text": "能比较访问计数器与收集无用单元两条途径的适用条件与代价。"
+        },
+        {
+          "id": "trace-mark-and-sweep",
+          "text": "能描述标记-收集的标记与清扫两步流程，并说明三类标记算法在辅助空间与时间上的取舍。"
+        },
+        {
+          "id": "compare-marking-algorithms",
+          "text": "能根据附加存储、时间开销与中断可恢复性为具体场景选择合适的标记算法。"
+        },
+        {
+          "id": "evaluate-collection-cost",
+          "text": "能用使用密度公式估算收集效率，并判断何时应停止收集。"
+        }
+      ],
+      "misconceptions": [
+        "把“用户不再使用”直接等同于“没有指针指向它”，忽略共享结构下其他表仍在使用同一批结点。",
+        "认为标记-收集的难点在第二步清扫，实际上难点是在空间几乎耗尽的条件下完成标记遍历。",
+        "认为访问计数器适用于所有结构，忽略互相引用的环会让计数永远不为零。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-concepts",
+          "title": "问题从哪里来：无用单元与悬挂访问",
+          "role": "concept-introduction",
+          "description": "从用户疏漏和共享结构两类成因建立问题意识。",
+          "outcomeRefs": [
+            "explain-garbage-and-dangling"
+          ],
+          "order": 0
+        },
+        {
+          "id": "two-strategies",
+          "title": "两条回收途径",
+          "role": "comparison",
+          "description": "对照访问计数器与收集无用单元的判断依据和代价。",
+          "outcomeRefs": [
+            "compare-reclamation-strategies"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mark-and-sweep",
+          "title": "标记-收集的两步流程",
+          "role": "procedure",
+          "description": "拆解加标志与顺序清扫，定位真正的难点。",
+          "outcomeRefs": [
+            "trace-mark-and-sweep"
+          ],
+          "order": 2
+        },
+        {
+          "id": "marking-algorithms",
+          "title": "三类标记算法及其取舍",
+          "role": "mechanism-and-comparison",
+          "description": "递归、非递归与指针域记录路径三种标记方式。",
+          "outcomeRefs": [
+            "trace-mark-and-sweep",
+            "compare-marking-algorithms"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-analysis",
+          "title": "收集代价的定量估计",
+          "role": "quantitative-analysis",
+          "description": "用结点数和使用密度推导平均收集时间。",
+          "outcomeRefs": [
+            "evaluate-collection-cost"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "通过情境判断检验策略选择能力，并过渡到存储紧缩。",
+          "outcomeRefs": [
+            "explain-garbage-and-dangling",
+            "compare-reclamation-strategies",
+            "trace-mark-and-sweep",
+            "compare-marking-algorithms",
+            "evaluate-collection-cost"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-garbage-and-dangling",
+          "compare-reclamation-strategies",
+          "trace-mark-and-sweep",
+          "compare-marking-algorithms",
+          "evaluate-collection-cost"
+        ],
+        "method": "完成情境判断题，说明策略选择、环形引用失效原因与收集器必备前提。",
+        "successCriteria": [
+          "能区分无用单元与悬挂访问的后果",
+          "能说明标记-收集为何依赖完整的根集合",
+          "能用密度公式解释低垃圾比例下收集效率低"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-8-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-garbage-definition",
+        "moduleId": "problem-and-concepts",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：无用单元与悬挂访问",
+        "markdown": "教材把“无用单元”定义为**用户不再使用、而系统又没有回收**的结构和变量。它产生于两类情形：一是用户疏漏，例如先 `p = malloc(size)` 分配结点，随后直接 `p = NULL`，原结点再没有任何指针可达，却仍占着存储；二是结构本身导致，后文共享子表的例子就属于这一类。\n\n另一类更危险的问题是“悬挂访问”：若执行 `q = p; free(p);`，指针 `q` 仍保存着已被释放结点的地址；一旦该结点被重新分配，再通过 `q` 访问就会读到别的数据或破坏结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "无用单元收集"
+              ],
+              "lineStart": 7797,
+              "lineEnd": 7929,
+              "assetRefs": [
+                "parts/part-0003/images/d9844c8fefeb8602954d9857f2a966b57853cfc44eb9c9f33eceedce0394d61b.jpg",
+                "parts/part-0003/images/061d2fe2f242bf7292f70978deddda38d01ba8d438db66ef92d7679308ed52a6.jpg",
+                "parts/part-0003/images/3611c6bed7f142b96d1051ea371b75215780b785e5d783715f2933fa560edde7.jpg"
+              ],
+              "excerptSha256": "29e33181445c05faca8c11f6f06a859a384896b81781862b05b85aa099bff144"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dangling-consequence",
+        "moduleId": "problem-and-concepts",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：悬挂访问与内存泄漏的区别",
+        "markdown": "这两种问题常被混为一谈。无用单元（内存泄漏）是“空间被占着却没人用”，后果是可用存储逐渐减少；悬挂访问是“指针还指着已经不属于自己的空间”，后果是读写到别人的数据，可能悄无声息地破坏程序状态。前者浪费空间，后者破坏正确性，因此回收机制必须同时照顾共享结构与失效指针。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-garbage-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-shared-sublist",
+        "moduleId": "problem-and-concepts",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材示例：共享子表带来的释放两难",
+        "markdown": "教材用三个广义表 $L_1$、$L_2$、$L_3$ 说明结构本身造成的困难：$L_4$ 是 $L_1$ 与 $L_2$ 共享的子表，$L_3$ 又被 $L_2$ 共享，于是 $L_5$ 同时被三个表共享。\n\n此时若 $L_1$ 不再使用而 $L_2$、$L_3$ 仍在使用，从 $L_1$ 起顺链回收就会连带回收 $L_4$、$L_5$ 上的结点，破坏 $L_2$、$L_3$，造成悬挂访问；反过来，若因为 $L_2$、$L_3$ 还要用而干脆不释放 $L_1$，等它们也都不再用时，这批结点又永远无法再分配，成为无用单元。可见“何时释放”不能只看单个表的生命周期，必须知道结点被多少条链共享。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "无用单元收集"
+              ],
+              "lineStart": 7797,
+              "lineEnd": 7929,
+              "assetRefs": [
+                "parts/part-0003/images/d9844c8fefeb8602954d9857f2a966b57853cfc44eb9c9f33eceedce0394d61b.jpg",
+                "parts/part-0003/images/061d2fe2f242bf7292f70978deddda38d01ba8d438db66ef92d7679308ed52a6.jpg",
+                "parts/part-0003/images/3611c6bed7f142b96d1051ea371b75215780b785e5d783715f2933fa560edde7.jpg"
+              ],
+              "excerptSha256": "29e33181445c05faca8c11f6f06a859a384896b81781862b05b85aa099bff144"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ownership-analogy",
+        "moduleId": "problem-and-concepts",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：把共享结点想成借阅登记",
+        "markdown": "可以把每个子表结点想成一本被多人借阅的书：只要还有人借，就不能下架；当最后一位借阅者归还时才可以处理。于是关键信息不是“谁在用”，而是“还有多少个引用指向它”。这一直觉直接导出教材给出的第一条途径——访问计数器；而第二条途径换个角度，不再追踪引用数，而是在没人借的时候统一清点一次，这正对应标记-收集。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-garbage-definition",
+            "tb-shared-sublist"
+          ]
+        }
+      },
+      {
+        "id": "tb-two-approaches",
+        "moduleId": "two-strategies",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材给出的两条途径",
+        "markdown": "教材提出两条解决途径。\n\n1. **使用访问计数器**：在所有子表或广义表上增加表头结点，设置一个“计数域”，其值为指向该子表或广义表的指针数目；只有当计数域为零时，才释放该子表或广义表中的结点。\n2. **收集无用单元**：程序运行过程中对所有链表结点一律不回收，直到整个可利用空间表为空；此时暂时中断程序，把所有当前不被使用的结点链接成新的可利用空间表，再继续执行。判断依据是：从所有当前正在工作的指针变量出发顺链遍历，链在这些链上的结点就是占用的，其余结点就是无用的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "无用单元收集"
+              ],
+              "lineStart": 7797,
+              "lineEnd": 7929,
+              "assetRefs": [
+                "parts/part-0003/images/d9844c8fefeb8602954d9857f2a966b57853cfc44eb9c9f33eceedce0394d61b.jpg",
+                "parts/part-0003/images/061d2fe2f242bf7292f70978deddda38d01ba8d438db66ef92d7679308ed52a6.jpg",
+                "parts/part-0003/images/3611c6bed7f142b96d1051ea371b75215780b785e5d783715f2933fa560edde7.jpg"
+              ],
+              "excerptSha256": "29e33181445c05faca8c11f6f06a859a384896b81781862b05b85aa099bff144"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-refcount-tradeoff",
+        "moduleId": "two-strategies",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：访问计数器的适用边界",
+        "markdown": "访问计数器把开销分散到每次指针赋值上，回收及时、无须暂停程序，适合引用关系简单、更新频繁的场景。但它的代价也很直接：每个结点要额外保存计数字段，每次修改指针都要同步维护；更棘手的是环形引用——一组结点互相指向，计数永远不为零，即使整组都已经不可达也无法释放。这类结构正是标记-收集相对占优的地方，因此两条途径并非互相替代，而是按结构形态取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-approaches",
+            "tb-shared-sublist"
+          ]
+        }
+      },
+      {
+        "id": "tb-mark-sweep-steps",
+        "moduleId": "mark-and-sweep",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材流程：标记-收集的两个步骤",
+        "markdown": "教材把收集无用单元分为两步。\n\n**第一步：加标志。** 在广义表结点上增设一个 `mark` 域，收集前所有结点置为 0；从正在工作的指针出发遍历，把占用结点的 `mark` 置为 1。\n\n**第二步：清扫。** 对整个可利用存储空间顺序扫描一遍，把所有 `mark` 仍为 0 的结点链接成一个新的可利用空间表。\n\n教材特别指出：第二步容易进行，第一步却要在“可利用存储几乎耗用殆尽”的困难条件下完成，因此研究精力主要集中在标记算法上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "无用单元收集"
+              ],
+              "lineStart": 7797,
+              "lineEnd": 7929,
+              "assetRefs": [
+                "parts/part-0003/images/d9844c8fefeb8602954d9857f2a966b57853cfc44eb9c9f33eceedce0394d61b.jpg",
+                "parts/part-0003/images/061d2fe2f242bf7292f70978deddda38d01ba8d438db66ef92d7679308ed52a6.jpg",
+                "parts/part-0003/images/3611c6bed7f142b96d1051ea371b75215780b785e5d783715f2933fa560edde7.jpg"
+              ],
+              "excerptSha256": "29e33181445c05faca8c11f6f06a859a384896b81781862b05b85aa099bff144"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mark-sweep-why-hard",
+        "moduleId": "mark-and-sweep",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么难点集中在标记",
+        "markdown": "清扫之所以简单，是因为它只需要线性扫描并按地址顺序串链，不依赖任何结构信息。标记则相反，它必须从根指针出发沿引用关系走遍所有可达结点；一旦漏掉某个根（例如某个链表的表头指针没有登记），可达结点就会被误判为无用而回收，造成悬挂访问。因此实现收集器时，正确性风险几乎都集中在这一步。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mark-sweep-steps"
+          ]
+        }
+      },
+      {
+        "id": "tb-marking-algorithms",
+        "moduleId": "marking-algorithms",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材介绍的三类标记算法",
+        "markdown": "**（1）递归算法。** 若表为空则不遍历；若是数据元素则标志元素结点；否则先标志表结点，再分别遍历表头和表尾。算法简单，但需要较大的递归栈，这部分内存不能用于动态分配，且列表层次不定使栈容量难以确定，存在栈溢出导致系统瘫痪的风险。\n\n**（2）非递归算法。** 程序中附设栈或队列实现遍历。表结点含表头、表尾两个指针，结构类似二叉链表：元素结点相当于叶子。可以仿照二叉树前序遍历，先顺表头指针逐层向下加标志，把同层非空且未加标志的表尾指针依次入栈，直到表头为空表或为元素结点，再退栈取出上一层的表尾指针；这就是深度优先搜索遍历。也可以仿照广度优先搜索按层次遍历。二者仍需一个容量不确定的附加存储。\n\n**（3）利用表结点自身指针域记录路径的算法。** 递归与非递归设栈的目的都是记下指针走过的路径。该算法改为用已标志表结点中的 `tag`、`hp`、`tp` 域代替栈：当指针由 $b$ 移向表头 $c$ 前，把 $b$ 的 `hp` 改为指向其母表结点并把 `tag` 置 0；当指针由 $b$ 移向表尾 $f$ 前，把 `tp` 改为指向母表结点并把 `tag` 置 1。回溯时根据 `tag` 判断该沿 `hp` 还是 `tp` 退回，从而免除附设栈。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "无用单元收集"
+              ],
+              "lineStart": 7797,
+              "lineEnd": 7929,
+              "assetRefs": [
+                "parts/part-0003/images/d9844c8fefeb8602954d9857f2a966b57853cfc44eb9c9f33eceedce0394d61b.jpg",
+                "parts/part-0003/images/061d2fe2f242bf7292f70978deddda38d01ba8d438db66ef92d7679308ed52a6.jpg",
+                "parts/part-0003/images/3611c6bed7f142b96d1051ea371b75215780b785e5d783715f2933fa560edde7.jpg"
+              ],
+              "excerptSha256": "29e33181445c05faca8c11f6f06a859a384896b81781862b05b85aa099bff144"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-marking-comparison",
+        "moduleId": "marking-algorithms",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充整理：三种标记算法的取舍",
+        "markdown": "| 算法 | 附加存储 | 时间开销 | 中断后的可恢复性 |\n|---|---|---|---|\n| 递归 | 递归栈，容量不易确定 | 较小 | 依赖系统栈，仍有溢出风险 |\n| 非递归（栈/队列） | 栈或队列，仍为不确定量 | 较小 | 依赖附加结构 |\n| 指针域记录路径 | 不需要附加存储 | 大，每个表结点的指针域几乎都要改两次 | 发生中断后系统无法重新启动 |\n\n三者的共同前提是空间已接近耗尽，所以“省空间”与“省时间、可恢复”之间的取舍没有免费答案。教材的结论是：指针域算法让动态分配的可利用空间得到充分利用，但时间开销相当大且一中断就瘫痪；非递归算法操作简单、比它省时间，却要占用一部分本可用于动态分配的存储。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-marking-algorithms"
+          ]
+        }
+      },
+      {
+        "id": "tb-algorithm-8-3",
+        "moduleId": "marking-algorithms",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材算法 8.3：不设栈的遍历加标志",
+        "markdown": "算法 8.3 用三个互相关联的指针推进遍历：$p$ 指向当前表结点，$t$ 指向 $p$ 的母表结点，$q$ 指向 $p$ 的表头或表尾。\n\n当 $q$ 指向表头时有三种情况：表头只是元素结点，打上标志后令 $q$ 指向表尾；表头为空表或已加标志，直接转向表尾；表头是未加标志的子表，则需先遍历表头，令 $p$ 取 $q$ 的值、$t$ 下移，并在改动前用 `hp` 域记下 $t$ 的旧值、把 `tag` 置 0。\n\n当 $q$ 指向表尾时：若表尾是未加标志的子表，先用 `tp` 域记下母表结点再下移；若表尾为空或已加标志，说明当前表已处理完，令 $p$ 退回母表结点 $t$，同时 $t$ 再后退一步，具体沿 `hp` 还是 `tp` 退回由 `tag` 判定。图 8.11 的 (a)–(i) 逐步展示了指针向表头推进、对元素结点加标志后后退、再向表尾推进与连续回溯的过程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000222"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "算法 8.3"
+              ],
+              "lineStart": 7930,
+              "lineEnd": 7941,
+              "assetRefs": [],
+              "excerptSha256": "b96f36c0ae825eaf113bf33004168f7b48a12801585c290bfd9493baf87383f4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-collector-requirements",
+        "moduleId": "marking-algorithms",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：收集器能工作依赖的前提",
+        "markdown": "教材强调，收集通常由编译程序中的专用系统完成，也可以作为标准函数由用户调用（类似 `free`）。无论哪种方式，系统都要求用户建立一个**初始变量表**，登录程序中所有链表的表头指针，以便从这些指针出发进行标志。这一点解释了标记-收集与手工管理的根本差异：它把“哪些还活着”的判断从用户的手工 `free` 转移到了根集合与可达性上，因此根集合是否完整直接决定回收是否安全。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-algorithm-8-3",
+            "tb-mark-sweep-steps"
+          ]
+        }
+      },
+      {
+        "id": "tb-cost-analysis",
+        "moduleId": "cost-analysis",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材定量估计：收集效率与使用密度",
+        "markdown": "设可用空间共有 $M$ 个结点，其中 $N$ 个仍被占用。第一步标记无论采用哪种算法，时间都与结点数成正比，记为 $c_1 N$；第二步从可用空间第一个结点起顺序扫描并把未加标志结点串链，时间为 $c_2 M$。因此总时间为 $c_1 N + c_2 M$，可回收的无用结点数为 $M-N$。\n\n用收集一个无用结点所需的平均时间来度量效率：\n\n$$\\frac{c_1 N + c_2 M}{M-N}$$\n\n若用 $\\rho = N/M$ 表示内存使用密度，则上式化为：\n\n$$\\frac{c_1\\rho + c_2}{1-\\rho}$$\n\n教材给出两个端点：当 $\\rho = 1/4$（3/4 的结点为无用）时，平均时间为 $\\frac{1}{3}c_1 + \\frac{4}{3}c_2$；当 $\\rho = 3/4$（仅 1/4 的结点为无用）时，平均时间为 $3c_1 + 4c_2$。可见可用内存中只有少量结点为无用单元时，收集效率很低。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+              "blockIds": [
+                "block-000222"
+              ],
+              "headingPath": [
+                "计算机精品学习资料大放送",
+                "算法 8.3"
+              ],
+              "lineStart": 7930,
+              "lineEnd": 7941,
+              "assetRefs": [],
+              "excerptSha256": "b96f36c0ae825eaf113bf33004168f7b48a12801585c290bfd9493baf87383f4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-example",
+        "moduleId": "cost-analysis",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：用密度公式比较两种局面",
+        "markdown": "取 $c_1 = c_2 = 1$ 做同尺度比较。\n\n- 若 $\\rho = 1/2$，平均时间为 $\\frac{0.5+1}{0.5} = 3$，即收集一个结点的代价约为扫描一个结点的 3 倍。\n- 若 $\\rho = 0.9$，平均时间为 $\\frac{0.9+1}{0.1} = 19$，可用空间只剩 10% 可回收时，代价急剧上升。\n\n这说明公式的分母 $1-\\rho$ 是效率的关键：垃圾越少，收集越不划算。教材据此指出，恢复运行后这些结点很快又被消耗，可能触发另一次收集并形成恶性循环，甚至使系统瘫痪；解决办法是系统事先确定常数 $k$，当收集到的无用单元数不多于 $k$ 时就停止继续运行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cost-analysis"
+          ]
+        }
+      },
+      {
+        "id": "model-practice-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：判断该用哪种回收策略",
+        "markdown": "某程序维护大量短生命周期的树结点，引用关系简单，且要求任何时刻都能立即响应请求，不能承受全局暂停；另有一个模块构造若干互相引用的对象环。请回答：\n\n1. 第一类结构更适合访问计数器还是标记-收集？说明理由。\n2. 对象环为什么让访问计数器失效？\n3. 若对第二类结构使用标记-收集，系统至少必须维护什么信息才能保证不漏标？\n\n参考要点：第一类适合访问计数器，因其回收及时且无须暂停，但需承担计数字段与指针维护开销；对象环内部互相引用使计数永不为零；标记-收集必须维护完整的初始变量表（根集合），否则可达结点会被误判为垃圾。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-approaches",
+            "tb-mark-sweep-steps",
+            "tb-cost-analysis"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "无用单元来自“不再使用却没有回收”，悬挂访问来自“指针指向已回收的空间”，共享结构让二者同时出现。访问计数器用引用数决定释放时机，代价是计数字段、维护开销和无法处理环形引用；标记-收集推迟回收，从根集合出发标记可达结点，再扫描清扫未标记结点，其难点在标记，取舍在附加存储、时间开销与中断可恢复性。定量上，收集一个无用结点的平均代价为 $\\frac{c_1\\rho+c_2}{1-\\rho}$，垃圾比例低时极不划算。下一节“存储紧缩”将讨论另一种依靠移动占用块来消除碎片的思路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-two-approaches",
+            "tb-mark-sweep-steps",
+            "tb-marking-algorithms",
+            "tb-cost-analysis"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "collection-strategy-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-practice-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-reclamation-strategies",
+          "compare-marking-algorithms"
+        ],
+        "learningPurpose": "检查学习者能否把两条回收途径的适用条件迁移到含环形引用的具体情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-two-approaches",
+            "tb-mark-sweep-steps",
+            "tb-cost-analysis",
+            "model-practice-check"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请分别说明访问计数器与标记-收集在“短生命周期、不可暂停”和“存在对象环”两种情境下的适用性，并写出判断依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "动态存储管理",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+      "blockIds": [
+        "block-000221"
+      ],
+      "headingPath": [
+        "计算机精品学习资料大放送",
+        "无用单元收集"
+      ],
+      "lineStart": 7797,
+      "lineEnd": 7929,
+      "assetRefs": [
+        "parts/part-0003/images/d9844c8fefeb8602954d9857f2a966b57853cfc44eb9c9f33eceedce0394d61b.jpg",
+        "parts/part-0003/images/061d2fe2f242bf7292f70978deddda38d01ba8d438db66ef92d7679308ed52a6.jpg",
+        "parts/part-0003/images/3611c6bed7f142b96d1051ea371b75215780b785e5d783715f2933fa560edde7.jpg"
+      ],
+      "excerptSha256": "29e33181445c05faca8c11f6f06a859a384896b81781862b05b85aa099bff144"
+    },
+    {
+      "materialId": "doc-6ea5f19a3c614ba8cee7df46",
+      "blockIds": [
+        "block-000222"
+      ],
+      "headingPath": [
+        "计算机精品学习资料大放送",
+        "算法 8.3"
+      ],
+      "lineStart": 7930,
+      "lineEnd": 7941,
+      "assetRefs": [],
+      "excerptSha256": "b96f36c0ae825eaf113bf33004168f7b48a12801585c290bfd9493baf87383f4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    671,
+    1392
+  ],
+  "scale": 0.94
+}

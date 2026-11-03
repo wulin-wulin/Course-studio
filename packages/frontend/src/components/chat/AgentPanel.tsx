@@ -569,6 +569,16 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         cache: "no-store",
         signal: request.controller.signal,
       });
+      if (response.status === 404 || response.status === 410) {
+        if (!conversationRestoreGuardRef.current.isCurrent(request)) return null;
+        useCourseGenerationStore.getState().removeLive(conversationId);
+        getBrowserReviewResumeOutbox().removeConversation(conversationId);
+        if (window.location.hash.includes(encodeURIComponent(conversationId))) {
+          window.location.hash = "/";
+        }
+        setHistoryError("该创建流程已不存在，已清理本地记录。");
+        return null;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const conversation = await response.json() as ConversationDetail;
       if (!conversationRestoreGuardRef.current.isCurrent(request)) return null;

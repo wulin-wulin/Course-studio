@@ -1,0 +1,488 @@
+{
+  "id": "point-16-10",
+  "title": "光线投射算法",
+  "shortSummary": "讲解从视点发射光线并与场景求交确定可见面的方法，以及其与光线跟踪的区别。",
+  "keyTerms": [
+    "光线投射",
+    "求交",
+    "可见面"
+  ],
+  "animationType": "visibilityAlgorithmLab",
+  "animationSuggestion": "逐个高亮像素并画出其视线，显示与球面等对象的交点及距离标注，最近交点所在表面被选中着色，可重播并切换不同像素观察可见面差异。",
+  "difficulty": "进阶",
+  "importance": 0.75,
+  "prerequisites": [
+    "point-16-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对光线投射、深度缓存变体和光线跟踪特例的界定，围绕逐像素求交的机制补充流程、算例与场景选择练习。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-ray-casting",
+          "text": "用自己的话解释光线投射如何借助穿过像素的视线确定可见面。"
+        },
+        {
+          "id": "trace-visibility-step",
+          "text": "按顺序描述处理一个像素时求交、比较距离并取最近交点的步骤。"
+        },
+        {
+          "id": "compare-depth-buffer",
+          "text": "说明光线投射与深度缓存算法在处理单位与深度来源上的差异。"
+        },
+        {
+          "id": "distinguish-ray-tracing",
+          "text": "区分光线投射与光线跟踪在追踪光线范围和生成效果上的边界。"
+        },
+        {
+          "id": "choose-scene",
+          "text": "判断含曲面的场景为何适合使用光线投射，并说明其效率来源。"
+        }
+      ],
+      "misconceptions": [
+        "把光线投射理解为从光源向场景发射光线，实际上这里是从视点经像素逆向射入场景。",
+        "认为光线投射会继续追踪反射和折射光线，实际上它只追踪到每个像素的最近对象为止。",
+        "以为光线投射需要处理场景中的无限多条光线，实际上只处理穿过观察平面像素的那些光线。"
+      ],
+      "modules": [
+        {
+          "id": "pixel-visibility-problem",
+          "title": "问题导入：一个像素看到什么",
+          "role": "introduction",
+          "description": "从视点、观察平面像素和场景的关系引出可见面问题。",
+          "outcomeRefs": [
+            "explain-ray-casting"
+          ],
+          "order": 0
+        },
+        {
+          "id": "ray-casting-mechanism",
+          "title": "光线投射的求交与可见面判定",
+          "role": "mechanism",
+          "description": "说明视线构造、交点计算和最近交点选择，并给出单像素处理流程。",
+          "outcomeRefs": [
+            "explain-ray-casting",
+            "trace-visibility-step"
+          ],
+          "order": 1
+        },
+        {
+          "id": "depth-buffer-contrast",
+          "title": "与深度缓存算法的对照",
+          "role": "comparison",
+          "description": "用统一维度比较逐表面与逐像素两种可见性判定方式。",
+          "outcomeRefs": [
+            "compare-depth-buffer"
+          ],
+          "order": 2
+        },
+        {
+          "id": "ray-tracing-boundary",
+          "title": "与光线跟踪的边界",
+          "role": "comparison",
+          "description": "澄清特例关系，说明追踪范围和效果上的差异。",
+          "outcomeRefs": [
+            "distinguish-ray-tracing"
+          ],
+          "order": 3
+        },
+        {
+          "id": "scene-suitability",
+          "title": "适用场景与效率",
+          "role": "application",
+          "description": "分析曲面特别是球面场景中的效率优势和使用条件。",
+          "outcomeRefs": [
+            "explain-ray-casting",
+            "choose-scene"
+          ],
+          "order": 4
+        },
+        {
+          "id": "consolidation",
+          "title": "检查与小结",
+          "role": "assessment",
+          "description": "通过判断与选择题检查机制理解和边界辨别，并衔接下一节比较。",
+          "outcomeRefs": [
+            "explain-ray-casting",
+            "trace-visibility-step",
+            "compare-depth-buffer",
+            "distinguish-ray-tracing",
+            "choose-scene"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-ray-casting",
+          "trace-visibility-step",
+          "compare-depth-buffer",
+          "distinguish-ray-tracing",
+          "choose-scene"
+        ],
+        "method": "完成单像素求交流程复述、算法对照表和两道边界判断题。",
+        "successCriteria": [
+          "能正确指出视线从视点经像素射入场景",
+          "能说明最近交点的选择依据",
+          "能区分光线投射与深度缓存、光线跟踪"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-16-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-ray-definition",
+        "moduleId": "pixel-visibility-problem",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：穿过像素的视线",
+        "markdown": "教材从观察平面上的一个像素出发描述可见性：由视点出发、穿过该像素射入场景的一条射线，会与场景中的对象相交（如果有）。在算出光线与对象表面的所有交点之后，**离像素最近的交点所在的表面就是该像素的可见面**。这种判别方式沿用了光线投射（ray casting）算法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000509"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线投射算法"
+              ],
+              "lineStart": 13942,
+              "lineEnd": 13956,
+              "assetRefs": [
+                "parts/part-0005/images/ba68bba9739e44c3673e53ca0fad071590503016d1cd1b3be282680e9295d496.jpg"
+              ],
+              "excerptSha256": "cc405e1936fb48bb53e3addde577df359bddd0c7d7e52a7d5f0476d4ac958fc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-inverse-ray",
+        "moduleId": "pixel-visibility-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么是从像素往回射",
+        "markdown": "场景中能到达眼睛的光线有无限多条，但我们只关心最终落在观察平面像素上的那些。与其从光源和物体向四处追踪，不如反过来：对每个像素构造一条从视点穿过它的射线，再看这条射线最先碰到什么。这里的“逆向”只是追踪方向与物理光路相反，几何关系并没有改变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ray-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-geometric-optics",
+        "moduleId": "ray-casting-mechanism",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "几何光学基础与效率来源",
+        "markdown": "光线投射建立在几何光学的基础之上，沿光线路径追踪，是一种有效的可见性判别手段。因为场景中的光线数量无限，而真正需要处理的只是穿过各像素的光线，所以算法选择从像素出发、逆向跟踪射入场景的光线路径。教材特别指出，光线投射对包含曲面、特别是球面的场景有很高的效率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000509"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线投射算法"
+              ],
+              "lineStart": 13942,
+              "lineEnd": 13956,
+              "assetRefs": [
+                "parts/part-0005/images/ba68bba9739e44c3673e53ca0fad071590503016d1cd1b3be282680e9295d496.jpg"
+              ],
+              "excerptSha256": "cc405e1936fb48bb53e3addde577df359bddd0c7d7e52a7d5f0476d4ac958fc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-per-pixel-procedure",
+        "moduleId": "ray-casting-mechanism",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "单像素处理流程",
+        "markdown": "把教材的描述展开成可执行步骤，一个像素的可见面判定可以写成：\n\n1. 由视点和该像素的位置确定一条射入场景的视线。\n2. 求这条视线与场景中所有对象的交点，得到一组交点。\n3. 计算每个交点沿视线方向到像素（观察平面）的距离。\n4. 选出距离最近的那个交点，其所在表面即为该像素的可见面。\n5. 对该可见面着色，写入该像素；然后处理下一个像素。\n\n如果视线与任何对象都不相交，该像素保持背景色。第 4 步的比较是“最近优先”，这正是光线投射与逐表面比较深度的关键区别所在。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ray-definition",
+            "tb-geometric-optics"
+          ]
+        }
+      },
+      {
+        "id": "model-intersection-example",
+        "moduleId": "ray-casting-mechanism",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "球面求交的算例",
+        "markdown": "设某像素的视线与一个球面相交，代入球面方程后可解出参数 $t$ 的两个值，例如 $t_1 = 2.4$ 与 $t_2 = 7.8$。取较小的 $t_1$ 对应的交点，就是沿视线更靠近观察平面的那个表面点。若同一条视线还穿过一个更近的平面并得到 $t = 1.1$，则最终可见面属于该平面而不是球面。比较的是同一参数 $t$ 下的相对次序，不需要把每个对象单独渲染一遍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-per-pixel-procedure",
+            "tb-geometric-optics"
+          ]
+        }
+      },
+      {
+        "id": "tb-depth-buffer-variant",
+        "moduleId": "depth-buffer-contrast",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材定位：深度缓存算法的变形",
+        "markdown": "教材把光线投射看作深度缓存算法的一种变形。区别在于处理单位与深度来源：深度缓存算法每次处理**一个表面**，对表面上每个投影点计算深度值，再与之前保存的深度值比较，从而确定每个像素的可见表面；光线投射算法则每次处理**一个像素**，沿光线的投射路径计算出该像素所对应的所有表面的深度值，再从中取最近者。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000509"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线投射算法"
+              ],
+              "lineStart": 13942,
+              "lineEnd": 13956,
+              "assetRefs": [
+                "parts/part-0005/images/ba68bba9739e44c3673e53ca0fad071590503016d1cd1b3be282680e9295d496.jpg"
+              ],
+              "excerptSha256": "cc405e1936fb48bb53e3addde577df359bddd0c7d7e52a7d5f0476d4ac958fc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-table",
+        "moduleId": "depth-buffer-contrast",
+        "depth": "core",
+        "kind": "table",
+        "title": "两种算法按统一维度对照",
+        "markdown": "| 维度 | 深度缓存算法 | 光线投射算法 |\n|---|---|---|\n| 外层循环 | 逐个表面 | 逐个像素 |\n| 深度从哪来 | 表面投影后逐点计算 | 沿该像素的视线求交后计算 |\n| 比较方式 | 与已保存的深度值即时比较 | 汇集该像素的所有候选交点后取最近 |\n| 结果 | 每个像素保留最近表面 | 每个像素选出最近交点所在表面 |\n\n两种方法都在回答“每个像素看到哪个表面”，只是遍历顺序与比较时机不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-depth-buffer-variant",
+            "tb-ray-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-ray-tracing-special-case",
+        "moduleId": "ray-tracing-boundary",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材定位：光线跟踪的特例",
+        "markdown": "教材明确说明，光线投射是光线跟踪算法的**特例**。光线跟踪通过追踪多条光线在场景中的路径，得到多个对象表面所产生的反射和折射效果；而在光线投射中，所追踪的光线仅从每个像素到最近的对象为止，不继续追踪次级光线。教材还指出，针对常见对象特别是球体，已有高效的求交算法，并将在光线跟踪章节详细讨论。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000509"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线投射算法"
+              ],
+              "lineStart": 13942,
+              "lineEnd": 13956,
+              "assetRefs": [
+                "parts/part-0005/images/ba68bba9739e44c3673e53ca0fad071590503016d1cd1b3be282680e9295d496.jpg"
+              ],
+              "excerptSha256": "cc405e1936fb48bb53e3addde577df359bddd0c7d7e52a7d5f0476d4ac958fc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-distinguish-ray-tracing",
+        "moduleId": "ray-tracing-boundary",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "边界辨析：只走到最近对象",
+        "markdown": "可以抓住一个判据：**光线在最近交点处是否继续传播**。光线投射在找到每个像素的最近对象后即停止，因此它只解决可见面判定，不会自动产生镜面反射或折射；光线跟踪从交点继续发射反射、折射等次级光线，并递归追踪，才可能得到这些效果。两种方法可以共用求交例程，但它们追踪的光线范围不同，不能混为一谈。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ray-tracing-special-case"
+          ]
+        }
+      },
+      {
+        "id": "tb-surface-efficiency",
+        "moduleId": "scene-suitability",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材提示：曲面场景的优势",
+        "markdown": "教材在讨论适用性时强调，光线投射算法对于包含曲面、特别是球面的场景有很高的效率。原因不在遍历方式本身，而在于可以直接用曲面方程求交，避免先把曲面离散成大量多边形面片再逐一比较。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-abebc170f9271e4546887278",
+              "blockIds": [
+                "block-000509"
+              ],
+              "headingPath": [
+                "计算机图形学(第四版)",
+                "光线投射算法"
+              ],
+              "lineStart": 13942,
+              "lineEnd": 13956,
+              "assetRefs": [
+                "parts/part-0005/images/ba68bba9739e44c3673e53ca0fad071590503016d1cd1b3be282680e9295d496.jpg"
+              ],
+              "excerptSha256": "cc405e1936fb48bb53e3addde577df359bddd0c7d7e52a7d5f0476d4ac958fc8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scene-selection",
+        "moduleId": "scene-suitability",
+        "depth": "support",
+        "kind": "application",
+        "title": "场景选择建议",
+        "markdown": "当场景以球、曲面为主，且需要精确的可见面时，光线投射能利用解析求交直接得到交点，通常比先做多边形近似再逐面片处理更贴合教材所说的效率优势。反过来，若场景已经由大量多边形面片构成、且需要逐帧高效处理，深度缓存等逐表面方法往往更合适。判断时先问两个问题：场景的主要表示是曲面还是面片？当前任务只求可见面，还是还要反射与折射效果？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-surface-efficiency",
+            "tb-depth-buffer-variant",
+            "tb-ray-tracing-special-case"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. 判断：“光线投射从光源向场景发射光线，因此能自动产生阴影。”这句话错在哪里？请用视点、像素和最近交点的关系说明。\n2. 判断：“光线投射与深度缓存完全无关。”请指出教材给出的变形关系，并说明两者的处理单位。\n3. 某场景由若干球面组成，只需确定可见面，不需要反射和折射。应优先考虑哪类方法？说明它与光线跟踪在追踪范围上的差别。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ray-definition",
+            "tb-depth-buffer-variant",
+            "tb-ray-tracing-special-case",
+            "tb-surface-efficiency"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一节衔接",
+        "markdown": "光线投射对每个像素构造一条从视点穿过它的视线，求出与场景对象的全部交点，取离像素最近者作为可见面。它是深度缓存算法的变形，也是光线跟踪的特例：前者体现逐像素与逐表面的差异，后者体现“只追踪到最近对象”这一范围边界。下一节将把光线投射与其他可见性检测算法放在同一组维度下比较。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-ray-definition",
+            "tb-depth-buffer-variant",
+            "tb-ray-tracing-special-case",
+            "tb-surface-efficiency"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "ray-casting-check",
+        "type": "formative-check",
+        "title": "光线投射边界检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-depth-buffer",
+          "distinguish-ray-tracing",
+          "choose-scene"
+        ],
+        "learningPurpose": "检查学习者能否把光线投射的逐像素机制与深度缓存、光线跟踪的边界区分开，并据此判断适用场景。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-depth-buffer-variant",
+            "tb-ray-tracing-special-case",
+            "tb-surface-efficiency"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "prompt": "光线投射与深度缓存的主要处理单位分别是什么？",
+              "answer": "光线投射逐个像素处理，深度缓存逐个表面处理。"
+            },
+            {
+              "prompt": "为什么说光线投射是光线跟踪的特例？",
+              "answer": "因为光线投射只追踪从像素到最近对象的光线，不继续追踪反射和折射等次级光线。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "请写出光线投射与深度缓存的处理单位差异，并说明光线投射为何只算光线跟踪的特例。"
+        }
+      }
+    ]
+  },
+  "subtitle": "可见面判别算法",
+  "clusterId": "chapter-16",
+  "clusterIds": [
+    "chapter-16"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-abebc170f9271e4546887278",
+      "blockIds": [
+        "block-000509"
+      ],
+      "headingPath": [
+        "计算机图形学(第四版)",
+        "光线投射算法"
+      ],
+      "lineStart": 13942,
+      "lineEnd": 13956,
+      "assetRefs": [
+        "parts/part-0005/images/ba68bba9739e44c3673e53ca0fad071590503016d1cd1b3be282680e9295d496.jpg"
+      ],
+      "excerptSha256": "cc405e1936fb48bb53e3addde577df359bddd0c7d7e52a7d5f0476d4ac958fc8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3847,
+    535
+  ],
+  "scale": 0.92
+}
