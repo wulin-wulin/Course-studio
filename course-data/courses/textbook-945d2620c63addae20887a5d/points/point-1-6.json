@@ -1,0 +1,589 @@
+{
+  "id": "point-1-6",
+  "title": "循环神经网络的简洁实现",
+  "shortSummary": "使用 nn.RNN 等高层接口搭建训练循环，并对照手写实现理解接口参数与状态返回约定。",
+  "keyTerms": [
+    "nn.RNN",
+    "高层接口",
+    "批大小",
+    "训练循环"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-1-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "guided-implementation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的接口约定、张量形状与训练设置，围绕“先约定状态与输出语义、再对照手写实现”的学习路径重排讲解，并补充自查清单与练习引导。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "interface-contract",
+          "text": "说明高层循环层返回的 Y 与更新后隐状态的含义、形状和用途区别。"
+        },
+        {
+          "id": "build-model",
+          "text": "使用 nn.RNN 与独立输出层搭建 RNNModel，并正确初始化隐状态。"
+        },
+        {
+          "id": "compare-implementations",
+          "text": "对照从零实现说明高层接口封装了哪些步骤、仍保留哪些手工工作。"
+        },
+        {
+          "id": "train-and-predict",
+          "text": "复述训练与预测流程，并解释随机权重预测无意义、训练后困惑度下降的原因。"
+        }
+      ],
+      "misconceptions": [
+        "把 rnn_layer 返回的 Y 当作词表上的最终输出；它其实只是每个时间步的隐状态，还需要单独的输出层。",
+        "认为返回的 state_new 保存了全部时间步的隐状态；它只是最后时间步的隐状态，可用于初始化下一个小批量。",
+        "认为高层接口会改变循环神经网络的计算原理；它只是把循环层封装起来，计算规则不变。"
+      ],
+      "modules": [
+        {
+          "id": "overview-and-setup",
+          "title": "任务与数据准备",
+          "role": "orientation",
+          "description": "明确本节要复用同一语言模型任务与数据，并固定输入与状态的形状约定。",
+          "outcomeRefs": [
+            "build-model",
+            "train-and-predict"
+          ],
+          "order": 0
+        },
+        {
+          "id": "model-and-state-contract",
+          "title": "定义模型与状态、输出约定",
+          "role": "worked-example",
+          "description": "从循环层的构造、隐状态形状出发，讲清 Y 与 state_new 的分工，再组装成完整模型。",
+          "outcomeRefs": [
+            "interface-contract",
+            "build-model"
+          ],
+          "order": 1
+        },
+        {
+          "id": "training-and-prediction",
+          "title": "训练与预测",
+          "role": "procedure",
+          "description": "按预测、训练的顺序说明流程，并解释训练效率与困惑度的变化。",
+          "outcomeRefs": [
+            "train-and-predict"
+          ],
+          "order": 2
+        },
+        {
+          "id": "concise-vs-scratch",
+          "title": "与从零实现的对照",
+          "role": "comparison",
+          "description": "用统一环节比较手写实现与高层接口，明确哪些步骤被封装、哪些仍要自己做。",
+          "outcomeRefs": [
+            "compare-implementations"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-extend",
+          "title": "检查与迁移",
+          "role": "assessment",
+          "description": "用自查清单与教材练习检查形状、状态和扩展方向的掌握。",
+          "outcomeRefs": [
+            "interface-contract",
+            "build-model",
+            "compare-implementations",
+            "train-and-predict"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "interface-contract",
+          "build-model",
+          "compare-implementations",
+          "train-and-predict"
+        ],
+        "method": "完成三项自查：写出 Y 与输出层 logits 的形状、说明 state_new 的用途、用对照表指出高层接口仍需手写的部分。",
+        "successCriteria": [
+          "形状与用途描述正确",
+          "能指出输出层不可省略",
+          "能说明 state_new 与跨批延续的关系"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-1-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "overview-and-setup",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "从上一节到高层接口",
+        "markdown": "上一节从零手写循环神经网络，对理解实现方式很有帮助，但代码冗长、不便直接使用。本节改用深度学习框架的高级 API 来完成同一个语言模型任务：仍然从读取时光机器数据集开始，把批大小设为 32、时间步数设为 35，然后利用高层接口构造循环层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000043"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现"
+              ],
+              "lineStart": 2647,
+              "lineEnd": 2699,
+              "assetRefs": [],
+              "excerptSha256": "d29889bd6a98688d9ec1fa88dc2cd33caf737af17e7aad36ba670ecddde0f1a3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-data-shape",
+        "moduleId": "overview-and-setup",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：先固定批大小与时间步数",
+        "markdown": "批大小决定一次并行处理多少条序列，时间步数决定一次前向要展开多少步。固定这两个超参数后，输入张量可以按（时间步数，批大小，输入维度）组织，隐状态按（隐藏层数，批大小，隐藏单元数）组织；后文的形状核对都以这两个约定为基准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-model-definition",
+        "moduleId": "model-and-state-contract",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "定义循环层并初始化隐状态",
+        "markdown": "高层 API 已经提供了循环神经网络层的实现。书中构造一个具有 256 个隐藏单元的单隐藏层循环层，PyTorch 写法是 `nn.RNN(len(vocab), num_hiddens)`。隐状态用一个全零张量初始化，形状为（隐藏层数，批量大小，隐藏单元数）；单隐藏层、批大小为 32 时就是 (1, 32, 256)。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000044"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现",
+                "[**定义模型**]"
+              ],
+              "lineStart": 2700,
+              "lineEnd": 2937,
+              "assetRefs": [],
+              "excerptSha256": "ad8084ee640be04c186810ab32e37d4c6be6741c142ab13d18c9462af35ed4f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hidden-state-reading",
+        "moduleId": "model-and-state-contract",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：三层形状各自表示什么",
+        "markdown": "把隐状态形状 (1, 32, 256) 拆开看：第一维是隐藏层数，多层时每一层各存一份状态；第二维是批次里的每条序列；第三维是每条序列在该时刻的隐藏表示。全零初始化表示“开始时没有任何历史信息”，之后这些状态由循环层一步步更新。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-forward-io",
+        "moduleId": "model-and-state-contract",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "前向计算：Y 与更新后的状态",
+        "markdown": "通过一个隐状态和一个输入，就能用更新后的隐状态计算输出。需要强调的是，`rnn_layer` 的“输出” Y 不涉及输出层的计算：它是每个时间步的隐状态，可以作为后续输出层的输入。返回的 state_new 则是小批量数据最后一个时间步的隐状态，可以用来初始化顺序分区中下一个小批量的隐状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000044"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现",
+                "[**定义模型**]"
+              ],
+              "lineStart": 2700,
+              "lineEnd": 2937,
+              "assetRefs": [],
+              "excerptSha256": "ad8084ee640be04c186810ab32e37d4c6be6741c142ab13d18c9462af35ed4f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-model-wrapper",
+        "moduleId": "model-and-state-contract",
+        "depth": "core",
+        "kind": "code",
+        "title": "把循环层封装成 RNNModel",
+        "markdown": "与从零实现类似，可以用一个 RNNModel 类把循环层和输出层组装起来：构造时保存循环层与词表大小，并创建一个线性输出层；前向时先对输入做转置与独热编码，送入循环层得到 Y 和状态，再把 Y 变形后交给线性层，返回输出与状态；`begin_state` 负责按隐藏层数、批大小和隐藏单元数创建初始状态。在 PyTorch 中，如果循环层是 LSTM，隐状态是元组而不是单个张量，初始化代码需要分别处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000044"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现",
+                "[**定义模型**]"
+              ],
+              "lineStart": 2700,
+              "lineEnd": 2937,
+              "assetRefs": [],
+              "excerptSha256": "ad8084ee640be04c186810ab32e37d4c6be6741c142ab13d18c9462af35ed4f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-output-layer",
+        "moduleId": "model-and-state-contract",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：为什么还要单独的输出层",
+        "markdown": "Y 的形状是（时间步数，批量大小，隐藏单元数），它并不是词表上的得分。接入输出层时先把 Y 变形为（时间步数×批量大小，隐藏单元数），再经线性层得到（时间步数×批量大小，词表大小）的 logits；这样每个时间步、每条序列都有一份词表分布，可以逐时间步计算语言模型的损失。这正是“循环层只负责隐藏状态，输出层负责词表预测”的分工。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-definition",
+            "tb-forward-io",
+            "tb-model-wrapper"
+          ]
+        }
+      },
+      {
+        "id": "tb-training",
+        "moduleId": "training-and-prediction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "预测与训练流程",
+        "markdown": "训练之前，书中先用一个随机权重的模型做预测，结果显然没有意义，说明参数尚未学习。随后沿用上一节定义的超参数调用 `train_ch8` 进行训练：训练轮数取 500、学习率取 1。由于深度学习框架的高级 API 对代码做了更多优化，这个模型在较短的时间内达到了较低的困惑度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000045"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现",
+                "训练与预测"
+              ],
+              "lineStart": 2938,
+              "lineEnd": 3003,
+              "assetRefs": [],
+              "excerptSha256": "2ca37c3590cf3ce6bf8cc6e1361d54e913cd5e9c7947740d7ab7c4ef9c4a7416"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-loop",
+        "moduleId": "training-and-prediction",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：训练与预测时状态如何流动",
+        "markdown": "训练时，每个小批量先取一份初始隐状态，前向得到输出和更新后的状态，再按损失反向传播更新参数；把 state_new 传给下一个小批量，可以让信息在批与批之间延续。预测时则逐时间步生成词元，每一步都把上一步的状态继续传下去。随机权重下这条链路是通的，只是参数没有学到语言规律，所以输出没有意义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training",
+            "tb-forward-io"
+          ]
+        }
+      },
+      {
+        "id": "model-implementation-comparison",
+        "moduleId": "concise-vs-scratch",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充：手写实现与高层接口的对照",
+        "markdown": "| 环节 | 从零实现 | 高层接口 |\n|---|---|---|\n| 独热编码 | 手写实现 | 前向中仍需调用独热编码 |\n| 循环计算 | 手写参数与逐步循环 | 由 `rnn_layer` 直接提供 |\n| 输出层 | 手写线性层 | 仍需单独创建线性层 |\n| 隐状态初始化 | 手写生成 | 用零张量或 `begin_state` 生成 |\n| 训练效率 | 代码多、较慢 | 框架优化，困惑度下降更快 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-definition",
+            "tb-model-wrapper",
+            "tb-training"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-and-extend",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "深度学习框架的高级 API 提供了循环神经网络层的实现。高级 API 的循环神经网络层返回一个输出和一个更新后的隐状态，我们还需要计算整个模型的输出层。相比从零开始实现，使用高级 API 实现可以加速训练。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000046"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现",
+                "小结"
+              ],
+              "lineStart": 3004,
+              "lineEnd": 3009,
+              "assetRefs": [],
+              "excerptSha256": "d25c19220d32e8e13cedb577d125483ced9d49e1e0680dcddda20615efbb55a9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "check-and-extend",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "补充：实现自查清单",
+        "markdown": "写完代码后逐项核对：\n\n1. 输入是否按（时间步数，批量大小，输入维度）组织，隐状态是否为（隐藏层数，批量大小，隐藏单元数）？\n2. 是否记得 Y 只是隐状态，后面还接了输出层？输出层前的变形是否为（时间步数×批量大小，隐藏单元数）？\n3. 是否把 state_new 用于下一个小批量，而不是错误地当成全部时间步的状态？\n4. 循环层换成 LSTM 时，隐状态是否是元组，`begin_state` 是否相应处理？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "model-output-layer",
+            "model-hidden-state-reading"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "check-and-extend",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "教材给出三个练习：尝试用高级 API 使循环神经网络模型过拟合；在模型中增加隐藏层数量，观察模型是否还能正常工作；用循环神经网络实现自回归模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000047"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的简洁实现",
+                "练习"
+              ],
+              "lineStart": 3010,
+              "lineEnd": 3031,
+              "assetRefs": [],
+              "excerptSha256": "a68ec80807189bfd96022f69395d24c9c036a1756453588bb98f0e24d99a6eef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "check-and-extend",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：练习的着手方向",
+        "markdown": "增加隐藏层数量时，隐状态第一维会从 1 变为层数，参数量随之增加，训练也更慢；需要同时检查输出层输入维度是否匹配。想制造过拟合，可以缩小训练集或延长训练，并观察训练损失与验证损失的分离。把模型改造成自回归模型时，只需把输入从独热词元换成连续数值特征，循环层与输出层的组织方式仍然适用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises",
+            "tb-model-wrapper",
+            "model-hidden-state-reading"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "asset-output-shape-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-output-layer",
+        "moduleId": "model-and-state-contract",
+        "depth": "core",
+        "outcomeRefs": [
+          "interface-contract",
+          "build-model"
+        ],
+        "learningPurpose": "检查学习者能否区分 Y 与输出层 logits，并写出形状变化。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-forward-io",
+            "tb-model-wrapper",
+            "model-output-layer"
+          ]
+        },
+        "config": {
+          "prompt": "输入批大小为 32、时间步数为 35 时，Y 与输出层 logits 的形状分别是什么？",
+          "expectedKeyPoints": [
+            "Y 为（35，32，256）",
+            "logits 为（35×32，词表大小）",
+            "Y 不是词表得分"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 Y 与输出层 logits 的形状，并说明为什么循环层之后还需要输出层。"
+        }
+      },
+      {
+        "id": "asset-implementation-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-checklist",
+        "moduleId": "check-and-extend",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-implementations",
+          "train-and-predict"
+        ],
+        "learningPurpose": "检查学习者能否用对照清单定位高层接口仍需手写的部分，并解释训练效率差异。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-summary",
+            "model-implementation-comparison",
+            "model-checklist"
+          ]
+        },
+        "config": {
+          "prompt": "使用 nn.RNN 后，哪些步骤仍需自己完成？训练为什么更快？",
+          "expectedKeyPoints": [
+            "仍需输出层与状态管理",
+            "循环层计算由框架封装",
+            "框架优化带来更快训练"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "列出使用高层接口后仍需自己完成的三个步骤，并说明训练加速的来源。"
+        }
+      }
+    ]
+  },
+  "subtitle": "循环神经网络",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000043"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "循环神经网络的简洁实现"
+      ],
+      "lineStart": 2647,
+      "lineEnd": 2699,
+      "assetRefs": [],
+      "excerptSha256": "d29889bd6a98688d9ec1fa88dc2cd33caf737af17e7aad36ba670ecddde0f1a3"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000044"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "循环神经网络的简洁实现",
+        "[**定义模型**]"
+      ],
+      "lineStart": 2700,
+      "lineEnd": 2937,
+      "assetRefs": [],
+      "excerptSha256": "ad8084ee640be04c186810ab32e37d4c6be6741c142ab13d18c9462af35ed4f5"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000045"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "循环神经网络的简洁实现",
+        "训练与预测"
+      ],
+      "lineStart": 2938,
+      "lineEnd": 3003,
+      "assetRefs": [],
+      "excerptSha256": "2ca37c3590cf3ce6bf8cc6e1361d54e913cd5e9c7947740d7ab7c4ef9c4a7416"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000046"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "循环神经网络的简洁实现",
+        "小结"
+      ],
+      "lineStart": 3004,
+      "lineEnd": 3009,
+      "assetRefs": [],
+      "excerptSha256": "d25c19220d32e8e13cedb577d125483ced9d49e1e0680dcddda20615efbb55a9"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000047"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "循环神经网络的简洁实现",
+        "练习"
+      ],
+      "lineStart": 3010,
+      "lineEnd": 3031,
+      "assetRefs": [],
+      "excerptSha256": "a68ec80807189bfd96022f69395d24c9c036a1756453588bb98f0e24d99a6eef"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1205,
+    2288
+  ],
+  "scale": 0.7
+}

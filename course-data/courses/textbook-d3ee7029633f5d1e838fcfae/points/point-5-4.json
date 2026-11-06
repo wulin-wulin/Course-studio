@@ -1,0 +1,803 @@
+{
+  "id": "point-5-4",
+  "title": "锚框",
+  "shortSummary": "介绍锚框的生成方式、锚框与真实框的交并比匹配规则，以及基于锚框的偏移量预测。",
+  "keyTerms": [
+    "锚框",
+    "交并比",
+    "偏移量",
+    "正负样本"
+  ],
+  "animationType": "anchorMatching",
+  "animationSuggestion": "按轮次高亮 IoU 矩阵最大值，同步画出锚框与真实框的配对连线，并灰化被删除的行列；最后一步按阈值把剩余锚框标成绿色正类和灰色背景，并提供重播回到初始矩阵。",
+  "difficulty": "中等",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-5-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-with-greedy-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的定义、公式、阈值与示例结论，围绕“先铺候选框、再匹配、再回归、最后抑制”的任务链重排讲解，并补充数量核算、IoU 小算例和自检题。",
+      "estimatedMinutes": 26,
+      "outcomes": [
+        {
+          "id": "explain-anchor-generation",
+          "text": "解释锚框的作用，并按缩放比、宽高比与像素中心计算锚框的尺寸和数量。"
+        },
+        {
+          "id": "compute-iou",
+          "text": "用交并比量化两个边界框的重合程度，并说明其取值范围的含义。"
+        },
+        {
+          "id": "assign-anchors",
+          "text": "按 IoU 矩阵与阈值把真实边界框分配给锚框，区分正类与背景负类样本。"
+        },
+        {
+          "id": "encode-offset",
+          "text": "写出锚框到真实框的偏移量编码，并说明预测时如何用逆变换还原边界框。"
+        },
+        {
+          "id": "apply-nms",
+          "text": "说明非极大值抑制如何按置信度排序并移除重复的预测边界框。"
+        }
+      ],
+      "misconceptions": [
+        "把锚框本身当成最终预测框，忽略还需要预测并应用偏移量。",
+        "以为每个生成的锚框都会分配到真实边界框，忽略阈值以下的锚框是背景负样本。",
+        "计算 IoU 时用锚框面积作分母，而不是用两框并集面积。",
+        "以为要枚举缩放比与宽高比的全部组合，忽略实践中只取包含 s1 或 r1 的组合。"
+      ],
+      "modules": [
+        {
+          "id": "anchor-generation",
+          "title": "锚框从哪里来",
+          "role": "concept-intuition",
+          "description": "从检测任务的候选区域需求引出锚框，并给出尺寸、数量公式与计数示例。",
+          "outcomeRefs": [
+            "explain-anchor-generation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "iou-matching",
+          "title": "用 IoU 把真实框分配给锚框",
+          "role": "mechanism-procedure",
+          "description": "先定义 IoU，再按贪心最大匹配与阈值规则标注正负样本。",
+          "outcomeRefs": [
+            "compute-iou",
+            "assign-anchors"
+          ],
+          "order": 1
+        },
+        {
+          "id": "offset-labeling",
+          "title": "类别与偏移量标签",
+          "role": "quantitative-mechanism",
+          "description": "给出偏移量编码公式，并用狗猫示例说明类别、偏移量和掩码如何产生。",
+          "outcomeRefs": [
+            "encode-offset"
+          ],
+          "order": 2
+        },
+        {
+          "id": "nms-prediction",
+          "title": "预测阶段与 NMS",
+          "role": "procedure",
+          "description": "说明逆变换生成预测框后，如何按置信度排序并用非极大值抑制去重。",
+          "outcomeRefs": [
+            "apply-nms"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-transfer",
+          "title": "自检与迁移",
+          "role": "formative-check",
+          "description": "用概念辨析与计算题检查五个学习目标，并桥接到多尺度锚框。",
+          "outcomeRefs": [
+            "explain-anchor-generation",
+            "compute-iou",
+            "assign-anchors",
+            "encode-offset",
+            "apply-nms"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-anchor-generation",
+          "compute-iou",
+          "assign-anchors",
+          "encode-offset",
+          "apply-nms"
+        ],
+        "method": "完成锚框数量、IoU 与正负样本三道自检题，并能对每个结论指出教材中的依据。",
+        "successCriteria": [
+          "能由 n 和 m 算出每像素锚框数 n+m-1 并乘以像素数",
+          "能用相交面积除以并集面积算出 IoU",
+          "能说明阈值如何决定背景负类，以及负类偏移量为何被掩码置零"
+        ],
+        "exerciseBlockId": "tb-exercise",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-5-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-intro",
+        "moduleId": "anchor-generation",
+        "depth": "core",
+        "kind": "definition",
+        "title": "锚框在目标检测中的角色",
+        "markdown": "目标检测需要判断图像中是否含有感兴趣的目标，并把区域边界调整到更贴合目标的**真实边界框**（ground-truth bounding box）。一种常见做法是在输入图像上采样大量候选区域，再对每个区域做判断与调整。\n\n不同的模型采用不同的区域采样方法。教材介绍其中一种：以图像的每个像素为中心，生成多个缩放比和宽高比不同的边界框，这些边界框称为**锚框**（anchor box）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000247"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框"
+              ],
+              "lineStart": 8391,
+              "lineEnd": 8433,
+              "assetRefs": [],
+              "excerptSha256": "9f7c29fe85235aeebb4d5c5086d758a9b9cda458e8a1b2c84a17cb2004b213de"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-anchor",
+        "moduleId": "anchor-generation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么先铺一批候选框",
+        "markdown": "如果让网络直接从整幅图像回归任意位置的框，搜索空间太大。锚框把“目标可能在哪、可能多大”提前结构化了：位置由像素中心给出，形状由少量缩放比和宽高比给出。网络只需要回答两个较窄的问题——这个锚框里有没有目标，以及它偏移真实框多少。\n\n因此锚框是候选先验而不是输出结果，后面还要经过偏移量修正和去重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-intro"
+          ]
+        }
+      },
+      {
+        "id": "tb-generation",
+        "moduleId": "anchor-generation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "锚框尺寸与数量",
+        "markdown": "假设输入图像的高为 $h$、宽为 $w$。给定缩放比 $s\\in(0,1]$ 与宽高比 $r>0$，以某个像素为中心生成的锚框宽度和高度分别是 $hs\\sqrt{r}$ 与 $hs/\\sqrt{r}$：中心位置与宽高一确定，锚框就唯一确定。\n\n若取 $n$ 个缩放比 $s_1,\\ldots,s_n$ 和 $m$ 个宽高比 $r_1,\\ldots,r_m$，这些取值的全部组合在每个像素上会产生 $whnm$ 个锚框。为控制计算量，实践中只保留包含 $s_1$ 或 $r_1$ 的组合：\n\n$$(s_1,r_1),(s_1,r_2),\\ldots,(s_1,r_m),(s_2,r_1),\\ldots,(s_n,r_1)$$\n\n于是以同一像素为中心的锚框数量为 $n+m-1$，整幅图像共生成 $wh(n+m-1)$ 个锚框。实现时把像素中心坐标与各锚框的宽高拼成左上角、右下角四角坐标，返回的锚框变量形状为（批量大小，锚框数量，4），坐标已经分别除以图像的宽度和高度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000248"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "生成多个锚框"
+              ],
+              "lineStart": 8434,
+              "lineEnd": 8674,
+              "assetRefs": [],
+              "excerptSha256": "802bcbb031baaa548aee4d7f6b8ad0836bafc05ccdeb4b74aa2512d1f4b85a9a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-count-example",
+        "moduleId": "anchor-generation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：数量核算示例",
+        "markdown": "设 $n=3$ 个缩放比、$m=3$ 个宽高比，则每个像素生成 $3+3-1=5$ 个锚框。若输入图像为 $200\\times 300$，总数为 $300\\times 200\\times 5=300000$ 个。若把全部组合都用上，同一设置会产生 $200\\times 300\\times 9=540000$ 个，翻倍还不止；缩放比与宽高比的取值越多，差距越大。\n\n这也是下一节要引入多尺度策略、在部分像素上铺锚框的原因：单张图像上的锚框数量直接决定后续分类与回归的计算量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-generation"
+          ]
+        }
+      },
+      {
+        "id": "tb-iou",
+        "moduleId": "iou-matching",
+        "depth": "core",
+        "kind": "formula",
+        "title": "交并比（IoU）",
+        "markdown": "说某个锚框“较好地”覆盖了目标，需要可量化的指标。杰卡德系数衡量两个集合的相似性：给定集合 $\\mathcal{A}$ 与 $\\mathcal{B}$，它是交集大小除以并集大小：\n\n$$J(\\mathcal{A},\\mathcal{B}) = \\frac{\\left|\\mathcal{A}\\cap\\mathcal{B}\\right|}{\\left|\\mathcal{A}\\cup\\mathcal{B}\\right|}$$\n\n把一个边界框覆盖的像素区域视为像素集合，两个框的杰卡德系数就称为**交并比**（intersection over union，IoU），即两个框相交面积与相并面积之比。IoU 的取值在 0 和 1 之间：0 表示两个框无重合像素，1 表示完全重合。后续既用它衡量锚框与真实边界框的相似度，也用它衡量不同锚框之间、不同预测框之间的相似度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000249"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "[**交并比（IoU）**]"
+              ],
+              "lineStart": 8675,
+              "lineEnd": 8770,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/iou.svg"
+              ],
+              "excerptSha256": "ff70fab5dbaf439dbb003e7f436e487148154a6170749d0ea8c1796f5bcc7d94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-iou-example",
+        "moduleId": "iou-matching",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：IoU 计算演示",
+        "markdown": "设框 $A$ 覆盖 $[0,2]\\times[0,2]$，框 $B$ 覆盖 $[1,3]\\times[1,3]$。它们各自面积都是 4，交集是 $[1,2]\\times[1,2]$、面积为 1，因此并集面积为 $4+4-1=7$，IoU 为 $1/7\\approx 0.14$。\n\n这个值说明两框只有小部分重叠。若 $B$ 与 $A$ 完全重合，交集与并集同为 4，IoU 为 1；若两框不相交，交集为 0，IoU 为 0。注意分母始终是并集：用锚框面积作分母会把“大框套住小目标”的情况算得偏高。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-iou"
+          ]
+        }
+      },
+      {
+        "id": "tb-labeling-overview",
+        "moduleId": "iou-matching",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "锚框的类别与偏移量标签",
+        "markdown": "在训练集中，每个锚框被当作一个训练样本。为了训练检测模型，需要为每个锚框准备两类标签：**类别**（class），即该锚框相关的对象类别；以及与真实边界框位置有关的**偏移量**（offset）。\n\n训练集带有真实边界框的位置和包围物体的类别标签。要标记一个生成的锚框，可以参照分配给它、且与它最接近的真实边界框的位置和类别。预测时流程相反：先为图像生成多个锚框，再预测所有锚框的类别和偏移量，按预测偏移量调整锚框位置得到预测边界框，最后只输出满足特定条件的预测框。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000250"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "在训练数据中标注锚框"
+              ],
+              "lineStart": 8771,
+              "lineEnd": 8781,
+              "assetRefs": [],
+              "excerptSha256": "94bce2c9514a4e25e3e15c34d835cd47e54fc61746f0436a71328016d5daa16b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-positive-negative",
+        "moduleId": "iou-matching",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：正类与背景负类",
+        "markdown": "锚框不是平均分享标签的。被分配了真实边界框的锚框是**正类**样本；没有分配到的锚框类别标为**背景**（background），通常称为**负类**锚框。\n\n区分的意义在于损失计算：背景锚框数量远多于含目标的锚框，如果让它们也参与定位损失，回归目标会被大量没有意义的位置主导。因此负类锚框的偏移量会在计算目标函数前被掩码置零，只保留类别损失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-labeling-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-assignment",
+        "moduleId": "iou-matching",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把真实边界框分配给锚框",
+        "markdown": "给定图像，设锚框为 $A_1,A_2,\\ldots,A_{n_a}$，真实边界框为 $B_1,B_2,\\ldots,B_{n_b}$，且 $n_a\\geq n_b$。定义矩阵 $\\mathbf{X}\\in\\mathbb{R}^{n_a\\times n_b}$，其中第 $i$ 行第 $j$ 列的元素 $x_{ij}$ 是锚框 $A_i$ 与真实边界框 $B_j$ 的 IoU。分配算法如下：\n\n1. 在矩阵 $\\mathbf{X}$ 中找到最大元素，记其行索引和列索引为 $i_1$ 和 $j_1$，把 $B_{j_1}$ 分配给 $A_{i_1}$，然后丢弃第 $i_1$ 行与第 $j_1$ 列的全部元素。\n2. 在剩余元素中再找最大值，记行列索引为 $i_2$、$j_2$，把 $B_{j_2}$ 分配给 $A_{i_2}$，再丢弃对应的行与列。\n3. 重复上述过程，直到 $n_b$ 列都被丢弃。此时已有 $n_b$ 个锚框各自分到一个真实边界框。\n4. 遍历剩下的 $n_a-n_b$ 个锚框：对每个锚框 $A_i$，在矩阵第 $i$ 行找到与它 IoU 最大的真实边界框 $B_j$，只有当这个 IoU 大于预设阈值时，才把 $B_j$ 分配给 $A_i$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000251"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "在训练数据中标注锚框",
+                "[**将真实边界框分配给锚框**]"
+              ],
+              "lineStart": 8782,
+              "lineEnd": 8886,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/anchor-label.svg"
+              ],
+              "excerptSha256": "741ece8069a30854ed129c8cfc1958260a273e59964ec5a3e43f4ff05fcd824f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-assignment-walkthrough",
+        "moduleId": "iou-matching",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：分配过程小算例",
+        "markdown": "设 4 个锚框 $A_1,\\ldots,A_4$ 与 2 个真实框 $B_1,B_2$，IoU 矩阵为：\n\n| | $B_1$ | $B_2$ |\n|---|---|---|\n| $A_1$ | 0.90 | 0.10 |\n| $A_2$ | 0.20 | 0.85 |\n| $A_3$ | 0.60 | 0.30 |\n| $A_4$ | 0.10 | 0.20 |\n\n第一轮最大值是 0.90，$B_1$ 分给 $A_1$，丢弃第 1 行与第 1 列；第二轮最大值是 0.85，$B_2$ 分给 $A_2$，丢弃第 2 行与第 2 列。此时每个真实框都已有归属，进入第 4 步：$A_3$ 的最大 IoU 为 0.60，超过 0.5 阈值，分到 $B_1$；$A_4$ 的最大 IoU 只有 0.20，低于阈值，标为背景。\n\n这个顺序保证每个真实框至少被一个锚框认领，同时避免同一个高 IoU 锚框抢走多个真实框。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-assignment"
+          ]
+        }
+      },
+      {
+        "id": "tb-offset",
+        "moduleId": "offset-labeling",
+        "depth": "core",
+        "kind": "formula",
+        "title": "偏移量的标准化变换",
+        "markdown": "假设锚框 $A$ 被分配了真实边界框 $B$。$A$ 与 $B$ 的中心坐标分别为 $(x_a,y_a)$ 与 $(x_b,y_b)$，宽度分别为 $w_a$ 与 $w_b$，高度分别为 $h_a$ 与 $h_b$。由于不同框的位置和大小差异很大，教材先对相对位置和大小做变换，使偏移量分布更均匀、更容易拟合：\n\n$$\\left(\\frac{\\frac{x_b-x_a}{w_a}-\\mu_x}{\\sigma_x},\\frac{\\frac{y_b-y_a}{h_a}-\\mu_y}{\\sigma_y},\\frac{\\log\\frac{w_b}{w_a}-\\mu_w}{\\sigma_w},\\frac{\\log\\frac{h_b}{h_a}-\\mu_h}{\\sigma_h}\\right)$$\n\n其中常量的默认值为 $\\mu_x=\\mu_y=\\mu_w=\\mu_h=0$，$\\sigma_x=\\sigma_y=0.1$，$\\sigma_w=\\sigma_h=0.2$。没有被分配真实框的锚框类别标为背景，其偏移量在参与损失前会被掩码置零。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000252"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "在训练数据中标注锚框",
+                "标记类别和偏移量"
+              ],
+              "lineStart": 8887,
+              "lineEnd": 9027,
+              "assetRefs": [],
+              "excerptSha256": "6de2d2b0ccb16126c72059dbd8bc3c1eb118f46b7ea6327b339530971528e7a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-offset-intuition",
+        "moduleId": "offset-labeling",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么这样编码，以及如何还原",
+        "markdown": "这组变换做了三件事。前两项把中心位移除以锚框自身的宽和高，使偏移量与锚框尺度无关，大框和小框的同类位移得到相近的数值；后两项用宽高比的对数表示尺度变化，放大与缩小在数值上对称（$w_b/w_a=2$ 与 $w_b/w_a=1/2$ 只差一个符号）；最后按 $\\mu$、$\\sigma$ 标准化，让四个分量的数值范围接近，便于回归。\n\n预测时要反向还原。已知锚框中心 $(x_a,y_a)$、宽高 $(w_a,h_a)$ 和网络预测的偏移量 $\\mathbf{t}=(t_x,t_y,t_w,t_h)$，预测框中心为 $(t_x w_a/10+x_a,\\;t_y h_a/10+y_a)$，预测宽高为 $(e^{t_w/5}w_a,\\;e^{t_h/5}h_a)$。这里的 10 与 5 正是 $\\sigma_x=0.1$ 与 $\\sigma_w=0.2$ 的倒数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-offset"
+          ]
+        }
+      },
+      {
+        "id": "tb-dog-cat-example",
+        "moduleId": "offset-labeling",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "标注示例：狗与猫",
+        "markdown": "教材用一个狗猫图像的例子说明标注结果。真实边界框有两个：类别 0 表示狗、1 表示猫，其余四个元素是左上角和右下角的坐标（范围在 0 到 1 之间）。另构造 5 个锚框 $A_0,\\ldots,A_4$，同样用左上角和右下角坐标表示。\n\n调用标注函数后，类别索引中背景、狗、猫分别为 0、1、2。结果分析如下：所有锚框与真实框配对中，$A_4$ 与猫的真实框 IoU 最大，因此 $A_4$ 的类别标为猫；去除含 $A_4$ 和猫框的配对后，$A_1$ 与狗框的 IoU 最大，$A_1$ 标为狗；接着遍历剩下的 $A_0$、$A_2$、$A_3$：$A_2$ 与猫框的最大 IoU 超过阈值 0.5，标为猫；$A_0$ 和 $A_3$ 的最大 IoU 低于阈值，标为背景。\n\n返回的第二个元素是形状为（批量大小，锚框数的四倍）的掩码，与每个锚框的 4 个偏移量一一对应；返回的第一个元素是偏移值，负类锚框的偏移量被标为零。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000253"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "在训练数据中标注锚框",
+                "一个例子"
+              ],
+              "lineStart": 9028,
+              "lineEnd": 9103,
+              "assetRefs": [],
+              "excerptSha256": "a3b138460f2a67f45a9e989e9260875935e5d21b181f3e236dc8eb39b5f9c481"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-example-analysis",
+        "moduleId": "offset-labeling",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：示例里两个容易忽略的细节",
+        "markdown": "第一，阈值只作用于第 4 步。前两步按最大 IoU 强制分配，所以哪怕某个真实框的最大 IoU 不高，它也会被某个锚框认领；阈值决定的是剩余锚框能不能成为正类。例子里如果阈值从 0.5 降到 0.3，$A_0$ 和 $A_3$ 也可能被标为正类。\n\n第二，掩码解决的是“背景不参与定位损失”。负类锚框的类别仍有监督信号（背景类），但它们的偏移量为零且被掩码挡住，这样回归分支只从真正有目标的锚框学习。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dog-cat-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-nms",
+        "moduleId": "nms-prediction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "用非极大值抑制预测边界框",
+        "markdown": "预测时先为图像生成多个锚框，再为锚框一一预测类别和偏移量，按逆偏移变换得到预测边界框。由于锚框密集，许多预测框会围绕同一目标并明显重叠，需要合并。\n\n对一个预测边界框 $B$，模型会计算每个类别的预测概率；最大概率 $p$ 对应的类别即 $B$ 的预测类别，$p$ 称为 $B$ 的**置信度**（confidence）。把图像中所有非背景预测框按置信度降序排列成列表 $L$，然后执行**非极大值抑制**（non-maximum suppression，NMS）：\n\n1. 取 $L$ 中置信度最高的框 $B_1$ 作为基准，把所有与 $B_1$ 的 IoU 超过阈值 $\\epsilon$ 的其他框从 $L$ 中移除。\n2. 取剩余列表置信度最高的框 $B_2$ 作为新基准，同样移除与它 IoU 超过 $\\epsilon$ 的框。\n3. 重复上述过程，直到列表中的每个框都曾被用作基准。此时任意一对保留框的 IoU 都小于阈值 $\\epsilon$。\n4. 输出 $L$ 中剩余的全部预测边界框。\n\n实践中可以在抑制前先移除置信度较低的框以减少计算量，也可以对输出做后处理，例如只保留置信度更高的结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000254"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "使用非极大值抑制预测边界框"
+              ],
+              "lineStart": 9104,
+              "lineEnd": 9386,
+              "assetRefs": [],
+              "excerptSha256": "f3d8b1be75f64908847245c8538412f216dfb01aa7dce0f9652183b0596a978a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-nms-walkthrough",
+        "moduleId": "nms-prediction",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：NMS 去重演示",
+        "markdown": "教材的预测示例构造了 4 个锚框，预测偏移量全为零（预测框就是锚框本身），类别概率为狗 0.9、0.8、0.7 和猫 0.9。按置信度降序，首先取 dog=0.9 作为基准：另外两个狗框与它的 IoU 超过 0.5，被从列表中移除。接着取 cat=0.9 作为基准，它与其他剩余框的 IoU 不超过阈值，因此保留。\n\n最终只输出这两个非背景框，其余框的类别被置为 -1（背景或在抑制中被移除）。输出最内层有 6 个元素：预测类别索引、置信度、预测框左上角与右下角的坐标。\n\n这说明 NMS 的输入是**已修正过的预测框**，不是原始锚框；而它的贪心性质也意味着被移除的框未必一定无用，练习中提到的 Soft-NMS 就是针对这一点的改进方向。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-nms"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "- 以图像的每个像素为中心生成不同形状的锚框。\n- 交并比（IoU）也称为杰卡德系数，用于衡量两个边界框的相似性，等于相交面积与相并面积之比。\n- 训练时需要给每个锚框两类标签：目标类别，以及真实边界框相对于锚框的偏移量。\n- 预测期间可以使用非极大值抑制（NMS）移除相似的预测边界框，简化输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000255"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "小结"
+              ],
+              "lineStart": 9387,
+              "lineEnd": 9393,
+              "assetRefs": [],
+              "excerptSha256": "ebc80af1a52e6b90460f065aa23ca95aae62697c63ad322f1c925f6c0fd94752"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "四个常见误解",
+        "markdown": "- **把锚框当成预测结果**：锚框只是覆盖不同位置与形状的参考先验，最终框由锚框加上网络预测的偏移量得到。\n- **以为每个锚框都会被分配真实框**：第一轮只为每个真实框各匹配一个 IoU 最大的锚框，其余锚框只有在最大 IoU 超过阈值时才分配，否则是背景负样本。\n- **把 IoU 的分母写成锚框面积**：并集是两框面积之和减去交集，分母用并集而不是某一个框的面积。\n- **以为要生成全部缩放比与宽高比的组合**：实践中只取包含 $s_1$ 或 $r_1$ 的组合，每像素 $n+m-1$ 个，否则数量会膨胀到 $whnm$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercise",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 修改生成锚框函数中 `sizes` 和 `ratios` 的取值，生成的锚框有什么变化？\n2. 构造并可视化两个 IoU 为 0.5 的边界框，它们是怎样重叠的？\n3. 修改标注示例与预测示例中的 `anchors`，类别标签、偏移量和 NMS 输出会如何变化？\n4. 非极大值抑制是一种通过移除来抑制的贪心算法，被移除的框是否可能仍然有用？如何改成更柔和的抑制（可参考 Soft-NMS）？\n5. 如果不手工设定，非极大值抑制的规则能否被学习得到？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000256"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "锚框",
+                "练习"
+              ],
+              "lineStart": 9394,
+              "lineEnd": 9413,
+              "assetRefs": [],
+              "excerptSha256": "a0acbed357afeba7961edf4d91a727e5735cbff473d11e9fa073e019250baae1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "三道自检题",
+        "markdown": "1. 给定 $n=2$ 个缩放比与 $m=3$ 个宽高比，每个像素生成多少个锚框？整幅 $100\\times 200$ 的图像呢？（每个像素 $2+3-1=4$ 个，共 $100\\times 200\\times 4=80000$ 个。）\n2. 两个框的相交面积为 12，各自的面积为 20 与 18，IoU 是多少？（并集为 $20+18-12=26$，IoU 约为 0.46。）\n3. 一个锚框与所有真实框的最大 IoU 只有 0.3，在阈值 0.5 下它属于哪一类？（背景负样本，偏移量被掩码置零。）\n\n如果三道题都能说明依据，就可以进入下一节：在多个尺度的特征图上铺设锚框。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercise"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "anchor-count-lab",
+        "type": "parameter-slider",
+        "anchorBlockId": "model-count-example",
+        "moduleId": "anchor-generation",
+        "depth": "support",
+        "outcomeRefs": [
+          "explain-anchor-generation"
+        ],
+        "learningPurpose": "让学习者改变缩放比与宽高比的个数，观察每像素锚框数按 n+m-1 变化，从而建立数量与计算成本的直觉。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-generation"
+          ]
+        },
+        "config": {
+          "sizes": [
+            0.75,
+            0.5,
+            0.25
+          ],
+          "ratios": [
+            1,
+            2,
+            0.5
+          ],
+          "imageWidth": 200,
+          "imageHeight": 100
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "取 $n$ 个缩放比与 $m$ 个宽高比时，每像素锚框数为 $n+m-1$。请用 $n=3$、$m=3$ 和 $n=4$、$m=3$ 分别算出每像素数量，再乘以图像像素数，比较两者的计算量。"
+        }
+      },
+      {
+        "id": "anchor-label-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "assign-anchors",
+          "apply-nms"
+        ],
+        "learningPurpose": "检查学习者能否区分正负样本，并判断 NMS 保留与移除的框。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-assignment",
+            "tb-nms"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "passingScore": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定 4 个锚框与 2 个真实框的 IoU 矩阵，写出前两步强制分配的结果，并说明剩余锚框在阈值 0.5 下哪些成为正类。再说明 NMS 为什么从置信度最高的框开始处理。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000247"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框"
+      ],
+      "lineStart": 8391,
+      "lineEnd": 8433,
+      "assetRefs": [],
+      "excerptSha256": "9f7c29fe85235aeebb4d5c5086d758a9b9cda458e8a1b2c84a17cb2004b213de"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000248"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "生成多个锚框"
+      ],
+      "lineStart": 8434,
+      "lineEnd": 8674,
+      "assetRefs": [],
+      "excerptSha256": "802bcbb031baaa548aee4d7f6b8ad0836bafc05ccdeb4b74aa2512d1f4b85a9a"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000249"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "[**交并比（IoU）**]"
+      ],
+      "lineStart": 8675,
+      "lineEnd": 8770,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/iou.svg"
+      ],
+      "excerptSha256": "ff70fab5dbaf439dbb003e7f436e487148154a6170749d0ea8c1796f5bcc7d94"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000250"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "在训练数据中标注锚框"
+      ],
+      "lineStart": 8771,
+      "lineEnd": 8781,
+      "assetRefs": [],
+      "excerptSha256": "94bce2c9514a4e25e3e15c34d835cd47e54fc61746f0436a71328016d5daa16b"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000251"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "在训练数据中标注锚框",
+        "[**将真实边界框分配给锚框**]"
+      ],
+      "lineStart": 8782,
+      "lineEnd": 8886,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/anchor-label.svg"
+      ],
+      "excerptSha256": "741ece8069a30854ed129c8cfc1958260a273e59964ec5a3e43f4ff05fcd824f"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000252"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "在训练数据中标注锚框",
+        "标记类别和偏移量"
+      ],
+      "lineStart": 8887,
+      "lineEnd": 9027,
+      "assetRefs": [],
+      "excerptSha256": "6de2d2b0ccb16126c72059dbd8bc3c1eb118f46b7ea6327b339530971528e7a6"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000253"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "在训练数据中标注锚框",
+        "一个例子"
+      ],
+      "lineStart": 9028,
+      "lineEnd": 9103,
+      "assetRefs": [],
+      "excerptSha256": "a3b138460f2a67f45a9e989e9260875935e5d21b181f3e236dc8eb39b5f9c481"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000254"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "使用非极大值抑制预测边界框"
+      ],
+      "lineStart": 9104,
+      "lineEnd": 9386,
+      "assetRefs": [],
+      "excerptSha256": "f3d8b1be75f64908847245c8538412f216dfb01aa7dce0f9652183b0596a978a"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000255"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "小结"
+      ],
+      "lineStart": 9387,
+      "lineEnd": 9393,
+      "assetRefs": [],
+      "excerptSha256": "ebc80af1a52e6b90460f065aa23ca95aae62697c63ad322f1c925f6c0fd94752"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000256"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "锚框",
+        "练习"
+      ],
+      "lineStart": 9394,
+      "lineEnd": 9413,
+      "assetRefs": [],
+      "excerptSha256": "a0acbed357afeba7961edf4d91a727e5735cbff473d11e9fa073e019250baae1"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1849,
+    1062
+  ],
+  "scale": 0.9
+}

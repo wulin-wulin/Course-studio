@@ -1,0 +1,683 @@
+{
+  "id": "point-1-9",
+  "title": "Histograms - 2: Histogram Equalization",
+  "shortSummary": "讲解直方图统计、直方图均衡化与 CLAHE 提升对比度的原理和适用局限。",
+  "keyTerms": [
+    "直方图",
+    "均衡化",
+    "CLAHE",
+    "对比度"
+  ],
+  "animationType": "histogramEqualization",
+  "animationSuggestion": "逐步显示直方图累积成 CDF、归一化生成查找表、输入灰度按映射搬到输出直方图的过程，并对比均衡化前后的分布；固定样本，支持重播。",
+  "difficulty": "中等",
+  "importance": 0.75,
+  "prerequisites": [],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的适用条件、Numpy 与 OpenCV 两种实现和 CLAHE 参数事实，按「问题—CDF 映射—上手—失效—改进」重排，并补足公式、直觉与参数取舍。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-he-problem",
+          "text": "解释直方图均衡化要解决的问题，以及它如何把受限的灰度分布拉伸到整个范围。"
+        },
+        {
+          "id": "apply-cdf-mapping",
+          "text": "说明基于累积分布函数的灰度映射，写出 0–255 归一化公式并解释查找表的含义。"
+        },
+        {
+          "id": "use-opencv-equalize",
+          "text": "能用 cv.equalizeHist 处理灰度图，并正确比较均衡化前后的结果。"
+        },
+        {
+          "id": "judge-applicability",
+          "text": "判断全局均衡何时有效、何时失效，尤其是大面积明暗共存造成局部过曝的情况。"
+        },
+        {
+          "id": "explain-clahe",
+          "text": "解释 CLAHE 的分块、对比度裁剪与双线性插值处理链，并说明参数取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为直方图均衡化在任何图像上都能改善对比度。",
+        "认为均衡化后的直方图一定变成完全平坦的一条线。",
+        "把 CLAHE 当成全局均衡的另一个名字，忽略它按块处理并限制对比度。"
+      ],
+      "modules": [
+        {
+          "id": "goal-and-problem",
+          "title": "目标与问题导入",
+          "role": "overview",
+          "outcomeRefs": [
+            "explain-he-problem"
+          ],
+          "order": 0
+        },
+        {
+          "id": "mechanism-cdf",
+          "title": "从直方图到累积分布映射",
+          "role": "derivation",
+          "outcomeRefs": [
+            "explain-he-problem",
+            "apply-cdf-mapping"
+          ],
+          "order": 1
+        },
+        {
+          "id": "opencv-and-limits",
+          "title": "OpenCV 用法与适用条件",
+          "role": "procedure",
+          "outcomeRefs": [
+            "use-opencv-equalize",
+            "judge-applicability"
+          ],
+          "order": 2
+        },
+        {
+          "id": "global-limits",
+          "title": "全局均衡的失效案例",
+          "role": "diagnosis",
+          "outcomeRefs": [
+            "judge-applicability"
+          ],
+          "order": 3
+        },
+        {
+          "id": "clahe",
+          "title": "CLAHE：分块与对比度限制",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-clahe",
+            "judge-applicability"
+          ],
+          "order": 4
+        },
+        {
+          "id": "summary-and-bridge",
+          "title": "决策链与下一点桥接",
+          "role": "summary",
+          "outcomeRefs": [
+            "explain-he-problem",
+            "apply-cdf-mapping",
+            "use-opencv-equalize",
+            "judge-applicability",
+            "explain-clahe"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-he-problem",
+          "apply-cdf-mapping",
+          "use-opencv-equalize",
+          "judge-applicability",
+          "explain-clahe"
+        ],
+        "method": "给出一幅灰度图和它的直方图，先判断该用全局均衡还是 CLAHE，再说明所用的映射或参数，最后比较处理前后的直方图与局部细节。",
+        "successCriteria": [
+          "能说出全局均衡适用于直方图集中、不适于明暗大面积共存的依据",
+          "能解释 CDF 映射中减最小值与除以 MN 的作用",
+          "能为 CLAHE 的 clipLimit 与 tileGridSize 给出有理由的取值"
+        ],
+        "summaryBlockId": "model-summary-checklist",
+        "nextPointId": "point-2-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "goal-and-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节来源与在课程中的位置",
+        "markdown": "本节属于「图像表示与基础处理」章。教材注明内容取自 OpenCV 官方教程的 Histogram Equalization 一篇，采用 Apache-2.0 许可并固定在版本 6d381e0。它承接前面几节对图像强度、阈值与边缘的处理，转向从整幅图的灰度分布出发改善显示效果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization"
+              ],
+              "lineStart": 1163,
+              "lineEnd": 1166,
+              "assetRefs": [],
+              "excerptSha256": "b51e46539347b2e594c6687ac0ed43880bb575d62bc7d1dc970ab8d71e9a7410"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-goal",
+        "moduleId": "goal-and-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材目标",
+        "markdown": "教材把本节目标写得很直接：理解直方图均衡化的概念，并用它提升图像对比度。也就是说，重点不只是调用一个函数，而是弄清「为什么拉伸灰度分布能增强对比」以及「它在什么图像上有效」。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000067"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "Goal"
+              ],
+              "lineStart": 1167,
+              "lineEnd": 1172,
+              "assetRefs": [],
+              "excerptSha256": "361567a4f8cab48657d826df3eb458526d88ecfcf150436d881c3a08f854d0f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-problem-frame",
+        "moduleId": "goal-and-problem",
+        "depth": "support",
+        "kind": "note",
+        "title": "带着两个问题往下读",
+        "markdown": "读后续内容时抓住两个问题：\n\n1. 均衡化用的是什么映射，为什么这个映射能把挤在一小段灰度里的像素摊开？\n2. 这个映射对哪些图像有用，遇到大面积明暗共存时为什么会失效，CLAHE 又如何修补？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-goal"
+          ]
+        }
+      },
+      {
+        "id": "tb-theory-problem",
+        "moduleId": "mechanism-cdf",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材原理：受限直方图与拉伸",
+        "markdown": "教材先从现象入手：如果一幅图像的像素值都挤在某个较窄的区间里，例如亮图的像素几乎都在高灰度段，画面看起来就会发灰、层次少。理想图像应该让像素分布到整个灰度范围。直方图均衡化要做的，就是把这种受限的直方图向两端拉伸，从而提升对比度。\n\n实现上需要一个变换函数，把集中在较亮区域的输入像素映射到完整的输出范围。教材先画出直方图和累积分布（CDF）的对照图，说明直方图确实落在较亮区域，然后才用这个变换把输入灰度的分布摊到全域。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "Theory"
+              ],
+              "lineStart": 1173,
+              "lineEnd": 1235,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histogram_equalization.png",
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histeq_numpy1.jpg",
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histeq_numpy2.jpg"
+              ],
+              "excerptSha256": "2ea57a98383921d14c342251cb9f6be6c1a4c8e1bd106a2cfe6d93f97f9fc187"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cdf-intuition",
+        "moduleId": "mechanism-cdf",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "直觉：按累积比例重新分配灰度",
+        "markdown": "可以把累积分布理解为「有多少比例的像素比当前灰度更暗」。如果 60% 的像素都暗于某个灰度，均衡化就希望这个灰度落在输出范围的 60% 位置。于是原来挤在 100–150 的像素，会按各自在累积分布中的位置被拉开到 0–255 的不同段落。\n\n这个映射是单调的：原本更暗的像素映射后不会反而更亮，所以相对明暗关系不会翻转，改变的是它们之间的间距。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-theory-problem"
+          ]
+        }
+      },
+      {
+        "id": "tb-theory-mapping",
+        "moduleId": "mechanism-cdf",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材的 Numpy 实现：从累计直方图到查找表",
+        "markdown": "教材给出了一套不依赖 OpenCV 的 Numpy 写法，步骤是：\n\n1. 用 `np.histogram(img.flatten(), 256, [0,256])` 统计 0–255 的直方图。\n2. 对直方图做累积求和得到 `cdf`。\n3. 为了显示方便，用 `cdf * hist.max() / cdf.max()` 把 CDF 归一化到直方图的纵轴尺度，并与直方图画在一起。\n4. 用掩膜数组排除累计值为 0 的项：`np.ma.masked_equal(cdf, 0)`，再做 `(cdf_m - cdf_m.min()) * 255 / (cdf_m.max() - cdf_m.min())` 的线性拉伸。\n5. 把结果转回 `uint8` 得到查找表，最后用 `img2 = cdf[img]` 按每个输入灰度查表，得到均衡化图像。\n\n教材还指出一个有趣性质：即使输入是较暗的图像，均衡化后也会得到几乎相同的结果；因此它被当作「参照工具」，用于让不同光照条件下的图像趋于一致，例如人脸识别训练前先对所有人脸做均衡化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "Theory"
+              ],
+              "lineStart": 1173,
+              "lineEnd": 1235,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histogram_equalization.png",
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histeq_numpy1.jpg",
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histeq_numpy2.jpg"
+              ],
+              "excerptSha256": "2ea57a98383921d14c342251cb9f6be6c1a4c8e1bd106a2cfe6d93f97f9fc187"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cdf-formula",
+        "moduleId": "mechanism-cdf",
+        "depth": "core",
+        "kind": "formula",
+        "title": "把代码写成公式",
+        "markdown": "教材的代码对应下面这条映射。设图像共有 $MN$ 个像素、灰度级为 $L = 256$，$\\operatorname{CDF}(r)$ 是灰度不超过 $r$ 的像素累计数，$\\operatorname{CDF}_{\\min}$ 是最小的非零累计数，则输入灰度 $r$ 被映射为\n\n$$\ns = \\operatorname{round}\\left( \\frac{\\operatorname{CDF}(r) - \\operatorname{CDF}_{\\min}}{MN - \\operatorname{CDF}_{\\min}} \\times (L - 1) \\right)\n$$\n\n减去看似多余的 $\\operatorname{CDF}_{\\min}$，是为了让图像中出现过的最暗灰度映射到 0；分母用 $MN - \\operatorname{CDF}_{\\min}$ 而不是 $MN$，则让最亮灰度映射到 $L-1$，从而把有效灰度段真正铺满。把每个 $r$ 的映射结果预先算好存进数组，就是教材所说的查找表，`img2 = cdf[img]` 只是在查这张表。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-theory-problem",
+            "tb-theory-mapping"
+          ]
+        }
+      },
+      {
+        "id": "model-discrete-properties",
+        "moduleId": "mechanism-cdf",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "离散图像上的三个性质",
+        "markdown": "- **单调**：映射由累积分布决定，累计数只增不减，因此灰度相对顺序保持。\n- **近似均匀**：连续情形下输出分布可变成均匀分布；实际图像是离散的，灰度级有限且像素要取整，所以直方图只是被摊平、拉开，不会变成绝对平坦的一条线。\n- **对整体明暗不敏感**：教材提到较暗图像均衡化后与较亮图像结果几乎相同，因为映射只依赖累积比例，不依赖灰度的绝对位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-theory-mapping"
+          ]
+        }
+      },
+      {
+        "id": "tb-opencv",
+        "moduleId": "opencv-and-limits",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材的 OpenCV 用法与适用条件",
+        "markdown": "OpenCV 把整套流程封装成 `cv.equalizeHist()`：输入一幅灰度图，输出均衡化后的灰度图。教材的示例读入 `wiki.jpg`，用 `equ = cv.equalizeHist(img)` 得到结果，再用 `np.hstack((img, equ))` 把原图与结果左右拼接保存，便于对比。\n\n教材同时给出适用条件：当直方图集中在一个较小区域时，均衡化效果好；如果图像存在很大的强度变化、直方图覆盖很宽的区域，也就是亮像素和暗像素同时大量存在时，效果往往不好。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000069"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "Histograms Equalization in OpenCV"
+              ],
+              "lineStart": 1236,
+              "lineEnd": 1257,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/equalization_opencv.jpg"
+              ],
+              "excerptSha256": "ae09dc3096a27383dd295e59ad4acc2e76fda1affad1e8fd6620b43ec5b81120"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-opencv-workflow",
+        "moduleId": "opencv-and-limits",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "调用前的三条检查",
+        "markdown": "1. **先转灰度**：`equalizeHist` 接受单通道灰度图；彩色图要先转换，或在亮度通道上处理，避免直接对三个颜色通道分别均衡而改变颜色关系。\n2. **确认类型**：OpenCV 的 `uint8` 图像直接可用；换成浮点或更大范围的数据时要先检查函数对类型的要求。\n3. **固定对比方式**：用 `np.hstack` 拼接原图和结果、或并排画两张直方图，避免只凭记忆比较亮度。\n\n这三步不改变算法，但能避免「结果看起来不对」其实是用错输入或看错图的情况。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-opencv"
+          ]
+        }
+      },
+      {
+        "id": "model-applicability-check",
+        "moduleId": "opencv-and-limits",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "判断全局均衡是否值得用",
+        "markdown": "| 图像情况 | 全局均衡的效果 | 建议 |\n|---|---|---|\n| 整体偏暗或偏亮，灰度挤在窄区间 | 通常明显提升对比度 | 直接用 `equalizeHist` |\n| 同时有大片亮区和暗区，直方图覆盖很宽 | 容易把原本正常的区域推得过亮或过暗 | 谨慎使用，考虑 CLAHE 或先做局部处理 |\n| 需要让不同光照下的图像可比 | 可作统一预处理 | 用于人脸等任务的预处理，但训练集与测试集要一致处理 |\n\n判断依据不是图像「看起来灰不灰」，而是直方图是否集中：先画直方图，再决定要不要均衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-opencv",
+            "tb-theory-problem"
+          ]
+        }
+      },
+      {
+        "id": "tb-global-limit",
+        "moduleId": "global-limits",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材的失效案例：雕像面部过曝",
+        "markdown": "教材用一幅雕像照片说明全局均衡的问题：均衡化后背景对比度确实提高了，但雕像面部的大部分信息因为过亮而丢失。原因是这幅图像的直方图并没有集中在某个窄区间，亮部和暗部同时存在；全局映射为了拉开整体分布，把面部所在的中间灰度段推到了过亮的一端。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000070"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "CLAHE (Contrast Limited Adaptive Histogram Equalization)"
+              ],
+              "lineStart": 1258,
+              "lineEnd": 1296,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/clahe_1.jpg",
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/clahe_2.jpg"
+              ],
+              "excerptSha256": "52b442ea16966a756ed7c1a73e2bb136d6a696882180876f920d1869f94c8b5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-global-limit-reason",
+        "moduleId": "global-limits",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "为什么全局映射会牺牲局部",
+        "markdown": "全局均衡只用一条覆盖整幅图的累积分布。如果背景占了大量像素且集中在某一亮度，它会在累积分布中占据很大比例，于是中间灰度能分到的输出区间被压缩或推向一端。面部本来细节丰富，却因为像素数量少、灰度又落在被推挤的区段，细节被压平甚至截断到 255，看起来就是一片过曝。\n\n这也解释了教材的判断标准：直方图覆盖很宽、明暗共存时，单一的全局映射很难同时照顾所有区域。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-global-limit",
+            "tb-opencv"
+          ]
+        }
+      },
+      {
+        "id": "tb-clahe",
+        "moduleId": "clahe",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材的 CLAHE：分块、裁剪与插值",
+        "markdown": "为解决上面的问题，教材介绍自适应直方图均衡化（AHE）：把图像切成小块，称为 tile，OpenCV 默认 `tileSize` 为 8×8，然后对每个小块分别做直方图均衡化。局部区域内的直方图通常集中在较小范围，因此每个 tile 都能得到自己的映射。\n\n但局部均衡会放大噪声。为此加入对比度限制：如果某个直方图 bin 超过设定的对比度上限（OpenCV 默认 40），就把超出的像素裁剪掉，并均匀分配到其他 bin，然后再做均衡化。\n\n最后，tile 边界会因为各块映射不同而出现接缝。教材指出，均衡化之后用双线性插值来消除这些边界伪影。OpenCV 通过 `cv.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))` 创建对象，再用 `clahe.apply(img)` 处理图像。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000070"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "CLAHE (Contrast Limited Adaptive Histogram Equalization)"
+              ],
+              "lineStart": 1258,
+              "lineEnd": 1296,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/clahe_1.jpg",
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/clahe_2.jpg"
+              ],
+              "excerptSha256": "52b442ea16966a756ed7c1a73e2bb136d6a696882180876f920d1869f94c8b5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-clahe-parameters",
+        "moduleId": "clahe",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "clipLimit 与 tileGridSize 的取舍",
+        "markdown": "- **`clipLimit` 越大**：允许单个 bin 承载更多像素，增强更强，但噪声和过曝风险也更高；越小则越保守，细节增强变弱。\n- **`tileGridSize` 越小**：每块覆盖范围越小、越局部，能突出细小结构，但块间差异和噪声放大更明显；越大越接近全局均衡。\n- 两个参数都要结合图像尺寸和噪声水平调；教材示例使用 `clipLimit=2.0`、`tileGridSize=(8,8)`，只是可用的起点，不是通用最优值。\n\n还要清楚裁剪发生在均衡化之前：先把超过上限的 bin 削平，并把像素均匀分到其他 bin，再计算映射，这样局部映射不会被少数极亮或极暗的像素主导。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-clahe"
+          ]
+        }
+      },
+      {
+        "id": "model-clahe-vs-global",
+        "moduleId": "clahe",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "全局均衡、AHE 与 CLAHE 的对比",
+        "markdown": "| 方法 | 映射范围 | 主要风险 | 典型用途 |\n|---|---|---|---|\n| 全局直方图均衡 | 整幅图共用一条映射 | 明暗共存时局部过曝或欠曝 | 灰度集中、光照均匀的图像 |\n| 自适应直方图均衡（AHE） | 每个 tile 一条映射 | 放大噪声、块边界接缝 | 局部细节重要且噪声较小的图像 |\n| CLAHE | 每个 tile 一条映射，并限制对比度 | 参数不当仍会过增强 | 局部对比度要求高、噪声可控的场景 |\n\n教材的雕像案例正落在第一行失效、第三行有效的区间：全局映射照顾不了面部，分块加裁剪能在提升背景的同时保住面部层次。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-clahe",
+            "tb-global-limit",
+            "tb-opencv"
+          ]
+        }
+      },
+      {
+        "id": "tb-additional-resources",
+        "moduleId": "summary-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材延伸阅读",
+        "markdown": "教材在延伸资源中列出 Wikipedia 的直方图均衡化条目、Numpy 掩膜数组文档，以及 Stack Overflow 上关于对比度调整的讨论。它们分别对应三件事：更完整的推导与算例、代码里排除零值所用的掩码数组机制，以及在实践中调整对比度与亮度时遇到的问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "图像表示与基础处理",
+                "Histograms - 2: Histogram Equalization",
+                "Additional Resources"
+              ],
+              "lineStart": 1297,
+              "lineEnd": 1307,
+              "assetRefs": [],
+              "excerptSha256": "ee0db885e0fbcc5d8246730e5f40bd0551370ed1d279ebdd3ce3329bbf736113"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary-checklist",
+        "moduleId": "summary-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "处理流程图与检查表",
+        "markdown": "把本节压成一条决策链：\n\n1. **看直方图**：灰度是否集中在窄区间？是，考虑均衡化；覆盖很宽且明暗共存，进入第 4 步。\n2. **选全局均衡**：灰度图直接 `cv.equalizeHist`；彩色图先转到灰度或亮度通道。\n3. **检查结果**：并排对比原图与结果，确认没有大面积过曝或欠曝；若局部细节丢失，进入第 4 步。\n4. **改用 CLAHE**：用 `createCLAHE` 分块处理，从较小的 `clipLimit` 和常见 `tileGridSize` 起步，再按噪声和细节调参。\n5. **验证一致性**：若用于不同光照图像的可比性，训练与测试必须使用相同的预处理参数。\n\n下一节转向图像特征：局部对比度的改善会影响角点与边缘的可见性，理解均衡化的适用边界有助于判断特征检测前的预处理是否合适。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-goal",
+            "tb-theory-problem",
+            "tb-theory-mapping",
+            "tb-opencv",
+            "tb-global-limit",
+            "tb-clahe",
+            "tb-additional-resources"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "histogram-equalization-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-summary-checklist",
+        "moduleId": "summary-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-he-problem",
+          "apply-cdf-mapping",
+          "use-opencv-equalize",
+          "judge-applicability",
+          "explain-clahe"
+        ],
+        "learningPurpose": "检查学习者能否把全局均衡的适用条件与 CLAHE 的处理链迁移到具体图像判断上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-summary-checklist",
+            "tb-opencv",
+            "tb-clahe"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "一幅夜间监控画面整体偏暗，但画面里有明亮的路灯，直方图覆盖了很宽的灰度范围。请判断直接使用 cv.equalizeHist 可能出什么问题，并给出更合适的处理方案和理由。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "一幅夜间监控画面整体偏暗，但画面里有明亮的路灯，直方图覆盖了很宽的灰度范围。请判断直接使用 `cv.equalizeHist` 可能出什么问题，并给出更合适的处理方案和理由。参考方向：全局映射在明暗共存时的失效原因、CLAHE 的分块与对比度限制。"
+        }
+      }
+    ]
+  },
+  "subtitle": "图像表示与基础处理",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-1-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000066"
+      ],
+      "headingPath": [
+        "图像表示与基础处理",
+        "Histograms - 2: Histogram Equalization"
+      ],
+      "lineStart": 1163,
+      "lineEnd": 1166,
+      "assetRefs": [],
+      "excerptSha256": "b51e46539347b2e594c6687ac0ed43880bb575d62bc7d1dc970ab8d71e9a7410"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000067"
+      ],
+      "headingPath": [
+        "图像表示与基础处理",
+        "Histograms - 2: Histogram Equalization",
+        "Goal"
+      ],
+      "lineStart": 1167,
+      "lineEnd": 1172,
+      "assetRefs": [],
+      "excerptSha256": "361567a4f8cab48657d826df3eb458526d88ecfcf150436d881c3a08f854d0f8"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000068"
+      ],
+      "headingPath": [
+        "图像表示与基础处理",
+        "Histograms - 2: Histogram Equalization",
+        "Theory"
+      ],
+      "lineStart": 1173,
+      "lineEnd": 1235,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histogram_equalization.png",
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histeq_numpy1.jpg",
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/histeq_numpy2.jpg"
+      ],
+      "excerptSha256": "2ea57a98383921d14c342251cb9f6be6c1a4c8e1bd106a2cfe6d93f97f9fc187"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000069"
+      ],
+      "headingPath": [
+        "图像表示与基础处理",
+        "Histograms - 2: Histogram Equalization",
+        "Histograms Equalization in OpenCV"
+      ],
+      "lineStart": 1236,
+      "lineEnd": 1257,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/equalization_opencv.jpg"
+      ],
+      "excerptSha256": "ae09dc3096a27383dd295e59ad4acc2e76fda1affad1e8fd6620b43ec5b81120"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000070"
+      ],
+      "headingPath": [
+        "图像表示与基础处理",
+        "Histograms - 2: Histogram Equalization",
+        "CLAHE (Contrast Limited Adaptive Histogram Equalization)"
+      ],
+      "lineStart": 1258,
+      "lineEnd": 1296,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/clahe_1.jpg",
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_imgproc/py_histograms/py_histogram_equalization/images/clahe_2.jpg"
+      ],
+      "excerptSha256": "52b442ea16966a756ed7c1a73e2bb136d6a696882180876f920d1869f94c8b5d"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000071"
+      ],
+      "headingPath": [
+        "图像表示与基础处理",
+        "Histograms - 2: Histogram Equalization",
+        "Additional Resources"
+      ],
+      "lineStart": 1297,
+      "lineEnd": 1307,
+      "assetRefs": [],
+      "excerptSha256": "ee0db885e0fbcc5d8246730e5f40bd0551370ed1d279ebdd3ce3329bbf736113"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1557,
+    2426
+  ],
+  "scale": 0.66
+}

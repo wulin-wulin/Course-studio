@@ -1,0 +1,968 @@
+{
+  "id": "point-3-5",
+  "title": "工具",
+  "shortSummary": "说明 smolagents 中工具的声明方式、参数描述与共享机制，以及如何把多个工具交给同一智能体。",
+  "keyTerms": [
+    "Tool",
+    "工具声明",
+    "参数描述",
+    "工具共享"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-1-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-branches",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对工具接口、两种声明方式和四条复用路径的原始表述与代码示例，围绕「选哪种写法、交给谁用」补充取舍依据、检查清单和练习。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-tool-interface",
+          "text": "说出 smolagents 工具接口描述必须包含的四类要素，并解释它们各自的作用。"
+        },
+        {
+          "id": "declare-tool",
+          "text": "根据工具复杂度在 @tool 装饰器与 Tool 子类之间做出选择，并写出符合要求的声明。"
+        },
+        {
+          "id": "assemble-toolset",
+          "text": "把多个工具装配进同一智能体，并说明工具描述如何影响模型的选择与参数填写。"
+        },
+        {
+          "id": "reuse-tool",
+          "text": "说明默认工具箱、Hub、HF Space 与 LangChain 四条工具复用路径及各自的前提。"
+        }
+      ],
+      "misconceptions": [
+        "认为工具只要函数逻辑正确就够用，描述和参数说明可以省略。",
+        "认为 @tool 装饰器与 Tool 子类功能完全等价，可以随意互换。",
+        "认为把工具放进列表后模型自然知道调用细节，不需要显式声明输入输出。",
+        "认为从 Hub 导入工具没有安全代价，忽略 trust_remote_code 会执行远程代码。"
+      ],
+      "modules": [
+        {
+          "id": "tool-interface",
+          "title": "工具接口与调用位置",
+          "role": "concept",
+          "description": "明确工具是 LLM 可调用的函数，以及接口描述必须交代的四类要素。",
+          "outcomeRefs": [
+            "explain-tool-interface"
+          ],
+          "order": 0
+        },
+        {
+          "id": "declare-function-tool",
+          "title": "用 @tool 声明简单工具",
+          "role": "worked-example",
+          "description": "从装饰器的解析机制出发，写出命名、类型提示与 docstring 都合格的简单工具。",
+          "outcomeRefs": [
+            "declare-tool"
+          ],
+          "order": 1
+        },
+        {
+          "id": "declare-class-tool",
+          "title": "用 Tool 子类声明复杂工具",
+          "role": "worked-example",
+          "description": "用类属性显式声明元数据，并在 forward 中实现执行逻辑。",
+          "outcomeRefs": [
+            "declare-tool"
+          ],
+          "order": 2
+        },
+        {
+          "id": "assemble-toolset",
+          "title": "组装工具集",
+          "role": "application",
+          "description": "把默认工具箱与自定义工具一起交给同一智能体，并控制工具之间的区分度。",
+          "outcomeRefs": [
+            "assemble-toolset"
+          ],
+          "order": 3
+        },
+        {
+          "id": "share-import",
+          "title": "共享与导入工具",
+          "role": "procedure",
+          "description": "按 Hub 共享、Hub 导入、HF Space、LangChain 四条路径复用现成工具。",
+          "outcomeRefs": [
+            "reuse-tool"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "选择路径与自我检查",
+          "role": "assessment",
+          "description": "用小结与练习检验能否为新场景选出正确的声明与复用方式。",
+          "outcomeRefs": [
+            "declare-tool",
+            "assemble-toolset"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-tool-interface",
+          "declare-tool",
+          "assemble-toolset",
+          "reuse-tool"
+        ],
+        "method": "完成小结后的三道检查题，并为每个工具写出模型可见的接口要素。",
+        "successCriteria": [
+          "四类接口要素齐全且参数说明具体",
+          "声明方式的选择与工具复杂度匹配",
+          "能指出工具描述含糊会导致选错工具"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-3-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-tool-interface",
+        "moduleId": "tool-interface",
+        "depth": "core",
+        "kind": "definition",
+        "title": "工具是 LLM 可调用的函数",
+        "markdown": "在 smolagents 中，**工具被视为 LLM 可以在智能体系统中调用的函数**。要让 LLM 调用一个工具，需要为它提供一份接口描述，包含四类关键要素：\n\n- **名称**：工具的标识名称。\n- **工具描述**：工具的功能说明。\n- **输入类型及描述**：工具接受的参数说明。\n- **输出类型**：工具的返回结果类型。\n\n教材以韦恩庄园筹备派对的场景说明这套接口的写法。一个简单的网络搜索工具可以描述为：\n\n- **名称**：`web_search`\n- **工具描述**：根据特定查询进行网络搜索\n- **输入**：`query`（字符串），需要查找的搜索关键词\n- **输出**：包含搜索结果的字符串\n\n借助这些工具，Alfred 才能收集到筹备派对所需的全部信息并做出判断。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000098"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具"
+              ],
+              "lineStart": 2551,
+              "lineEnd": 2577,
+              "assetRefs": [
+                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/Agent_ManimCE.gif"
+              ],
+              "excerptSha256": "ce8b954f3647abbfb6c85623bf63ffe822361ba1efd0f79b8af0f3ce17691e94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-interface",
+        "moduleId": "tool-interface",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么四类要素缺一不可",
+        "markdown": "**为什么四类要素缺一不可**（模型补充）：智能体并不直接读代码，而是读工具的名称、描述、参数说明和输出类型，来决定「调不调、调哪个、参数填什么」。名称和描述决定工具能否被正确选中，参数的类型与说明决定模型能否生成合法的调用参数，输出类型则约束模型对返回结果的预期。教材只要求提供这份接口描述，而把它写清楚、写具体，是工具能被稳定调用的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tool-interface"
+          ]
+        }
+      },
+      {
+        "id": "tb-declare-methods",
+        "moduleId": "declare-function-tool",
+        "depth": "core",
+        "kind": "note",
+        "title": "两种工具创建方法",
+        "markdown": "在 smolagents 中，可以通过两种方式定义工具：\n\n1. 使用 `@tool` 装饰器创建基于函数的简单工具；\n2. 创建 `Tool` 的子类，实现复杂功能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000099"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "工具创建方法"
+              ],
+              "lineStart": 2578,
+              "lineEnd": 2583,
+              "assetRefs": [],
+              "excerptSha256": "fb876f119cabe298c67a23fcd0389791ad116b43080c8de83230399b09f69a29"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-method-choice",
+        "moduleId": "declare-function-tool",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：两种声明方式怎么选",
+        "markdown": "**两种声明方式的取舍**（模型补充）：\n\n| 判断维度 | `@tool` 装饰器 | `Tool` 子类 |\n|---|---|---|\n| 适用规模 | 单个简单函数、逻辑短、参数少 | 逻辑复杂、需要多个字段或内部状态 |\n| 元数据来源 | 从函数签名与 docstring 解析 | 在类属性中逐项显式声明 |\n| 主要成本 | 依赖命名和 docstring 的质量 | 需要多写 `inputs`、`output_type`、`forward` |\n\n两者最终都以工具对象的形式放进 `tools` 列表，选择依据是工具的复杂度，而不是个人偏好。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-declare-methods"
+          ]
+        }
+      },
+      {
+        "id": "tb-decorator-rules",
+        "moduleId": "declare-function-tool",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "@tool 装饰器的写法要求",
+        "markdown": "`@tool` 装饰器是定义简单工具的推荐方式。在底层，smolagents 会从 Python 函数解析基本信息，因此清晰的函数命名和规范的文档字符串（docstring）能让 LLM 更容易理解工具用途。使用这种方法时，函数需要具备：\n\n- **明确描述性的函数名称**：帮助 LLM 理解其用途。\n- **输入输出的类型提示**：确保工具被正确使用。\n- **详细描述**：包含明确描述各参数的 `Args:` 部分，为 LLM 提供关键上下文。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "工具创建方法",
+                "`@tool`装饰器"
+              ],
+              "lineStart": 2584,
+              "lineEnd": 2593,
+              "assetRefs": [],
+              "excerptSha256": "23da5e1e5c7619a9751308ee1b2bbee759d8ae946b1768924bd9d1666dc56bd5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decorator-check",
+        "moduleId": "declare-function-tool",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：装简单工具的检查清单",
+        "markdown": "**写 `@tool` 函数的检查清单**（模型补充）：\n\n1. 函数名是能说明动作的短语，例如 `catering_service_tool`，而不是 `f1`、`helper`。\n2. 每个参数都有类型提示，返回值也有类型提示。\n3. docstring 第一段说明「返回什么」，`Args:` 逐项说明参数含义；这些文字会成为模型判断何时调用、如何填参的依据。\n4. 函数只做一件事，把数据库查询、HTTP 请求等细节留在函数内部，不要把中间步骤暴露成大量可选参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-decorator-rules"
+          ]
+        }
+      },
+      {
+        "id": "tb-catering-example",
+        "moduleId": "declare-function-tool",
+        "depth": "core",
+        "kind": "code",
+        "title": "示例：餐饮评分查询工具",
+        "markdown": "假设 Alfred 已确定派对菜单，但需要为大量宾客准备食物，他希望雇佣当地评分最高的餐饮服务。以下是用 `@tool` 装饰器实现该查询工具的示例：\n\n```python\nfrom smolagents import CodeAgent, InferenceClientModel, tool\n\n# 假设我们有一个获取最高评分餐饮服务的函数\n@tool\ndef catering_service_tool(query: str) -> str:\n    \"\"\"\n    This tool returns the highest-rated catering service in Gotham City.\n\n    Args:\n        query: A search term for finding catering services.\n    \"\"\"\n    # 示例餐饮服务及评分列表\n    services = {\n        \"Gotham Catering Co.\": 4.9,\n        \"Wayne Manor Catering\": 4.8,\n        \"Gotham City Events\": 4.7,\n    }\n\n    # 查找评分最高的餐饮服务（模拟搜索查询过滤）\n    best_service = max(services, key=services.get)\n\n    return best_service\n\n\nagent = CodeAgent(tools=[catering_service_tool], model=InferenceClientModel())\n\n# 运行智能体寻找最佳餐饮服务\nresult = agent.run(\n    \"Can you give me the name of the highest-rated catering service in Gotham City?\"\n)\n\nprint(result)   # Output: Gotham Catering Co.\n```\n\n装饰后的函数通过 `tools=[catering_service_tool]` 交给 `CodeAgent`，随后智能体用自然语言提出需求，由模型自行决定是否调用该工具。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "工具创建方法",
+                "`@tool`装饰器",
+                "创建餐饮评分查询工具"
+              ],
+              "lineStart": 2594,
+              "lineEnd": 2639,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-catering.jpg"
+              ],
+              "excerptSha256": "4cde3efa94828e2a74916f4a37c3a242c7b4d6090f889eacef1abcfd81f96379"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-catering-walkthrough",
+        "moduleId": "declare-function-tool",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：这条调用链上发生了什么",
+        "markdown": "**以餐饮评分工具为例看调用链**（模型补充）：`catering_service_tool` 经 `@tool` 装饰后，模型看到的是名称、docstring 描述、`query: str` 参数和 `str` 返回值。用户用自然语言提问时，`CodeAgent` 决定调用该工具并给 `query` 填入搜索词；函数的返回值作为观察结果回到上下文，智能体再据此给出最终答案。评分字典与 `max` 取值都是工具内部实现，模型不需要也不应该直接操作它们。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-catering-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-class-contract",
+        "moduleId": "declare-class-tool",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "通过 Python 类定义工具",
+        "markdown": "通过 Python 类定义工具需要创建 `Tool` 的子类。对于复杂工具，可以用类把函数及其元数据封装起来，帮助 LLM 理解使用方式。类中需要定义：\n\n- `name`：工具名称。\n- `description`：用于构建智能体系统提示的描述。\n- `inputs`：包含 `type` 和 `description` 的字典，帮助 Python 解释器处理输入。\n- `output_type`：指定期望的输出类型。\n- `forward`：包含执行逻辑的方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "工具创建方法",
+                "通过Python类定义工具"
+              ],
+              "lineStart": 2640,
+              "lineEnd": 2651,
+              "assetRefs": [],
+              "excerptSha256": "f37d43e9aebec89ddb6a1935a69a93e68cae438c431711c4d139333bd125bb80"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-class-extra",
+        "moduleId": "declare-class-tool",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：类写法多出来的自由度与代价",
+        "markdown": "**类写法的额外自由度**（模型补充）：子类除了教材列出的五个要素，还可以携带实例属性、复用辅助方法，或在 `forward` 中做参数校验与异常处理。代价是 `inputs` 的键必须与 `forward` 的形参一致，`output_type` 必须与真实返回值一致，否则模型按元数据填的参数会与执行逻辑错位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-class-contract"
+          ]
+        }
+      },
+      {
+        "id": "tb-party-example",
+        "moduleId": "declare-class-tool",
+        "depth": "core",
+        "kind": "code",
+        "title": "示例：超级英雄主题派对创意生成工具",
+        "markdown": "Alfred 计划在庄园举办超级英雄主题派对，需要独特创意让活动与众不同。下面用 `Tool` 子类实现一个按类别生成派对创意的工具，并与 `CodeAgent` 集成：\n\n```python\nfrom smolagents import Tool, CodeAgent, InferenceClientModel\n\nclass SuperheroPartyThemeTool(Tool):\n    name = \"superhero_party_theme_generator\"\n    description = \"\"\"\n    This tool suggests creative superhero-themed party ideas based on a category.\n    It returns a unique party theme idea.\"\"\"\n\n    inputs = {\n        \"category\": {\n            \"type\": \"string\",\n            \"description\": \"The type of superhero party (e.g., 'classic heroes', 'villain masquerade', 'futuristic Gotham').\",\n        }\n    }\n\n    output_type = \"string\"\n\n    def forward(self, category: str):\n        themes = {\n            \"classic heroes\": \"Justice League Gala: Guests come dressed as their favorite DC heroes with themed cocktails like 'The Kryptonite Punch'.\",\n            \"villain masquerade\": \"Gotham Rogues' Ball: A mysterious masquerade where guests dress as classic Batman villains.\",\n            \"futuristic Gotham\": \"Neo-Gotham Night: A cyberpunk-style party inspired by Batman Beyond, with neon decorations and futuristic gadgets.\"\n        }\n\n        return themes.get(category.lower(), \"Themed party idea not found. Try 'classic heroes', 'villain masquerade', or 'futuristic Gotham'.\")\n\n# 实例化工具\nparty_theme_tool = SuperheroPartyThemeTool()\nagent = CodeAgent(tools=[party_theme_tool], model=InferenceClientModel())\n\n# 运行智能体生成派对主题\nresult = agent.run(\n    \"What would be a good superhero party idea for a 'villain masquerade' theme?\"\n)\n\nprint(result)  # Output: \"Gotham Rogues' Ball: A mysterious masquerade where guests dress as classic Batman villains.\"\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000103"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "工具创建方法",
+                "通过Python类定义工具",
+                "创建超级英雄主题派对创意生成工具"
+              ],
+              "lineStart": 2652,
+              "lineEnd": 2698,
+              "assetRefs": [],
+              "excerptSha256": "5af2c93f459e46166d1d328fdb3a73f5ecce64b3f209142955f83f955c1ca726"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-party-notes",
+        "moduleId": "declare-class-tool",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：inputs 与 forward 如何配合",
+        "markdown": "**看 `inputs` 与 `forward` 如何配合**（模型补充）：`SuperheroPartyThemeTool` 的 `inputs` 声明了 `category` 的参数说明，并给出 `'classic heroes'`、`'villain masquerade'`、`'futuristic Gotham'` 三个示例值，模型据此知道该传什么。`forward` 在类别的键不存在时返回一条带可用选项的提示，这属于工具层面的错误恢复：智能体读到提示后可以换一个类别重试，而不是直接失败。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-party-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-default-toolbox",
+        "moduleId": "assemble-toolset",
+        "depth": "core",
+        "kind": "note",
+        "title": "默认工具箱",
+        "markdown": "smolagents 自带一组预构建工具，可以直接注入智能体。默认工具箱包含：\n\n- `PythonInterpreterTool`\n- `FinalAnswerTool`\n- `UserInputTool`\n- `DuckDuckGoSearchTool`\n- `GoogleSearchTool`\n- `VisitWebpageTool`\n\n教材用派对筹备串起这些工具的配合：先用 `DuckDuckGoSearchTool` 搜索创意超级英雄主题派对灵感，再用 `GoogleSearchTool` 查找哥谭市评分最高的餐饮服务，用 `PythonInterpreterTool` 运行座位安排所需的计算，最后用 `FinalAnswerTool` 整合计划。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000104"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "默认工具箱"
+              ],
+              "lineStart": 2699,
+              "lineEnd": 2721,
+              "assetRefs": [],
+              "excerptSha256": "9f054fee01cb7db3cb158be19c5f48a41fd916091dcd61f4673b4be29909533a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-toolset",
+        "moduleId": "assemble-toolset",
+        "depth": "core",
+        "kind": "application",
+        "title": "补充：把多个工具交给同一智能体",
+        "markdown": "**把多个工具交给同一智能体**（模型补充）：工具以列表形式传入，例如 `CodeAgent(tools=[search_tool, image_generation_tool])`，智能体在每一轮根据任务和已获得的观察结果自行选择工具。工具一多，描述之间的区分度就成了关键：名称相近、描述含糊的工具会让模型选错。因此应只为当前任务添加必要工具，并让每个工具的描述明确写出「输入什么、返回什么、什么时候用」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-default-toolbox"
+          ]
+        }
+      },
+      {
+        "id": "tb-share-import",
+        "moduleId": "share-import",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "共享与导入工具",
+        "markdown": "smolagents 支持把自定义工具共享到 Hub，并无缝集成社区创建的工具，这包括与 **HF Spaces** 和 **LangChain 工具**的连接。借助这些集成，Alfred 可以利用高级活动策划工具，例如调整灯光、策划歌单，或与餐饮服务商协调。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000105"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "共享与导入工具"
+              ],
+              "lineStart": 2722,
+              "lineEnd": 2729,
+              "assetRefs": [],
+              "excerptSha256": "ec030173b3eb47f58cb0c58016e3b7d2bdeec3966838ecdac67e2018767f135d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-push-hub",
+        "moduleId": "share-import",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "向 Hub 共享工具",
+        "markdown": "与社区分享自定义工具只需使用 `push_to_hub()` 方法，把它上传到自己的 Hugging Face 账户：\n\n```python\nparty_theme_tool.push_to_hub(\"{your_username}/party_theme_tool\", token=\"<YOUR_HUGGINGFACEHUB_API_TOKEN>\")\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000106"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "共享与导入工具",
+                "向 Hub 共享工具"
+              ],
+              "lineStart": 2730,
+              "lineEnd": 2739,
+              "assetRefs": [],
+              "excerptSha256": "837568aaecfc4bffe3f286125851542b9349e98ffeaeba32b993d9dbd86fd3be"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hub-notes",
+        "moduleId": "share-import",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：共享工具的两个约束",
+        "markdown": "**共享工具时的两个约束**（模型补充）：`push_to_hub()` 的仓库路径采用 `用户名/仓库名` 形式，并需要有效的 Hugging Face token；被共享的工具应当自包含可复现的执行逻辑与元数据，否则其他用户加载后无法得到一致行为。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-push-hub"
+          ]
+        }
+      },
+      {
+        "id": "tb-load-hub",
+        "moduleId": "share-import",
+        "depth": "core",
+        "kind": "code",
+        "title": "从 Hub 导入工具",
+        "markdown": "使用 `load_tool()` 函数可以导入其他用户创建的工具。例如直接加载社区预定义的文生图工具并交给智能体：\n\n```python\nfrom smolagents import load_tool, CodeAgent, InferenceClientModel\n\nimage_generation_tool = load_tool(\n    \"m-ric/text-to-image\",\n    trust_remote_code=True\n)\n\nagent = CodeAgent(\n    tools=[image_generation_tool],\n    model=InferenceClientModel()\n)\n\nagent.run(\"Generate an image of a luxurious superhero-themed party at Wayne Manor with made-up superheros.\")\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000107"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "共享与导入工具",
+                "从 Hub 导入工具"
+              ],
+              "lineStart": 2740,
+              "lineEnd": 2759,
+              "assetRefs": [],
+              "excerptSha256": "33c581537e9b844adbaf210eccda432021643082871b4d2dedd3117542fb55fd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trust-warning",
+        "moduleId": "share-import",
+        "depth": "core",
+        "kind": "warning",
+        "title": "补充：trust_remote_code 的边界",
+        "markdown": "**注意 `trust_remote_code=True` 的含义**（模型补充）：该参数允许加载并执行仓库中的远程代码，这等于把工具的实现交给第三方。教材示例为了演示便利直接开启；实际使用时应只加载可信来源、固定版本，并在受限环境中运行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-load-hub"
+          ]
+        }
+      },
+      {
+        "id": "tb-from-space",
+        "moduleId": "share-import",
+        "depth": "core",
+        "kind": "code",
+        "title": "将 Hugging Face Space 导入为工具",
+        "markdown": "使用 `Tool.from_space()` 可以把 HF Space 作为工具导入，从而与社区数千个 Space 集成，从图像生成到数据分析均可实现。该工具通过 `gradio_client` 连接 Space 的后端，因此需要先安装这个依赖。\n\n```python\nfrom smolagents import CodeAgent, InferenceClientModel, Tool\n\nimage_generation_tool = Tool.from_space(\n    \"black-forest-labs/FLUX.1-schnell\",\n    name=\"image_generator\",\n    description=\"Generate an image from a prompt\"\n)\n\nmodel = InferenceClientModel(\"Qwen/Qwen2.5-Coder-32B-Instruct\")\n\nagent = CodeAgent(tools=[image_generation_tool], model=model)\n\nagent.run(\n    \"Improve this prompt, then generate an image of it.\",\n    additional_args={'user_prompt': 'A grand superhero-themed party at Wayne Manor, with Alfred overseeing a luxurious gala'}\n)\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "共享与导入工具",
+                "将 Hugging Face Space 导入为工具"
+              ],
+              "lineStart": 2760,
+              "lineEnd": 2786,
+              "assetRefs": [],
+              "excerptSha256": "2d1ae3ca8aa22d0e3cc14fac9c6860bc08a3a656a6c3163fbcb57100350c9c82"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-space-notes",
+        "moduleId": "share-import",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：from_space 的字段来源",
+        "markdown": "**`Tool.from_space()` 的字段来源**（模型补充）：`name` 与 `description` 是显式给出的，它们会成为模型看到的工具名和描述；Space 本身的接口则通过 `gradio_client` 调用。`additional_args` 用于传入不适合让模型生成的参数，例如固定的提示词片段，这类参数不会进入模型的工具描述。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-from-space"
+          ]
+        }
+      },
+      {
+        "id": "tb-from-langchain",
+        "moduleId": "share-import",
+        "depth": "core",
+        "kind": "code",
+        "title": "导入 LangChain 工具",
+        "markdown": "可以在 smolagents 工作流中复用 LangChain 工具，方法是 `Tool.from_langchain()`。教材说明 LangChain 框架将在后续章节讨论，这里只需知道这样加载即可：\n\n```python\nfrom langchain.agents import load_tools\nfrom smolagents import CodeAgent, InferenceClientModel, Tool\n\nsearch_tool = Tool.from_langchain(load_tools([\"serpapi\"])[0])\n\nagent = CodeAgent(tools=[search_tool], model=model)\n\nagent.run(\"Search for luxury entertainment ideas for a superhero-themed event, such as live performances and interactive experiences.\")\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000109"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "共享与导入工具",
+                "导入 LangChain 工具"
+              ],
+              "lineStart": 2787,
+              "lineEnd": 2810,
+              "assetRefs": [],
+              "excerptSha256": "64b21ed63d3042d203d5c0baeafec89d1773094e6a105fac1f25a123a33b8edf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-langchain-notes",
+        "moduleId": "share-import",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：复用 LangChain 工具的前提",
+        "markdown": "**复用 LangChain 工具的前提**（模型补充）：`Tool.from_langchain()` 做的是一次接口适配，把 LangChain 工具包装成 smolagents 可用的工具；因此仍需安装 LangChain 及其工具依赖，并配置该工具所需的服务凭据（例如示例中的搜索 API key）。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-from-langchain"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "选择路径小结",
+        "markdown": "**选择路径小结**（模型补充）：\n\n- 只有一个简单函数、参数少：用 `@tool`，把功夫花在函数名、类型提示和 docstring 上。\n- 逻辑复杂或需要显式元数据：继承 `Tool`，声明 `name`、`description`、`inputs`、`output_type` 并实现 `forward`。\n- 已有现成能力：先看默认工具箱，再看 Hub、HF Space 与 LangChain 三条导入路径，避免重复造工具。\n- 交给智能体时：按任务挑选最小工具集，保证每个工具的描述能与其他工具区分开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tool-interface",
+            "tb-class-contract",
+            "tb-default-toolbox",
+            "tb-from-langchain"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查一下",
+        "markdown": "**检查一下**（模型补充）：\n\n1. 为一个「按宾客姓名查询座位号」的工具选择声明方式，并写出模型能看到的四类接口要素。\n2. 另一个工具需要调用内部票务 HTTP 接口，带超时与重试，还要读取配置好的 API 地址。它更适合哪种声明方式？说明理由。\n3. 如果智能体总是把两个搜索类工具用混，你会先改什么？\n\n写完后对照上面的小结：接口要素是否齐全、参数说明是否具体、工具之间是否可区分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-summary"
+          ]
+        }
+      },
+      {
+        "id": "tb-resources",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "延伸资源",
+        "markdown": "教材为本节给出的延伸材料包括：工具教程、工具文档、工具使用导览，以及关于开发可靠高性能自定义函数工具的最佳实践指南。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "工具",
+                "资源"
+              ],
+              "lineStart": 2811,
+              "lineEnd": 2817,
+              "assetRefs": [],
+              "excerptSha256": "7e79f0a5b8c2d1a53ef706194e3289eec1e4d7579891a7c8459c23fa84e531ae"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "tool-interface-check",
+        "type": "formative-check",
+        "title": "工具声明与复用自检",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-tool-interface",
+          "declare-tool",
+          "reuse-tool"
+        ],
+        "learningPurpose": "检查学习者能否为不同复杂度的工具选出正确声明方式，并补齐模型可见的接口要素。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-tool-interface",
+            "tb-decorator-rules",
+            "tb-class-contract",
+            "tb-default-toolbox"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            "为简单的座位查询函数写出四类接口要素",
+            "判断带超时重试的 HTTP 工具该用哪种声明方式",
+            "指出两个搜索工具被混用的最可能原因"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "自检要点：① 名称、描述、输入类型及说明、输出类型是否齐全；② 简单函数选 `@tool`，需要显式元数据或复杂逻辑选 `Tool` 子类；③ 先检查两个工具的名称和描述是否足以区分，再考虑删减工具。"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 2.1 单元. smolagents 框架",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000098"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具"
+      ],
+      "lineStart": 2551,
+      "lineEnd": 2577,
+      "assetRefs": [
+        "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/Agent_ManimCE.gif"
+      ],
+      "excerptSha256": "ce8b954f3647abbfb6c85623bf63ffe822361ba1efd0f79b8af0f3ce17691e94"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000099"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "工具创建方法"
+      ],
+      "lineStart": 2578,
+      "lineEnd": 2583,
+      "assetRefs": [],
+      "excerptSha256": "fb876f119cabe298c67a23fcd0389791ad116b43080c8de83230399b09f69a29"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000100"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "工具创建方法",
+        "`@tool`装饰器"
+      ],
+      "lineStart": 2584,
+      "lineEnd": 2593,
+      "assetRefs": [],
+      "excerptSha256": "23da5e1e5c7619a9751308ee1b2bbee759d8ae946b1768924bd9d1666dc56bd5"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000101"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "工具创建方法",
+        "`@tool`装饰器",
+        "创建餐饮评分查询工具"
+      ],
+      "lineStart": 2594,
+      "lineEnd": 2639,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-catering.jpg"
+      ],
+      "excerptSha256": "4cde3efa94828e2a74916f4a37c3a242c7b4d6090f889eacef1abcfd81f96379"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000102"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "工具创建方法",
+        "通过Python类定义工具"
+      ],
+      "lineStart": 2640,
+      "lineEnd": 2651,
+      "assetRefs": [],
+      "excerptSha256": "f37d43e9aebec89ddb6a1935a69a93e68cae438c431711c4d139333bd125bb80"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000103"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "工具创建方法",
+        "通过Python类定义工具",
+        "创建超级英雄主题派对创意生成工具"
+      ],
+      "lineStart": 2652,
+      "lineEnd": 2698,
+      "assetRefs": [],
+      "excerptSha256": "5af2c93f459e46166d1d328fdb3a73f5ecce64b3f209142955f83f955c1ca726"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000104"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "默认工具箱"
+      ],
+      "lineStart": 2699,
+      "lineEnd": 2721,
+      "assetRefs": [],
+      "excerptSha256": "9f054fee01cb7db3cb158be19c5f48a41fd916091dcd61f4673b4be29909533a"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000105"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "共享与导入工具"
+      ],
+      "lineStart": 2722,
+      "lineEnd": 2729,
+      "assetRefs": [],
+      "excerptSha256": "ec030173b3eb47f58cb0c58016e3b7d2bdeec3966838ecdac67e2018767f135d"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000106"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "共享与导入工具",
+        "向 Hub 共享工具"
+      ],
+      "lineStart": 2730,
+      "lineEnd": 2739,
+      "assetRefs": [],
+      "excerptSha256": "837568aaecfc4bffe3f286125851542b9349e98ffeaeba32b993d9dbd86fd3be"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000107"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "共享与导入工具",
+        "从 Hub 导入工具"
+      ],
+      "lineStart": 2740,
+      "lineEnd": 2759,
+      "assetRefs": [],
+      "excerptSha256": "33c581537e9b844adbaf210eccda432021643082871b4d2dedd3117542fb55fd"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000108"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "共享与导入工具",
+        "将 Hugging Face Space 导入为工具"
+      ],
+      "lineStart": 2760,
+      "lineEnd": 2786,
+      "assetRefs": [],
+      "excerptSha256": "2d1ae3ca8aa22d0e3cc14fac9c6860bc08a3a656a6c3163fbcb57100350c9c82"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000109"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "共享与导入工具",
+        "导入 LangChain 工具"
+      ],
+      "lineStart": 2787,
+      "lineEnd": 2810,
+      "assetRefs": [],
+      "excerptSha256": "64b21ed63d3042d203d5c0baeafec89d1773094e6a105fac1f25a123a33b8edf"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000110"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "工具",
+        "资源"
+      ],
+      "lineStart": 2811,
+      "lineEnd": 2817,
+      "assetRefs": [],
+      "excerptSha256": "7e79f0a5b8c2d1a53ef706194e3289eec1e4d7579891a7c8459c23fa84e531ae"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3065,
+    2021
+  ],
+  "scale": 1.22
+}
