@@ -1,0 +1,464 @@
+{
+  "id": "point-9-5",
+  "title": "Distributing Packages",
+  "shortSummary": "构建源码包和轮子并上传到包索引，让他人可以通过包管理器安装，理解构建与发布的步骤。",
+  "keyTerms": [
+    "分发 distribution",
+    "wheel",
+    "sdist",
+    "PyPI"
+  ],
+  "animationType": "packageDistribution",
+  "animationSuggestion": "用一条横向流水线展示产物形态变化：源码目录打包成 sdist 进入 dist/，twine 把它上传到 TestPyPI，pip 在隔离环境中解析索引并在缺少 wheel 时从 sdist 现场构建 wheel，最后落地为已安装包；每一步标注命令、当前产物文件名和所在位置，并允许切换“索引上已有 wheel”的分支以对比安装路径。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-9-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-verification",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材中 sdist 构建、twine 上传 TestPyPI、隔离环境验证与 wheel 建议的原始命令和事实，围绕顺序判断与产物形态补充解释、对比表和检查表。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-artifacts",
+          "text": "说明 sdist 与 wheel 的内容差别，以及为什么作者宜同时上传两者。"
+        },
+        {
+          "id": "build-sdist-artifact",
+          "text": "执行构建命令，指出产物位置，并说明归档中包含什么。"
+        },
+        {
+          "id": "run-release-flow",
+          "text": "按先构建、再上传 TestPyPI、隔离环境验证、最后上传正式 PyPI 的顺序安排发布步骤。"
+        }
+      ],
+      "misconceptions": [
+        "认为上传成功后包就已经“发布完成”；实际上还要在一个干净环境中从索引安装并运行，才验证了分发链路。",
+        "认为 sdist 已经足够，wheel 可有可无；缺少 wheel 时每次安装都要现场构建，大型包的安装会明显变慢。",
+        "把 dist/ 中的构建产物提交到版本控制；教材明确指出 dist/ 应加入 .gitignore。"
+      ],
+      "modules": [
+        {
+          "id": "why-distribute",
+          "title": "分发的目标与角色",
+          "role": "motivation",
+          "description": "先明确分发要解决的问题：让包管理器能按名字和版本找到并安装。",
+          "outcomeRefs": [
+            "explain-artifacts"
+          ],
+          "order": 0
+        },
+        {
+          "id": "build-sdist",
+          "title": "构建源码分发",
+          "role": "procedure",
+          "description": "执行 sdist 构建，理解归档内容与产物位置。",
+          "outcomeRefs": [
+            "build-sdist-artifact"
+          ],
+          "order": 1
+        },
+        {
+          "id": "upload-test-index",
+          "title": "用 twine 上传到测试索引",
+          "role": "procedure",
+          "description": "先上传 TestPyPI，理解上传目标、凭据与重复文件的行为。",
+          "outcomeRefs": [
+            "run-release-flow"
+          ],
+          "order": 2
+        },
+        {
+          "id": "verify-install",
+          "title": "在隔离环境中验证安装",
+          "role": "application",
+          "description": "从索引而不是本地目录安装，检验真实的分发效果。",
+          "outcomeRefs": [
+            "run-release-flow"
+          ],
+          "order": 3
+        },
+        {
+          "id": "wheel-and-channels",
+          "title": "wheel 与其他分发渠道",
+          "role": "comparison",
+          "description": "对比 sdist 与 wheel 的安装差别，了解 conda 渠道。",
+          "outcomeRefs": [
+            "explain-artifacts"
+          ],
+          "order": 4
+        },
+        {
+          "id": "release-checklist",
+          "title": "发布检查表与迁移",
+          "role": "exercise",
+          "description": "把流程整理成可复用的检查表，并判断只上传 sdist 时的安装行为。",
+          "outcomeRefs": [
+            "explain-artifacts",
+            "build-sdist-artifact",
+            "run-release-flow"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-artifacts",
+          "build-sdist-artifact",
+          "run-release-flow"
+        ],
+        "method": "按顺序写出从构建到正式发布的关键步骤，并说明只上传 sdist 时 pip 安装会经历什么。",
+        "successCriteria": [
+          "能给出构建产物名称与所在目录",
+          "能把 TestPyPI 验证放在正式 PyPI 之前，并说明两个索引参数的分工",
+          "能说明 wheel 缺失时安装需要现场构建"
+        ],
+        "exerciseBlockId": "model-release-exercise",
+        "summaryBlockId": "model-release-checklist",
+        "nextPointId": "point-9-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-distribution-goal",
+        "moduleId": "why-distribute",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材导读：分发的目标",
+        "markdown": "教材指出，一个**可安装的包**只有被分发出去才最有用：使用者应当能直接运行 `pip install pyzipf` 就拿到它。为了让这件事成立，需要用 `setuptools` 创建**源码分发**（source distribution，Python 打包术语中称为 `sdist`），再把产物放到包索引上。\n\n分发解决的不是“把代码给别人”的问题，而是“让包管理器能按名字和版本找到并安装”的问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "Creating Packages with Python",
+                "Distributing Packages"
+              ],
+              "lineStart": 8743,
+              "lineEnd": 8963,
+              "assetRefs": [],
+              "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-distribution-roles",
+        "moduleId": "why-distribute",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充说明：分发链路上的三个角色",
+        "markdown": "分发链路上有三个角色：包的作者、包索引（PyPI 或 TestPyPI）、使用者的环境。作者产出的不是仓库快照，而是一个可安装的文件；索引负责按项目名和版本保存与检索这些文件；使用者的 `pip` 在安装时才到索引解析并下载。\n\n因此“发布成功”不能只看上传命令有没有报错，还要看能否在一个干净环境里从索引重新装出来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-distribution-goal"
+          ]
+        }
+      },
+      {
+        "id": "textbook-build-sdist",
+        "moduleId": "build-sdist",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材步骤：用 setup.py 构建 sdist",
+        "markdown": "用 `setuptools` 构建源码分发的命令是：\n\n```bash\n(pyzipf)$ python setup.py sdist\n```\n\n输出会依次显示 `running sdist`、在 `pyzipf.egg-info` 中写出 `PKG-INFO`、`requires.txt`、`entry_points.txt`、`SOURCES.txt` 等元数据文件，然后执行检查。教材示例中的两条警告分别指出元数据缺少 `url`，以及提供了 `author` 却没有提供 `author_email`。\n\n最后一步 `Creating tar archive` 生成归档，产物是 `dist/` 目录下的 `pyzipf-0.1.tar.gz`。教材提醒要把 `dist/` 也加入 `.gitignore`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "Creating Packages with Python",
+                "Distributing Packages"
+              ],
+              "lineStart": 8743,
+              "lineEnd": 8963,
+              "assetRefs": [],
+              "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sdist-anatomy",
+        "moduleId": "build-sdist",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充说明：源码归档里装了什么",
+        "markdown": "解压这个归档能看到什么，决定了 sdist 的性质：顶层目录以“项目名-版本”命名，里面是 `README.md`、`setup.py`、包目录下的各个 `.py` 模块，以及 `pyzipf.egg-info` 中的元数据。也就是说，sdist 交付的是源码和构建说明，不是已经装好的环境。\n\n因此版本号会出现在归档名和顶层目录名中；发新版本前先修改版本号，否则新产物与旧产物同名，索引也不会接受重复文件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-build-sdist"
+          ]
+        }
+      },
+      {
+        "id": "textbook-upload-testpypi",
+        "moduleId": "upload-test-index",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材步骤：先上传到 TestPyPI",
+        "markdown": "`dist/` 中的分发文件最终要放到包索引上。PyPI 是 Python 包的标准仓库；在把包放到正式 PyPI 之前，可以先放到 **TestPyPI**，它允许在不影响正式仓库的情况下测试分发流程。TestPyPI 需要账号，但可以免费注册。\n\n把包上传到 PyPI 的首选工具是 `twine`：\n\n```bash\n(pyzipf)$ pip install twine\n$ twine upload --repository testpypi dist/*\n```\n\n命令用 `--repository` 指定上传目标是 TestPyPI，随后提示输入用户名和密码。上传完成后可以打开测试项目页面查看结果，满意后再用同样的流程上传正式 PyPI。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "Creating Packages with Python",
+                "Distributing Packages"
+              ],
+              "lineStart": 8743,
+              "lineEnd": 8963,
+              "assetRefs": [],
+              "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-look-dont-execute",
+        "moduleId": "upload-test-index",
+        "depth": "support",
+        "kind": "warning",
+        "title": "教材提醒：这一节只读不执行",
+        "markdown": "教材特别标注了这一节“只读不执行”：`pyzipf` 已经被作者上传过，照原样执行 `twine upload` 会失败。练习时应当把项目名改成包含自己名字的形式（例如 `pyzipf-yourname`），并把上传目标限定为 TestPyPI，而不是占用正式仓库中的名字。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "Creating Packages with Python",
+                "Distributing Packages"
+              ],
+              "lineStart": 8743,
+              "lineEnd": 8963,
+              "assetRefs": [],
+              "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-upload-semantics",
+        "moduleId": "upload-test-index",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充说明：上传命令在做什么",
+        "markdown": "`twine upload` 做的事很直接：`dist/*` 表示把该目录下的每个产物逐个上传，`--repository testpypi` 决定发往哪个索引，随后的用户名和密码就是索引上的身份凭据。\n\n上传不是覆盖写入：同一个项目名下的同一个文件名（通常等于“项目名-版本号”）已经存在时，索引会拒绝再次上传。常见处理是提升版本号后重新构建，而不是改动索引上的既有记录；这也是教材让练习者改名、只在 TestPyPI 上试的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-upload-testpypi",
+            "textbook-look-dont-execute"
+          ]
+        }
+      },
+      {
+        "id": "textbook-verify-install",
+        "moduleId": "verify-install",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材步骤：在隔离环境中验证安装",
+        "markdown": "上传之后还要验证：在一个**隔离环境**中从索引安装，才能证明别人装得到你的包。教材先创建环境再安装：\n\n```bash\n(pyzipf)$ conda create -n pyzipf-test pip python=3.7.6\n(pyzipf)$ conda activate pyzipf-test\n$ pip install --index-url https://test.pypi.org/simple --extra-index-url https://pypi.org/simple pyzipf\n```\n\n输出显示 `pip` 同时在两个索引中查找，下载 `pyzipf-0.1.tar.gz` 后现场 `Building wheel for pyzipf`，产出 `pyzipf-0.1-py3-none-any.whl` 并给出 sha256，最后显示 `Successfully installed`。教材还指出，已经缓存过的依赖不会被重复下载。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "Creating Packages with Python",
+                "Distributing Packages"
+              ],
+              "lineStart": 8743,
+              "lineEnd": 8963,
+              "assetRefs": [],
+              "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-indexes",
+        "moduleId": "verify-install",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充说明：两个索引参数的分工",
+        "markdown": "两个索引参数是理解这段命令的关键：`--index-url` 把默认索引换成 TestPyPI，`--extra-index-url` 再追加正式 PyPI 作为补充。必须追加的原因是包的依赖（如 `matplotlib`）大多不在 TestPyPI 上，只指向 TestPyPI 会解析不到依赖。\n\n验证时要装的是**索引上的包**，而不是用 `pip install .` 或指向本地 `dist/` 的路径；只有从索引下载、由 `pip` 自己解析依赖，才验证了真正的分发效果。测试满意后再上传正式 PyPI，就能让普通使用者用一条 `pip install pyzipf` 完成安装。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-verify-install",
+            "textbook-upload-testpypi"
+          ]
+        }
+      },
+      {
+        "id": "textbook-wheels",
+        "moduleId": "wheel-and-channels",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材补充：wheel 与 conda 渠道",
+        "markdown": "安装输出里的 `Building wheel for pyzipf` 说明了一件重要的事：`pip` 拿到的是 sdist，需要先把它构建成 **wheel**（`.whl`）再安装。这个过程耗时，包越大越复杂越明显，所以教材建议作者在发布 sdist 的同时也构建并上传 wheel；PyPI 上有合适的 wheel 时，`pip` 会直接使用而不再现场构建，安装更快。\n\n教材还提到另一条渠道：`conda` 使用广泛，可以考虑把 conda 安装包发布到 Anaconda Cloud；conda 文档提供了从 PyPI 上已有的 Python 模块快速构建 conda 包的说明。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "Creating Packages with Python",
+                "Distributing Packages"
+              ],
+              "lineStart": 8743,
+              "lineEnd": 8963,
+              "assetRefs": [],
+              "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-artifact-comparison",
+        "moduleId": "wheel-and-channels",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充对比：sdist 与 wheel",
+        "markdown": "把两种产物放在同一组维度上比较：\n\n| 维度 | sdist（`.tar.gz`） | wheel（`.whl`） |\n|---|---|---|\n| 内容 | 源码、`setup.py` 与元数据 | 可直接解包的构建结果 |\n| 安装时是否需构建 | 需要现场构建 wheel | 不需要 |\n| 安装速度 | 较慢 | 较快 |\n| 平台相关性 | 通常与平台无关 | 可能带平台与 Python 版本标签 |\n| 主要作用 | 兜底：任何环境都能从源码构建 | 首选：命中时直接安装 |\n\n示例中的 `pyzipf-0.1-py3-none-any.whl` 标签表示适用于 Python 3、与平台和 ABI 均无关，适合纯 Python 包。再补充一点现代工具：新项目常用 `python -m build` 一次产出 sdist 和 wheel，产物形态和用途与本节讨论的一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-wheels",
+            "textbook-build-sdist"
+          ]
+        }
+      },
+      {
+        "id": "model-release-checklist",
+        "moduleId": "release-checklist",
+        "depth": "support",
+        "kind": "summary",
+        "title": "发布检查表",
+        "markdown": "把前面的步骤整理成一张发布检查表：\n\n1. 确认版本号已更新，`url`、作者与邮箱等元数据齐全，避免构建时就出现教材示例中的警告。\n2. 构建源码分发，检查 `dist/` 中出现了预期的归档文件，并确认 `dist/` 已在 `.gitignore` 中。\n3. 若准备了 wheel，一并放入 `dist/`，让 `twine upload dist/*` 一次上传。\n4. 上传到 TestPyPI，在项目页面确认文件与元数据显示正常。\n5. 在新建的虚拟环境中从 TestPyPI 安装并实际运行，确认依赖也能解析。\n6. 验证通过后再上传正式 PyPI，并保留本次构建的产物以便复现。\n\n失败时的处理原则同样固定：凭据或网络错误修正后重试；文件名重复则提升版本号重新构建，而不是改动索引上的既有文件。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-build-sdist",
+            "textbook-upload-testpypi",
+            "textbook-verify-install",
+            "textbook-wheels"
+          ]
+        }
+      },
+      {
+        "id": "model-release-exercise",
+        "moduleId": "release-checklist",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查题：只上传 sdist 会发生什么",
+        "markdown": "情境题：你的包只上传了 sdist，一位使用者在全新的虚拟环境中执行 `pip install pyzipf`。请回答：\n\n1. `pip` 从索引下载到的是什么文件？\n2. 安装过程中会发生哪一步额外工作，为什么它可能很慢？\n3. 如果同一个版本也上传了 `pyzipf-0.1-py3-none-any.whl`，安装流程会怎样变化？\n4. 按顺序写出从本地构建到正式发布你会执行的命令，并说明每一步的产物在哪里。\n\n自查要点：只上传 sdist 时 `pip` 必须现场构建 wheel，大型包会明显变慢；上传 wheel 后 `pip` 命中 wheel 即可跳过构建；发布顺序应是先构建、再 TestPyPI 验证、最后正式 PyPI，而不是一开始就占用正式项目名。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-release-checklist",
+            "textbook-verify-install",
+            "textbook-wheels"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "release-order-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-release-exercise",
+        "moduleId": "release-checklist",
+        "depth": "core",
+        "outcomeRefs": [
+          "run-release-flow",
+          "explain-artifacts"
+        ],
+        "learningPurpose": "检查学习者能否按正确顺序安排构建、测试索引上传、验证与正式发布，并说明 wheel 在安装中的作用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-build-sdist",
+            "textbook-upload-testpypi",
+            "textbook-verify-install",
+            "textbook-wheels",
+            "model-release-checklist",
+            "model-release-exercise"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出从本地构建到正式发布的步骤顺序，并说明只上传 sdist 时 pip 安装要多做哪一步。"
+        }
+      }
+    ]
+  },
+  "subtitle": "Creating Packages with Python",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+      "blockIds": [
+        "block-000084"
+      ],
+      "headingPath": [
+        "Creating Packages with Python",
+        "Distributing Packages"
+      ],
+      "lineStart": 8743,
+      "lineEnd": 8963,
+      "assetRefs": [],
+      "excerptSha256": "c565fbeeffe5294c86407ed30a87dce1282ef9d5d75c3efec2adbece20e4ab93"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2621,
+    679
+  ],
+  "scale": 0.89
+}

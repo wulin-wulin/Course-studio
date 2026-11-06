@@ -1,0 +1,495 @@
+{
+  "id": "point-1-9",
+  "title": "简单智能体库 (Dummy Agent Library)",
+  "shortSummary": "以无服务器 API 与 Dummy Agent 为例，演示最小可用智能体的消息拼装、工具回传与观测过程。",
+  "keyTerms": [
+    "Dummy Agent",
+    "无服务器 API",
+    "工具回调",
+    "消息历史"
+  ],
+  "animationType": "agentLoop",
+  "animationSuggestion": "逐轮展示提示串如何从系统提示增长到包含真实观察，用两种颜色区分模型生成的片段与程序回填的片段，并标出停止标记所在的位置。",
+  "difficulty": "中等",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-1-3",
+    "point-1-4",
+    "point-1-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "guided-implementation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的动手顺序与全部代码要点，把零散步骤重组为“定位—调用—契约—执行—回填—诊断—迁移”的实施路径，补足解析边界与失败排查。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "identify-minimal-pieces",
+          "text": "说清最小可用智能体由系统提示、模型调用、动作解析、工具执行和观察回填这几部分组成。"
+        },
+        {
+          "id": "explain-api-and-template",
+          "text": "解释无服务器 API 调用中聊天模板与 EOS 停止条件的关系。"
+        },
+        {
+          "id": "implement-manual-loop",
+          "text": "按系统提示给出的动作契约，手工完成一次思考-行动-观察循环。"
+        },
+        {
+          "id": "diagnose-loop-failures",
+          "text": "识别幻觉观察、输出不收敛和动作解析失败，并给出针对性修复。"
+        }
+      ],
+      "misconceptions": [
+        "把模型自己写出的 Observation 当成真实工具返回结果。",
+        "以为换上 chat 接口后就不再需要关心特殊 token 与停止标记。",
+        "把这个教学用的无服务器 API 组合当作可以直接上生产的方案。"
+      ],
+      "modules": [
+        {
+          "id": "scope-and-positioning",
+          "title": "定位：为什么先手写一个最小智能体",
+          "role": "concept-introduction",
+          "description": "说明教材为何在引入框架前使用简单智能体库与无服务器 API。",
+          "outcomeRefs": [
+            "identify-minimal-pieces"
+          ],
+          "order": 0
+        },
+        {
+          "id": "serverless-api",
+          "title": "无服务器 API 与聊天模板",
+          "role": "tool-demo",
+          "description": "跑通一次模型调用，并解释输出为何不收敛。",
+          "outcomeRefs": [
+            "explain-api-and-template"
+          ],
+          "order": 1
+        },
+        {
+          "id": "prompt-contract",
+          "title": "系统提示里的动作契约",
+          "role": "contract-design",
+          "description": "拆解工具说明与循环指令如何构成可解析的格式约束。",
+          "outcomeRefs": [
+            "implement-manual-loop"
+          ],
+          "order": 2
+        },
+        {
+          "id": "execute-and-stop",
+          "title": "先停下，再执行工具",
+          "role": "procedure",
+          "description": "用停止标记切断幻觉观察，解析动作并调用真实函数。",
+          "outcomeRefs": [
+            "implement-manual-loop",
+            "diagnose-loop-failures"
+          ],
+          "order": 3
+        },
+        {
+          "id": "observe-and-resume",
+          "title": "回填观察并恢复生成",
+          "role": "mechanism",
+          "description": "把真实返回值拼进提示，让循环推进到最终答案。",
+          "outcomeRefs": [
+            "implement-manual-loop"
+          ],
+          "order": 4
+        },
+        {
+          "id": "failure-check",
+          "title": "失败排查与检查表",
+          "role": "diagnosis",
+          "description": "按症状定位循环中的失效环节并给出修复方式。",
+          "outcomeRefs": [
+            "diagnose-loop-failures"
+          ],
+          "order": 5
+        },
+        {
+          "id": "bridge",
+          "title": "从手写循环到框架",
+          "role": "transfer",
+          "description": "把手工步骤对应到框架接管的位置，衔接到 smolagents。",
+          "outcomeRefs": [
+            "identify-minimal-pieces"
+          ],
+          "order": 6
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "identify-minimal-pieces",
+          "explain-api-and-template",
+          "implement-manual-loop",
+          "diagnose-loop-failures"
+        ],
+        "method": "亲手跑通一次手工循环，并填写“模型生成片段 / 程序回填片段”的记录表。",
+        "successCriteria": [
+          "能在提示中明确指出停止标记的位置",
+          "能写出解析 action 与 action_input 的代码",
+          "能说明删掉停止标记后观察会变成幻觉的原因"
+        ],
+        "exerciseBlockId": "model-checklist-exercise",
+        "nextPointId": "point-1-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-positioning",
+        "kind": "explanation",
+        "title": "教材导读：为什么先用简单智能体库",
+        "markdown": "本课程有意保持框架无关：第一单元先聚焦 AI 智能体的概念，避免一开始就陷进某个框架的细节里。为此，教材选择用一个简单智能体库配合一个简单的无服务器 API 来访问 LLM 引擎。\n\n这套组合并不打算用于生产环境，它的价值在于作为理解智能体如何运转的起点；学完这一节，才有基础去用 `smolagents` 创建真正的智能体。为了让代码在任何环境都能跑，示例只使用 Python 标准库中的 `datetime` 与 `os`，并把一个普通 Python 函数直接当作工具。",
+        "moduleId": "scope-and-positioning",
+        "depth": "core",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "第 1 单元. 智能体简介",
+                "简单智能体库 (Dummy Agent Library)"
+              ],
+              "lineStart": 1333,
+              "lineEnd": 1357,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit1/whiteboard-unit1sub3DONE.jpg"
+              ],
+              "excerptSha256": "a02328286a21f8658adf5b937f769bee97380b6f55ae88ed256149f1f0a0d1a2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-manual-loop",
+        "kind": "note",
+        "title": "补充：框架替你隐藏的是哪条链",
+        "markdown": "框架隐藏的正是这一条链：把工具说明拼进系统提示、从模型输出里截出动作、真的调用函数、再把结果贴回上下文。先用最小样例走通它，之后遇到 `smolagents` 之类的封装时，你才知道每一行代码对应的到底是哪个环节，而不是只记住一个 API 名字。\n\n同时要接受教材给的定位：这个组合是教学起点，不是生产方案——它没有并发控制、重试、权限边界和运行日志。",
+        "moduleId": "scope-and-positioning",
+        "depth": "support",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-positioning"
+          ]
+        }
+      },
+      {
+        "id": "textbook-serverless-api",
+        "kind": "code",
+        "title": "教材示例：用无服务器 API 调用模型",
+        "markdown": "无服务器 API 让你不必安装或部署模型，就能直接在托管模型上运行推理。教材示例使用 `huggingface_hub` 的 `InferenceClient`：\n\n```python\nfrom huggingface_hub import InferenceClient\n\nclient = InferenceClient(provider=\"hf-inference\", model=\"meta-llama/Llama-3.3-70B-Instruct\")\n\noutput = client.text_generation(\"The capital of France is\", max_new_tokens=100)\nprint(output)\n```\n\n只做解码时，模型仅在预测到 EOS token 时才会停止。第一次输出之所以把同一句话重复了很多遍，是因为这里用的是会话（chat）模型，却没有套用它期望的聊天模板。补上模型对应的特殊 token（`<|begin_of_text|>`、`<|start_header_id|>`、`<|end_header_id|>`、`<|eot_id|>`）之后，输出就正常结束了。\n\n更省事也更可靠的做法是改用 `client.chat.completions.create(...)`，它会替你套用聊天模板；教材为了看清底层细节，后面仍继续使用 `text_generation`。",
+        "moduleId": "serverless-api",
+        "depth": "core",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "第 1 单元. 智能体简介",
+                "简单智能体库 (Dummy Agent Library)",
+                "无服务器 API (Serverless API)"
+              ],
+              "lineStart": 1358,
+              "lineEnd": 1431,
+              "assetRefs": [],
+              "excerptSha256": "f19b5c0192145c27c5772ad0f789f5fc1343610077bf88a759de528df9ae3f11"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-chat-template-intuition",
+        "kind": "explanation",
+        "title": "补充：聊天模板到底解决了什么",
+        "markdown": "把对话交给模型，本质是把它编码成模型训练时见过的模板：特殊 token 标出 system、user、assistant 三段各自从哪里开始、到哪里结束，结束标记还告诉模型此处应当停止。\n\n`text_generation` 是裸的补全接口，它既不知道角色边界，也不会自动收尾，所以要么手工拼上这些标记，要么改用 `chat.completions.create`。两种写法产生的是同一份提示，区别只在于谁来负责套模板。这也是后面手工拼智能体提示时最容易出错的地方：换一个模型，模板里的特殊 token 就不再适用。",
+        "moduleId": "serverless-api",
+        "depth": "support",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-serverless-api"
+          ]
+        }
+      },
+      {
+        "id": "textbook-system-prompt",
+        "kind": "code",
+        "title": "教材示例：把工具与循环写进系统提示",
+        "markdown": "智能体库的核心是在系统提示中附加信息。这一节给出的系统提示比前面的更长，但它只做两件事：\n\n1. **列出工具信息**：说明 `get_weather` 用于获取指定地点的当前天气，参数是 `{\"location\": {\"type\": \"string\"}}`。\n2. **给出循环指令**：规定输出按 `Question:`、`Thought:`、`Action:`、`Observation:` 组织，每一步只允许一个动作，动作写成一个 JSON blob，包含 `action`（工具名）与 `action_input`（参数）两个键，循环可以重复多次，最后用精确字符 `Final Answer:` 收尾。\n\n提示中动作格式与结束格式的原文如下：\n\n```text\n必须始终使用以下格式：\n\nQuestion: 需要回答的输入问题\nThought: 你应该始终思考要采取的一个行动（每次只能执行一个行动）\nAction:\n\nJSON_BLOB (inside markdown cell)\n\nObservation: 行动执行结果（这是唯一且完整的事实依据）\n...（这个 Thought/Action/Observation 循环可根据需要重复多次，JSON_BLOB 必须使用 markdown 格式且每次仅执行一个行动）\n\n最后必须以下列格式结束：\n\nThought: 我现在知道最终答案\nFinal Answer: 对原始问题的最终回答\n```",
+        "moduleId": "prompt-contract",
+        "depth": "core",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000054"
+              ],
+              "headingPath": [
+                "第 1 单元. 智能体简介",
+                "简单智能体库 (Dummy Agent Library)",
+                "简单智能体 (Dummy Agent)"
+              ],
+              "lineStart": 1432,
+              "lineEnd": 1688,
+              "assetRefs": [],
+              "excerptSha256": "f4a51f4d07b9a6980f24837f01a12f032faf15f30eeb49bcc4e9d692b439354d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-action-contract",
+        "kind": "explanation",
+        "title": "补充：动作契约的三条硬约束",
+        "markdown": "这段系统提示实际上是一份人和模型之间的**动作契约**，它靠三条硬约束让程序可以机械解析：\n\n- **一次一个动作**：`Action:` 后只允许一段 JSON，程序不必在多个调用之间做取舍。\n- **动作取值封闭**：`action` 只能是已列出的工具名，程序据此查表，不做模糊匹配。\n- **边界用固定字符串**：`Action:`、`Observation:`、`Final Answer:` 既是给模型看的格式说明，也是程序截断与判停的锚点。\n\n换句话说，提示不是“描述任务”的散文，而是让后续解析代码可以依赖的结构化协议。",
+        "moduleId": "prompt-contract",
+        "depth": "core",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-system-prompt"
+          ]
+        }
+      },
+      {
+        "id": "textbook-stop-before-observation",
+        "kind": "procedure",
+        "title": "教材示例：先停下，再执行工具",
+        "markdown": "第一次直接生成时，模型在 `Action:` 之后自己接着写出了 `Thought` 和 `Observation`，并“报告”伦敦多云、最高气温 12°C、最低气温 8°C。教材明确指出：这是模型产生的幻觉，观察必须来自真实执行。\n\n修复办法是让生成在 `Observation:` 之前停下：\n\n```python\noutput = client.text_generation(prompt, max_new_tokens=200, stop=[\"Observation:\"])\n```\n\n此时输出只包含到动作 JSON 为止，程序可以安全地解析它，再调用自己写的函数。教材用的是一个虚拟函数，真实项目中会换成 API 调用：\n\n```python\ndef get_weather(location):\n    return f\"the weather in {location} is sunny with low temperatures.\"\n```",
+        "moduleId": "execute-and-stop",
+        "depth": "core",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000054"
+              ],
+              "headingPath": [
+                "第 1 单元. 智能体简介",
+                "简单智能体库 (Dummy Agent Library)",
+                "简单智能体 (Dummy Agent)"
+              ],
+              "lineStart": 1432,
+              "lineEnd": 1688,
+              "assetRefs": [],
+              "excerptSha256": "f4a51f4d07b9a6980f24837f01a12f032faf15f30eeb49bcc4e9d692b439354d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parse-and-execute",
+        "kind": "worked-example",
+        "title": "补充：一次可复现的解析与执行",
+        "markdown": "把上面的契约落到代码，一次执行只有四步：\n\n```python\nimport json\n\ntext = output.split(\"Action:\", 1)[1]\nstart = text.index(\"{\")\nend = text.rindex(\"}\") + 1\naction = json.loads(text[start:end])\n\nresult = TOOLS[action[\"action\"]](**action[\"action_input\"])\nobservation = str(result)\n```\n\n关键在于两条边界规则：`action` 不在 `TOOLS` 里时应当直接报错，而不是猜一个最接近的工具；`json.loads` 失败时应当让解析错误暴露出来，因为它说明上一轮的提示没有真正约束住模型。把错误吞掉会让智能体带着错误的观察继续往下跑，比直接失败更难排查。",
+        "moduleId": "execute-and-stop",
+        "depth": "core",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-stop-before-observation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-observation-resume",
+        "kind": "mechanism",
+        "title": "教材示例：回填观察并恢复生成",
+        "markdown": "拿到真实返回值后，教材把三段内容拼成同一份提示：原始提示 + 模型刚才的输出（含动作 JSON）+ 函数返回的天气文本，然后再次调用生成：\n\n```python\nnew_prompt = prompt + output + get_weather('London')\nfinal_output = client.text_generation(new_prompt, max_new_tokens=200)\n```\n\n模型看到这段 Observation 后不再编造，直接给出 `最终答案：伦敦天气晴朗，气温较低。`。教材由此总结：用 Python 代码从零创建智能体是可行的，但整个过程相当繁琐。",
+        "moduleId": "observe-and-resume",
+        "depth": "core",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000054"
+              ],
+              "headingPath": [
+                "第 1 单元. 智能体简介",
+                "简单智能体库 (Dummy Agent Library)",
+                "简单智能体 (Dummy Agent)"
+              ],
+              "lineStart": 1432,
+              "lineEnd": 1688,
+              "assetRefs": [],
+              "excerptSha256": "f4a51f4d07b9a6980f24837f01a12f032faf15f30eeb49bcc4e9d692b439354d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loop-invariants",
+        "kind": "summary",
+        "title": "补充：最小循环的四个不变量",
+        "markdown": "把教材的三段代码收拢，最小循环其实只依赖四个不变量：\n\n1. **只追加不改写**：已发生的提示前缀保持原样，新一轮只往后接。\n2. **每轮一条观察**：模型一次只发一个动作，程序一次只回填一条 Observation。\n3. **观察只来自真实执行**：任何“看起来像结果”的模型文字都不能当作观察。\n4. **终止显式**：正常结束靠 `Final Answer:`，异常结束靠最大轮次上限。\n\n对照教材的输出可以看到，这些不变量在代码里没有一处被自动保证：停止标记、解析、调用、回填、计轮次全部要自己写。这正是下一步引入框架的动机。",
+        "moduleId": "observe-and-resume",
+        "depth": "support",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-observation-resume",
+            "textbook-stop-before-observation",
+            "textbook-system-prompt"
+          ]
+        }
+      },
+      {
+        "id": "model-failure-diagnosis",
+        "kind": "warning",
+        "title": "补充：高频失败的症状与修复",
+        "markdown": "| 症状 | 常见原因 | 修复 |\n|---|---|---|\n| 观察里出现模型编造的温度和天气 | 没有在 `Observation:` 处停住 | 加 `stop=[\"Observation:\"]`，把观察留给真实函数 |\n| 输出重复同一句话、迟迟不结束 | 裸补全没套聊天模板，模型没遇到 EOS | 改用 `chat.completions.create`，或补上模型的特殊 token |\n| 解析动作时报 JSON 错误 | 动作不是合法 JSON，或夹了多余文字 | 收紧系统提示的格式要求，并在解析处抛出错误而不是兜底 |\n| 多轮后上下文越来越长、开始跑偏 | 没有轮次上限，也没有保留轨迹 | 设定最大轮次，保留完整轨迹便于复盘 |",
+        "moduleId": "failure-check",
+        "depth": "advanced",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-loop-invariants",
+            "model-parse-and-execute"
+          ]
+        }
+      },
+      {
+        "id": "model-checklist-exercise",
+        "kind": "exercise",
+        "title": "补充：亲手验证一份检查表",
+        "markdown": "拿这张检查表亲手跑一遍最小智能体，并记录四项内容：\n\n- 系统提示的原文与大致长度；\n- 模型第一轮输出的截断位置，以及解析出的 `action` 与 `action_input`；\n- 真实函数返回的字符串；\n- 最终答案，以及它出现在第几轮。\n\n最后回答一个判断题：如果删掉 `stop=[\"Observation:\"]`，最终答案会变成什么？它为什么仍然“看起来合理”？能说清这一点，就说明你已经分得清哪些内容是模型生成的、哪些是程序回填的。",
+        "moduleId": "failure-check",
+        "depth": "core",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-failure-diagnosis"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-smolagents",
+        "kind": "summary",
+        "title": "补充：从手写循环到框架",
+        "markdown": "回看这一节，繁琐之处集中在四件事：拼系统提示、从输出里解析动作、真正执行并回填观察、控制循环何时结束。后面 `smolagents` 的 `Tool` 与 `Agent` 正是在这四个位置接管工作——你只需要声明工具和任务，剩下的拼接与循环由库完成。",
+        "moduleId": "bridge",
+        "depth": "support",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-loop-invariants"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "loop-reconstruction-check",
+        "type": "formative-check",
+        "title": "标注模型输出与程序回填的边界",
+        "anchorBlockId": "model-parse-and-execute",
+        "moduleId": "execute-and-stop",
+        "depth": "core",
+        "outcomeRefs": [
+          "implement-manual-loop"
+        ],
+        "learningPurpose": "检查学习者能否在给定的一段模型输出上判断该在哪里停止、解析什么、回填什么。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-stop-before-observation",
+            "model-parse-and-execute"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenarioCount": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定一段包含 `Action:` 与自造 `Observation:` 的模型输出，标出应截断的位置、需要解析出的 `action` 与 `action_input`，并写出应当回填的真实 Observation 文本。"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 1 单元. 智能体简介",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000052"
+      ],
+      "headingPath": [
+        "第 1 单元. 智能体简介",
+        "简单智能体库 (Dummy Agent Library)"
+      ],
+      "lineStart": 1333,
+      "lineEnd": 1357,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit1/whiteboard-unit1sub3DONE.jpg"
+      ],
+      "excerptSha256": "a02328286a21f8658adf5b937f769bee97380b6f55ae88ed256149f1f0a0d1a2"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000053"
+      ],
+      "headingPath": [
+        "第 1 单元. 智能体简介",
+        "简单智能体库 (Dummy Agent Library)",
+        "无服务器 API (Serverless API)"
+      ],
+      "lineStart": 1358,
+      "lineEnd": 1431,
+      "assetRefs": [],
+      "excerptSha256": "f19b5c0192145c27c5772ad0f789f5fc1343610077bf88a759de528df9ae3f11"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000054"
+      ],
+      "headingPath": [
+        "第 1 单元. 智能体简介",
+        "简单智能体库 (Dummy Agent Library)",
+        "简单智能体 (Dummy Agent)"
+      ],
+      "lineStart": 1432,
+      "lineEnd": 1688,
+      "assetRefs": [],
+      "excerptSha256": "f4a51f4d07b9a6980f24837f01a12f032faf15f30eeb49bcc4e9d692b439354d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1411,
+    1952
+  ],
+  "scale": 0.89
+}

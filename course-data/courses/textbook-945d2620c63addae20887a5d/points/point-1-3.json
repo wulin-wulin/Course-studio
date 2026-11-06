@@ -1,0 +1,699 @@
+{
+  "id": "point-1-3",
+  "title": "语言模型和数据集",
+  "shortSummary": "用词序列的联合概率刻画语言模型，介绍链式分解、n 元语法、拉普拉斯平滑、齐普夫定律与长序列读取策略。",
+  "keyTerms": [
+    "语言模型",
+    "n 元语法",
+    "拉普拉斯平滑",
+    "齐普夫定律",
+    "随机采样",
+    "顺序分区"
+  ],
+  "animationType": "sequenceBatchingPartition",
+  "animationSuggestion": "并排展示两种策略：在长序列上用色块标出每批的特征窗口与右移一位的标签窗口，随机采样时窗口跳跃并打乱顺序，顺序分区时窗口逐段右移，让学习者直接看到相邻性与覆盖范围的差别。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-1-1",
+    "point-1-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-and-data-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的概率定义、公式、数值与结论，按“目标—推导—统计证据—数据流程”重排讲解顺序，补充小语料算例、策略对照与练习提示。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-language-model",
+          "text": "说明语言模型为什么用词序列的联合概率作为目标，以及链式分解与计数估计会遇到的困难。"
+        },
+        {
+          "id": "apply-ngram-smoothing",
+          "text": "用 n 元语法近似和拉普拉斯平滑写出可计算的条件概率估计，并说明超参数作用与适用边界。"
+        },
+        {
+          "id": "evaluate-data-loading",
+          "text": "比较随机采样与顺序分区在相邻性、覆盖性和随机性上的差异，并据此选择长序列读取策略。"
+        }
+      ],
+      "misconceptions": [
+        "把 n 元语法当成能够利用全部历史上下文的模型。",
+        "认为拉普拉斯平滑可以彻底解决长 n 元组几乎不出现的问题。",
+        "认为随机采样得到的相邻两个小批量，其子序列在原文中也相邻。"
+      ],
+      "modules": [
+        {
+          "id": "model-goal",
+          "title": "语言模型要估计什么",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "explain-language-model"
+          ],
+          "order": 0
+        },
+        {
+          "id": "chain-rule-and-smoothing",
+          "title": "链式分解与计数估计",
+          "role": "quantitative-derivation",
+          "outcomeRefs": [
+            "explain-language-model",
+            "apply-ngram-smoothing"
+          ],
+          "order": 1
+        },
+        {
+          "id": "markov-ngram",
+          "title": "马尔可夫假设与 n 元语法",
+          "role": "approximation-model",
+          "outcomeRefs": [
+            "apply-ngram-smoothing"
+          ],
+          "order": 2
+        },
+        {
+          "id": "zipf-statistics",
+          "title": "真实词频统计与计数模型的极限",
+          "role": "empirical-evidence",
+          "outcomeRefs": [
+            "explain-language-model",
+            "apply-ngram-smoothing"
+          ],
+          "order": 3
+        },
+        {
+          "id": "long-sequence-loading",
+          "title": "读取长序列数据",
+          "role": "procedure-and-decision",
+          "outcomeRefs": [
+            "evaluate-data-loading"
+          ],
+          "order": 4
+        },
+        {
+          "id": "summary-and-practice",
+          "title": "小结与练习",
+          "role": "consolidation",
+          "outcomeRefs": [
+            "explain-language-model",
+            "apply-ngram-smoothing",
+            "evaluate-data-loading"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-language-model",
+          "apply-ngram-smoothing",
+          "evaluate-data-loading"
+        ],
+        "method": "重做一次小语料的概率估计，并为给定训练场景选择序列读取策略并说明依据。",
+        "successCriteria": [
+          "能用链式分解写出序列概率，并指出哪一步最稀疏",
+          "能说明平滑超参数的作用及其无法解决的边界",
+          "能按相邻性、覆盖性和随机性比较两种采样策略"
+        ],
+        "exerciseBlockId": "model-exercise-guidance",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-1-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-joint-probability",
+        "moduleId": "model-goal",
+        "depth": "core",
+        "kind": "definition",
+        "title": "语言模型的目标是序列的联合概率",
+        "markdown": "语言模型把长度为 $T$ 的文本序列看作词元序列 $x_1, x_2, \\ldots, x_T$：每个 $x_t$（$1 \\leq t \\leq T$）是序列在时间步 $t$ 处的观测或标签。给定这样的序列，语言模型的目标是估计整段序列的联合概率\n\n$$P(x_1, x_2, \\ldots, x_T).$$\n\n一个理想的语言模型只要每步抽取 $x_t \\sim P(x_t \\mid x_{t-1}, \\ldots, x_1)$，就能基于自身生成自然文本；它需要的不只是语法合理的内容，还要对文本有理解。现实中的模型远未达到这一步，但语言模型依然有用：读音相近的“to recognize speech”与“to wreck a nice beach”可以靠语言模型判断哪一句更自然；“狗咬人”比“人咬狗”常见得多，摘要生成也会据此排除语义古怪的句子。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000018"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集"
+              ],
+              "lineStart": 832,
+              "lineEnd": 865,
+              "assetRefs": [],
+              "excerptSha256": "03db489f10b4f9158d645ed45ebfc53246f5c8db88013b2ded1f96d9602ffad7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-language-model-intuition",
+        "moduleId": "model-goal",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把语言模型看成给文本打分的函数",
+        "markdown": "可以把语言模型理解成一个给候选文本打分的函数：分数是整段序列的联合概率，概率越高，说明这段文本越符合训练语料中的语言习惯。这个分数不判断语法对错，也不直接给出语义标签，而是回答“这样一串词有多常见”。\n\n因此在语音识别、拼写纠错或生成任务中，语言模型常作为打分器与其它模型配合：声学模型给出若干读音相近的候选，语言模型负责挑出更自然的那一句。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-joint-probability"
+          ]
+        }
+      },
+      {
+        "id": "textbook-chain-rule",
+        "moduleId": "chain-rule-and-smoothing",
+        "depth": "core",
+        "kind": "formula",
+        "title": "链式法则与相对词频估计",
+        "markdown": "直接估计整段序列的概率并不现实，但按概率的链式法则，联合概率可以分解为逐词条件概率的乘积：\n\n$$P(x_1, x_2, \\ldots, x_T) = \\prod_{t=1}^{T} P(x_t \\mid x_1, \\ldots, x_{t-1}).$$\n\n例如四个单词组成的序列：\n\n$$P(\\text{deep}, \\text{learning}, \\text{is}, \\text{fun}) = P(\\text{deep}) \\, P(\\text{learning} \\mid \\text{deep}) \\, P(\\text{is} \\mid \\text{deep}, \\text{learning}) \\, P(\\text{fun} \\mid \\text{deep}, \\text{learning}, \\text{is}).$$\n\n这些条件概率本质上就是语言模型的参数：训练时要计算单词的概率，以及给定前面几个单词后出现某个单词的条件概率。用大型语料库（例如维基百科的全部条目、古登堡计划或网络上发布的文本）训练时，可以用相对词频估计单词概率，条件概率则用\n\n$$\\hat{P}(\\text{learning} \\mid \\text{deep}) = \\frac{n(\\text{deep, learning})}{n(\\text{deep})}$$\n\n估计，其中 $n(x)$ 与 $n(x, x')$ 分别是单个单词和连续单词对的出现次数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "学习语言模型"
+              ],
+              "lineStart": 866,
+              "lineEnd": 935,
+              "assetRefs": [],
+              "excerptSha256": "0ddb6db706146e0f6e5d0dc03849b5d1cd374c67146f3eebef819eccf77c8c58"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-laplace-smoothing",
+        "moduleId": "chain-rule-and-smoothing",
+        "depth": "core",
+        "kind": "formula",
+        "title": "稀疏问题与拉普拉斯平滑",
+        "markdown": "相对词频对高频词工作得不错，但长组合很快变得稀疏：“deep learning”的出现次数已远少于单个单词，三词、四词组合很多在语料中根本找不到，计数为零会让整段序列的概率直接变成零。拉普拉斯平滑（Laplace smoothing）的做法是在所有计数上加一个小常量。设 $n$ 为训练集单词总数、$m$ 为唯一单词数：\n\n$$\\hat{P}(x) = \\frac{n(x) + \\epsilon_1/m}{n + \\epsilon_1},$$\n\n$$\\hat{P}(x' \\mid x) = \\frac{n(x, x') + \\epsilon_2 \\hat{P}(x')}{n(x) + \\epsilon_2},$$\n\n$$\\hat{P}(x'' \\mid x, x') = \\frac{n(x, x', x'') + \\epsilon_3 \\hat{P}(x'')}{n(x, x') + \\epsilon_3},$$\n\n其中 $\\epsilon_1, \\epsilon_2, \\epsilon_3$ 是超参数。以 $\\epsilon_1$ 为例：取 $0$ 时不应用平滑；趋于正无穷时 $\\hat{P}(x)$ 趋于均匀概率分布 $1/m$。这种模型仍有明显局限：需要存储全部计数；完全忽略单词的意思，难以根据上下文调整“猫”与“猫科动物”这类相关词；长单词序列大多没有出现过，简单的计数统计在长序列上必然表现不佳。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "学习语言模型"
+              ],
+              "lineStart": 866,
+              "lineEnd": 935,
+              "assetRefs": [],
+              "excerptSha256": "0ddb6db706146e0f6e5d0dc03849b5d1cd374c67146f3eebef819eccf77c8c58"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-small-corpus-example",
+        "moduleId": "chain-rule-and-smoothing",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "小语料上的计数与平滑演算",
+        "markdown": "用一个极小的语料库演算一遍。假设语料只包含三句：“我 爱 自然 语言 处理”“我 爱 机器 学习”“自然 语言 处理 很 有趣”。词级统计得到 $n(\\text{我}) = 2$、$n(\\text{我, 爱}) = 2$，于是 $\\hat{P}(\\text{爱} \\mid \\text{我}) = 1$；而 $n(\\text{有趣}) = 1$、$n(\\text{有趣, 之处}) = 0$，所以“有趣 之处”的计数估计为 $0$。\n\n这个例子说明两件事。高频组合的相对词频相当可靠，低频组合的估计却会直接落到 $0$，一个零计数就能把整句概率清零；平滑的作用不是提高精度，而是按低阶分布给未出现的组合补上非零概率。$\\epsilon$ 越大概率分布越接近均匀，取 $0$ 则回到原始计数。也正因为补充概率要依赖低阶分布，平滑只能缓解稀疏，不能恢复被截断的上下文信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-chain-rule",
+            "textbook-laplace-smoothing"
+          ]
+        }
+      },
+      {
+        "id": "textbook-markov-ngram",
+        "moduleId": "markov-ngram",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "马尔可夫假设与 n 元语法",
+        "markdown": "使用全部历史仍不可行：条件概率 $P(x_t \\mid x_1, \\ldots, x_{t-1})$ 的参数会随历史长度增长。马尔可夫假设把历史截断到最近的若干词；若\n\n$$P(x_{t+1} \\mid x_t, \\ldots, x_1) = P(x_{t+1} \\mid x_t),$$\n\n则序列上的分布满足一阶马尔可夫性质。阶数越高，依赖的历史越长。按截断长度不同，$P(x_1, x_2, x_3, x_4)$ 可以有以下近似分解：\n\n$$P(x_1, x_2, x_3, x_4) = P(x_1)P(x_2)P(x_3)P(x_4),$$\n\n$$P(x_1, x_2, x_3, x_4) = P(x_1)P(x_2 \\mid x_1)P(x_3 \\mid x_2)P(x_4 \\mid x_3),$$\n\n$$P(x_1, x_2, x_3, x_4) = P(x_1)P(x_2 \\mid x_1)P(x_3 \\mid x_1, x_2)P(x_4 \\mid x_2, x_3).$$\n\n涉及一个、两个和三个变量的概率公式分别称为一元语法（unigram）、二元语法（bigram）和三元语法（trigram）模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "马尔可夫模型与$n$元语法"
+              ],
+              "lineStart": 936,
+              "lineEnd": 957,
+              "assetRefs": [],
+              "excerptSha256": "164cce3d10840591587ecfadef0df5ff15dd6fc8adf676928427de76e7987692"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ngram-comparison",
+        "moduleId": "markov-ngram",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "一元、二元、三元语法的取舍",
+        "markdown": "把三种近似放在同一组维度上比较，取舍会更清楚：\n\n| 模型 | 使用的历史 | 需估计的组合量级 | 优点 | 主要风险 |\n|---|---|---|---|---|\n| 一元语法 | 不使用历史 | $m$ | 估计最稳定 | 丢失词序，无法区分“人咬狗”与“狗咬人” |\n| 二元语法 | 前 1 个词 | $m^2$ | 兼顾局部搭配与可估计性 | 更长的搭配信息被截断 |\n| 三元语法 | 前 2 个词 | $m^3$ | 能捕捉常见短语 | 组合稀疏，未见三元组的比例很高 |\n\n阶数越大，理论上越能表达长依赖，但需要估计的组合数量按 $m$ 的幂增长，稀疏问题也越严重。这正是 n 元语法必须在“上下文长度”与“可估计性”之间折中的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-chain-rule",
+            "textbook-markov-ngram"
+          ]
+        }
+      },
+      {
+        "id": "textbook-zipf-law",
+        "moduleId": "zipf-statistics",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "真实词频统计与齐普夫定律",
+        "markdown": "在时光机器数据集上统计真实词频会看到两个现象。第一，最高频的词多是停用词（如 the、a 这类词），它们本身仍然有意义，通常不会被直接删除。第二，词频衰减很快：最常用单词中第 $10$ 个的出现次数还不到第 $1$ 个的 $1/5$。去掉最前面的少数词后，剩余单词在双对数坐标图上大致是一条直线，说明词频满足齐普夫定律（Zipf's law）：\n\n$$n_i \\propto \\frac{1}{i^\\alpha},$$\n\n等价地写作 $\\log n_i = -\\alpha \\log i + c$，其中 $n_i$ 是第 $i$ 个最常用单词的出现次数，$\\alpha$ 是刻画分布的指数，$c$ 是常数。二元语法和三元语法的词频也大致服从齐普夫定律，只是指数 $\\alpha$ 更小。由此得到三个判断：n 元组的种类数并没有那么大，说明语言中存在相当多的结构可供建模；但大量 n 元组极少出现，所以用计数加平滑来建模并不可行，这也正是后来转向基于深度学习的模型的原因。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000021"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "自然语言统计"
+              ],
+              "lineStart": 958,
+              "lineEnd": 1074,
+              "assetRefs": [],
+              "excerptSha256": "6226d17378e02f5f5764e6f2504fc7cfe30d11fa3fabb618aee4db800544e65e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-zipf-consequence",
+        "moduleId": "zipf-statistics",
+        "depth": "support",
+        "kind": "note",
+        "title": "为什么计数模型必须让位于表示学习",
+        "markdown": "齐普夫定律解释了为什么平滑只能缓解而不能解决稀疏：按定律，排在尾部的绝大多数单词和 n 元组本身就很罕见，语料再大也难以为每个组合提供足够计数。继续加大语料只能缓慢改善尾部估计，而参数量却按阶数成倍增长。\n\n因此语言建模需要从“统计出现次数”转向“学习可共享的表示”：用参数共享的神经网络把相似上下文中的统计强度借给没见过的组合。这条动机把本节的数据统计与后面的循环网络、词嵌入连接起来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-zipf-law"
+          ]
+        }
+      },
+      {
+        "id": "textbook-long-sequence-splitting",
+        "moduleId": "long-sequence-loading",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把长序列切分成固定长度的子序列",
+        "markdown": "文本序列可以任意长（例如整本《时光机器》），而网络一次只处理具有预定义长度 $n$ 的子序列，因此训练前要把长序列划分成相同时间步数的子序列。划分时可以选择不同的初始偏移量来指示起始位置，因此有相当大的自由度，教材用 $n = 5$、每个时间步一个字符的例子展示了这种分割。\n\n每一种偏移都同样合理，但如果只固定一个偏移，训练能覆盖的子序列组合就有限。于是实践中从随机偏移量开始划分序列，以同时获得覆盖性（coverage）和随机性（randomness）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000022"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "读取长序列数据"
+              ],
+              "lineStart": 1075,
+              "lineEnd": 1109,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/timemachine-5gram.svg"
+              ],
+              "excerptSha256": "aa2e9a2a1c22d709532048f7ebbea4439d723fca86012c6cdc482e3924dc04af"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-offset-coverage",
+        "moduleId": "long-sequence-loading",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "固定偏移为什么会漏掉组合",
+        "markdown": "固定偏移的局限可以用一个具体例子看清：若子序列长度是 $5$、序列总长是 $12$，取偏移 $0$ 只能得到位置 $0$–$4$ 与 $5$–$9$ 两段，位置 $1$–$5$、$2$–$6$ 这些跨段组合永远不会作为一个完整样本参与训练。随机偏移让每次迭代的切分起点不同，跨段组合在多个 epoch 中都有机会被覆盖。\n\n需要注意，随机偏移只改变切分位置，不会打乱序列内部的顺序；标签仍然是输入序列右移一个词元，因此跨段组合的覆盖与标签的正确对齐是两件独立的事。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-long-sequence-splitting"
+          ]
+        }
+      },
+      {
+        "id": "textbook-random-sampling",
+        "moduleId": "long-sequence-loading",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "随机采样",
+        "markdown": "随机采样（random sampling）在每个小批量中任取长序列上的子序列，因此相邻两个小批量中的子序列在原文中不一定相邻。对语言建模来说，目标是用到目前为止看到的词元预测下一个词元，所以标签是右移了一个词元的原始序列。\n\n实现时先从 $[0, n-1]$ 内随机取偏移截掉前缀，再按时间步 $n$ 切出 $\\lfloor (L-1)/n \\rfloor$ 个子序列（减 $1$ 是因为要考虑标签），打乱起始索引后每 $\\text{batch_size}$ 个组成一批。以长度 $35$ 的序列 $0, 1, \\ldots, 34$、批量大小 $2$、时间步 $5$ 为例，共得到 $\\lfloor (35-1)/5 \\rfloor = 6$ 个“特征—标签”子序列对，也就是 $3$ 个小批量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "读取长序列数据",
+                "随机采样"
+              ],
+              "lineStart": 1110,
+              "lineEnd": 1159,
+              "assetRefs": [],
+              "excerptSha256": "2065cd6ba6d5c2c2e909f83682446190bdfddd5d6ff9efe48f444ceb7374bc99"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-sequential-partition",
+        "moduleId": "long-sequence-loading",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "顺序分区",
+        "markdown": "顺序分区（sequential partitioning）则保证相邻两个小批量中的子序列在原文中也是相邻的，从而在基于小批量的迭代过程中保留拆分的子序列的顺序。\n\n实现时先随机取偏移 $\\text{offset}$，把剩余词元截成 $\\text{batch_size}$ 的整数倍，再把整段重塑成 $\\text{batch_size}$ 行，按列方向每 $n$ 列切出一批。这样第 $i$ 批与第 $i+1$ 批在原文中首尾相接。教材把两种采样函数包装成 SeqDataLoader，并由 load_data_time_machine 同时返回数据迭代器和词表，使得它可以像其它 load_data 前缀的函数一样使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "读取长序列数据",
+                "顺序分区"
+              ],
+              "lineStart": 1160,
+              "lineEnd": 1262,
+              "assetRefs": [],
+              "excerptSha256": "bb2020790b0b641539ae1ccb9e8471b042c9f512079492829fae14d6728cb932"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loading-comparison",
+        "moduleId": "long-sequence-loading",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "两种读取策略的对照与选择",
+        "markdown": "两种策略的差异可以归纳为几个维度：\n\n| 维度 | 随机采样 | 顺序分区 |\n|---|---|---|\n| 相邻小批量的子序列 | 在原文中不一定相邻 | 在原文中首尾相接 |\n| 覆盖性 | 靠随机偏移与打乱起始索引，跨段组合更容易被覆盖 | 每个 epoch 内切分固定，靠随机偏移获得有限变化 |\n| 随机性 | 高 | 低 |\n| 批次连续性 | 批次之间没有顺序关系，适合每批独立初始化 | 保留原文顺序，为在批次间延续隐藏状态提供条件 |\n\n选择规则可以概括为：需要打散样本、让每条样本独立时用随机采样；希望样本按原文顺序进入模型、并让状态沿时间连续演进时用顺序分区。两种方式都遵循同一条约定——标签是输入序列右移一个词元。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-random-sampling",
+            "textbook-sequential-partition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "summary-and-practice",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本节结论",
+        "markdown": "教材对本节的结论是：\n\n- 语言模型是自然语言处理的关键。\n- $n$ 元语法通过截断相关性，为处理长序列提供了一种实用的模型。\n- 长序列存在一个问题：它们很少出现或者从不出现。\n- 齐普夫定律支配着单词的分布，这个分布不仅适用于一元语法，还适用于其它 $n$ 元语法。\n- 拉普拉斯平滑可以处理结构丰富而频率不足的低频词词组。\n- 读取长序列的主要方式是随机采样和顺序分区；在迭代过程中，后者可以保证来自两个相邻小批量中的子序列在原始序列上也是相邻的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000025"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "小结"
+              ],
+              "lineStart": 1263,
+              "lineEnd": 1271,
+              "assetRefs": [],
+              "excerptSha256": "0c8af5eadd244a1dd6e6adc3ac16504ec98fcd726fbc5c445032877e81b48516"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "summary-and-practice",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "教材在本节末尾给出以下练习：\n\n1. 假设训练数据集中有 $100,000$ 个单词，一个四元语法需要存储多少个词频和相邻多词频率？\n2. 我们如何对一系列对话建模？\n3. 一元语法、二元语法和三元语法的齐普夫定律指数不一样，能设法估计吗？\n4. 想一想读取长序列数据的其他方法。\n5. 考虑读取长序列时使用的随机偏移量：为什么随机偏移量是个好主意？它真的会在文档序列上实现完美的均匀分布吗？要怎么做才能使分布更均匀？\n6. 如果希望一个序列样本是一个完整的句子，这在小批量抽样中会带来怎样的问题？如何解决？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000026"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "语言模型和数据集",
+                "练习"
+              ],
+              "lineStart": 1272,
+              "lineEnd": 1299,
+              "assetRefs": [],
+              "excerptSha256": "b0a8b3d0a457ace4d4976f62096d9a1ab66a40e094b31811a1770d62c0c31be0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "summary-and-practice",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "练习思路提示",
+        "markdown": "练习 1 的估算方式：四元语法要分别保存一元到四元的计数表，最坏情况下的条目数约为 $m + m^2 + m^3 + m^4$；当 $m = 100{,}000$ 时主导项是 $m^4 = 10^{20}$，实际存储必须依赖稀疏结构或只保留高频 n 元组，这正是教材说计数模型“很容易变得无效”的规模原因。\n\n练习 5 的思考方向：随机偏移在每个 epoch 只取一个起点，当句子边界与子序列边界不对齐时，某些位置组合仍可能被系统性跳过；引入句边界重置、按长度加权或多起点采样可以让位置分布更均匀。\n\n练习 6 的取舍：按句子采样能保证样本语义完整，但句子长短不一，需要填充或按长度分桶；填充词会增加无效计算，还可能影响损失统计，需要配合掩码处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "loading-strategy-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-loading-comparison",
+        "moduleId": "long-sequence-loading",
+        "depth": "support",
+        "outcomeRefs": [
+          "evaluate-data-loading"
+        ],
+        "learningPurpose": "检查学习者能否根据相邻性与随机性要求，为具体训练场景选择序列读取策略。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-random-sampling",
+            "textbook-sequential-partition"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若训练时需要相邻小批量在原文中也相邻，并使隐藏状态在批次间连续传递，应选择哪种读取策略？请写出你的结论和依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "循环神经网络",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000018"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集"
+      ],
+      "lineStart": 832,
+      "lineEnd": 865,
+      "assetRefs": [],
+      "excerptSha256": "03db489f10b4f9158d645ed45ebfc53246f5c8db88013b2ded1f96d9602ffad7"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000019"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "学习语言模型"
+      ],
+      "lineStart": 866,
+      "lineEnd": 935,
+      "assetRefs": [],
+      "excerptSha256": "0ddb6db706146e0f6e5d0dc03849b5d1cd374c67146f3eebef819eccf77c8c58"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000020"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "马尔可夫模型与$n$元语法"
+      ],
+      "lineStart": 936,
+      "lineEnd": 957,
+      "assetRefs": [],
+      "excerptSha256": "164cce3d10840591587ecfadef0df5ff15dd6fc8adf676928427de76e7987692"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000021"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "自然语言统计"
+      ],
+      "lineStart": 958,
+      "lineEnd": 1074,
+      "assetRefs": [],
+      "excerptSha256": "6226d17378e02f5f5764e6f2504fc7cfe30d11fa3fabb618aee4db800544e65e"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000022"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "读取长序列数据"
+      ],
+      "lineStart": 1075,
+      "lineEnd": 1109,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/timemachine-5gram.svg"
+      ],
+      "excerptSha256": "aa2e9a2a1c22d709532048f7ebbea4439d723fca86012c6cdc482e3924dc04af"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000023"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "读取长序列数据",
+        "随机采样"
+      ],
+      "lineStart": 1110,
+      "lineEnd": 1159,
+      "assetRefs": [],
+      "excerptSha256": "2065cd6ba6d5c2c2e909f83682446190bdfddd5d6ff9efe48f444ceb7374bc99"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000024"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "读取长序列数据",
+        "顺序分区"
+      ],
+      "lineStart": 1160,
+      "lineEnd": 1262,
+      "assetRefs": [],
+      "excerptSha256": "bb2020790b0b641539ae1ccb9e8471b042c9f512079492829fae14d6728cb932"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000025"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "小结"
+      ],
+      "lineStart": 1263,
+      "lineEnd": 1271,
+      "assetRefs": [],
+      "excerptSha256": "0c8af5eadd244a1dd6e6adc3ac16504ec98fcd726fbc5c445032877e81b48516"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000026"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "语言模型和数据集",
+        "练习"
+      ],
+      "lineStart": 1272,
+      "lineEnd": 1299,
+      "assetRefs": [],
+      "excerptSha256": "b0a8b3d0a457ace4d4976f62096d9a1ab66a40e094b31811a1770d62c0c31be0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1540,
+    2487
+  ],
+  "scale": 1.22
+}

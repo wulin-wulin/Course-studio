@@ -1,0 +1,734 @@
+{
+  "id": "point-2-4",
+  "title": "Feature Matching",
+  "shortSummary": "讲解暴力匹配、k 近邻匹配与比率检验筛选可靠特征对应的方法。",
+  "keyTerms": [
+    "特征匹配",
+    "暴力匹配",
+    "k 近邻",
+    "比率检验"
+  ],
+  "animationType": "bruteForceMatching",
+  "animationSuggestion": "逐个扫描候选描述子并实时显示当前距离、最小距离与次小距离；扫描结束后展示比率检验的接受或拒绝，再进入下一个 query，使学习者看清过滤发生在最近邻选择之后。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-2-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-and-tradeoff",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于暴力匹配、距离度量、crossCheck、比率检验与 FLANN 的事实和参数，按「任务—流程—参数选择—规模取舍」重排讲解，补充直觉、对比表与检查清单。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "define-feature-matching",
+          "text": "说明特征匹配的输入、输出，以及它为什么可以看作描述子集合上的最近邻检索。"
+        },
+        {
+          "id": "choose-distance-metric",
+          "text": "根据描述子的存储形式，为 BFMatcher 选择 L2、Hamming 或 Hamming2 距离度量。"
+        },
+        {
+          "id": "run-brute-force",
+          "text": "按完整流程用 BFMatcher 完成匹配、排序、截取并绘制结果。"
+        },
+        {
+          "id": "filter-matches",
+          "text": "使用 crossCheck 或比率检验筛除歧义匹配，并解释阈值松紧的影响。"
+        },
+        {
+          "id": "choose-flann",
+          "text": "在同一组维度上比较 BFMatcher 与 FLANN，并按数据规模与精度需求做出取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为描述子距离最小的匹配一定就是正确的对应点。",
+        "把 FLANN 当成一定比暴力匹配更精确的匹配器。",
+        "认为 crossCheck 与比率检验可以不加区分地随意互换。"
+      ],
+      "modules": [
+        {
+          "id": "problem-framing",
+          "title": "匹配任务与输入输出",
+          "role": "concept-introduction",
+          "outcomeRefs": [
+            "define-feature-matching"
+          ],
+          "order": 0
+        },
+        {
+          "id": "brute-force-procedure",
+          "title": "暴力匹配的操作流程",
+          "role": "worked-procedure",
+          "outcomeRefs": [
+            "run-brute-force"
+          ],
+          "order": 1
+        },
+        {
+          "id": "distance-and-filtering",
+          "title": "距离度量与可靠性筛选",
+          "role": "decision-and-check",
+          "outcomeRefs": [
+            "choose-distance-metric",
+            "filter-matches"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scaling-and-tradeoff",
+          "title": "FLANN 与规模取舍",
+          "role": "comparison-decision",
+          "outcomeRefs": [
+            "choose-flann"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-summary",
+          "title": "检查与总结",
+          "role": "review",
+          "outcomeRefs": [
+            "define-feature-matching",
+            "run-brute-force",
+            "filter-matches",
+            "choose-flann"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "define-feature-matching",
+          "choose-distance-metric",
+          "run-brute-force",
+          "filter-matches",
+          "choose-flann"
+        ],
+        "method": "针对给定场景选择匹配器与距离度量，写出匹配流程并用过滤方法说明如何保留可靠对应。",
+        "successCriteria": [
+          "距离度量与描述子类型匹配",
+          "流程中说明 k 的取值与排序、截断的作用",
+          "能说明 crossCheck 或比率检验为何能筛掉歧义匹配",
+          "能根据数据规模在 BFMatcher 与 FLANN 之间给出有理由的选择"
+        ],
+        "summaryBlockId": "key-takeaways",
+        "nextPointId": "point-2-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "section-goal-and-scope",
+        "moduleId": "problem-framing",
+        "depth": "core",
+        "kind": "definition",
+        "title": "本节要解决的问题",
+        "markdown": "在完成关键点检测与描述子计算之后，下一个问题是：给定两幅图像，如何找出彼此对应的特征点。教材把这一任务称为**特征匹配**（Feature Matching），并明确本节使用 OpenCV 中的 Brute-Force 匹配器和 FLANN 匹配器来完成它。\n\n它的输入是两组已经算好的描述子：queryImage（查询图）与 trainImage（训练图）。匹配的结果是一组对应关系，每条关系指向两幅图像中的各一个描述子。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000092"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching"
+              ],
+              "lineStart": 1690,
+              "lineEnd": 1693,
+              "assetRefs": [],
+              "excerptSha256": "2a88cb7b66d8f2668c01795abac149b36ebe09c588ac1ceea3e2ce96f227b09b"
+            },
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000093"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Goal"
+              ],
+              "lineStart": 1694,
+              "lineEnd": 1698,
+              "assetRefs": [],
+              "excerptSha256": "78d9c72e4ca7d7e7b494b990738c76c6153f250f1bd1f012586a9e21f179248d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "matching-as-nearest-neighbor",
+        "moduleId": "problem-framing",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把匹配看成最近邻检索",
+        "markdown": "一个更便于计算的视角是：把 query 描述子看成待查询的向量，把 train 描述子看成候选库，为每个 query 在候选库中找「最像」的那一个。相似程度用描述子之间的距离衡量，距离越小表示越相似。\n\n这样，「找对应点」就转化为**高维向量集合上的最近邻检索**。本节后续要处理的两个问题都建立在这个视角上：用什么距离度量，以及怎样排除并不可靠的最近邻。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "section-goal-and-scope"
+          ]
+        }
+      },
+      {
+        "id": "brute-force-definition",
+        "moduleId": "brute-force-procedure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "暴力匹配的基本做法",
+        "markdown": "Brute-Force（暴力）匹配器的做法很直接：取第一个集合中某个特征点的描述子，用某种距离计算与第二个集合中的全部特征逐一比较，把距离最近的那个返回作为匹配。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher"
+              ],
+              "lineStart": 1699,
+              "lineEnd": 1728,
+              "assetRefs": [],
+              "excerptSha256": "e66b32500e2b7145b93fd41519c470a22e498a1a27cda10a5dc5135cc6159dcd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "matcher-methods-and-drawing",
+        "moduleId": "brute-force-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "match、knnMatch 与结果绘制",
+        "markdown": "BFMatcher 创建后有两个常用方法：`BFMatcher.match()` 返回最佳匹配，`BFMatcher.knnMatch()` 返回用户指定数量的 k 个最佳匹配，便于后续继续处理。\n\n绘制结果时，`cv.drawMatches()` 把两幅图像横向并排，并在最佳匹配之间连线；`cv.drawMatchesKnn()` 会画出全部 k 个最佳匹配。k=2 时每个关键点会画出两条匹配线，若只想选择性绘制，需要传入掩码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher"
+              ],
+              "lineStart": 1699,
+              "lineEnd": 1728,
+              "assetRefs": [],
+              "excerptSha256": "e66b32500e2b7145b93fd41519c470a22e498a1a27cda10a5dc5135cc6159dcd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bf-cost-and-steps",
+        "moduleId": "brute-force-procedure",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "暴力匹配的执行步骤与代价",
+        "markdown": "把上面的描述整理成可执行的步骤：\n\n1. 为两幅图分别检测关键点并计算描述子。\n2. 创建 `BFMatcher`，指定距离度量。\n3. 用 `match()` 取每个 query 的最佳匹配，或用 `knnMatch()` 取前 k 个。\n4. 按需要排序、筛选，再绘制。\n\n由于 T 个 query 描述子要与 N 个 train 描述子逐一比较，距离计算量约为 $T \\times N$；描述子维度越高、图像越大，暴力匹配越慢。这正是后面引入 FLANN 的动机。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "brute-force-definition",
+            "matcher-methods-and-drawing"
+          ]
+        }
+      },
+      {
+        "id": "orb-matching-example",
+        "moduleId": "brute-force-procedure",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "ORB 描述子的暴力匹配实例",
+        "markdown": "教材用一个具体例子演示了完整流程。给定 queryImage（`box.png`）与 trainImage（`box_in_scene.png`），先用 `cv.ORB_create()` 检测关键点并计算描述子，然后创建 `cv.BFMatcher(cv.NORM_HAMMING, crossCheck=True)`，调用 `bf.match(des1, des2)` 得到匹配。\n\n匹配结果按 `distance` 升序排序，让距离小、可信度高的匹配排在前面，然后只绘制前 10 条，便于观察。这里选择 `NORM_HAMMING` 是因为 ORB 产生的是二进制描述子；打开 `crossCheck` 则要求两个特征互为最佳匹配。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000095"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher",
+                "Brute-Force Matching with ORB Descriptors"
+              ],
+              "lineStart": 1729,
+              "lineEnd": 1775,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_result1.jpg"
+              ],
+              "excerptSha256": "53ada3746ea41d04f80b3b6f2bcbba54b453a4c95707c9c73a0916ef4b610c25"
+            }
+          ]
+        }
+      },
+      {
+        "id": "sort-and-inspect",
+        "moduleId": "brute-force-procedure",
+        "depth": "support",
+        "kind": "note",
+        "title": "排序与截取是结果整理，不是匹配本身",
+        "markdown": "排序不是匹配算法的一部分，而是结果整理手段：`match()` 返回的列表并不保证按距离有序，先按 `distance` 升序排序，才能稳定地取前若干条或设定距离阈值。只看前 10 条也说明可视化需要主动截断，否则大量匹配线会互相遮挡。\n\n还要注意，`crossCheck=True` 已经筛掉了一部分单向最佳匹配，所以此时的匹配数量通常少于 `match()` 的原始输出。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "orb-matching-example"
+          ]
+        }
+      },
+      {
+        "id": "d-match-fields",
+        "moduleId": "brute-force-procedure",
+        "depth": "support",
+        "kind": "definition",
+        "title": "DMatch 记录的字段",
+        "markdown": "`bf.match(des1, des2)` 返回的是 `DMatch` 对象列表，每个对象包含四个属性：\n\n- `DMatch.distance`：两个描述子之间的距离，越小越好；\n- `DMatch.trainIdx`：该描述子在 train 描述子中的索引；\n- `DMatch.queryIdx`：该描述子在 query 描述子中的索引；\n- `DMatch.imgIdx`：训练图像的索引。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000096"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher",
+                "What is this Matcher Object?"
+              ],
+              "lineStart": 1776,
+              "lineEnd": 1785,
+              "assetRefs": [],
+              "excerptSha256": "926b2a4f5db9237c571b762ab1a5a5d6ac34e4d2d82e943e7d8022eac7003476"
+            }
+          ]
+        }
+      },
+      {
+        "id": "trace-back-to-keypoints",
+        "moduleId": "brute-force-procedure",
+        "depth": "support",
+        "kind": "application",
+        "title": "从匹配记录找回关键点坐标",
+        "markdown": "`DMatch` 只保存索引和距离，不直接保存坐标。要拿到对应关键点的位置，需要用 `queryIdx` 去 `kp1` 中取 query 关键点，用 `trainIdx` 去 `kp2` 中取 train 关键点。\n\n`imgIdx` 用于在多图训练集中区分具体是第几张训练图；本例只有一张 trainImage，因此该字段通常为 0。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "d-match-fields"
+          ]
+        }
+      },
+      {
+        "id": "distance-norm-choice",
+        "moduleId": "distance-and-filtering",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "按描述子类型选择距离度量",
+        "markdown": "`BFMatcher` 的第一个可选参数是 `normType`，用来指定距离度量，默认是 `cv.NORM_L2`。\n\n- 对 SIFT、SURF 等浮点描述子，`cv.NORM_L2` 适用，也提供 `cv.NORM_L1`；\n- 对 ORB、BRIEF、BRISK 等二进制串描述子，应使用 `cv.NORM_HAMMING`，即汉明距离；\n- 若 ORB 使用 `WTA_K == 3` 或 `4`，则应使用 `cv.NORM_HAMMING2`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher"
+              ],
+              "lineStart": 1699,
+              "lineEnd": 1728,
+              "assetRefs": [],
+              "excerptSha256": "e66b32500e2b7145b93fd41519c470a22e498a1a27cda10a5dc5135cc6159dcd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "norm-choice-table",
+        "moduleId": "distance-and-filtering",
+        "depth": "support",
+        "kind": "table",
+        "title": "描述子与距离度量的对应关系",
+        "markdown": "| 描述子类型 | 推荐 normType | 原因 |\n|---|---|---|\n| SIFT、SURF 等浮点向量 | `cv.NORM_L2`（或 `cv.NORM_L1`） | 描述子是连续数值，用欧氏距离比较差异大小 |\n| ORB、BRIEF、BRISK 等二进制串 | `cv.NORM_HAMMING` | 按位比较，汉明距离统计不同位的个数 |\n| ORB 且 `WTA_K == 3` 或 `4` | `cv.NORM_HAMMING2` | 每个比较单元不止一位，需要按对应位宽统计 |\n\n度量必须与描述子的存储形式匹配：对二进制描述子使用 L2 距离，得到的数值不能反映按位相似程度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "distance-norm-choice"
+          ]
+        }
+      },
+      {
+        "id": "crosscheck-filter",
+        "moduleId": "distance-and-filtering",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "crossCheck 的双向一致性",
+        "markdown": "第二个可选参数是布尔变量 `crossCheck`，默认为 `false`。当它为 `true` 时，匹配器只返回满足以下条件的匹配 (i, j)：集合 A 中第 i 个描述子把集合 B 中第 j 个描述子当作最佳匹配，同时集合 B 中第 j 个描述子也把集合 A 中第 i 个描述子当作最佳匹配。\n\n教材指出，这种双向一致性检查能得到更一致的结果，可以作为 SIFT 论文中 Lowe 比率检验的一种替代方案。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher"
+              ],
+              "lineStart": 1699,
+              "lineEnd": 1728,
+              "assetRefs": [],
+              "excerptSha256": "e66b32500e2b7145b93fd41519c470a22e498a1a27cda10a5dc5135cc6159dcd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "sift-ratio-test",
+        "moduleId": "distance-and-filtering",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "用比率检验筛选 SIFT 匹配",
+        "markdown": "教材的 SIFT 例子使用 `BFMatcher.knnMatch()` 并令 k=2，为每个 query 描述子保留两个最近邻，然后应用 Lowe 提出的比率检验：\n\n```python\nmatches = bf.knnMatch(des1, des2, k=2)\ngood = []\nfor m, n in matches:\n    if m.distance < 0.75 * n.distance:\n        good.append([m])\n```\n\n只有最近邻距离明显小于次近邻距离时才保留该匹配。`cv.drawMatchesKnn` 期望的输入是列表的列表，因此保留结果写成 `[m]`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "Basics of Brute-Force Matcher",
+                "Brute-Force Matching with SIFT Descriptors and Ratio Test"
+              ],
+              "lineStart": 1786,
+              "lineEnd": 1823,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_result2.jpg"
+              ],
+              "excerptSha256": "a9f2a8cc6ef216d0f41b81b509cacc36cfd6ec599340a0c1101ba273627525bb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "ratio-test-why",
+        "moduleId": "distance-and-filtering",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "比率检验为什么能筛掉歧义匹配",
+        "markdown": "比率检验针对的是**歧义匹配**：如果某个 query 描述子在 train 集合中同时有几个同样接近的候选，说明它缺乏区分度，此时最近邻很可能只是碰巧最近；如果真正的对应存在，最近邻通常应当显著优于次近邻。\n\n设最近邻距离为 $d_1$、次近邻距离为 $d_2$，检验要求\n\n$$d_1 < \\tau \\, d_2$$\n\n$\\tau$ 越小越严格，保留的匹配越少但越可靠。教材在 SIFT 例子中使用 $0.75$，在 FLANN 例子中使用 $0.7$，两者都是可调阈值，而不是固定的物理常数。\n\n与 `crossCheck` 相比，比率检验不需要反向再检索一次，只用单向的 k=2 结果就能判断可靠性；`crossCheck` 则检查两个方向的最佳匹配是否互相一致。两者都是过滤手段，可按可用调用与场景选择。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "crosscheck-filter",
+            "sift-ratio-test"
+          ]
+        }
+      },
+      {
+        "id": "flann-overview",
+        "moduleId": "scaling-and-tradeoff",
+        "depth": "core",
+        "kind": "definition",
+        "title": "FLANN 的作用",
+        "markdown": "FLANN 是 Fast Library for Approximate Nearest Neighbors（快速近似最近邻库）的缩写，包含一组针对大规模数据集和高维特征优化过的快速最近邻搜索算法。教材指出，在大型数据集上它比 `BFMatcher` 工作得更快。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000098"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "FLANN based Matcher"
+              ],
+              "lineStart": 1824,
+              "lineEnd": 1896,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_flann.jpg"
+              ],
+              "excerptSha256": "796f0d6c3d37192c272d088a29b2e749d15bf973221c125c417681d637d1cc13"
+            }
+          ]
+        }
+      },
+      {
+        "id": "flann-params",
+        "moduleId": "scaling-and-tradeoff",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "FLANN 的参数配置",
+        "markdown": "使用 FLANN 匹配器需要传入两个字典，分别指定索引算法及其参数、以及搜索参数。\n\n第一个字典 `IndexParams` 指定索引算法：\n\n- 对 SIFT、SURF 等算法，使用 `FLANN_INDEX_KDTREE = 1`，例如 `dict(algorithm = FLANN_INDEX_KDTREE, trees = 5)`；\n- 对 ORB，使用 `FLANN_INDEX_LSH = 6`，并给出 `table_number`、`key_size`、`multi_probe_level` 等参数。教材代码中的取值为 `table_number = 6`、`key_size = 12`、`multi_probe_level = 1`，注释里给出的是文档推荐值。\n\n第二个字典 `SearchParams` 指定索引中的树被递归遍历的次数：值越大精度越好，但耗时越多。教材示例使用 `search_params = dict(checks=50)`，正文提到可改为 `checks=100`。\n\n配置完成后，`cv.FlannBasedMatcher(index_params, search_params)` 同样可以调用 `knnMatch()`。教材的 FLANN 示例沿用 k=2，并用比率检验保留 `m.distance < 0.7 * n.distance` 的匹配，再通过掩码只绘制这些好匹配。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000098"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching",
+                "FLANN based Matcher"
+              ],
+              "lineStart": 1824,
+              "lineEnd": 1896,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_flann.jpg"
+              ],
+              "excerptSha256": "796f0d6c3d37192c272d088a29b2e749d15bf973221c125c417681d637d1cc13"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bf-vs-flann-tradeoff",
+        "moduleId": "scaling-and-tradeoff",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "BFMatcher 与 FLANN 的取舍",
+        "markdown": "把两种匹配器放在同一组维度上比较：\n\n| 维度 | BFMatcher | FLANN |\n|---|---|---|\n| 搜索方式 | 穷举全部候选，得到精确最近邻 | 借助索引做近似最近邻 |\n| 数据规模 | 小规模时简单直接 | 大规模、高维时更快 |\n| 精度 | 精确 | 受索引与 `checks` 影响，是近似值 |\n| 参数 | `normType`、`crossCheck` | `IndexParams`、`SearchParams` |\n| 共同点 | 都提供 `match()` 与 `knnMatch()`，都可接比率检验 | 同左 |\n\n选择规则：描述子数量和维度不大时用 BFMatcher，行为最可预期；候选规模很大、又愿意用少量精度换速度时用 FLANN，并通过增大 `checks` 把精度调回来。无论用哪一个，最终仍要靠 `crossCheck` 或比率检验筛掉不可靠的对应。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "flann-overview",
+            "flann-params"
+          ]
+        }
+      },
+      {
+        "id": "common-mistakes",
+        "moduleId": "check-and-summary",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解与纠正",
+        "markdown": "- **距离越小就一定是正确匹配**：距离只说明两个描述子在这一度量下接近，重复纹理或缺乏区分度的区域也可能给出很小的距离，需要 `crossCheck` 或比率检验进一步筛选。\n- **比率检验与 crossCheck 可以不加区分地互换**：两者都能过滤歧义匹配，但机制不同。`crossCheck` 依赖反向检索，比率检验依赖最近邻与次近邻的比值；能用哪种取决于匹配器提供的调用方式。\n- **FLANN 一定比 BFMatcher 准**：FLANN 是近似最近邻，用速度换精度；`checks` 越大越接近穷举结果，但不会自动超过 BFMatcher。\n- **knnMatch 的 k 越大越好**：k 只决定保留多少个候选，比率检验实际只需要最近邻与次近邻两个；更大的 k 意味着更多结果与更多后续处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "brute-force-definition",
+            "distance-norm-choice",
+            "crosscheck-filter",
+            "sift-ratio-test",
+            "bf-vs-flann-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "key-takeaways",
+        "moduleId": "check-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本节主线与检查清单",
+        "markdown": "本节的主线可以概括为四步：\n\n1. 用描述子之间的距离把匹配变成最近邻检索；\n2. 按描述子类型选择 `NORM_L2`、`NORM_HAMMING` 或 `NORM_HAMMING2`；\n3. 用 `match()` 或 `knnMatch()` 取得候选，再用 `crossCheck` 或比率检验筛掉歧义对应；\n4. 数据规模大时用 FLANN 近似加速，并用 `checks` 调节精度与速度。\n\n检查清单：距离度量是否与描述子类型匹配？k 是否按后续过滤的需要设置？过滤后是否重新排序或限制绘制数量？换成 FLANN 后，精度下降是否可接受？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "section-goal-and-scope",
+            "bf-cost-and-steps",
+            "ratio-test-why",
+            "bf-vs-flann-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "filter-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "bf-vs-flann-tradeoff",
+        "moduleId": "scaling-and-tradeoff",
+        "depth": "support",
+        "outcomeRefs": [
+          "filter-matches",
+          "choose-flann"
+        ],
+        "learningPurpose": "检查学习者能否根据描述子类型与数据规模，选择匹配器、过滤方式和参数。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "crosscheck-filter",
+            "sift-ratio-test",
+            "bf-vs-flann-tradeoff"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "场景：用 ORB 描述子匹配两幅大尺寸图像，候选描述子数量很多。请回答：应选哪种距离度量？用 BFMatcher 还是 FLANN？用 crossCheck 还是比率检验？并各写一条理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "局部特征与几何视觉",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000092"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching"
+      ],
+      "lineStart": 1690,
+      "lineEnd": 1693,
+      "assetRefs": [],
+      "excerptSha256": "2a88cb7b66d8f2668c01795abac149b36ebe09c588ac1ceea3e2ce96f227b09b"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000093"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching",
+        "Goal"
+      ],
+      "lineStart": 1694,
+      "lineEnd": 1698,
+      "assetRefs": [],
+      "excerptSha256": "78d9c72e4ca7d7e7b494b990738c76c6153f250f1bd1f012586a9e21f179248d"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000094"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching",
+        "Basics of Brute-Force Matcher"
+      ],
+      "lineStart": 1699,
+      "lineEnd": 1728,
+      "assetRefs": [],
+      "excerptSha256": "e66b32500e2b7145b93fd41519c470a22e498a1a27cda10a5dc5135cc6159dcd"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000095"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching",
+        "Basics of Brute-Force Matcher",
+        "Brute-Force Matching with ORB Descriptors"
+      ],
+      "lineStart": 1729,
+      "lineEnd": 1775,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_result1.jpg"
+      ],
+      "excerptSha256": "53ada3746ea41d04f80b3b6f2bcbba54b453a4c95707c9c73a0916ef4b610c25"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000096"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching",
+        "Basics of Brute-Force Matcher",
+        "What is this Matcher Object?"
+      ],
+      "lineStart": 1776,
+      "lineEnd": 1785,
+      "assetRefs": [],
+      "excerptSha256": "926b2a4f5db9237c571b762ab1a5a5d6ac34e4d2d82e943e7d8022eac7003476"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000097"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching",
+        "Basics of Brute-Force Matcher",
+        "Brute-Force Matching with SIFT Descriptors and Ratio Test"
+      ],
+      "lineStart": 1786,
+      "lineEnd": 1823,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_result2.jpg"
+      ],
+      "excerptSha256": "a9f2a8cc6ef216d0f41b81b509cacc36cfd6ec599340a0c1101ba273627525bb"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000098"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching",
+        "FLANN based Matcher"
+      ],
+      "lineStart": 1824,
+      "lineEnd": 1896,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_matcher/images/matcher_flann.jpg"
+      ],
+      "excerptSha256": "796f0d6c3d37192c272d088a29b2e749d15bf973221c125c417681d637d1cc13"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2157,
+    2450
+  ],
+  "scale": 0.91
+}

@@ -1,0 +1,461 @@
+{
+  "id": "point-6-2",
+  "title": "Managing Multiple Files",
+  "shortSummary": "把多个文件与目标组织成依赖图，让 make 按依赖顺序更新，避免手工重复执行命令。",
+  "keyTerms": [
+    "依赖图 dependency graph",
+    "多目标",
+    "构建顺序",
+    "make"
+  ],
+  "animationType": "makeTimestampBuild",
+  "animationSuggestion": "以节点图展示 all、两个结果文件与各自数据文件的依赖结构，用时间戳标记过期节点；先点亮一个过期结果并让它依赖的数据保持最新，再演示交换规则书写顺序后执行顺序不变；最后加入一个与 clean 同名的目录节点，展示伪目标被判定为最新、声明 .PHONY 后恢复执行。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-6-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-and-failure-diagnosis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的规则写法、默认目标、all 与 clean 示例和伪目标失效案例，按可操作步骤重排，补充依赖图直觉、顺序约束解释与诊断清单。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-multi-target",
+          "text": "说明多个结果如何各用一条规则写进同一个 Makefile，目标、依赖与命令分别起什么作用。"
+        },
+        {
+          "id": "invoke-targets",
+          "text": "区分默认目标与显式指定目标，并解释直接运行 make 时为什么只处理第一个目标。"
+        },
+        {
+          "id": "aggregate-with-all",
+          "text": "用 all 伪目标把多个结果聚合成一次构建，并按依赖关系而不是书写顺序说明执行约束。"
+        },
+        {
+          "id": "diagnose-phony",
+          "text": "诊断同名文件或目录导致伪目标失效的现象，并用 .PHONY 修复。"
+        }
+      ],
+      "misconceptions": [
+        "把 Makefile 中规则出现的顺序当成命令执行的顺序。",
+        "认为 all 目标必须有同名文件或自己的命令才会生效。",
+        "认为伪目标一定不会与真实文件冲突，因而省略 .PHONY 声明。"
+      ],
+      "modules": [
+        {
+          "id": "multi-target-rules",
+          "title": "一个结果一条规则",
+          "role": "context",
+          "description": "从单个结果的 Makefile 出发，追加第二个结果的规则。",
+          "outcomeRefs": [
+            "explain-multi-target"
+          ],
+          "order": 0
+        },
+        {
+          "id": "default-target",
+          "title": "默认目标与显式调用",
+          "role": "concept",
+          "description": "说明直接运行 make 只更新第一个目标，以及如何指定其他目标。",
+          "outcomeRefs": [
+            "invoke-targets"
+          ],
+          "order": 1
+        },
+        {
+          "id": "aggregate-all",
+          "title": "用 all 聚合多个结果",
+          "role": "worked-example",
+          "description": "把多个结果写成 all 的依赖，用一条命令完成整个构建。",
+          "outcomeRefs": [
+            "explain-multi-target",
+            "aggregate-with-all"
+          ],
+          "order": 2
+        },
+        {
+          "id": "build-order",
+          "title": "执行顺序由依赖决定",
+          "role": "concept",
+          "description": "区分规则书写顺序与依赖约束决定的执行顺序。",
+          "outcomeRefs": [
+            "aggregate-with-all"
+          ],
+          "order": 3
+        },
+        {
+          "id": "phony-workflow",
+          "title": "用伪目标组织清理步骤",
+          "role": "application",
+          "description": "把清理动作写成 clean 伪目标，替代手工重复输入命令。",
+          "outcomeRefs": [
+            "aggregate-with-all",
+            "diagnose-phony"
+          ],
+          "order": 4
+        },
+        {
+          "id": "phony-pitfall",
+          "title": "伪目标重名的诊断与修复",
+          "role": "diagnosis",
+          "description": "从症状、证据定位到 .PHONY 修复，处理同名目录造成的目标失效。",
+          "outcomeRefs": [
+            "diagnose-phony"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-multi-target",
+          "invoke-targets",
+          "aggregate-with-all",
+          "diagnose-phony"
+        ],
+        "method": "完成自检清单，并写出两种一次更新全部结果的做法及各自的适用理由。",
+        "successCriteria": [
+          "能写出第二个结果的规则并说明目标、依赖与命令",
+          "能解释直接运行 make 只处理默认目标",
+          "能说明 all 作为依赖聚合点如何取代逐条调用",
+          "能指出伪目标同名文件造成的失效并给出 .PHONY 修复"
+        ],
+        "exerciseBlockId": "model-review-checklist"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-second-rule",
+        "moduleId": "multi-target-rules",
+        "depth": "core",
+        "kind": "code",
+        "title": "为第二个结果新增一条规则",
+        "markdown": "教材在已有 Makefile 中再添加一条规则，用来生成另一个结果文件：目标 `results/jane_eyre.csv` 依赖数据文件 `data/jane_eyre.txt`，命令仍然是调用 `bin/countwords.py`。\n\n```makefile\n# Regenerate results for \"Jane Eyre\"\nresults/jane_eyre.csv : data/jane_eyre.txt\n\tpython bin/countwords.py \\\n\t\tdata/jane_eyre.txt > results/jane_eyre.csv\n```\n\n这条规则与原有的 `results/moby_dick.csv` 规则并列写在同一个 Makefile 里，每条规则只负责一个结果文件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "Automating Analyses with Make",
+                "Managing Multiple Files"
+              ],
+              "lineStart": 5369,
+              "lineEnd": 5489,
+              "assetRefs": [],
+              "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rule-anatomy",
+        "moduleId": "multi-target-rules",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "规则的三段结构决定了复制式扩展",
+        "markdown": "每条规则都由三部分组成：冒号左边是目标文件，冒号右边是它依赖的文件，下一行的命令说明如何由依赖生成目标。多个结果之间没有共享语义时，最直接的扩展方式就是复制这条结构、换掉文件名。\n\n这也解释了一个容易忽略的事实：make 不会主动把所有规则都跑一遍。它执行的是被请求的目标，而不是文件里出现的全部目标，因此上面两条规则并不会因为同时存在就一起运行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-second-rule"
+          ]
+        }
+      },
+      {
+        "id": "tb-default-target",
+        "moduleId": "default-target",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "直接运行 make 只处理默认目标",
+        "markdown": "加入第二条规则后再运行 `make`，输出是 `make: 'results/moby_dick.csv' is up to date.`。原因是默认情况下 make 只尝试更新它在 Makefile 中找到的第一个目标，这个目标称为默认目标。本例中第一个目标是 `results/moby_dick.csv`，而它已经是最新的。\n\n要更新别的目标，必须明确告诉 make 想要什么，例如运行 `make results/jane_eyre.csv`，这时才会执行对应的计数命令。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "Automating Analyses with Make",
+                "Managing Multiple Files"
+              ],
+              "lineStart": 5369,
+              "lineEnd": 5489,
+              "assetRefs": [],
+              "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-default-choice",
+        "moduleId": "default-target",
+        "depth": "support",
+        "kind": "note",
+        "title": "默认目标是可以设计的入口",
+        "markdown": "默认目标不是特殊语法，而是一条位置约定：Makefile 中第一条规则的第一个目标。既然它决定「只敲 make 会发生什么」，就可以有意识地安排这个入口——若希望默认构建全部结果，只要把聚合目标放到文件最前面。\n\n反过来说，如果每次都靠 `make results/jane_eyre.csv` 逐个指定，等于把原本要自动化的步骤又退回手工操作，这与使用构建工具的初衷相悖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-default-target"
+          ]
+        }
+      },
+      {
+        "id": "tb-all-rule",
+        "moduleId": "aggregate-all",
+        "depth": "core",
+        "kind": "code",
+        "title": "用 all 目标一次更新全部结果",
+        "markdown": "为了不用逐个调用，教材在 Makefile 顶部加入一条规则，把两个结果文件都列为 `all` 的依赖：\n\n```makefile\n# Regenerate all results.\nall : results/moby_dick.csv results/jane_eyre.csv\n```\n\n并不存在名为 `all` 的文件，这条规则本身也没有任何命令；但运行 `make all` 时，make 会找到 `all` 依赖的全部内容，并把每个前置更新到最新状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "Automating Analyses with Make",
+                "Managing Multiple Files"
+              ],
+              "lineStart": 5369,
+              "lineEnd": 5489,
+              "assetRefs": [],
+              "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dependency-graph",
+        "moduleId": "aggregate-all",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把 Makefile 看成一张依赖图",
+        "markdown": "把规则画成图更容易理解发生了什么：`all` 是唯一的根，它下面直接挂着两个结果文件，每个结果文件下面又接着各自的文本数据。make 从被请求的目标出发沿箭头向下求值，先确保前置最新，再回头判断目标本身是否过期。\n\n这张图还说明了 `all` 为什么不需要命令：它的作用是声明「这些目标共同构成一次完整构建」，真正的生成工作由下面各条规则完成。图上任何一个结果过期，`make all` 都会把它补上，而没有过期的部分不会重复执行。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-all-rule"
+          ]
+        }
+      },
+      {
+        "id": "tb-rule-order",
+        "moduleId": "build-order",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "规则书写顺序不等于执行顺序",
+        "markdown": "规则在 Makefile 中出现的先后，并不必然决定命令执行的先后。只要没有任何目标在它的前置更新之前就被更新，make 可以按任意顺序运行这些命令。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "Automating Analyses with Make",
+                "Managing Multiple Files"
+              ],
+              "lineStart": 5369,
+              "lineEnd": 5489,
+              "assetRefs": [],
+              "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-order-constraint",
+        "moduleId": "build-order",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "需要顺序时，把顺序写成依赖",
+        "markdown": "真正的约束是「前置先于目标」这条偏序关系，而不是文本位置。把 `all` 写到文件顶部并没有让它先执行，它只是最后被判定；两个结果之间谁先跑，取决于依赖与时间戳，而不取决于哪条规则写得更靠上。\n\n所以不要用摆放位置来暗示先后。若某个步骤必须在另一个步骤之后，就把它表达成依赖边，例如让后续目标依赖前一步产出的文件。依赖图能表达的约束，写进依赖；依赖图不必表达的先后，就不要依赖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-rule-order"
+          ]
+        }
+      },
+      {
+        "id": "tb-clean-rule",
+        "moduleId": "phony-workflow",
+        "depth": "core",
+        "kind": "code",
+        "title": "用 clean 目标固化清理动作",
+        "markdown": "教材随后再用一个目标把清理步骤写进 Makefile，按惯例命名为 `clean`，放在两个结果目标之下：\n\n```makefile\n# Remove all generated files.\nclean :\n\trm -f results/*.csv\n```\n\n`rm` 的 `-f` 表示强制删除：即使要删的文件已经不存在，也不会报错。运行 `make clean` 就会删除已有的结果文件。教材指出，这比每次在命令行手敲 `rm -f results/*.csv` 安全得多，因为一旦在 `*` 前面多打一个空格，就会把项目根目录下所有 CSV 文件删掉。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "Automating Analyses with Make",
+                "Managing Multiple Files"
+              ],
+              "lineStart": 5369,
+              "lineEnd": 5489,
+              "assetRefs": [],
+              "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-phony-purpose",
+        "moduleId": "phony-workflow",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "伪目标的用途：给一组动作起名字",
+        "markdown": "`all` 和 `clean` 的共同点是：它们代表一件要完成的事，而不是某个具体产物。这类目标称为伪目标。它们把容易写错、容易漏改的命令固定在文件里，让「构建全部」「清理产物」成为可以反复调用的稳定入口。\n\n与 `results/moby_dick.csv` 这类真实产物目标相比，伪目标没有可供比较的时间戳，它的「是否最新」只能由依赖关系推断——这正是下一节出问题的根源。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-all-rule",
+            "tb-clean-rule"
+          ]
+        }
+      },
+      {
+        "id": "tb-phony-failure",
+        "moduleId": "phony-pitfall",
+        "depth": "core",
+        "kind": "warning",
+        "title": "同名目录会让伪目标失效",
+        "markdown": "伪目标很有用，但有一个陷阱。执行 `mkdir clean` 后再运行 `make clean`，输出是 `make: 'clean' is up to date.`，什么也没有删除。\n\n因为有同名目录存在，make 认为规则里的 `clean` 指的就是这个目录；该规则又没有前置条件，于是它「永远不会过期」，命令不会被执行。教材给出的解决办法是在 Makefile 顶部加一行，明确声明这些目标不对应真实文件：\n\n```makefile\n.PHONY : all clean\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "Automating Analyses with Make",
+                "Managing Multiple Files"
+              ],
+              "lineStart": 5369,
+              "lineEnd": 5489,
+              "assetRefs": [],
+              "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-phony-diagnosis",
+        "moduleId": "phony-pitfall",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "从症状到修复的诊断链",
+        "markdown": "遇到「命令明明写了却没有执行」，可以按以下顺序排查：\n\n1. 症状：运行 `make clean` 只得到 up to date 提示，没有实际动作。\n2. 证据：当前目录存在与目标同名的文件或目录，且该规则没有前置。\n3. 定位：make 用目标名对应的文件存在性与时间戳判断是否需要更新；有同名目录又无前置，就永远判定为最新。\n4. 修复：用 `.PHONY` 声明该目标不是文件，让它回到「每次请求都执行」的语义。\n\n同一条链路也能解释 `all`：若项目里恰好有个叫 `all` 的文件，聚合构建同样会失效，所以声明通常把 `all clean` 一起写上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-phony-failure"
+          ]
+        }
+      },
+      {
+        "id": "model-review-checklist",
+        "moduleId": "phony-pitfall",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "自检清单与练习",
+        "markdown": "**自检清单**\n\n- 每个结果文件是否都有自己的规则，且目标、依赖与命令齐全？\n- 想让一条 `make` 构建全部结果，是否提供了聚合目标并把各结果列为依赖？\n- 是否避免依靠规则的书写位置来表达先后关系？\n- `all`、`clean` 等不对应文件的目标，是否都用 `.PHONY` 声明？\n\n**练习**\n\n某个 Makefile 只包含两条结果规则，直接运行 `make` 时只报告第一个结果 is up to date。请写出两种「一次更新全部结果」的做法，并说明哪一种更适合长期使用。\n\n**参考答案**\n\n第一种是逐个指定目标，例如依次运行 `make results/moby_dick.csv` 和 `make results/jane_eyre.csv`；第二种是新增 `all` 目标，把两个结果文件列为依赖，再运行 `make all`。第二种更适合长期使用：新增结果时只需把它加入 `all` 的依赖，调用方式保持不变，也便于配合 `.PHONY` 明确语义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-all-rule",
+            "tb-clean-rule",
+            "tb-phony-failure"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "phony-target-check",
+        "type": "formative-check",
+        "title": "判断伪目标为何没执行",
+        "anchorBlockId": "model-review-checklist",
+        "moduleId": "phony-pitfall",
+        "depth": "support",
+        "outcomeRefs": [
+          "diagnose-phony"
+        ],
+        "learningPurpose": "检查学习者能否把同名目录导致目标失效的现象，追溯到文件时间戳判定并给出 .PHONY 修复。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-phony-failure",
+            "model-phony-diagnosis"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "Makefile 中写了 clean : 与删除命令，项目里也存在名为 clean 的空目录。运行 make clean 会发生什么，应如何修改？",
+          "answer": "make 会把 clean 当作该目录，规则无前置因而判定为最新，命令不执行；应在 Makefile 中加 .PHONY : clean 声明它是伪目标。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请说明：Makefile 的 `clean` 规则在项目存在同名目录时为什么不会执行？应添加哪一行声明来修复？"
+        }
+      }
+    ]
+  },
+  "subtitle": "Automating Analyses with Make",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-dacd3293b5aedfe0e5a195bd",
+      "blockIds": [
+        "block-000056"
+      ],
+      "headingPath": [
+        "Automating Analyses with Make",
+        "Managing Multiple Files"
+      ],
+      "lineStart": 5369,
+      "lineEnd": 5489,
+      "assetRefs": [],
+      "excerptSha256": "19e8e453fb2c3aaf983939adbb0030d52a8771a538a137806e1a5a47d71d99c6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1160,
+    1539
+  ],
+  "scale": 0.98
+}
