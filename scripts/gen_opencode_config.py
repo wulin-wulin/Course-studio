@@ -189,6 +189,27 @@ TEXTBOOK_COURSE_CREATOR_PERMISSION = _without_manifest_edit(
     COURSE_CREATOR_PERMISSION
 )
 
+
+def _curriculum_guided_permission(permission: dict) -> dict:
+    restricted = _without_manifest_edit(permission)
+    restricted["edit"].pop("**/pipeline/*/textbook-outline.json", None)
+    restricted["edit"]["**/pipeline/*/curriculum-guided-plan.json"] = "allow"
+    restricted["skill"].pop("textbook-outline-generator", None)
+    restricted["skill"]["curriculum-guided-textbook-generator"] = "allow"
+    return restricted
+
+
+CURRICULUM_GUIDED_OUTLINE_CREATOR_PERMISSION = _curriculum_guided_permission(
+    COURSE_OUTLINE_CREATOR_PERMISSION
+)
+CURRICULUM_GUIDED_COURSE_CREATOR_PERMISSION = _curriculum_guided_permission(
+    COURSE_CREATOR_PERMISSION
+)
+CURRICULUM_GUIDED_COURSE_CREATOR_PERMISSION["edit"].pop(
+    "**/pipeline/*/curriculum-guided-plan.json",
+    None,
+)
+
 COURSE_CONTENT_WORKER_PERMISSION = {
     "edit": {
         "**": "deny",
@@ -248,6 +269,16 @@ def _course_agents() -> dict:
             "description": "Continue a textbook-grounded course after G2 review and publish it.",
             "mode": "primary",
             "permission": TEXTBOOK_COURSE_CREATOR_PERMISSION,
+        },
+        "curriculum-guided-outline-creator": {
+            "description": "Use curriculum requirements to adjust a textbook-grounded identity plan, stopping at G2 review.",
+            "mode": "primary",
+            "permission": CURRICULUM_GUIDED_OUTLINE_CREATOR_PERMISSION,
+        },
+        "curriculum-guided-course-creator": {
+            "description": "Continue a curriculum-guided textbook course after G2 review and publish it.",
+            "mode": "primary",
+            "permission": CURRICULUM_GUIDED_COURSE_CREATOR_PERMISSION,
         },
         "course-content-worker": {
             "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",

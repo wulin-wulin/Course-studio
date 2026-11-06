@@ -6,7 +6,8 @@
 
 1. 每次创建、恢复或校验课程，都先加载 `knowledge-pipeline-orchestrator` Skill，并按它编排的 G0-G7 门禁执行。
 2. 在相应阶段加载并严格遵守：
-   - `textbook-outline-generator`（仅当后端提示本次请求已绑定 PDF 或 Markdown 教材）
+   - `textbook-outline-generator`（仅当后端提示本次请求只绑定 PDF/Markdown 教材，且不存在 `curriculum-guided-binding.json`）
+   - `curriculum-guided-textbook-generator`（仅当后端提示已同时绑定教材与培养方案/教学大纲）
    - `candidate-knowledge-point-generator`
    - `knowledge-cluster-builder`（实际图谱 Skill 位于其包内的 `knowledge-cluster-builder/`）
 3. 如果用户尚未给出课程或领域名称，先询问名称，不要自行假定。已有信息足够时直接继续；一次只追问最影响结果的一项。
@@ -15,7 +16,7 @@
 
 ## 教材 PDF / Markdown 模式
 
-当后端在本轮提示中给出 `textbook_document_id`、固定 `course_id` 和 `textbook-input/<document-id>/outline.json` 时，必须先加载 `textbook-outline-generator`：
+当后端在本轮提示中给出 `textbook_document_id`、固定 `course_id` 和 `textbook-input/<document-id>/outline.json`，且没有培养方案辅助绑定时，必须先加载 `textbook-outline-generator`：
 
 - 使用后端指定的 `course_id`，不要另造 ID；
 - 教材结构固定为“章节 → 知识点”两层；
@@ -26,12 +27,32 @@
   `validate-index`；教材 manifest 及 sourceSpans 由该受信 action 机械生成，不得用 `write` 手写；
 - G6 用教材章节直接生成 clusters，禁止自由重聚类；装配后必须调用 `validate-textbook-graph`；
 - 未收到后端教材绑定提示时，继续使用普通课程流程。
+
+## 教材 + 培养方案 / 教学大纲模式
+
+当后端提示存在 `curriculum-guided-binding.json` 时，必须加载
+`curriculum-guided-textbook-generator`。教材仍是知识正文证据；培养方案只用于调整知识点清单和
+计划知识簇，不得转写成教材 source span。G1 写 `course.json`、`index.json` 和
+`curriculum-guided-plan.json`，不得生成 `textbook-outline.json`。随后固定调用：
+
+```text
+course_pipeline {"action":"sync-curriculum-guided-manifest","courseId":"<course-id>"}
+course_pipeline {"action":"validate-curriculum-guided-plan","courseId":"<course-id>"}
+course_pipeline {"action":"validate-index","courseId":"<course-id>"}
+course_pipeline {"action":"review-knowledge-points","courseId":"<course-id>"}
+```
+
+G2 返回 pending 后立即停止。不得在同一会话中更换教材、培养方案或切回仅教材模式。
+G2 通过后，G6 必须读取已签名的 `curriculum-guided-plan.json`，以其中的 `clusters` 和逐点
+`clusterIds` 作为聚类起点与强建议；可以根据完整正文在 G6 提出有理由的次要簇调整，但不得无理由
+丢弃大纲修订结果，最终变化仍由 G6 结构化审核确认。
 - 后端给出 `material.json` 与 `full.md` 路径时，必须按 Markdown 正文材料模式执行：点级证据包由
   `prepare-content-tasks` 从受信 `manifest.pointEvidence` 机械写入每个点的任务包 `evidence`，worker
   按其中的行号读取正文；主智能体不再分批读取正文构造证据包。教材原有点必须按
   `material.point_sources` 的顺序完整覆盖全部 section 正文，不能只读取标题或代表段落；所有
   非教材点（`llm-extension` 或 `user`）都必须提供同章教材 `anchor_point_id`，并只使用该锚点
-  对应的非空证据子集。正文同时覆盖教材内容和明确标注的模型
+  对应的非空证据子集；唯一例外是培养方案辅助模式中经 G2 确认的 `coverage: "gap"` 点，它不得
+  读取或伪造教材 span，按普通栏目式 v1 生成明确标注的模型补充详情。正文同时覆盖教材内容和明确标注的模型
   补充。manifest 声明 `contentContract: "textbook-content/2.0"`，point 用有序
   `content.blocks` 分开保存教材块和模型块；教材块登记 span（worker 写 ref，由
   `finalize-point-drafts` 展开为精确 spans），模型块通过
@@ -94,6 +115,8 @@ course_pipeline {"action":"validate-textbook-outline","courseId":"<course-id>"}
 
 - `sync-textbook-manifest` 从绑定的 material/full.md、教材结构和索引确定性生成
   `textbook-content/2.0` manifest，教材点完整覆盖既定 sections，扩展点严格使用 anchor 范围。
+- 教材 + 培养方案模式按上文独立计划契约执行；培养方案触发的保留、重命名、合并、拆分和补充必须
+  写明 requirement 引用与理由。`gap` 点必须进入 needs-review，且不能伪造教材证据。
 
 ```text
 course_pipeline {"action":"validate-index","courseId":"<course-id>"}

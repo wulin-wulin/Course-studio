@@ -382,6 +382,191 @@ class CourseReviewStoreTest(unittest.TestCase):
             },
         )
 
+    def write_curriculum_guided_plan(self) -> None:
+        textbook_id = "doc-1234567890abcdef12345678"
+        curriculum_id = "curr-1234567890abcdef12345678"
+        input_root = self.fixture.session_root / "curriculum-guided-input"
+        textbook_root = input_root / "textbook" / textbook_id
+        curriculum_root = input_root / "curriculum" / curriculum_id
+        source_points = []
+        sections = []
+        point_sources = []
+        plan_points = []
+        evidence = []
+        for order, point in enumerate(self.fixture.index_points):
+            block_id = f"block-{order + 1}"
+            source_points.append({
+                "id": point["id"],
+                "title": point["title"],
+                "order": order,
+                "origin": "textbook",
+            })
+            sections.append({
+                "id": block_id,
+                "heading_path": ["第一章", point["title"]],
+                "line_start": order * 5 + 1,
+                "line_end": order * 5 + 4,
+                "asset_refs": [],
+                "sha256": f"{order + 1:064x}",
+            })
+            point_sources.append({
+                "point_id": point["id"],
+                "section_ids": [block_id],
+            })
+            plan_points.append({
+                "id": point["id"],
+                "title": point["title"],
+                "order": order,
+                "action": "retain",
+                "sourcePointIds": [point["id"]],
+                "sourceRefs": [],
+                "requirementRefs": ["req-core"],
+                "coverage": "covered",
+                "clusterIds": ["cluster-core"],
+                "changeReason": "教材内容满足培养要求，保留该知识点。",
+            })
+            evidence.append({
+                "pointId": point["id"],
+                "title": point["title"],
+                "kind": "concept",
+                "sourceRefs": ["src-textbook", "src-curriculum"],
+                "confidence": 0.95,
+                "scopeStatus": "core",
+                "origin": "textbook",
+                "coverage": "covered",
+                "sourceSpans": [{
+                    "materialId": textbook_id,
+                    "blockIds": [block_id],
+                    "headingPath": ["第一章", point["title"]],
+                    "lineStart": order * 5 + 1,
+                    "lineEnd": order * 5 + 4,
+                    "assetRefs": [],
+                    "excerptSha256": f"{order + 1:064x}",
+                }],
+            })
+        _write_json(textbook_root / "outline.json", {
+            "schema_version": "textbook-outline/1.0",
+            "document_id": textbook_id,
+            "course": {"id": COURSE_ID, "title": "Demo Course"},
+            "title": "Demo Course",
+            "source": {"filename": "demo.md", "sha256": "a" * 64},
+            "chapters": [{
+                "id": "chapter-one",
+                "title": "第一章",
+                "order": 0,
+                "points": source_points,
+            }],
+        })
+        _write_json(textbook_root / "material.json", {
+            "schema_version": "textbook-material/1.0",
+            "sections": sections,
+            "point_sources": point_sources,
+        })
+        (textbook_root / "full.md").write_text(
+            "# 第一章\n\n" + "\n\n".join(point["title"] for point in self.fixture.index_points),
+            encoding="utf-8",
+        )
+        requirements = {
+            "schema_version": "curriculum-requirements/1.0",
+            "document_id": curriculum_id,
+            "document_type": "syllabus",
+            "title": "Demo Course 教学大纲",
+            "source": {"sha256": "b" * 64},
+            "course_goals": ["掌握核心知识"],
+            "prerequisites": [],
+            "content_units": [{
+                "id": "unit-core",
+                "title": "核心知识",
+                "order": 0,
+                "hours": 4.0,
+                "topics": [],
+                "requirement_ids": ["req-core"],
+                "key_points": [],
+                "difficult_points": [],
+                "source": {},
+            }],
+            "requirements": [{
+                "id": "req-core",
+                "text": "掌握核心知识",
+                "level": "master",
+                "level_label": "掌握",
+                "kind": "knowledge",
+                "priority": "core",
+                "unit_id": "unit-core",
+                "source": {},
+            }],
+            "experiments": [],
+            "warnings": [],
+            "summary": {},
+        }
+        _write_json(curriculum_root / "requirements.json", requirements)
+        (curriculum_root / "full.md").write_text("# 教学大纲\n", encoding="utf-8")
+        plan_path = self.fixture.course_root / "curriculum-guided-plan.json"
+        _write_json(plan_path, {
+            "schema_version": "curriculum-guided-plan/1.0",
+            "course": {"id": COURSE_ID, "title": "Demo Course"},
+            "sources": {
+                "textbook_document_id": textbook_id,
+                "curriculum_document_id": curriculum_id,
+            },
+            "clusters": [{
+                "id": "cluster-core",
+                "title": "核心知识",
+                "order": 0,
+                "pointIds": [point["id"] for point in self.fixture.index_points],
+                "requirementRefs": ["req-core"],
+                "reason": "按培养方案核心要求组织。",
+            }],
+            "points": plan_points,
+        })
+        _write_json(self.fixture.session_root / "curriculum-guided-binding.json", {
+            "schema_version": "curriculum-guided-binding/1.0",
+            "textbook_document_id": textbook_id,
+            "curriculum_document_id": curriculum_id,
+            "course_id": COURSE_ID,
+            "title": "Demo Course",
+            "textbook_sha256": "c" * 64,
+            "curriculum_sha256": "d" * 64,
+            "guidance_sha256": "e" * 64,
+            "textbook_outline_path": f"curriculum-guided-input/textbook/{textbook_id}/outline.json",
+            "textbook_material_path": f"curriculum-guided-input/textbook/{textbook_id}/material.json",
+            "textbook_markdown_path": f"curriculum-guided-input/textbook/{textbook_id}/full.md",
+            "curriculum_requirements_path": f"curriculum-guided-input/curriculum/{curriculum_id}/requirements.json",
+            "curriculum_markdown_path": f"curriculum-guided-input/curriculum/{curriculum_id}/full.md",
+            "output_plan_path": f"pipeline/{COURSE_ID}/curriculum-guided-plan.json",
+            "textbook_point_count": len(source_points),
+            "requirement_count": 1,
+        })
+        manifest = _read_json(
+            self.fixture.content_root / "generation" / "manifest.json"
+        )
+        manifest["generation"].update({
+            "evidenceMode": "textbook-grounded",
+            "guidanceMode": "curriculum-guided",
+            "contentContract": "textbook-content/2.0",
+        })
+        manifest["sources"] = [
+            {
+                "id": "src-textbook",
+                "type": "textbook",
+                "title": "Demo Course",
+                "locator": f"curriculum-guided-input/textbook/{textbook_id}/full.md",
+                "accessedAt": "2026-07-24",
+            },
+            {
+                "id": "src-curriculum",
+                "type": "curriculum",
+                "title": "Demo Course 教学大纲",
+                "locator": f"curriculum-guided-input/curriculum/{curriculum_id}/full.md",
+                "accessedAt": "2026-07-24",
+            },
+        ]
+        manifest["pointEvidence"] = evidence
+        _write_json(
+            self.fixture.content_root / "generation" / "manifest.json",
+            manifest,
+        )
+
     def write_textbook_graph(self, *, wrong_point_id: str | None = None) -> None:
         """Write a graph whose clusters mirror the bound textbook chapters.
 
@@ -481,6 +666,50 @@ class CourseReviewStoreTest(unittest.TestCase):
             approval["textbook_structure_sha256"],
             resource["textbook_structure_sha256"],
         )
+
+    def test_curriculum_guided_g2_updates_plan_and_cross_language_hash(self):
+        self.write_curriculum_guided_plan()
+        resource = self.pending("knowledge-points")
+        self.assertRegex(resource["curriculum_guidance_sha256"], r"^[a-f0-9]{64}$")
+        operations = [
+            {"op": "delete", "point_id": "beta"},
+            {"op": "add", "point": {"id": "delta", "title": "Delta"}},
+        ]
+
+        result = self.submit(resource, operations)
+
+        self.assertEqual(result["review"]["status"], "resolved")
+        plan = _read_json(self.fixture.course_root / "curriculum-guided-plan.json")
+        self.assertEqual(
+            [point["id"] for point in plan["points"]],
+            ["alpha", "gamma", "delta"],
+        )
+        self.assertTrue(any(
+            item["sourcePointId"] == "beta"
+            for item in plan["omittedSourcePoints"]
+        ))
+        self.assertEqual(plan["points"][-1]["reviewAdjustment"], "user-add")
+        approval = _read_json(
+            self.fixture.approval_root / "knowledge-points.json"
+        )
+        completed = subprocess.run(
+            [
+                "node",
+                str(PROJECT_ROOT / "scripts" / "validate-curriculum-guided-plan.mjs"),
+                "plan",
+                COURSE_ID,
+            ],
+            cwd=self.fixture.session_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        node_hash = json.loads(completed.stdout)["curriculumGuidanceSha256"]
+        self.assertEqual(approval["curriculum_guidance_sha256"], node_hash)
 
     def test_textbook_g2_rejects_outline_index_identity_mismatch(self):
         self.write_textbook_outline()

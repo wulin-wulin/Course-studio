@@ -23,6 +23,12 @@ from .binding import (
     bind_textbook_workspace,
     course_id_for_document,
 )
+from .curriculum_binding import (
+    CURRICULUM_GUIDED_BINDING_SCHEMA,
+    CurriculumGuidedBinding,
+    CurriculumGuidedBindingError,
+    bind_curriculum_guided_workspace,
+)
 from .structure import (
     TextbookStructureIntegrityError,
     assert_textbook_source_unchanged,
@@ -54,6 +60,10 @@ __all__ = [
     "TextbookBindingError",
     "bind_textbook_workspace",
     "course_id_for_document",
+    "CURRICULUM_GUIDED_BINDING_SCHEMA",
+    "CurriculumGuidedBinding",
+    "CurriculumGuidedBindingError",
+    "bind_curriculum_guided_workspace",
     "TextbookStructureIntegrityError",
     "assert_textbook_source_unchanged",
     "MATERIAL_SCHEMA",

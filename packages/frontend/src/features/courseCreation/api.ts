@@ -14,6 +14,22 @@ export type TextbookDocumentMetadata = {
   outlineSummary?: DocumentOutlineSummary;
 };
 
+export type CurriculumRequirementsSummary = {
+  title?: string;
+  unitCount?: number;
+  requirementCount?: number;
+};
+
+export type CurriculumDocumentMetadata = {
+  id: string;
+  filename: string;
+  contentType?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  status?: string;
+  requirementsSummary?: CurriculumRequirementsSummary;
+};
+
 export type TextbookOutlinePoint = {
   id: string;
   title: string;
@@ -94,6 +110,45 @@ export async function fetchTextbookOutline(
   return parseTextbookOutline(payload);
 }
 
+export async function uploadCurriculumDocument(
+  file: File,
+  signal?: AbortSignal,
+): Promise<CurriculumDocumentMetadata> {
+  const body = new FormData();
+  body.append("file", file, file.name);
+  const response = await fetch("/api/curricula", {
+    method: "POST",
+    body,
+    signal,
+  });
+  const payload = await readResponsePayload(response);
+  if (!response.ok) {
+    throw makeApiError(response.status, payload, "培养方案上传失败");
+  }
+  return parseCurriculumDocumentMetadata(payload, {
+    fallbackFilename: file.name,
+  });
+}
+
+export async function parseCurriculumDocument(
+  documentId: string,
+  fallbackFilename = "",
+  signal?: AbortSignal,
+): Promise<CurriculumDocumentMetadata> {
+  const response = await fetch(
+    `/api/curricula/${encodeURIComponent(documentId)}/parse`,
+    { method: "POST", signal },
+  );
+  const payload = await readResponsePayload(response);
+  if (!response.ok) {
+    throw makeApiError(response.status, payload, "培养方案解析失败");
+  }
+  return parseCurriculumDocumentMetadata(payload, {
+    fallbackId: documentId,
+    fallbackFilename,
+  });
+}
+
 function parseDocumentMetadata(
   payload: unknown,
   fallback: { fallbackId?: string; fallbackFilename?: string } = {},
@@ -148,6 +203,65 @@ function parseOutlineSummary(value: unknown): DocumentOutlineSummary | null {
         value.point_count ??
         value.pointCount ??
         value.points,
+    ),
+  };
+  return Object.keys(summary).length > 0 ? summary : null;
+}
+
+function parseCurriculumDocumentMetadata(
+  payload: unknown,
+  fallback: { fallbackId?: string; fallbackFilename?: string } = {},
+): CurriculumDocumentMetadata {
+  if (!isRecord(payload)) {
+    throw new DocumentApiError("培养方案服务返回了无效响应");
+  }
+  const candidate = isRecord(payload.document) ? payload.document : payload;
+  const id =
+    readString(candidate, "id", "document_id") ||
+    fallback.fallbackId?.trim() ||
+    "";
+  const filename =
+    readString(candidate, "filename", "original_filename", "name") ||
+    fallback.fallbackFilename?.trim() ||
+    "";
+  if (!id || !filename) {
+    throw new DocumentApiError("培养方案响应缺少 id 或 filename");
+  }
+  const summaryValue =
+    candidate.requirements_summary ??
+    candidate.requirementsSummary ??
+    candidate.summary ??
+    payload.requirements_summary ??
+    payload.requirementsSummary ??
+    payload.summary;
+  const requirementsSummary = parseCurriculumRequirementsSummary(summaryValue);
+  return {
+    id,
+    filename,
+    ...optionalString(
+      "contentType",
+      candidate.content_type ?? candidate.contentType,
+    ),
+    ...optionalNumber("sizeBytes", candidate.size_bytes ?? candidate.sizeBytes),
+    ...optionalString("sha256", candidate.sha256),
+    ...optionalString("status", candidate.status),
+    ...(requirementsSummary ? { requirementsSummary } : {}),
+  };
+}
+
+function parseCurriculumRequirementsSummary(
+  value: unknown,
+): CurriculumRequirementsSummary | null {
+  if (!isRecord(value)) return null;
+  const summary: CurriculumRequirementsSummary = {
+    ...optionalString("title", value.title ?? value.course_title),
+    ...optionalNumber(
+      "unitCount",
+      value.unit_count ?? value.unitCount ?? value.content_unit_count,
+    ),
+    ...optionalNumber(
+      "requirementCount",
+      value.requirement_count ?? value.requirementCount ?? value.requirements,
     ),
   };
   return Object.keys(summary).length > 0 ? summary : null;

@@ -33,8 +33,10 @@ from ..services.courses import (
 from ..services.courses.generation import CourseGenerationObserver
 from ..services.conversations import get_conversation_store
 from ..services.documents import (
+    CurriculumGuidedBinding,
     DocumentError,
     TextbookBinding,
+    bind_curriculum_guided_workspace,
     bind_textbook_workspace,
 )
 from ..services.opencode import client as opencode_client
@@ -482,11 +484,11 @@ def _request_history_content(
 
 def _course_creation_prompt(
     message: str,
-    textbook_binding: TextbookBinding | None = None,
+    source_binding: TextbookBinding | CurriculumGuidedBinding | None = None,
 ) -> str:
-    textbook_context = (
-        f"\n\n{textbook_binding.prompt_context()}\n"
-        if textbook_binding is not None
+    source_context = (
+        f"\n\n{source_binding.prompt_context()}\n"
+        if source_binding is not None
         else ""
     )
     return (
@@ -500,7 +502,7 @@ def _course_creation_prompt(
         "但必须通过全部自动结构、构建、安全和完整性校验。不要在 G6 审核通过、用户明确确认发布"
         "且 G7 校验通过前生成 courses 下的正式课程。"
         "不得生成或继续使用 v1 中间产物。"
-        f"{textbook_context}"
+        f"{source_context}"
     )
 
 
@@ -779,8 +781,11 @@ async def _run_agent_turn_opencode_unlocked(
     workflow = _request_workflow(payload)
     creating_course = workflow == "course-create"
     readonly = mode == "chat"
+    source_mode = str(payload.get("source_mode") or "").strip().lower()
     textbook_document_id = str(payload.get("textbook_document_id") or "").strip()
+    curriculum_document_id = str(payload.get("curriculum_document_id") or "").strip()
     textbook_binding: TextbookBinding | None = None
+    curriculum_guided_binding: CurriculumGuidedBinding | None = None
     resume_response: dict[str, Any] | None = None
     review_store = get_course_review_store() if creating_course else None
 
@@ -995,12 +1000,56 @@ async def _run_agent_turn_opencode_unlocked(
     # a document id or a previous PDF turn left a durable binding record.
     session_root_value = getattr(workspace, "path", None)
     binding_exists = False
+    curriculum_binding_exists = False
     if session_root_value:
         try:
             binding_exists = (Path(session_root_value).parent / "textbook-binding.json").is_file()
+            curriculum_binding_exists = (
+                Path(session_root_value).parent / "curriculum-guided-binding.json"
+            ).is_file()
         except (TypeError, OSError):
             binding_exists = False
-    if creating_course and (textbook_document_id or binding_exists):
+            curriculum_binding_exists = False
+    if source_mode not in {"", "textbook", "textbook-curriculum"}:
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "message": f"不支持的课程来源模式：{source_mode}",
+                "conversation_id": conversation_id,
+            },
+        })
+        return
+    if source_mode == "textbook" and curriculum_document_id:
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "message": "仅教材模式不能同时提供培养方案 document_id",
+                "conversation_id": conversation_id,
+            },
+        })
+        return
+    guided_mode = bool(
+        source_mode == "textbook-curriculum"
+        or curriculum_document_id
+        or curriculum_binding_exists
+    )
+    if creating_course and curriculum_binding_exists and source_mode == "textbook":
+        await websocket.send_json({
+            "type": "agent_error",
+            "payload": {
+                "message": "本课程会话已绑定培养方案辅助模式，不能中途切换为仅教材模式",
+                "conversation_id": conversation_id,
+            },
+        })
+        return
+    if creating_course and (
+        guided_mode
+        or
+        textbook_document_id
+        or curriculum_document_id
+        or binding_exists
+        or curriculum_binding_exists
+    ):
         if not session_root_value:
             await websocket.send_json({
                 "type": "agent_error",
@@ -1020,16 +1069,28 @@ async def _run_agent_turn_opencode_unlocked(
             active_session["id"] = None
             return
         try:
-            textbook_binding = await asyncio.to_thread(
-                bind_textbook_workspace,
-                Path(session_root_value).parent,
-                document_id=textbook_document_id or None,
-            )
+            if guided_mode:
+                curriculum_guided_binding = await asyncio.to_thread(
+                    bind_curriculum_guided_workspace,
+                    Path(session_root_value).parent,
+                    textbook_document_id=textbook_document_id or None,
+                    curriculum_document_id=curriculum_document_id or None,
+                )
+                if curriculum_guided_binding is None:
+                    raise DocumentError(
+                        "培养方案辅助模式首次创建必须同时选择教材和培养方案"
+                    )
+            else:
+                textbook_binding = await asyncio.to_thread(
+                    bind_textbook_workspace,
+                    Path(session_root_value).parent,
+                    document_id=textbook_document_id or None,
+                )
         except DocumentError as exc:
             await websocket.send_json({
                 "type": "agent_error",
                 "payload": {
-                    "message": f"教材绑定失败：{exc}",
+                    "message": f"课程来源绑定失败：{exc}",
                     "conversation_id": conversation_id,
                 },
             })
@@ -1089,7 +1150,13 @@ async def _run_agent_turn_opencode_unlocked(
             str(resume_response["review"].get("course_id") or "")
             if resume_response is not None
             else ""
-        ) or (textbook_binding.course_id if textbook_binding is not None else "")
+        ) or (
+            curriculum_guided_binding.course_id
+            if curriculum_guided_binding is not None
+            else textbook_binding.course_id
+            if textbook_binding is not None
+            else ""
+        )
         try:
             if identity_course_id:
                 identity_reviewed = await asyncio.to_thread(
@@ -1126,7 +1193,18 @@ async def _run_agent_turn_opencode_unlocked(
         textbook_course = bool(
             textbook_document_id or binding_exists or textbook_binding is not None
         )
-        if textbook_course:
+        curriculum_guided_course = bool(
+            guided_mode
+            or curriculum_binding_exists
+            or curriculum_guided_binding is not None
+        )
+        if curriculum_guided_course:
+            course_agent_name = (
+                "curriculum-guided-course-creator"
+                if identity_reviewed
+                else "curriculum-guided-outline-creator"
+            )
+        elif textbook_course:
             course_agent_name = (
                 "textbook-course-creator"
                 if identity_reviewed
@@ -1272,7 +1350,10 @@ async def _run_agent_turn_opencode_unlocked(
     if readonly:
         prompt = _chat_prompt(message) if message else "请只读分析上传内容并回答问题。"
     elif creating_course:
-        prompt = _course_creation_prompt(message, textbook_binding)
+        prompt = _course_creation_prompt(
+            message,
+            curriculum_guided_binding or textbook_binding,
+        )
     else:
         prompt = _agent_prompt(message) if message else "请根据上传内容维护课程知识数据。"
     try:

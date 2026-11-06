@@ -23,6 +23,7 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
       "run-course-pipeline-step.mjs",
       "publish-course-pipeline.mjs",
       "validate-textbook-outline.mjs",
+      "validate-curriculum-guided-plan.mjs",
     ]) {
       fs.writeFileSync(path.join(toolsRoot, script), "// test fixture\n");
     }
@@ -81,6 +82,31 @@ test("course_pipeline enforces agent actions and fixed no-shell argv", () => {
         context("course-outline-creator"),
       )
       assert.deepEqual(calls.at(-1).argv.slice(-2), ["manifest", "demo-course"])
+
+      await definition.execute(
+        { action: "sync-curriculum-guided-manifest", courseId: "demo-course" },
+        context("curriculum-guided-outline-creator"),
+      )
+      assert.deepEqual(calls.at(-1).argv.slice(-2), ["manifest", "demo-course"])
+      await definition.execute(
+        { action: "validate-curriculum-guided-plan", courseId: "demo-course" },
+        context("curriculum-guided-course-creator"),
+      )
+      assert.deepEqual(calls.at(-1).argv.slice(-2), ["plan", "demo-course"])
+      for (const action of [
+        "sync-textbook-manifest",
+        "validate-textbook-outline",
+        "validate-textbook-graph",
+        "sync-curriculum-guided-manifest",
+      ]) {
+        await assert.rejects(
+          definition.execute(
+            { action, courseId: "demo-course" },
+            context("curriculum-guided-course-creator"),
+          ),
+          /无权执行/,
+        )
+      }
 
       await definition.execute(
         { action: "validate-textbook-outline", courseId: "demo-course" },

@@ -6,6 +6,7 @@ import {
   BookPlus,
   Bot,
   Brain,
+  BookOpenCheck,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -59,12 +60,17 @@ import {
 } from "@/features/reviews/resumeDelivery";
 import {
   COURSE_CREATION_SETUP_QUESTION,
+  prepareCurriculumCourseCreationRequest,
   prepareCourseCreationRequest,
   prepareMarkdownCourseCreationRequest,
   preparePdfCourseCreationRequest,
 } from "@/features/courseCreation/setup";
 import { PdfCourseCreationForm } from "@/features/courseCreation/PdfCourseCreationForm";
-import type { TextbookDocumentMetadata } from "@/features/courseCreation/api";
+import { CurriculumCourseCreationForm } from "@/features/courseCreation/CurriculumCourseCreationForm";
+import type {
+  CurriculumDocumentMetadata,
+  TextbookDocumentMetadata,
+} from "@/features/courseCreation/api";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ImageAttachments } from "./ImageAttachments";
 import { MarkdownContent } from "./MarkdownContent";
@@ -91,8 +97,22 @@ type AgentRunStatus = {
 
 type ConnectionState = "connecting" | "connected" | "disconnected";
 type AgentWorkflow = "default" | "course-create";
-type CourseCreationSource = "topic" | "pdf";
+type CourseCreationSource = "topic" | "textbook" | "textbook-curriculum";
 type TextbookUploadFormat = "all" | "pdf" | "markdown";
+
+type SubmitAgentRequest = {
+  conversationId: string;
+  message: string;
+  images?: string[];
+  workflow: AgentWorkflow;
+  displayContent?: string;
+  replaceEntries?: boolean;
+  reviewResumeId?: string;
+  modelOverride?: string;
+  textbookDocumentId?: string;
+  curriculumDocumentId?: string;
+  sourceMode?: "textbook-curriculum";
+};
 
 type AgentQuestionOption = {
   label: string;
@@ -739,17 +759,19 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     return () => window.clearInterval(timer);
   }, [isRunning]);
 
-  const submitRequest = useCallback((
-    conversationId: string,
-    message: string,
-    requestImages: string[],
-    requestWorkflow: AgentWorkflow,
-    displayContent?: string,
+  const submitRequest = useCallback(({
+    conversationId,
+    message,
+    images: requestImages = [],
+    workflow: requestWorkflow,
+    displayContent,
     replaceEntries = false,
-    reviewResumeId?: string,
-    modelOverride?: string,
-    textbookDocumentId?: string,
-  ) => {
+    reviewResumeId,
+    modelOverride,
+    textbookDocumentId,
+    curriculumDocumentId,
+    sourceMode,
+  }: SubmitAgentRequest) => {
     const requestMode: ChatMode =
       requestWorkflow === "course-create" ? "agent" : mode;
     if (requestWorkflow === "course-create") {
@@ -793,6 +815,10 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
           ...(textbookDocumentId
             ? { textbook_document_id: textbookDocumentId }
             : {}),
+          ...(curriculumDocumentId
+            ? { curriculum_document_id: curriculumDocumentId }
+            : {}),
+          ...(sourceMode ? { source_mode: sourceMode } : {}),
         },
       })
     );
@@ -834,21 +860,18 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     modeRef.current = "agent";
     setWorkflow("course-create");
     workflowRef.current = "course-create";
-    submitRequest(
-      normalizedId,
-      [
+    submitRequest({
+      conversationId: normalizedId,
+      message: [
         "继续之前中断的课程创建流程。",
         "必须使用 knowledge-pipeline-orchestrator 的 resume 模式：读取当前会话的 pipeline、审核回执和已生成文件，",
         "通过固定校验 action 定位最早未完成 Gate；复用所有已通过的产物，只修复或继续未完成阶段。",
         "如果 G0 课程信息仍不完整，请直接询问我缺少的信息。",
       ].join(""),
-      [],
-      "course-create",
-      "继续创建课程",
-      false,
-      undefined,
-      conversation.model,
-    );
+      workflow: "course-create",
+      displayContent: "继续创建课程",
+      modelOverride: conversation.model,
+    });
   }, [
     isRunning,
     openHistoricalConversation,
@@ -900,15 +923,13 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     workflowRef.current = "course-create";
     setPendingReview(null);
     useCourseGenerationStore.getState().resumeLive(request.conversationId);
-    submitRequest(
-      request.conversationId,
-      request.resumeMessage,
-      [],
-      "course-create",
-      request.displayContent,
-      false,
-      request.reviewId,
-    );
+    submitRequest({
+      conversationId: request.conversationId,
+      message: request.resumeMessage,
+      workflow: "course-create",
+      displayContent: request.displayContent,
+      reviewResumeId: request.reviewId,
+    });
   }, [isRunning, setActiveConversation, setMode, submitRequest]);
 
   const reconcilePendingReviewResume = useCallback(async () => {
@@ -1028,7 +1049,12 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       lastActiveConversationIdRef.current = conversationId;
     }
 
-    submitRequest(conversationId, message, images, workflow);
+    submitRequest({
+      conversationId,
+      message,
+      images,
+      workflow,
+    });
     setInput("");
     setImages([]);
   }, [
@@ -1060,8 +1086,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     setModeInfoOpen(false);
     setCourseDeleteOpen(false);
     setCourseCreationSetupError("");
-    setCourseCreationSource("pdf");
+    setCourseCreationSource("textbook");
     setTextbookUploadFormat("pdf");
+    setCourseCreationSetupOpen(true);
+    stickToBottomRef.current = true;
+  }, [isRunning, mode, workflow]);
+
+  const startCurriculumCourseCreation = useCallback(() => {
+    if (mode !== "agent" || isRunning || workflow === "course-create") return;
+    setHistoryOpen(false);
+    setModeInfoOpen(false);
+    setCourseDeleteOpen(false);
+    setCourseCreationSetupError("");
+    setCourseCreationSource("textbook-curriculum");
+    setTextbookUploadFormat("all");
     setCourseCreationSetupOpen(true);
     stickToBottomRef.current = true;
   }, [isRunning, mode, workflow]);
@@ -1070,6 +1108,8 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     message: string;
     displayContent: string;
     textbookDocumentId?: string;
+    curriculumDocumentId?: string;
+    sourceMode?: "textbook-curriculum";
   }) => {
     if (
       !courseCreationSetupOpen ||
@@ -1093,17 +1133,16 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     workflowRef.current = "course-create";
     startLiveGeneration(conversationId);
     window.location.hash = `/generation/${encodeURIComponent(conversationId)}`;
-    submitRequest(
+    submitRequest({
       conversationId,
-      request.message,
-      [],
-      "course-create",
-      request.displayContent,
-      true,
-      undefined,
-      undefined,
-      request.textbookDocumentId,
-    );
+      message: request.message,
+      workflow: "course-create",
+      displayContent: request.displayContent,
+      replaceEntries: true,
+      textbookDocumentId: request.textbookDocumentId,
+      curriculumDocumentId: request.curriculumDocumentId,
+      sourceMode: request.sourceMode,
+    });
   }, [
     courseCreationSetupOpen,
     createConversation,
@@ -1140,6 +1179,24 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
       textbookDocumentId: request.documentId,
     });
   }, [launchCourseCreation, textbookUploadFormat]);
+
+  const confirmCurriculumCourseCreation = useCallback((
+    textbook: TextbookDocumentMetadata,
+    curriculum: CurriculumDocumentMetadata,
+  ) => {
+    const request = prepareCurriculumCourseCreationRequest(textbook, curriculum);
+    if (!request) {
+      setCourseCreationSetupError("教材或培养方案信息不完整，请重新上传文件。");
+      return;
+    }
+    launchCourseCreation({
+      message: request.message,
+      displayContent: request.displayContent,
+      sourceMode: request.sourceMode,
+      textbookDocumentId: request.textbookDocumentId,
+      curriculumDocumentId: request.curriculumDocumentId,
+    });
+  }, [launchCourseCreation]);
 
   const cancelCourseCreationSetup = useCallback(() => {
     setCourseCreationSetupOpen(false);
@@ -1597,7 +1654,7 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
         ) : courseCreationSetupOpen ? (
           <div className="space-y-2">
             <div
-              className="grid grid-cols-2 rounded-xl border border-border bg-cream/75 p-1"
+              className="grid grid-cols-3 rounded-xl border border-border bg-cream/75 p-1"
               role="tablist"
               aria-label="课程创建方式"
             >
@@ -1622,20 +1679,38 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
               <button
                 type="button"
                 role="tab"
-                aria-selected={courseCreationSource === "pdf"}
+                aria-selected={courseCreationSource === "textbook"}
                 onClick={() => {
-                  setCourseCreationSource("pdf");
+                  setCourseCreationSource("textbook");
                   setTextbookUploadFormat("all");
                   setCourseCreationSetupError("");
                 }}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  courseCreationSource === "pdf"
+                  courseCreationSource === "textbook"
                     ? "bg-surface text-primary-text shadow-sm"
                     : "text-text-secondary hover:text-text-primary"
                 }`}
               >
                 <FileText className="h-3.5 w-3.5" />
-                上传教材文件
+                仅教材
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={courseCreationSource === "textbook-curriculum"}
+                onClick={() => {
+                  setCourseCreationSource("textbook-curriculum");
+                  setTextbookUploadFormat("all");
+                  setCourseCreationSetupError("");
+                }}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                  courseCreationSource === "textbook-curriculum"
+                    ? "bg-surface text-primary-text shadow-sm"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                <BookOpenCheck className="h-3.5 w-3.5" />
+                教材 + 大纲
               </button>
             </div>
             {courseCreationSource === "topic" ? (
@@ -1645,6 +1720,13 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                 error={courseCreationSetupError}
                 onSubmit={confirmCourseCreation}
                 onReject={cancelCourseCreationSetup}
+              />
+            ) : courseCreationSource === "textbook-curriculum" ? (
+              <CurriculumCourseCreationForm
+                disabled={isRunning}
+                externalError={courseCreationSetupError}
+                onReady={confirmCurriculumCourseCreation}
+                onCancel={cancelCourseCreationSetup}
               />
             ) : (
               <PdfCourseCreationForm
@@ -1750,6 +1832,20 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
                   >
                     <FileText className="h-3.5 w-3.5" />
                     PDF 生成图谱
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startCurriculumCourseCreation}
+                    disabled={isRunning || workflow === "course-create" || courseCreationSetupOpen}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-primary-text transition-colors hover:border-sky-300 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      workflow === "course-create"
+                        ? "当前对话正在创建课程"
+                        : "上传教材和培养方案或教学大纲，生成经过要求校准的知识点清单"
+                    }
+                  >
+                    <BookOpenCheck className="h-3.5 w-3.5" />
+                    教材 + 大纲
                   </button>
                   <button
                     type="button"

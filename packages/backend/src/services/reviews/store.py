@@ -928,6 +928,14 @@ class CourseReviewStore:
                 self._resource_path(session_root, course_id, "knowledge-graph"),
             }
         )
+        if (
+            kind == "knowledge-points"
+            and (
+                os.path.lexists(paths["curriculum_guided_plan"])
+                or os.path.lexists(session_root / "curriculum-guided-binding.json")
+            )
+        ):
+            expected_paths.add(paths["curriculum_guided_plan"])
         expected_relatives = {
             self._within(session_root, path).relative_to(session_root).as_posix()
             for path in expected_paths
@@ -1155,6 +1163,7 @@ class CourseReviewStore:
             "points": content_root / "src" / "data" / "points",
             "graph": course_root / "clustered-graph.json",
             "textbook_outline": course_root / "textbook-outline.json",
+            "curriculum_guided_plan": course_root / "curriculum-guided-plan.json",
         }
 
     @staticmethod
@@ -1284,6 +1293,116 @@ class CourseReviewStore:
             # source snapshot so a concurrent chapter edit cannot be hidden by
             # an otherwise unchanged index/manifest pair.
             originals[paths["textbook_outline"]] = outline_bytes
+        guided_binding_path = session_root / "curriculum-guided-binding.json"
+        guided_plan_bytes = _capture_bytes(paths["curriculum_guided_plan"])
+        guided_binding_bytes = _capture_bytes(guided_binding_path)
+        if guided_plan_bytes is not None or guided_binding_bytes is not None:
+            if guided_plan_bytes is None or guided_binding_bytes is None:
+                raise CourseReviewValidationError(
+                    "培养方案辅助绑定与调整计划必须同时存在"
+                )
+            if outline_bytes is not None:
+                raise CourseReviewValidationError(
+                    "培养方案辅助模式不得同时使用 textbook-outline.json"
+                )
+            binding = _parse_json_bytes(
+                guided_binding_bytes,
+                "培养方案辅助绑定",
+                guided_binding_path,
+            )
+            plan = _parse_json_bytes(
+                guided_plan_bytes,
+                "培养方案调整计划",
+                paths["curriculum_guided_plan"],
+            )
+            if (
+                binding.get("schema_version") != "curriculum-guided-binding/1.0"
+                or binding.get("course_id") != course_id
+                or binding.get("output_plan_path")
+                != f"pipeline/{course_id}/curriculum-guided-plan.json"
+                or plan.get("schema_version") != "curriculum-guided-plan/1.0"
+                or (plan.get("course") or {}).get("id") != course_id
+                or (plan.get("sources") or {}).get("textbook_document_id")
+                != binding.get("textbook_document_id")
+                or (plan.get("sources") or {}).get("curriculum_document_id")
+                != binding.get("curriculum_document_id")
+            ):
+                raise CourseReviewValidationError(
+                    "培养方案辅助绑定、调整计划与课程不一致"
+                )
+            requirements_relative = str(
+                binding.get("curriculum_requirements_path") or ""
+            )
+            if not requirements_relative:
+                raise CourseReviewValidationError("培养方案辅助绑定缺少 requirements 路径")
+            requirements_path = self._within(
+                session_root,
+                session_root.joinpath(*requirements_relative.split("/")),
+            )
+            requirements_bytes, requirements = self._required_document(
+                requirements_path,
+                "培养方案要求",
+            )
+            plan_points = plan.get("points")
+            index_points = documents["index"].get("points")
+            if (
+                not isinstance(plan_points, list)
+                or not isinstance(index_points, list)
+                or _identity_payload(plan_points) != _identity_payload(index_points)
+            ):
+                raise CourseReviewValidationError(
+                    "培养方案调整计划必须与 index.points 的 ID、标题和顺序一致"
+                )
+            guidance_hash = _hash_json(
+                {
+                    "binding": {
+                        key: binding.get(key)
+                        for key in (
+                            "schema_version",
+                            "textbook_document_id",
+                            "curriculum_document_id",
+                            "course_id",
+                            "textbook_sha256",
+                            "curriculum_sha256",
+                            "guidance_sha256",
+                        )
+                    },
+                    "requirements_file_sha256": hashlib.sha256(
+                        requirements_bytes
+                    ).hexdigest(),
+                    "plan_file_sha256": hashlib.sha256(
+                        guided_plan_bytes
+                    ).hexdigest(),
+                    "identity": _identity_payload(index_points),
+                },
+                sort_keys=True,
+            )
+            documents["curriculum_guided_binding"] = binding
+            documents["curriculum_guided_plan"] = plan
+            documents["curriculum_requirements"] = requirements
+            documents["curriculum_guidance_sha256"] = guidance_hash
+            originals[guided_binding_path] = guided_binding_bytes
+            originals[paths["curriculum_guided_plan"]] = guided_plan_bytes
+            originals[requirements_path] = requirements_bytes
+            for field, label in (
+                ("textbook_outline_path", "教材输入结构"),
+                ("textbook_material_path", "教材材料索引"),
+                ("textbook_markdown_path", "教材 Markdown"),
+                ("curriculum_markdown_path", "培养方案 Markdown"),
+            ):
+                relative = str(binding.get(field) or "")
+                if not relative:
+                    raise CourseReviewValidationError(
+                        f"培养方案辅助绑定缺少{label}路径"
+                    )
+                input_path = self._within(
+                    session_root,
+                    session_root.joinpath(*relative.split("/")),
+                )
+                input_bytes = _capture_bytes(input_path)
+                if input_bytes is None:
+                    raise CourseReviewValidationError(f"缺少{label}：{input_path}")
+                originals[input_path] = input_bytes
         return documents, originals
 
     def _graph_source(
@@ -1326,6 +1445,23 @@ class CourseReviewStore:
                 documents["textbook_input_outline"] = input_outline
                 originals[input_path] = input_bytes
             originals[paths["textbook_outline"]] = outline_bytes
+        if (
+            os.path.lexists(session_root / "curriculum-guided-binding.json")
+            or os.path.lexists(paths["curriculum_guided_plan"])
+        ):
+            knowledge_documents, knowledge_originals = self._knowledge_source(
+                session_root,
+                course_id,
+            )
+            for key in (
+                "curriculum_guided_binding",
+                "curriculum_guided_plan",
+                "curriculum_requirements",
+                "curriculum_guidance_sha256",
+            ):
+                if key in knowledge_documents:
+                    documents[key] = knowledge_documents[key]
+            originals.update(knowledge_originals)
         graph_points = documents["graph"].get("points")
         if not isinstance(graph_points, list) or not all(
             isinstance(item, dict) for item in graph_points
@@ -1352,6 +1488,7 @@ class CourseReviewStore:
         kind: str,
         identity_sha256: str,
         textbook_structure_sha256: str | None = None,
+        curriculum_guidance_sha256: str | None = None,
         clusters_sha256: str | None = None,
         prerequisites_sha256: str | None = None,
         review_audit_sha256: str | None = None,
@@ -1393,6 +1530,14 @@ class CourseReviewStore:
             approval.get("textbook_structure_sha256") != textbook_structure_sha256
         ):
             return False
+        if curriculum_guidance_sha256 is not None and (
+            not _SHA256.fullmatch(
+                str(approval.get("curriculum_guidance_sha256") or "")
+            )
+            or approval.get("curriculum_guidance_sha256")
+            != curriculum_guidance_sha256
+        ):
+            return False
         if kind != "knowledge-graph":
             return True
         return bool(
@@ -1410,6 +1555,7 @@ class CourseReviewStore:
         course_id: str,
         identity_sha256: str,
         textbook_structure_sha256: str | None = None,
+        curriculum_guidance_sha256: str | None = None,
     ) -> dict[str, Any]:
         approval = _read_optional_json(
             self._approval_path(session_root, course_id, "knowledge-points")
@@ -1420,6 +1566,7 @@ class CourseReviewStore:
             kind="knowledge-points",
             identity_sha256=identity_sha256,
             textbook_structure_sha256=textbook_structure_sha256,
+            curriculum_guidance_sha256=curriculum_guidance_sha256,
         ):
             raise CourseReviewConflictError(
                 "知识点审核回执缺失或已经失效，不能开始依赖关系审核"
@@ -1432,12 +1579,14 @@ class CourseReviewStore:
         course_id: str,
         identity_sha256: str,
         textbook_structure_sha256: str | None = None,
+        curriculum_guidance_sha256: str | None = None,
     ) -> dict[str, Any]:
         approval = self._require_knowledge_approval(
             session_root,
             course_id,
             identity_sha256,
             textbook_structure_sha256,
+            curriculum_guidance_sha256,
         )
         if approval.get("resume_pending") is not False:
             raise CourseReviewConflictError(
@@ -1451,6 +1600,7 @@ class CourseReviewStore:
         course_id: str,
         identity_sha256: str,
         textbook_structure_sha256: str | None = None,
+        curriculum_guidance_sha256: str | None = None,
     ) -> dict[str, Any]:
         """Close a stale G2 resume once its durable G6 successor is submitted.
 
@@ -1466,6 +1616,7 @@ class CourseReviewStore:
             course_id,
             identity_sha256,
             textbook_structure_sha256,
+            curriculum_guidance_sha256,
         )
         if approval.get("resume_pending") is False:
             return approval
@@ -1500,6 +1651,11 @@ class CourseReviewStore:
                 textbook_structure_sha256 is not None
                 and resource.get("textbook_structure_sha256")
                 != textbook_structure_sha256
+            )
+            or (
+                curriculum_guidance_sha256 is not None
+                and resource.get("curriculum_guidance_sha256")
+                != curriculum_guidance_sha256
             )
         ):
             raise CourseReviewConflictError(
@@ -1599,6 +1755,11 @@ class CourseReviewStore:
         evidence_by_id = {
             str(item.get("pointId") or ""): item for item in evidence
         }
+        guided_plan_by_id = {
+            str(item.get("id") or ""): item
+            for item in (source.get("curriculum_guided_plan") or {}).get("points", [])
+            if isinstance(item, dict)
+        }
         issues_by_id: dict[str, list[dict[str, Any]]] = {}
         for issue in review_queue:
             if not isinstance(issue, dict):
@@ -1611,6 +1772,7 @@ class CourseReviewStore:
         for point in points:
             point_id = str(point["id"])
             point_evidence = evidence_by_id.get(point_id, {})
+            guided_point = guided_plan_by_id.get(point_id)
             public_points.append({
                 "id": point_id,
                 "title": str(point["title"]),
@@ -1622,6 +1784,17 @@ class CourseReviewStore:
                 "confidence": point_evidence.get("confidence"),
                 "scope_status": str(point_evidence.get("scopeStatus") or "needs-review"),
                 "issues": issues_by_id.get(point_id, []),
+                **(
+                    {
+                        "adjustment": str(guided_point.get("action") or ""),
+                        "coverage": str(guided_point.get("coverage") or ""),
+                        "requirement_refs": deepcopy(
+                            guided_point.get("requirementRefs") or []
+                        ),
+                    }
+                    if guided_point is not None
+                    else {}
+                ),
             })
 
         artifact_hash = _hash_json(
@@ -1638,6 +1811,15 @@ class CourseReviewStore:
                     if source.get("textbook_structure_sha256")
                     else {}
                 ),
+                **(
+                    {
+                        "curriculumGuidanceSha256": source[
+                            "curriculum_guidance_sha256"
+                        ]
+                    }
+                    if source.get("curriculum_guidance_sha256")
+                    else {}
+                ),
             },
             sort_keys=True,
         )
@@ -1649,6 +1831,15 @@ class CourseReviewStore:
                     source["textbook_structure_sha256"]
                 ),
             }
+        if source.get("curriculum_guided_plan") is not None:
+            textbook_fields.update({
+                "curriculum_guided_plan": deepcopy(
+                    source["curriculum_guided_plan"]
+                ),
+                "curriculum_guidance_sha256": str(
+                    source["curriculum_guidance_sha256"]
+                ),
+            })
         summary = {
             "total": len(public_points),
             "core": sum(item["scope_status"] == "core" for item in public_points),
@@ -1835,6 +2026,15 @@ class CourseReviewStore:
                     if source.get("textbook_structure_sha256")
                     else {}
                 ),
+                **(
+                    {
+                        "curriculumGuidanceSha256": source[
+                            "curriculum_guidance_sha256"
+                        ]
+                    }
+                    if source.get("curriculum_guidance_sha256")
+                    else {}
+                ),
             },
             sort_keys=True,
         )
@@ -1846,6 +2046,15 @@ class CourseReviewStore:
                     source["textbook_structure_sha256"]
                 ),
             }
+        if source.get("curriculum_guided_plan") is not None:
+            textbook_fields.update({
+                "curriculum_guided_plan": deepcopy(
+                    source["curriculum_guided_plan"]
+                ),
+                "curriculum_guidance_sha256": str(
+                    source["curriculum_guidance_sha256"]
+                ),
+            })
         snapshot.update(textbook_fields)
         return (
             snapshot,
@@ -1895,11 +2104,20 @@ class CourseReviewStore:
                 review_audit_sha256,
             ) = self._graph_snapshot(session_root, course_id)
             textbook_structure_sha256 = snapshot.get("textbook_structure_sha256")
+            curriculum_guidance_sha256 = snapshot.get(
+                "curriculum_guidance_sha256"
+            )
             self._require_knowledge_approval(
                 session_root,
                 course_id,
                 identity_sha256,
                 textbook_structure_sha256,
+                curriculum_guidance_sha256,
+            )
+
+        if kind == "knowledge-points":
+            curriculum_guidance_sha256 = snapshot.get(
+                "curriculum_guidance_sha256"
             )
 
         approval = _read_optional_json(self._approval_path(session_root, course_id, kind))
@@ -1909,6 +2127,7 @@ class CourseReviewStore:
             kind=kind,
             identity_sha256=identity_sha256,
             textbook_structure_sha256=textbook_structure_sha256,
+            curriculum_guidance_sha256=curriculum_guidance_sha256,
             clusters_sha256=clusters_sha256,
             prerequisites_sha256=prerequisites_sha256,
             review_audit_sha256=review_audit_sha256,
@@ -2300,6 +2519,11 @@ class CourseReviewStore:
             )
         index = deepcopy(source["index"])
         manifest = deepcopy(source["manifest"])
+        guided_plan = (
+            deepcopy(source["curriculum_guided_plan"])
+            if source.get("curriculum_guided_plan") is not None
+            else None
+        )
         points = index.get("points")
         evidence = manifest.get("pointEvidence")
         review_queue = manifest.get("reviewQueue")
@@ -2353,7 +2577,7 @@ class CourseReviewStore:
             raise CourseReviewValidationError("manifest.generation 必须是对象")
         evidence_mode = generation.get("evidenceMode")
         source_refs: list[str] = []
-        if evidence_mode == "researched" and additions:
+        if (evidence_mode == "researched" or guided_plan is not None) and additions:
             sources = manifest.get("sources")
             if not isinstance(sources, list):
                 raise CourseReviewValidationError("researched 模式的 manifest.sources 必须是数组")
@@ -2399,8 +2623,17 @@ class CourseReviewStore:
                 "title": title,
                 "kind": "concept",
                 "sourceRefs": source_refs,
-                "confidence": 0.6,
-                "scopeStatus": "core",
+                "confidence": 0.6 if guided_plan is None else 0.45,
+                "scopeStatus": "core" if guided_plan is None else "needs-review",
+                **(
+                    {
+                        "origin": "user",
+                        "coverage": "gap",
+                        "sourceSpans": [],
+                    }
+                    if guided_plan is not None
+                    else {}
+                ),
             })
         index["points"] = retained
         manifest["pointEvidence"] = retained_evidence
@@ -2409,7 +2642,128 @@ class CourseReviewStore:
             for item in review_queue
             if not isinstance(item, dict) or item.get("pointId") not in deleted
         ]
+        if guided_plan is not None:
+            for addition in additions:
+                manifest["reviewQueue"].append({
+                    "pointId": addition["id"],
+                    "term": addition["title"],
+                    "issue": "insufficient-evidence",
+                    "reason": "用户在 G2 知识点清单审核中新增，尚无教材证据或培养要求映射。",
+                    "suggestedAction": "已由本次结构化审核确认；后续正文只能明确标为模型补充。",
+                })
         generation["pointCount"] = len(retained)
+
+        if guided_plan is not None:
+            plan_points = guided_plan.get("points")
+            clusters = guided_plan.get("clusters")
+            if not isinstance(plan_points, list) or not isinstance(clusters, list):
+                raise CourseReviewValidationError("培养方案调整计划格式无效")
+            next_plan_points = [
+                deepcopy(point)
+                for point in plan_points
+                if isinstance(point, dict) and point.get("id") not in deleted
+            ]
+            deleted_source_point_ids = {
+                str(source_point_id)
+                for point in plan_points
+                if isinstance(point, dict) and point.get("id") in deleted
+                for source_point_id in (point.get("sourcePointIds") or [])
+                if isinstance(source_point_id, str) and source_point_id
+            }
+            next_clusters: list[dict[str, Any]] = []
+            for cluster in clusters:
+                if not isinstance(cluster, dict) or not isinstance(
+                    cluster.get("pointIds"), list
+                ):
+                    raise CourseReviewValidationError("培养方案计划知识簇格式无效")
+                updated_cluster = deepcopy(cluster)
+                updated_cluster["pointIds"] = [
+                    point_id
+                    for point_id in updated_cluster["pointIds"]
+                    if point_id not in deleted
+                ]
+                if updated_cluster["pointIds"]:
+                    next_clusters.append(updated_cluster)
+
+            user_cluster_id = "user-review-additions"
+            if additions:
+                user_cluster = next(
+                    (
+                        cluster
+                        for cluster in next_clusters
+                        if cluster.get("id") == user_cluster_id
+                    ),
+                    None,
+                )
+                if user_cluster is None:
+                    user_cluster = {
+                        "id": user_cluster_id,
+                        "title": "用户审核补充",
+                        "order": len(next_clusters),
+                        "pointIds": [],
+                        "requirementRefs": [],
+                        "reason": "收纳用户在 G2 结构化审核中直接补充的知识点。",
+                    }
+                    next_clusters.append(user_cluster)
+                for addition in additions:
+                    user_cluster["pointIds"].append(addition["id"])
+                    next_plan_points.append({
+                        "id": addition["id"],
+                        "title": addition["title"],
+                        "order": len(next_plan_points),
+                        "action": "add",
+                        "sourcePointIds": [],
+                        "sourceRefs": [],
+                        "requirementRefs": [],
+                        "coverage": "gap",
+                        "clusterIds": [user_cluster_id],
+                        "changeReason": "用户在 G2 知识点清单审核中新增。",
+                        "reviewAdjustment": "user-add",
+                    })
+            live_cluster_ids = {
+                str(cluster.get("id") or "") for cluster in next_clusters
+            }
+            for position, point in enumerate(next_plan_points):
+                point["order"] = position
+                point["clusterIds"] = [
+                    cluster_id
+                    for cluster_id in (point.get("clusterIds") or [])
+                    if cluster_id in live_cluster_ids
+                ]
+                if not point["clusterIds"]:
+                    raise CourseReviewValidationError(
+                        f"审核修改后知识点 {point.get('id')} 没有可用知识簇"
+                    )
+            for position, cluster in enumerate(next_clusters):
+                cluster["order"] = position
+            guided_plan["points"] = next_plan_points
+            guided_plan["clusters"] = next_clusters
+            referenced_source_point_ids = {
+                str(source_point_id)
+                for point in next_plan_points
+                for source_point_id in (point.get("sourcePointIds") or [])
+                if isinstance(source_point_id, str) and source_point_id
+            }
+            omissions = [
+                deepcopy(item)
+                for item in (guided_plan.get("omittedSourcePoints") or [])
+                if isinstance(item, dict)
+            ]
+            omitted_ids = {
+                str(item.get("sourcePointId") or "") for item in omissions
+            }
+            for source_point_id in sorted(
+                deleted_source_point_ids - referenced_source_point_ids
+            ):
+                if source_point_id in omitted_ids:
+                    continue
+                omissions.append({
+                    "sourcePointId": source_point_id,
+                    "reason": "用户在 G2 知识点清单审核中删除了对应最终知识点。",
+                    "reviewAdjustment": "user-delete",
+                })
+            if omissions:
+                guided_plan["omittedSourcePoints"] = omissions
 
         self._assert_source_unchanged(source_bytes)
         index_output = self._write_review_transaction_json_cas(
@@ -2430,6 +2784,15 @@ class CourseReviewStore:
             paths["index"]: index_output,
             paths["manifest"]: manifest_output,
         }
+        if guided_plan is not None:
+            plan_output = self._write_review_transaction_json_cas(
+                transaction_journal,
+                paths["curriculum_guided_plan"],
+                guided_plan,
+                expected=source_bytes[paths["curriculum_guided_plan"]],
+            )
+            transaction_writes[paths["curriculum_guided_plan"]] = plan_output
+            expected_outputs[paths["curriculum_guided_plan"]] = plan_output
         validator = (
             self.project_root
             / "skills"
@@ -2442,6 +2805,17 @@ class CourseReviewStore:
             cwd=session_root,
             label="知识点索引校验",
         )
+        if guided_plan is not None:
+            guided_validator = (
+                self.project_root
+                / "scripts"
+                / "validate-curriculum-guided-plan.mjs"
+            )
+            self._run_validator(
+                ["node", str(guided_validator), "plan", course_id],
+                cwd=session_root,
+                label="培养方案调整计划校验",
+            )
         self._assert_output_unchanged(expected_outputs)
         return expected_outputs
 
@@ -2805,6 +3179,8 @@ class CourseReviewStore:
                     prerequisite_approval,
                     resource_path,
                 ]
+                if source.get("curriculum_guided_plan") is not None:
+                    mutable_paths.append(paths["curriculum_guided_plan"])
             else:
                 source, source_bytes = self._graph_source(session_root, course_id)
                 (
@@ -2820,12 +3196,14 @@ class CourseReviewStore:
                     course_id,
                     current_identity_sha256,
                     graph_snapshot.get("textbook_structure_sha256"),
+                    graph_snapshot.get("curriculum_guidance_sha256"),
                 )
                 self._require_completed_knowledge_approval(
                     session_root,
                     course_id,
                     current_identity_sha256,
                     graph_snapshot.get("textbook_structure_sha256"),
+                    graph_snapshot.get("curriculum_guidance_sha256"),
                 )
                 mutable_paths = [paths["graph"], prerequisite_approval, resource_path]
             if current_artifact_hash != artifact_hash:
@@ -2857,6 +3235,15 @@ class CourseReviewStore:
                     if source.get("textbook_structure_sha256")
                     else {}
                 ),
+                **(
+                    {
+                        "curriculum_guidance_sha256": source[
+                            "curriculum_guidance_sha256"
+                        ]
+                    }
+                    if source.get("curriculum_guidance_sha256")
+                    else {}
+                ),
             }
             transaction_journal = self._begin_review_transaction(
                 session_root,
@@ -2885,6 +3272,10 @@ class CourseReviewStore:
                     if updated_source.get("textbook_structure_sha256"):
                         approval["textbook_structure_sha256"] = updated_source[
                             "textbook_structure_sha256"
+                        ]
+                    if updated_source.get("curriculum_guidance_sha256"):
+                        approval["curriculum_guidance_sha256"] = updated_source[
+                            "curriculum_guidance_sha256"
                         ]
                     self._assert_output_unchanged(signed_state)
                     approval_output = self._write_review_transaction_json_cas(

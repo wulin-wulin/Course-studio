@@ -117,7 +117,9 @@ LaTeX 命令本身仍必须双写反斜杠。worker 写完 point 与 animation r
 
 `point.schema.json` 是兼容联合契约。普通 `researched/model-only` 课程继续使用下面的栏目式
 v1；`textbook-grounded` 且 manifest 声明 `contentContract: "textbook-content/2.0"` 时，必须使用
-后文的教材内容块 v2。两种格式不能混写。
+后文的教材内容块 v2。唯一例外是同时声明 `guidanceMode: "curriculum-guided"` 且该点
+`pointEvidence.coverage: "gap"`：它没有教材证据，使用普通栏目式 v1，并明确作为模型补充。
+同一个知识点内两种格式不能混写。
 
 ### 普通课程 v1 必填字段
 
@@ -357,7 +359,8 @@ misconception | exercise | summary | note | other
 至少一个精确 `sourceSpan`。模型块必须用非空 `basedOnBlockIds` 引用同一点中排在它前面的块，
 并最终追溯到至少一个教材块；可选 `sourceSpans` 仅表示额外 grounding。每个教材点和受控扩展点
 都至少有一个教材上下文块和一个模型补充块。受控扩展点的教材块只描述锚点或上下文，新增结论
-必须写在模型块中。
+必须写在模型块中。培养方案辅助模式的 `gap` 点不属于受控教材扩展点：它不得伪造教材块或
+source span，按上文例外使用栏目式详情。
 
 `learningDesign` 出现时内部计划必须完整：outcome 和 module ID 在点内唯一，module 的
 `outcomeRefs` 不能悬空且合计覆盖全部 outcomes；每个 module 至少有一个 block。每个 block 的
@@ -455,7 +458,8 @@ locator 指向会话内绑定的 material/full.md 相对路径。`pointEvidence`
 | 字段 | 类型 | 规则 |
 |---|---|---|
 | `origin` | string | `textbook`、`llm-extension` 或 `user` |
-| `sourceSpans` | object[] | 教材点和扩展点都至少一项，作为 G3 点级证据计划 |
+| `sourceSpans` | object[] | 教材点和有教材锚点的扩展点至少一项；培养方案 `gap` 点必须为空数组 |
+| `coverage` | string | 培养方案辅助模式必填：`covered`、`partial` 或 `gap` |
 
 每个 source span 严格包含 `materialId`、`blockIds`、`headingPath`、`lineStart`、
 `lineEnd`、`assetRefs`、`excerptSha256`，有页码时可增加 `page`。行号与哈希定位原始
@@ -471,7 +475,8 @@ G3 不由主智能体在 task 提示中注入或转述 `pointEvidence`：`prepar
 教材原有点的 `sourceSpans` 按 `material.point_sources.section_ids` 的既定顺序完整覆盖所有
 section 及其正文行；只引用标题、只选择代表段落或打乱顺序均无效。所有非教材点
 （`llm-extension` 或 `user`）必须提供同章教材 `anchor_point_id`，并使用对应教材点内的非空
-相关子集，不得引用其他知识点的正文。详情中所有教材块
+相关子集，不得引用其他知识点的正文；培养方案辅助模式中明确标记 `coverage: "gap"` 的点除外，
+它没有 anchor/source span，使用普通栏目式模型补充详情。详情中所有教材块
 合计保持同样的完整覆盖；模型块不能代替教材块补登记遗漏的教材范围。
 
 v2 point 详情的顶层 `origin` 必须与 pointEvidence 一致；从 `content.blocks` 派生的 spans 必须

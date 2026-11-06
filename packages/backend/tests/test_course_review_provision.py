@@ -304,6 +304,8 @@ class CourseReviewProvisionTest(unittest.TestCase):
             "course-creator",
             "textbook-outline-creator",
             "textbook-course-creator",
+            "curriculum-guided-outline-creator",
+            "curriculum-guided-course-creator",
         ):
             configured = config["agent"][name]
             self.assertEqual(configured["mode"], "primary")
@@ -455,6 +457,19 @@ class CourseReviewProvisionTest(unittest.TestCase):
                 manifest_pattern,
                 config["agent"][name]["permission"]["edit"],
             )
+        guided_plan_pattern = "**/pipeline/*/curriculum-guided-plan.json"
+        self.assertEqual(
+            config["agent"]["curriculum-guided-outline-creator"]["permission"][
+                "edit"
+            ][guided_plan_pattern],
+            "allow",
+        )
+        self.assertNotIn(
+            guided_plan_pattern,
+            config["agent"]["curriculum-guided-course-creator"]["permission"][
+                "edit"
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -15,6 +15,8 @@ const ACTION_NAMES = [
   "review-knowledge-points",
   "review-knowledge-graph",
   "sync-textbook-manifest",
+  "sync-curriculum-guided-manifest",
+  "validate-curriculum-guided-plan",
   "validate-textbook-outline",
   "validate-textbook-graph",
   "validate-index",
@@ -73,6 +75,14 @@ const ACTIONS: Record<Action, Invocation> = {
     script: "validate-textbook-outline.mjs",
     args: (courseId) => ["manifest", courseId],
   },
+  "sync-curriculum-guided-manifest": {
+    script: "validate-curriculum-guided-plan.mjs",
+    args: (courseId) => ["manifest", courseId],
+  },
+  "validate-curriculum-guided-plan": {
+    script: "validate-curriculum-guided-plan.mjs",
+    args: (courseId) => ["plan", courseId],
+  },
   "validate-textbook-outline": {
     script: "validate-textbook-outline.mjs",
     args: (courseId) => ["outline", courseId],
@@ -114,12 +124,29 @@ const OUTLINE_ACTIONS = new Set<Action>([
   "validate-textbook-outline",
   "review-knowledge-points",
 ])
+const CURRICULUM_GUIDED_OUTLINE_ACTIONS = new Set<Action>([
+  "init",
+  "sync-curriculum-guided-manifest",
+  "validate-curriculum-guided-plan",
+  "validate-index",
+  "review-knowledge-points",
+])
 const CREATOR_ACTIONS = new Set<Action>(ACTION_NAMES)
+const CURRICULUM_GUIDED_CREATOR_ACTIONS = new Set<Action>(
+  ACTION_NAMES.filter((action) => ![
+    "sync-textbook-manifest",
+    "validate-textbook-outline",
+    "validate-textbook-graph",
+    "sync-curriculum-guided-manifest",
+  ].includes(action)),
+)
 const AGENT_ACTIONS: Readonly<Record<string, ReadonlySet<Action>>> = {
   "course-outline-creator": OUTLINE_ACTIONS,
   "course-creator": CREATOR_ACTIONS,
   "textbook-outline-creator": OUTLINE_ACTIONS,
   "textbook-course-creator": CREATOR_ACTIONS,
+  "curriculum-guided-outline-creator": CURRICULUM_GUIDED_OUTLINE_ACTIONS,
+  "curriculum-guided-course-creator": CURRICULUM_GUIDED_CREATOR_ACTIONS,
 }
 
 function pipelineStep(action: string): Invocation {

@@ -241,6 +241,7 @@ function sharedForbiddenPaths(workspace) {
     `pipeline/${workspace.courseId}/clustered-graph.json`,
     ...existingSessionFiles(workspace, [
       `pipeline/${workspace.courseId}/textbook-outline.json`,
+      `pipeline/${workspace.courseId}/curriculum-guided-plan.json`,
     ]),
     `${workspace.tasksRel}/registry.json`,
   ];
@@ -297,6 +298,63 @@ function isSafeDocumentId(value) {
 // input_markdown_path 必须指向 textbook-input/<outline.document_id>/full.md。
 function loadTextbookEvidenceContext(workspace, manifest) {
   if (manifest.generation.evidenceMode !== 'textbook-grounded') return null;
+  if (manifest.generation.guidanceMode === 'curriculum-guided') {
+    const binding = readSafeJson(
+      workspace,
+      join(workspace.sessionRoot, 'curriculum-guided-binding.json'),
+      '培养方案辅助绑定',
+    );
+    const plan = readSafeJson(
+      workspace,
+      join(workspace.courseRoot, 'curriculum-guided-plan.json'),
+      '培养方案调整计划',
+    );
+    if (
+      !isRecord(binding)
+      || binding.schema_version !== 'curriculum-guided-binding/1.0'
+      || binding.course_id !== workspace.courseId
+      || !isSafeDocumentId(binding.textbook_document_id)
+      || typeof binding.textbook_markdown_path !== 'string'
+      || !isRecord(plan)
+      || plan.schema_version !== 'curriculum-guided-plan/1.0'
+      || plan.course?.id !== workspace.courseId
+    ) {
+      fail('培养方案辅助绑定或调整计划与当前课程不一致');
+    }
+    const markdownPath = binding.textbook_markdown_path;
+    assertRegularFile(
+      workspace,
+      join(workspace.sessionRoot, ...markdownPath.split('/')),
+      '教材 Markdown 正文',
+    );
+    const planById = new Map(
+      (Array.isArray(plan.points) ? plan.points : [])
+        .filter((point) => isRecord(point) && typeof point.id === 'string')
+        .map((point) => [point.id, point]),
+    );
+    const anchors = new Map();
+    for (const [pointId, point] of planById) {
+      const anchor = Array.isArray(point.sourcePointIds)
+        ? point.sourcePointIds[0]
+        : null;
+      if (typeof anchor === 'string') anchors.set(pointId, anchor);
+    }
+    const evidenceById = new Map();
+    for (const evidence of Array.isArray(manifest.pointEvidence) ? manifest.pointEvidence : []) {
+      if (isRecord(evidence) && typeof evidence.pointId === 'string') {
+        evidenceById.set(evidence.pointId, evidence);
+      }
+    }
+    return {
+      documentId: binding.textbook_document_id,
+      markdownPath,
+      anchors,
+      planById,
+      evidenceById,
+      usesTextbookContentV2: manifest.generation.contentContract === TEXTBOOK_CONTENT_SCHEMA,
+      curriculumGuided: true,
+    };
+  }
   const outline = readSafeJson(
     workspace,
     join(workspace.courseRoot, 'textbook-outline.json'),
@@ -384,6 +442,16 @@ function buildPointEvidence(context, pointId) {
   });
 
   const result = { origin: evidence.origin };
+  if (context.curriculumGuided) {
+    result.coverage = evidence.coverage;
+    const planned = context.planById.get(pointId);
+    result.requirementRefs = Array.isArray(planned?.requirementRefs)
+      ? structuredClone(planned.requirementRefs)
+      : [];
+    result.changeReason = typeof planned?.changeReason === 'string'
+      ? planned.changeReason
+      : '';
+  }
   const anchorPointId = typeof evidence.anchorPointId === 'string'
     ? evidence.anchorPointId
     : context.anchors.get(pointId);
@@ -531,6 +599,9 @@ function prepareContentTasks(workspace, concurrency) {
     evidenceMode: manifest.generation.evidenceMode,
     ...('contentContract' in manifest.generation
       ? { contentContract: manifest.generation.contentContract }
+      : {}),
+    ...('guidanceMode' in manifest.generation
+      ? { guidanceMode: manifest.generation.guidanceMode }
       : {}),
   };
   const registryPath = `${workspace.tasksRel}/registry.json`;

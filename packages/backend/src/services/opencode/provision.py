@@ -33,6 +33,7 @@ _PROJECT_ROOT = PROJECT_ROOT
 _PROJECT_SKILLS_PATH = _PROJECT_ROOT / "skills"
 _COURSE_CREATION_SKILLS = (
     ("textbook-outline-generator", Path("SKILL.md")),
+    ("curriculum-guided-textbook-generator", Path("SKILL.md")),
     ("candidate-knowledge-point-generator", Path("SKILL.md")),
     (
         "knowledge-cluster-builder",
@@ -48,6 +49,7 @@ _COURSE_CREATION_TOOLS = (
     "publish-course-pipeline.mjs",
     "run-course-pipeline-step.mjs",
     "validate-textbook-outline.mjs",
+    "validate-curriculum-guided-plan.mjs",
 )
 _COURSE_PIPELINE_TOOL_SOURCE = (
     _PROJECT_ROOT / ".opencode" / "tools" / "course_pipeline.ts"
@@ -223,6 +225,23 @@ def _course_creator_permission(*, allow_manifest: bool = True) -> dict:
     }
 
 
+def _curriculum_guided_outline_permission() -> dict:
+    permission = _course_outline_creator_permission(allow_manifest=False)
+    permission["edit"].pop("**/pipeline/*/textbook-outline.json", None)
+    permission["edit"]["**/pipeline/*/curriculum-guided-plan.json"] = "allow"
+    permission["skill"].pop("textbook-outline-generator", None)
+    permission["skill"]["curriculum-guided-textbook-generator"] = "allow"
+    return permission
+
+
+def _curriculum_guided_creator_permission() -> dict:
+    permission = _course_creator_permission(allow_manifest=False)
+    permission["edit"].pop("**/pipeline/*/textbook-outline.json", None)
+    permission["skill"].pop("textbook-outline-generator", None)
+    permission["skill"]["curriculum-guided-textbook-generator"] = "allow"
+    return permission
+
+
 def _course_worker_permission(*edit_patterns: str) -> dict:
     """Least-privilege permissions for v2 content-generation subagents."""
 
@@ -316,6 +335,16 @@ def build_root_config() -> dict:
                 "description": "Continue a textbook-grounded course after G2 review and publish it.",
                 "mode": "primary",
                 "permission": _course_creator_permission(allow_manifest=False),
+            },
+            "curriculum-guided-outline-creator": {
+                "description": "Use curriculum requirements to adjust a textbook-grounded identity plan, stopping at G2 review.",
+                "mode": "primary",
+                "permission": _curriculum_guided_outline_permission(),
+            },
+            "curriculum-guided-course-creator": {
+                "description": "Continue a curriculum-guided textbook course after G2 review and publish it.",
+                "mode": "primary",
+                "permission": _curriculum_guided_creator_permission(),
             },
             "course-content-worker": {
                 "description": "按冻结索引生成自己负责的知识点详情与同名动画请求",

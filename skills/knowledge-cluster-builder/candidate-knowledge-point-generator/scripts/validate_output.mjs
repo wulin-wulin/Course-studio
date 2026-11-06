@@ -459,7 +459,7 @@ function validateGeneration(generation, errors) {
   if (!checkObjectShape(
     generation,
     ['evidenceMode', 'generatedAt', 'pointCount'],
-    ['evidenceMode', 'generatedAt', 'pointCount', 'contentContract'],
+    ['evidenceMode', 'generatedAt', 'pointCount', 'contentContract', 'guidanceMode'],
     label,
     errors,
   )) {
@@ -485,6 +485,12 @@ function validateGeneration(generation, errors) {
     && generation.evidenceMode !== 'textbook-grounded'
   ) {
     errors.push(`${label}.contentContract 只能用于 textbook-grounded 模式`);
+  }
+  if (
+    'guidanceMode' in generation
+    && generation.guidanceMode !== 'curriculum-guided'
+  ) {
+    errors.push(`${label}.guidanceMode 只能是 curriculum-guided`);
   }
 }
 
@@ -561,7 +567,7 @@ function validatePointEvidence(pointEvidence, sourceById, errors) {
     const requiredKeys = [
       'pointId', 'title', 'kind', 'sourceRefs', 'confidence', 'scopeStatus',
     ];
-    const optionalKeys = ['origin', 'sourceSpans', 'modelEnriched'];
+    const optionalKeys = ['origin', 'sourceSpans', 'modelEnriched', 'coverage'];
     if (!checkObjectShape(
       evidence,
       requiredKeys,
@@ -620,6 +626,9 @@ function validatePointEvidence(pointEvidence, sourceById, errors) {
     }
     if ('modelEnriched' in evidence && typeof evidence.modelEnriched !== 'boolean') {
       errors.push(`${label}.modelEnriched 必须是布尔值`);
+    }
+    if ('coverage' in evidence && !['covered', 'partial', 'gap'].includes(evidence.coverage)) {
+      errors.push(`${label}.coverage 必须是 covered/partial/gap`);
     }
   });
   return evidenceByPointId;
@@ -808,6 +817,9 @@ function validateGenerationManifest(
     const usesTextbookContentV2 = (
       manifest.generation?.contentContract === TEXTBOOK_CONTENT_SCHEMA
     );
+    const usesCurriculumGuidance = (
+      manifest.generation?.guidanceMode === 'curriculum-guided'
+    );
     const textbookSources = [...result.sourceById.values()].filter(
       (source) => source.type === 'textbook',
     );
@@ -822,6 +834,11 @@ function validateGenerationManifest(
         errors.push(`textbook-grounded 模式下 ${pointId} 必须声明 sourceSpans`);
       } else if (
         (usesTextbookContentV2 || evidence.origin === 'textbook')
+        && !(
+          usesCurriculumGuidance
+          && evidence.coverage === 'gap'
+          && evidence.scopeStatus === 'needs-review'
+        )
         && evidence.sourceSpans.length < 1
       ) {
         errors.push(`${pointId} 至少需要 1 个教材 sourceSpan`);
@@ -1209,13 +1226,31 @@ function validatePointsStage(
   const trustedRefsByPoint = expectsTextbookContentV2
     ? trustedSourceSpanRefsByPoint(indexContext.manifest)
     : new Map();
+  const evidenceByPointId = new Map(
+    (Array.isArray(indexContext.manifest?.pointEvidence)
+      ? indexContext.manifest.pointEvidence
+      : [])
+      .filter((evidence) => isRecord(evidence) && typeof evidence.pointId === 'string')
+      .map((evidence) => [evidence.pointId, evidence]),
+  );
+  const curriculumGuided = (
+    indexContext.manifest?.generation?.guidanceMode === 'curriculum-guided'
+  );
   for (const artifact of artifacts.pointArtifacts) {
     const point = artifact.value;
     const label = `src/data/points/${artifact.filename}`;
     if (!isRecord(point)) continue;
 
-    if (expectsTextbookContentV2 && !isTextbookContentPoint(point)) {
+    const gapLegacy = (
+      expectsTextbookContentV2
+      && curriculumGuided
+      && evidenceByPointId.get(artifact.fileId)?.coverage === 'gap'
+    );
+    if (expectsTextbookContentV2 && !gapLegacy && !isTextbookContentPoint(point)) {
       errors.push(`${label} 必须使用 ${TEXTBOOK_CONTENT_SCHEMA}`);
+    }
+    if (gapLegacy && isTextbookContentPoint(point)) {
+      errors.push(`${label} 是无教材证据的培养方案 gap 点，必须使用普通模型补充详情契约`);
     }
     if (!expectsTextbookContentV2 && isTextbookContentPoint(point)) {
       errors.push(
@@ -1227,7 +1262,7 @@ function validatePointsStage(
     reportUnexpandedSourceSpanRefs(
       point,
       label,
-      expectsTextbookContentV2 && isTextbookContentPoint(point)
+      expectsTextbookContentV2 && !gapLegacy && isTextbookContentPoint(point)
         ? (trustedRefsByPoint.get(artifact.fileId) ?? null)
         : undefined,
       errors,
@@ -1334,6 +1369,38 @@ function validateTextbookPointDetails(indexContext, artifacts, errors) {
     const point = artifact.value;
     const evidence = evidenceByPointId.get(artifact.fileId);
     if (!isRecord(point) || !isRecord(evidence)) continue;
+
+    if (
+      manifest.generation?.guidanceMode === 'curriculum-guided'
+      && evidence.coverage === 'gap'
+    ) {
+      if (isTextbookContentPoint(point)) {
+        errors.push(
+          `培养方案 gap 知识点 ${artifact.fileId} 不得伪造教材内容块`,
+        );
+      }
+      if (Array.isArray(point.sourceSpans) && point.sourceSpans.length > 0) {
+        errors.push(
+          `培养方案 gap 知识点 ${artifact.fileId} 不得声明教材 sourceSpans`,
+        );
+      }
+      if (point.origin !== evidence.origin) {
+        errors.push(
+          `培养方案 gap 知识点 ${artifact.fileId}.origin 必须与 manifest.pointEvidence 一致`,
+        );
+      }
+      if (!Array.isArray(point.sourceSpans) || point.sourceSpans.length !== 0) {
+        errors.push(
+          `培养方案 gap 知识点 ${artifact.fileId}.sourceSpans 必须是空数组`,
+        );
+      }
+      if (point.modelEnriched !== true) {
+        errors.push(
+          `培养方案 gap 知识点 ${artifact.fileId}.modelEnriched 必须为 true`,
+        );
+      }
+      continue;
+    }
 
     if (usesTextbookContentV2) {
       if (!isTextbookContentPoint(point)) {

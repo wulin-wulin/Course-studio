@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { textbookStructureSha256 as hashTextbookStructure } from "../skills/knowledge-pipeline-orchestrator/scripts/textbook-structure.mjs";
 import { validateSequences } from "../skills/knowledge-cluster-builder/knowledge-cluster-builder/scripts/sequence-contract.mjs";
+import { loadAndValidateCurriculumGuidance } from "./validate-curriculum-guided-plan.mjs";
 
 const COURSE_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -296,6 +297,7 @@ export function reviewHashes(
   points,
   graph = null,
   textbookStructureSha256 = null,
+  curriculumGuidanceSha256 = null,
 ) {
   const identitySha256 = sha256(identityPayload(points, `${kind}.points`));
   const hashes = { identitySha256 };
@@ -304,6 +306,12 @@ export function reviewHashes(
     : textbookStructureSha256;
   if (typeof structureHash === "string" && structureHash) {
     hashes.textbookStructureSha256 = structureHash;
+  }
+  const guidanceHash = isRecord(curriculumGuidanceSha256)
+    ? curriculumGuidanceSha256.curriculumGuidanceSha256
+    : curriculumGuidanceSha256;
+  if (typeof guidanceHash === "string" && guidanceHash) {
+    hashes.curriculumGuidanceSha256 = guidanceHash;
   }
   if (kind === "knowledge-points") return hashes;
   const clustersSha256 = sha256(clusterReviewPayload(graph), { stableKeys: true });
@@ -340,6 +348,13 @@ export function approvalMatches(approval, { courseId, kind, gate, hashes }) {
     && (
       !SHA256_PATTERN.test(approval.textbook_structure_sha256 ?? "")
       || approval.textbook_structure_sha256 !== hashes.textbookStructureSha256
+    )
+  ) return false;
+  if (
+    hashes.curriculumGuidanceSha256 !== undefined
+    && (
+      !SHA256_PATTERN.test(approval.curriculum_guidance_sha256 ?? "")
+      || approval.curriculum_guidance_sha256 !== hashes.curriculumGuidanceSha256
     )
   ) return false;
   if (kind !== "knowledge-graph") return true;
@@ -405,6 +420,18 @@ function runTextbookValidation(root, courseId, mode) {
   }
 }
 
+function runCurriculumGuidedValidation(root, courseId) {
+  const bindingPath = path.join(root, "curriculum-guided-binding.json");
+  const planPath = path.join(root, "pipeline", courseId, "curriculum-guided-plan.json");
+  const hasBinding = fs.existsSync(bindingPath);
+  const hasPlan = fs.existsSync(planPath);
+  if (!hasBinding && !hasPlan) return null;
+  if (!hasBinding || !hasPlan) {
+    fail("培养方案辅助绑定与调整计划必须同时存在");
+  }
+  return loadAndValidateCurriculumGuidance(root, courseId).curriculumGuidanceSha256;
+}
+
 function parseArgs(argv) {
   const [kind, courseId, ...extra] = argv.slice(2);
   if (!REVIEW_KINDS.has(kind) || !COURSE_ID_PATTERN.test(courseId ?? "") || extra.length > 0) {
@@ -433,6 +460,7 @@ function prepare() {
     courseId,
     kind === "knowledge-points" ? "outline" : "graph",
   );
+  const curriculumGuidanceSha256 = runCurriculumGuidedValidation(root, courseId);
   runPipelineCheck(
     root,
     kind === "knowledge-points"
@@ -452,7 +480,13 @@ function prepare() {
   const textbookStructureSha256 = outline
     ? hashTextbookStructure(outline, { courseId })
     : null;
-  const hashes = reviewHashes(kind, points, graph, textbookStructureSha256);
+  const hashes = reviewHashes(
+    kind,
+    points,
+    graph,
+    textbookStructureSha256,
+    curriculumGuidanceSha256,
+  );
 
   if (kind === "knowledge-graph") {
     const identityApproval = readOptionalJson(
@@ -467,6 +501,9 @@ function prepare() {
         identitySha256: hashes.identitySha256,
         ...(hashes.textbookStructureSha256
           ? { textbookStructureSha256: hashes.textbookStructureSha256 }
+          : {}),
+        ...(hashes.curriculumGuidanceSha256
+          ? { curriculumGuidanceSha256: hashes.curriculumGuidanceSha256 }
           : {}),
       },
     })) {

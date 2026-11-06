@@ -35,11 +35,11 @@
 | `forbidden` | 明确禁止修改的共享文件 |
 | `contracts` | 必须按顺序完整读取的会话内合同与 Schema |
 | `course` | `course.json` 原样内容 |
-| `scope` | manifest 的 `subject` 原样内容（受众、深度、范围、排除项、学习成果），附 `evidenceMode`/`contentContract` |
+| `scope` | manifest 的 `subject` 原样内容（受众、深度、范围、排除项、学习成果），附 `evidenceMode`/`contentContract`/可选 `guidanceMode` |
 | `indexEntry` | 本点完整、冻结的索引项 JSON（`id/title/shortSummary/difficulty/importance/keyTerms`） |
 | `sequence` | `order`（从 1 起）、`previousPointId`、`nextPointId`；首末点对应值为 `null` |
 | `registryPath` | 全量 `id/title/difficulty/shortSummary` 注册表，每个知识点一行 |
-| `evidence` | 仅 `textbook-grounded`：`origin`、`anchorPointId`（扩展点）、`markdownPath`、有序 `spans` |
+| `evidence` | 仅 `textbook-grounded`：`origin`、`anchorPointId`（扩展点）、`markdownPath`、有序 `spans`；培养方案模式另含 `coverage/requirementRefs/changeReason` |
 | `sourceEvidence` | 仅 `researched`：本点 `manifest.pointEvidence` 单项原样（`kind/sourceRefs/confidence/scopeStatus`）及其 `sourceRefs` 指向的 `sources` 记录原样 |
 
 任务包由确定性脚本从受信 index 与 manifest 机械生成，只读。发现任务包与合同或事实矛盾时，
@@ -112,6 +112,8 @@
    `completion.nextPointId`，只能使用任务包 `sequence.nextPointId`；其为 `null`（末点）时省略。
 
 ## 教材证据（仅任务包含 `evidence` 时）
+
+- 当 `scope.guidanceMode="curriculum-guided"` 且 `evidence.coverage="gap"` 时，该点经 G2 确认但没有教材正文证据。不要读取或伪造教材 span，不写 `textbook-content/2.0` blocks；改用普通栏目式详情契约，顶层写与 evidence 一致的 `origin`、`sourceSpans: []`、`modelEnriched: true`，内容明确作为模型补充生成，并以 `requirementRefs/changeReason` 约束范围。此例外只适用于 gap，`covered/partial` 仍必须遵守下面全部教材证据规则。
 
 ### 读取正文
 

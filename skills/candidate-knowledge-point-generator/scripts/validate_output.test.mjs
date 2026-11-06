@@ -1203,6 +1203,59 @@ test('textbook-content/2.0 的 G1 不允许人工填写 modelEnriched', (t) => {
   )));
 });
 
+test('curriculum-guided gap 接受无教材 span 的栏目式模型补充详情', (t) => {
+  const { root } = createCourseFixture(t);
+  const legacyGap = readJson(root, 'src/data/points/state-transition.json');
+  const manifest = configureTextbookContentV2(root);
+  manifest.generation.guidanceMode = 'curriculum-guided';
+  manifest.sources.push({
+    id: 'src-curriculum',
+    type: 'curriculum',
+    title: '课程教学大纲',
+    locator: 'curriculum-guided-input/curriculum/curr-demo/requirements.json',
+    accessedAt: '2026-07-16',
+  });
+  manifest.pointEvidence[0].coverage = 'covered';
+  manifest.pointEvidence[1].coverage = 'gap';
+  manifest.pointEvidence[1].origin = 'llm-extension';
+  manifest.pointEvidence[1].sourceRefs = ['src-curriculum'];
+  manifest.pointEvidence[1].sourceSpans = [];
+  manifest.pointEvidence[1].scopeStatus = 'needs-review';
+  manifest.reviewQueue.push({
+    pointId: manifest.pointEvidence[1].pointId,
+    term: manifest.pointEvidence[1].title,
+    issue: 'insufficient-evidence',
+    reason: '培养方案要求但教材没有直接证据。',
+    suggestedAction: '在 G2 确认后作为模型补充生成。',
+  });
+  legacyGap.origin = 'llm-extension';
+  legacyGap.sourceSpans = [];
+  legacyGap.modelEnriched = true;
+  writeJson(root, 'generation/manifest.json', manifest);
+  writeJson(root, 'src/data/points/state-transition.json', legacyGap);
+
+  assert.deepEqual(validateProject(root, { phase: 'points' }).errors, []);
+});
+
+test('curriculum-guided 只允许 gap 使用栏目式详情', (t) => {
+  const { root } = createCourseFixture(t);
+  const legacyCovered = readJson(root, 'src/data/points/input-state.json');
+  const manifest = configureTextbookContentV2(root);
+  manifest.generation.guidanceMode = 'curriculum-guided';
+  manifest.pointEvidence.forEach((evidence) => { evidence.coverage = 'covered'; });
+  legacyCovered.origin = 'textbook';
+  legacyCovered.sourceSpans = structuredClone(manifest.pointEvidence[0].sourceSpans);
+  legacyCovered.modelEnriched = true;
+  writeJson(root, 'generation/manifest.json', manifest);
+  writeJson(root, 'src/data/points/input-state.json', legacyCovered);
+
+  const result = validateProject(root, { phase: 'points' });
+  assert.ok(result.errors.some((error) => (
+    error.includes('src/data/points/input-state.json')
+    && error.includes('必须使用 textbook-content/2.0')
+  )));
+});
+
 test('textbook-grounded 接受教材点证据和 sourceSpans 为空的模型扩展点', (t) => {
   const { root } = createCourseFixture(t, { includeDetails: false });
   const manifest = configureTextbookGroundedManifest(root);

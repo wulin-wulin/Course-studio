@@ -216,6 +216,7 @@ function approvalCommonMatches(
   gate,
   identitySha256,
   textbookStructureHash = null,
+  curriculumGuidanceHash = null,
 ) {
   return Boolean(
     isRecord(approval)
@@ -238,6 +239,13 @@ function approvalCommonMatches(
       || (
         /^[0-9a-f]{64}$/.test(approval.textbook_structure_sha256 ?? '')
         && approval.textbook_structure_sha256 === textbookStructureHash
+      )
+    )
+    && (
+      curriculumGuidanceHash === null
+      || (
+        /^[0-9a-f]{64}$/.test(approval.curriculum_guidance_sha256 ?? '')
+        && approval.curriculum_guidance_sha256 === curriculumGuidanceHash
       )
     )
   );
@@ -267,6 +275,73 @@ function loadApproval(workspaceRoot, courseId, kind) {
   return loadJson(assertSafeRegularFile(file, `${kind} 审核回执`));
 }
 
+function loadCurriculumGuidanceHash(workspaceRoot, courseId, indexPoints) {
+  const bindingPath = path.join(workspaceRoot, 'curriculum-guided-binding.json');
+  const planPath = path.join(
+    workspaceRoot,
+    'pipeline',
+    courseId,
+    'curriculum-guided-plan.json',
+  );
+  const hasBinding = existsSync(bindingPath);
+  const hasPlan = existsSync(planPath);
+  if (!hasBinding && !hasPlan) return null;
+  if (!hasBinding || !hasPlan) {
+    throw new Error('培养方案辅助绑定与调整计划必须同时存在');
+  }
+  const binding = loadJson(assertSafeRegularFile(bindingPath, '培养方案辅助绑定'));
+  const plan = loadJson(assertSafeRegularFile(planPath, '培养方案调整计划'));
+  if (
+    binding.schema_version !== 'curriculum-guided-binding/1.0'
+    || binding.course_id !== courseId
+    || binding.output_plan_path !== `pipeline/${courseId}/curriculum-guided-plan.json`
+    || plan.schema_version !== 'curriculum-guided-plan/1.0'
+    || plan.course?.id !== courseId
+    || plan.sources?.textbook_document_id !== binding.textbook_document_id
+    || plan.sources?.curriculum_document_id !== binding.curriculum_document_id
+    || !Array.isArray(plan.points)
+    || !equal(identityPayload(plan.points), identityPayload(indexPoints))
+  ) {
+    throw new Error('培养方案辅助绑定、调整计划与课程身份不一致');
+  }
+  const relative = binding.curriculum_requirements_path;
+  if (
+    typeof relative !== 'string'
+    || !relative
+    || path.isAbsolute(relative)
+    || relative.includes('\\')
+    || relative.split('/').some((segment) => !segment || segment === '.' || segment === '..')
+  ) {
+    throw new Error('培养方案 requirements 路径无效');
+  }
+  const requirementsPath = path.resolve(workspaceRoot, ...relative.split('/'));
+  const rootPrefix = `${path.resolve(workspaceRoot)}${path.sep}`;
+  if (!requirementsPath.startsWith(rootPrefix)) {
+    throw new Error('培养方案 requirements 路径越界');
+  }
+  const requirements = loadJson(
+    assertSafeRegularFile(requirementsPath, '培养方案要求'),
+  );
+  return sha256Json({
+    binding: {
+      schema_version: binding.schema_version,
+      textbook_document_id: binding.textbook_document_id,
+      curriculum_document_id: binding.curriculum_document_id,
+      course_id: binding.course_id,
+      textbook_sha256: binding.textbook_sha256,
+      curriculum_sha256: binding.curriculum_sha256,
+      guidance_sha256: binding.guidance_sha256,
+    },
+    requirements_file_sha256: createHash('sha256')
+      .update(readFileSync(requirementsPath))
+      .digest('hex'),
+    plan_file_sha256: createHash('sha256')
+      .update(readFileSync(planPath))
+      .digest('hex'),
+    identity: identityPayload(indexPoints),
+  }, { stableKeys: true });
+}
+
 function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
   if (reviewMode === 'skip') return 0;
   const graph = loadJson(graphFile);
@@ -274,6 +349,7 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
   const courseId = index.courseId;
   const workspaceRoot = reviewWorkspace(contentRoot, courseId);
   let textbookStructureHash = null;
+  let curriculumGuidanceHash = null;
   const textbookOutlinePath = path.join(
     workspaceRoot,
     'pipeline',
@@ -350,6 +426,22 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
       return 0;
     }
   }
+  try {
+    curriculumGuidanceHash = loadCurriculumGuidanceHash(
+      workspaceRoot,
+      courseId,
+      index.points,
+    );
+  } catch (error) {
+    add(
+      findings,
+      'error',
+      'review',
+      'invalid-curriculum-guidance',
+      `培养方案调整计划无法参与审核哈希校验：${error.message}`,
+    );
+    return 0;
+  }
   const identitySha256 = sha256Json(identityPayload(index.points));
   let count = 0;
 
@@ -366,6 +458,7 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
     'G2_IDENTITY_REVIEW',
     identitySha256,
     textbookStructureHash,
+    curriculumGuidanceHash,
   )) {
     count += 1;
   } else if (knowledgeApproval) {
@@ -399,6 +492,7 @@ function validateReviewApprovals(contentRoot, graphFile, reviewMode, findings) {
       'G6_GRAPH_REVIEW',
       graphIdentitySha256,
       textbookStructureHash,
+      curriculumGuidanceHash,
     )
     && graphApproval.clusters_sha256 === clustersSha256
     && graphApproval.prerequisites_sha256 === prerequisitesSha256

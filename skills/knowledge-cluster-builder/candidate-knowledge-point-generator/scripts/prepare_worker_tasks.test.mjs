@@ -279,6 +279,51 @@ test('教材 v2 任务包按 pointEvidence 顺序注入 ref 证据且不含哈�
   assert.doesNotMatch(serialized, /excerptSha256|materialId/);
 });
 
+test('培养方案辅助任务从 guided binding 读取教材且允许 gap 空 spans', (t) => {
+  const session = createWorkerSession(t);
+  writePlaceholders(session.contentRoot, POINT_IDS);
+  const manifest = configureTextbookSession(session);
+  rmSync(join(session.sessionRoot, 'textbook-binding.json'));
+  rmSync(join(session.courseRoot, 'textbook-outline.json'));
+  const markdownPath = `textbook-input/${DOCUMENT_ID}/full.md`;
+  writeJson(session.sessionRoot, 'curriculum-guided-binding.json', {
+    schema_version: 'curriculum-guided-binding/1.0',
+    course_id: COURSE_ID,
+    textbook_document_id: DOCUMENT_ID,
+    textbook_markdown_path: markdownPath,
+  });
+  const index = readJson(session.contentRoot, 'src/data/index.json');
+  writeJson(session.courseRoot, 'curriculum-guided-plan.json', {
+    schema_version: 'curriculum-guided-plan/1.0',
+    course: { id: COURSE_ID, title: '状态机' },
+    points: index.points.map((point, order) => ({
+      id: point.id,
+      title: point.title,
+      order,
+      sourcePointIds: order === 1 ? [] : [point.id],
+      requirementRefs: order === 1 ? ['req-transition'] : [],
+      changeReason: order === 1 ? '大纲要求补充' : '保留教材点',
+    })),
+  });
+  manifest.generation.guidanceMode = 'curriculum-guided';
+  manifest.pointEvidence.forEach((evidence, order) => {
+    evidence.coverage = order === 1 ? 'gap' : 'covered';
+  });
+  manifest.pointEvidence[1].sourceSpans = [];
+  manifest.pointEvidence[1].scopeStatus = 'needs-review';
+  writeJson(session.contentRoot, 'generation/manifest.json', manifest);
+
+  prepareContent(session);
+  const gap = readJson(session.tasksRoot, 'content/state-transition.json');
+  assert.equal(gap.scope.guidanceMode, 'curriculum-guided');
+  assert.equal(gap.evidence.coverage, 'gap');
+  assert.deepEqual(gap.evidence.spans, []);
+  assert.deepEqual(gap.evidence.requirementRefs, ['req-transition']);
+  assert.equal(gap.evidence.changeReason, '大纲要求补充');
+  assert.equal(gap.evidence.markdownPath, markdownPath);
+  assert.ok(gap.forbidden.includes(`pipeline/${COURSE_ID}/curriculum-guided-plan.json`));
+});
+
 test('同一点内 sourceSpans ref 不唯一时失败且不写任何任务包', (t) => {
   const session = createWorkerSession(t);
   writePlaceholders(session.contentRoot, POINT_IDS);

@@ -18,6 +18,7 @@ function loadPolicy() {
   const result = spawnSync("python", ["-c", source, CONFIG_SCRIPT], {
     cwd: PROJECT_ROOT,
     encoding: "utf8",
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
@@ -38,6 +39,7 @@ function buildProviders(document) {
   const result = spawnSync("python", ["-c", source, CONFIG_SCRIPT, JSON.stringify(document)], {
     cwd: PROJECT_ROOT,
     encoding: "utf8",
+    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
   });
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
@@ -107,6 +109,30 @@ test("textbook primary agents cannot replace the trusted manifest", () => {
       undefined,
     );
     assert.equal(configured.permission.course_pipeline, "allow");
+  }
+});
+
+test("curriculum-guided agents can edit only the pre-G2 plan", () => {
+  const { agents } = loadPolicy();
+  const outline = agents["curriculum-guided-outline-creator"];
+  const creator = agents["curriculum-guided-course-creator"];
+  assert.equal(outline.mode, "primary");
+  assert.equal(creator.mode, "primary");
+  assert.equal(
+    outline.permission.edit["**/pipeline/*/curriculum-guided-plan.json"],
+    "allow",
+  );
+  assert.equal(
+    creator.permission.edit["**/pipeline/*/curriculum-guided-plan.json"],
+    undefined,
+  );
+  for (const configured of [outline, creator]) {
+    assert.equal(
+      configured.permission.edit["**/pipeline/*/course-content/generation/manifest.json"],
+      undefined,
+    );
+    assert.equal(configured.permission.skill["curriculum-guided-textbook-generator"], "allow");
+    assert.equal(configured.permission.skill["textbook-outline-generator"], undefined);
   }
 });
 

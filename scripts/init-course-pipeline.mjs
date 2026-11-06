@@ -9,6 +9,7 @@ import {
   assertTextbookSourceUnchanged,
   textbookStructureSha256,
 } from "../skills/knowledge-pipeline-orchestrator/scripts/textbook-structure.mjs";
+import { loadAndValidateCurriculumGuidance } from "./validate-curriculum-guided-plan.mjs";
 
 const ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -101,6 +102,7 @@ function assertKnowledgePointApproval(paths, courseId, points) {
   }
   const approval = readJson(approvalPath, "知识点审核回执", paths.workspaceRoot);
   let textbookStructureHash = null;
+  let curriculumGuidanceHash = null;
   const textbookOutlinePath = path.join(paths.courseRoot, "textbook-outline.json");
   if (fs.existsSync(textbookOutlinePath)) {
     const outline = readJson(
@@ -112,6 +114,17 @@ function assertKnowledgePointApproval(paths, courseId, points) {
     textbookStructureHash = textbookStructureSha256(outline, { courseId });
   } else if (fs.existsSync(path.join(paths.workspaceRoot, "textbook-binding.json"))) {
     fail("教材绑定存在但缺少教材工作流结构");
+  }
+  const curriculumBindingPath = path.join(paths.workspaceRoot, "curriculum-guided-binding.json");
+  const curriculumPlanPath = path.join(paths.courseRoot, "curriculum-guided-plan.json");
+  if (fs.existsSync(curriculumBindingPath) || fs.existsSync(curriculumPlanPath)) {
+    if (!fs.existsSync(curriculumBindingPath) || !fs.existsSync(curriculumPlanPath)) {
+      fail("培养方案辅助绑定与调整计划必须同时存在");
+    }
+    curriculumGuidanceHash = loadAndValidateCurriculumGuidance(
+      paths.workspaceRoot,
+      courseId,
+    ).curriculumGuidanceSha256;
   }
   if (
     approval.schema_version !== "course-review-approval/1.0"
@@ -134,6 +147,13 @@ function assertKnowledgePointApproval(paths, courseId, points) {
       && (
         !SHA256_PATTERN.test(approval.textbook_structure_sha256 ?? "")
         || approval.textbook_structure_sha256 !== textbookStructureHash
+      )
+    )
+    || (
+      curriculumGuidanceHash !== null
+      && (
+        !SHA256_PATTERN.test(approval.curriculum_guidance_sha256 ?? "")
+        || approval.curriculum_guidance_sha256 !== curriculumGuidanceHash
       )
     )
   ) {

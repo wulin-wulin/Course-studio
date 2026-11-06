@@ -16,13 +16,15 @@ pipeline/<course-id>/
 ├── course-content/
 ├── worker-tasks/          # G3/G4 只读任务包，仅由 prepare-*-tasks 生成
 ├── clustered-graph.json
-└── textbook-outline.json  # 仅教材模式（PDF 或 Markdown）
+├── textbook-outline.json          # 仅教材模式（PDF 或 Markdown）
+└── curriculum-guided-plan.json    # 教材 + 培养方案模式
 ```
 
 确定一种模式：
 
 - `full`：从课程名或领域名依次完成全部门禁。
 - `textbook`：从后端绑定的两层教材结构开始，章节归属在 G1 冻结并贯穿 G6。
+- `textbook-curriculum`：教材提供正文证据，培养方案/大纲只指导知识点和知识簇调整；G1 使用独立调整计划。
 - `resume`：从现有产物和审核回执定位最早未通过阶段，不重建已通过阶段。
 - `validate`：只调用固定校验 action，不改写课程内容。
 - `dry-run`：只返回本文规定的固定状态对象。
@@ -36,6 +38,7 @@ pipeline/<course-id>/
 1. 内容阶段：`candidate-knowledge-point-generator/SKILL.md`、`data-contract.md`、`orchestration.md`、`animation-contract.md`；`content-worker-brief.md` 与 `animation-worker-brief.md` 由 worker 按任务包读取，主智能体无需转述。
 2. 图阶段：`knowledge-cluster-builder/knowledge-cluster-builder/SKILL.md`、关系启发式、Schema。
 3. 教材模式：在上述 Skill 之前读取 `textbook-outline-generator/SKILL.md`。
+4. 教材 + 培养方案模式：在内容 Skill 之前读取 `curriculum-guided-textbook-generator/SKILL.md`，不要加载教材结构锁定流程替代它。
 
 同名打包内容 Skill 与 canonical 副本有任何差异时，以 `duplicate-skill-drift` 阻断。
 
@@ -71,6 +74,7 @@ pipeline/<course-id>/
 - 教材模式必须先用 `textbook-outline.json` 决定完整点集，依次调用
   `sync-textbook-manifest`、`validate-textbook-outline`、`validate-index`；不得从内容反向聚类出教材结构。
 - 教材模式在 G1 只确定解析结果提供的章节包含关系和教材点顺序；不得在这一阶段生成或使用 `prerequisites`、`related` 或 cluster 关系来重构教材树。
+- 教材 + 培养方案模式只生成 `course.json`、`index.json` 和 `curriculum-guided-plan.json`；依次调用 `sync-curriculum-guided-manifest`、`validate-curriculum-guided-plan`、`validate-index`。培养方案只调整点清单与计划知识簇，不作为正文 source span。
 
 ### G2_IDENTITY_REVIEW
 
@@ -161,6 +165,7 @@ pipeline/<course-id>/
 - `related` 必须双向声明，只表达横向联系；同一对点只要任一方向存在 prerequisite，就不得再写 related。
 - 依次调用 `assemble-graph`、`assemble-graph-check`、`check-graph`。
 - 教材模式不执行自由聚类：章节一一成为 cluster，点的首个 `clusterIds` 固定为所属章节。完成上述装配检查后再调用 `validate-textbook-graph`。
+- 教材 + 培养方案模式以 G2 已签名 `curriculum-guided-plan.json` 的 `clusters` 和逐点 `clusterIds` 为聚类起点与强建议；可根据完整正文作有理由的次要调整，但不得无理由丢弃培养方案修订，最终由 G6 审核确认。
 - G6 的关系工作是对内容完成后的 `prerequisites`、`related`、`role` 和次要簇做补充、审计和去环；它不能把语义关系反向当作教材树，也不能用聚类结果覆盖已冻结的教材章节结构。
 - 图顶层使用 `sequences.cluster/point[{fromId,toId}]` 保存显式阅读顺序。章节相邻顺序写入
   cluster edges，同一章节内的点顺序写入 point edges；该关系独立于 prerequisites/related，
@@ -200,6 +205,8 @@ pipeline/<course-id>/
 
 - `sync-textbook-manifest`：只在绑定 material/full.md 的教材 G1 调用；校验输入后确定性生成
   v2 manifest、教材来源和逐点 source spans，避免模型手写大 JSON。
+- `sync-curriculum-guided-manifest`：只在教材 + 培养方案 G1 调用；根据调整计划机械生成双来源 manifest，只有教材材料可生成 source spans。
+- `validate-curriculum-guided-plan`：校验双源绑定、要求引用、教材证据、计划簇以及计划与 index/manifest 的身份一致性。
 - `prepare-content-tasks`：G3 在 `init-points` 之后调用；确定性生成注册表、index 全部点的一点一任务
   只读任务包和只调度占位点的 `content-plan.json`，stdout 只给简短摘要。
 - `finalize-point-drafts`：G3 每波返回后调用一次；教材 v2 课程先把 span ref 机械展开为可信 span，

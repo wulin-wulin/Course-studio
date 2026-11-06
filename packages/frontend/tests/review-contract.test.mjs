@@ -652,6 +652,71 @@ test("dedicated Markdown creation describes the graph generation action", () => 
   assert.match(request.message, /full\.md/);
 });
 
+test("curriculum upload accepts PDF and DOCX while rejecting legacy DOC", () => {
+  assert.equal(
+    contracts.isSupportedCurriculumFile({
+      name: "人工智能教学大纲.pdf",
+      type: "application/pdf",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedCurriculumFile({
+      name: "培养方案.DOCX",
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedCurriculumFile({
+      name: "培养方案.docx",
+      type: "application/octet-stream",
+    }),
+    true,
+  );
+  assert.equal(
+    contracts.isSupportedCurriculumFile({
+      name: "旧版培养方案.doc",
+      type: "application/msword",
+    }),
+    false,
+  );
+  assert.equal(
+    contracts.isSupportedCurriculumFile({
+      name: "教学大纲.md",
+      type: "text/markdown",
+    }),
+    false,
+  );
+  assert.match(contracts.CURRICULUM_FILE_ACCEPT, /application\/pdf/);
+  assert.match(contracts.CURRICULUM_FILE_ACCEPT, /wordprocessingml/);
+  assert.match(contracts.CURRICULUM_FILE_ACCEPT, /\.docx/);
+});
+
+test("curriculum-guided creation carries two durable document identities", () => {
+  assert.equal(
+    contracts.prepareCurriculumCourseCreationRequest(
+      { id: "", filename: "教材.pdf" },
+      { id: "curriculum-1", filename: "大纲.docx" },
+    ),
+    null,
+  );
+  const request = contracts.prepareCurriculumCourseCreationRequest(
+    { id: "textbook-1", filename: "机器学习教材.pdf" },
+    { id: "curriculum-1", filename: "机器学习教学大纲.docx" },
+  );
+  assert.equal(request.sourceMode, "textbook-curriculum");
+  assert.equal(request.textbookDocumentId, "textbook-1");
+  assert.equal(request.curriculumDocumentId, "curriculum-1");
+  assert.match(request.displayContent, /机器学习教材\.pdf/);
+  assert.match(request.displayContent, /机器学习教学大纲\.docx/);
+  assert.match(request.message, /只用于调整知识点清单/);
+  assert.match(request.message, /保留、重命名、合并、拆分、补充/);
+  assert.match(request.message, /不得把培养方案伪装成教材正文来源/);
+  assert.match(request.message, /coverage=gap/);
+  assert.match(request.message, /G2 知识点清单审核/);
+});
+
 test("stale conversation reconciliation prefers the next pending review", () => {
   const decision = contracts.reconcileReviewResume("review-1", {
     pending_review: pointer({

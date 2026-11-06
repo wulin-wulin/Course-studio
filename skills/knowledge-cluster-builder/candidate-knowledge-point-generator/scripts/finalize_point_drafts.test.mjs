@@ -150,6 +150,43 @@ test('finalize 第二次运行没有任何改动', (t) => {
   }
 });
 
+test('curriculum-guided gap 栏目式详情跳过 span 展开并通过草稿校验', (t) => {
+  const session = createDraftedTextbookSession(t);
+  const manifest = readJson(session.contentRoot, 'generation/manifest.json');
+  manifest.generation.guidanceMode = 'curriculum-guided';
+  manifest.pointEvidence.forEach((evidence) => { evidence.coverage = 'covered'; });
+  const gapEvidence = manifest.pointEvidence.find(
+    (evidence) => evidence.pointId === 'state-transition',
+  );
+  gapEvidence.coverage = 'gap';
+  gapEvidence.origin = 'llm-extension';
+  gapEvidence.sourceSpans = [];
+  gapEvidence.scopeStatus = 'needs-review';
+  manifest.reviewQueue.push({
+    pointId: 'state-transition',
+    term: gapEvidence.title,
+    issue: 'insufficient-evidence',
+    reason: '培养方案要求但教材未覆盖。',
+    suggestedAction: '作为模型补充生成。',
+  });
+  writeJson(session.contentRoot, 'generation/manifest.json', manifest);
+
+  const generic = createCourseFixture(t).root;
+  const gapPoint = readJson(generic, 'src/data/points/state-transition.json');
+  gapPoint.origin = 'llm-extension';
+  gapPoint.sourceSpans = [];
+  gapPoint.modelEnriched = true;
+  writeJson(session.contentRoot, 'src/data/points/state-transition.json', gapPoint);
+
+  const result = materializePointSourceSpans(session.contentRoot);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.expandedPointIds.includes('state-transition'), false);
+  assert.deepEqual(
+    validateProject(session.contentRoot, { phase: 'point-drafts' }).errors,
+    [],
+  );
+});
+
 test('未知 ref 不改该文件且只由校验器报告真正的未知项，对象 span 与其他点照常处理', (t) => {
   const { contentRoot, manifest } = createDraftedTextbookSession(t);
   const spans = evidenceSpans(manifest, 'input-state');

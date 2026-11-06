@@ -39,6 +39,16 @@ export type PreparedPdfCourseCreationRequest = {
   displayContent: string;
 };
 
+export type PreparedCurriculumCourseCreationRequest = {
+  sourceMode: "textbook-curriculum";
+  textbookDocumentId: string;
+  curriculumDocumentId: string;
+  textbookFilename: string;
+  curriculumFilename: string;
+  message: string;
+  displayContent: string;
+};
+
 export const TEXTBOOK_FILE_ACCEPT = [
   "application/pdf",
   ".pdf",
@@ -65,6 +75,14 @@ export const PDF_TEXTBOOK_FILE_ACCEPT = [
   ".pdf",
 ].join(",");
 
+export const CURRICULUM_FILE_ACCEPT = [
+  "application/pdf",
+  "application/x-pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".pdf",
+  ".docx",
+].join(",");
+
 type TextbookFileDescriptor = {
   name: string;
   type?: string;
@@ -81,6 +99,9 @@ const MARKDOWN_FILE_TYPES = new Set([
   "application/markdown",
   "text/x-markdown",
   "text/plain",
+]);
+const DOCX_FILE_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 export function isSupportedTextbookFile(file: TextbookFileDescriptor): boolean {
@@ -118,6 +139,22 @@ export function isSupportedMarkdownTextbookFile(
     (filename.endsWith(".md") || filename.endsWith(".markdown")) &&
     (MARKDOWN_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType))
   );
+}
+
+export function isSupportedCurriculumFile(
+  file: TextbookFileDescriptor,
+): boolean {
+  const filename = file.name.trim().toLowerCase();
+  const mediaType = ((file.type ?? "").split(";", 1)[0] ?? "")
+    .trim()
+    .toLowerCase();
+  if (filename.endsWith(".pdf")) {
+    return PDF_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType);
+  }
+  if (filename.endsWith(".docx")) {
+    return DOCX_FILE_TYPES.has(mediaType) || NEUTRAL_FILE_TYPES.has(mediaType);
+  }
+  return false;
 }
 
 export function prepareCourseCreationRequest(
@@ -171,5 +208,50 @@ export function prepareMarkdownCourseCreationRequest(document: {
   return {
     ...request,
     displayContent: `根据 Markdown 生成知识图谱：${request.filename}`,
+  };
+}
+
+export function buildCurriculumCourseCreationMessage(
+  textbookFilename: string,
+  curriculumFilename: string,
+): string {
+  return [
+    "开始根据已上传并解析完成的教材与培养方案（或教学大纲）创建课程。",
+    `教材文件：${textbookFilename}。`,
+    `培养方案或教学大纲：${curriculumFilename}。`,
+    "教材仍是知识内容和事实依据；培养方案只用于调整知识点清单，包括保留、重命名、合并、拆分、补充、重要程度以及知识簇建议，不得把培养方案伪装成教材正文来源。",
+    "先完成教材知识内容与培养要求的对齐，再形成最终候选知识点清单。每个知识点都要记录教材依据和培养要求引用，并说明结构调整动作与理由。",
+    "培养要求在教材中只有部分依据时标记 coverage=partial；教材没有对应依据时标记 coverage=gap，不得静默编造为教材知识点。",
+    "完成确定性校验后进入 G2 知识点清单审核，等待我确认再继续生成正文和图谱。",
+  ].join("");
+}
+
+export function prepareCurriculumCourseCreationRequest(
+  textbook: { id: string; filename: string },
+  curriculum: { id: string; filename: string },
+): PreparedCurriculumCourseCreationRequest | null {
+  const textbookDocumentId = textbook.id.trim();
+  const curriculumDocumentId = curriculum.id.trim();
+  const textbookFilename = textbook.filename.trim();
+  const curriculumFilename = curriculum.filename.trim();
+  if (
+    !textbookDocumentId ||
+    !curriculumDocumentId ||
+    !textbookFilename ||
+    !curriculumFilename
+  ) {
+    return null;
+  }
+  return {
+    sourceMode: "textbook-curriculum",
+    textbookDocumentId,
+    curriculumDocumentId,
+    textbookFilename,
+    curriculumFilename,
+    message: buildCurriculumCourseCreationMessage(
+      textbookFilename,
+      curriculumFilename,
+    ),
+    displayContent: `根据教材《${textbookFilename}》和大纲《${curriculumFilename}》创建课程`,
   };
 }
