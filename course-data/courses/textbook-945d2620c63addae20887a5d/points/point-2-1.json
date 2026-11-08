@@ -1,0 +1,940 @@
+{
+  "id": "point-2-1",
+  "title": "门控循环单元（GRU）",
+  "shortSummary": "用重置门和更新门控制候选状态与旧状态的混合比例，缓解普通循环网络的长程依赖困难。",
+  "keyTerms": [
+    "GRU",
+    "重置门",
+    "更新门",
+    "候选状态"
+  ],
+  "animationType": "gruGateUpdate",
+  "animationSuggestion": "按时间步逐步展示门值生成、候选状态计算和凸组合三段过程；允许把 Z 或 R 固定到接近 0 或 1，直观看到跳过时间步与重置旧状态两种极端行为。",
+  "difficulty": "中等",
+  "importance": 0.92,
+  "prerequisites": [
+    "point-1-4",
+    "point-1-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-derivation-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材的门控定义、公式与极端情形结论，按“动机—门计算—候选与更新—实现—边界—检查”重排讲解，并补充数值算例、实现对照表与练习提示。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-gating-need",
+          "text": "说明普通循环网络在长程记忆、无关输入与状态重置上的困难，以及门控为何能缓解这些问题。"
+        },
+        {
+          "id": "compute-gru-gates",
+          "text": "写出重置门、更新门、候选隐状态与最终隐状态的公式，并解释其中每个符号与激活函数的作用。"
+        },
+        {
+          "id": "trace-gate-extremes",
+          "text": "分析门值取 0 或 1 附近时隐状态如何被跳过、保留或重置，并据此判断模型行为。"
+        },
+        {
+          "id": "implement-gru-forward",
+          "text": "把门控公式对应到从零实现与高层接口的关键步骤，包括参数形状、状态初始化和状态传递。"
+        }
+      ],
+      "misconceptions": [
+        "更新门越大表示接纳的新信息越多。",
+        "重置门会把旧隐状态永久清零。",
+        "有了门控就一定不会出现梯度消失。",
+        "GRU 与 LSTM 只是门的数量不同。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-motivation",
+          "title": "问题与动机",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-gating-need"
+          ],
+          "order": 0
+        },
+        {
+          "id": "gate-computation",
+          "title": "重置门与更新门的计算",
+          "role": "definition",
+          "outcomeRefs": [
+            "compute-gru-gates"
+          ],
+          "order": 1
+        },
+        {
+          "id": "candidate-and-update",
+          "title": "候选状态与隐状态更新",
+          "role": "derivation",
+          "outcomeRefs": [
+            "compute-gru-gates",
+            "trace-gate-extremes"
+          ],
+          "order": 2
+        },
+        {
+          "id": "implementation-map",
+          "title": "从公式到实现",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "implement-gru-forward"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundary-and-comparison",
+          "title": "边界与比较",
+          "role": "comparison",
+          "outcomeRefs": [
+            "explain-gating-need",
+            "trace-gate-extremes"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "练习与迁移",
+          "role": "assessment",
+          "outcomeRefs": [
+            "trace-gate-extremes",
+            "implement-gru-forward"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-gating-need",
+          "compute-gru-gates",
+          "trace-gate-extremes",
+          "implement-gru-forward"
+        ],
+        "method": "完成门值极端情形的推演题与一道实现自查题，并说明 GRU 相对普通循环网络的取舍。",
+        "successCriteria": [
+          "能写出四个核心公式并指出各激活函数的作用",
+          "能把 Z 与 R 的极端取值映射回状态更新公式",
+          "能说明参数形状与状态传递顺序"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-2-2"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-rnn-limits",
+        "moduleId": "problem-and-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：普通循环网络的局限",
+        "markdown": "前一章的循环神经网络能处理序列数据，但面对当今各种序列学习问题，这些技术可能并不够用。教材指出一个常见问题是数值不稳定性：即使已经应用梯度裁剪等技巧缓解，仍需要通过设计更复杂的序列模型来进一步处理。门控循环单元（gated recurrent units，GRU）和长短期记忆网络（long short-term memory，LSTM）就是在这一背景下引入的两种广泛使用的网络，本章后续还会讨论深层与双向等扩展。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代循环神经网络"
+              ],
+              "lineStart": 3359,
+              "lineEnd": 3386,
+              "assetRefs": [],
+              "excerptSha256": "db1524c5a0e02e6cad77b0cb5ef3553cf241ee87cd8a328fbdf39e756d89d189"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gating-goal",
+        "moduleId": "problem-and-motivation",
+        "depth": "support",
+        "kind": "note",
+        "title": "门控要解决的不是单个技巧问题",
+        "markdown": "普通循环网络沿时间步反复乘同一个状态权重，误差在长序列上容易消失或爆炸；梯度裁剪只是把过大的梯度压住，并没有改变“每一步都必须整体改写隐状态”这一结构。门控的思路是给状态更新增加可学习的开关，让模型自己决定某一步该保留多少旧状态、吸收多少新信息，从而在结构上为长距离信息留出通道。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-rnn-limits"
+          ]
+        }
+      },
+      {
+        "id": "textbook-three-cases",
+        "moduleId": "problem-and-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材动机：三种需要门控的情形",
+        "markdown": "教材用三种情形说明普通隐状态更新机制的不足：\n\n1. **早期信息关键**：第一个观测值包含校验和，要在序列末尾判断校验和是否正确。若没有记忆机制，就必须给该观测值极大的梯度，因为它影响所有后续观测值，因此希望有机制把重要的早期信息存进记忆元。\n2. **无关词元**：对网页做情感分析时，辅助的 HTML 代码可能与网页传达的情绪无关，希望有机制跳过这类词元在隐状态中的表示。\n3. **逻辑中断**：书的章节之间可能有过渡，证券也可能从熊市转为牛市，此时最好能重置内部状态表示。\n\n教材还说明：LSTM 是更早提出的方法，GRU 是稍简化的变体，通常能提供同等效果，且计算速度明显更快，因此先讲 GRU。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000058"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）"
+              ],
+              "lineStart": 3387,
+              "lineEnd": 3423,
+              "assetRefs": [],
+              "excerptSha256": "4bc4093b1818e564d7642e6cf9147a76a7eb1b2e9f3adf2d3647a02ab9de6201"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-three-cases-map",
+        "moduleId": "problem-and-motivation",
+        "depth": "support",
+        "kind": "note",
+        "title": "三种情形对应两个动作",
+        "markdown": "三种情形可以归到两个动作上。需要长期保留或跳过当前词元时，让更新门接近 1，旧隐状态被原样带过时间步；需要丢弃旧状态时，让重置门接近 0，使候选状态的计算几乎不依赖旧隐状态。这里要强调两点：门由数据学习得到，不是教材预先写死的规则；两类门各管一件事，不能互相替代。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-cases"
+          ]
+        }
+      },
+      {
+        "id": "textbook-gated-hidden",
+        "moduleId": "gate-computation",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：门控隐状态",
+        "markdown": "门控循环单元与普通循环神经网络的关键区别在于支持隐状态的门控：模型有专门的机制决定何时更新隐状态、何时重置隐状态。这些机制可学习，因此能处理前面列出的问题。例如第一个词元非常重要时，模型会学会在第一次观测之后不更新隐状态；同样可以学会跳过不相关的临时观测，并在需要时重置隐状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000059"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "门控隐状态"
+              ],
+              "lineStart": 3424,
+              "lineEnd": 3436,
+              "assetRefs": [],
+              "excerptSha256": "7df590d68cfda80e34c22be09561248e5ea80bd11db5d0b17151e1686363664d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gating-learned",
+        "moduleId": "gate-computation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "门是学习出来的软开关",
+        "markdown": "门是一个 0 到 1 之间的连续值，而不是布尔开关。它由当前输入和上一隐状态经过全连接层再取 sigmoid 得到，因此对参数可微，可以随训练一起优化。门值接近 0 或 1 时表现得像“关”或“开”，处于中间时则完成平滑的加权混合；这正是它能替代硬性 if 规则的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-gated-hidden"
+          ]
+        }
+      },
+      {
+        "id": "textbook-gate-equations",
+        "moduleId": "gate-computation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材公式：重置门与更新门",
+        "markdown": "设时间步 $t$ 的输入为 $\\mathbf{X}_t \\in \\mathbb{R}^{n \\times d}$（$n$ 为批量大小，$d$ 为输入个数），上一时间步的隐状态为 $\\mathbf{H}_{t-1} \\in \\mathbb{R}^{n \\times h}$（$h$ 为隐藏单元个数）。重置门 $\\mathbf{R}_t$ 与更新门 $\\mathbf{Z}_t$ 都是 $\\mathbb{R}^{n \\times h}$ 的矩阵：\n\n$$\n\\begin{aligned}\n\\mathbf{R}_t = \\sigma(\\mathbf{X}_t \\mathbf{W}_{xr} + \\mathbf{H}_{t-1} \\mathbf{W}_{hr} + \\mathbf{b}_r),\\\\\n\\mathbf{Z}_t = \\sigma(\\mathbf{X}_t \\mathbf{W}_{xz} + \\mathbf{H}_{t-1} \\mathbf{W}_{hz} + \\mathbf{b}_z),\n\\end{aligned}\n$$\n\n其中 $\\mathbf{W}_{xr}, \\mathbf{W}_{xz} \\in \\mathbb{R}^{d \\times h}$，$\\mathbf{W}_{hr}, \\mathbf{W}_{hz} \\in \\mathbb{R}^{h \\times h}$，偏置 $\\mathbf{b}_r, \\mathbf{b}_z \\in \\mathbb{R}^{1 \\times h}$。两个门都使用 sigmoid 把结果压到 $(0,1)$ 区间，从而可以作为凸组合的系数；求和中会触发广播机制。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000060"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "门控隐状态",
+                "重置门和更新门"
+              ],
+              "lineStart": 3437,
+              "lineEnd": 3477,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/gru-1.svg"
+              ],
+              "excerptSha256": "61d7b24974aefcc5e9fe8ca7f902b3ffd5fff42fc2d969cb536ef0ee898c7641"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gate-reading",
+        "moduleId": "gate-computation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "怎样读这两个门",
+        "markdown": "每个门都由三部分相加再取 sigmoid：当前输入项决定这个词元的影响，上一隐状态项决定历史的影响，偏置给出与输入无关的默认倾向。两个门形状相同但参数各自独立，因此可以学到不同的开合模式。sigmoid 是逐元素作用的，所以每个隐藏单元都有自己的门值，模型可以对不同特征分别记忆或遗忘。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-gate-equations"
+          ]
+        }
+      },
+      {
+        "id": "textbook-candidate-state",
+        "moduleId": "candidate-and-update",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材公式：候选隐状态",
+        "markdown": "把重置门并入普通的隐状态更新机制，就得到时间步 $t$ 的候选隐状态：\n\n$$\n\\tilde{\\mathbf{H}}_t = \\tanh(\\mathbf{X}_t \\mathbf{W}_{xh} + (\\mathbf{R}_t \\odot \\mathbf{H}_{t-1}) \\mathbf{W}_{hh} + \\mathbf{b}_h),\n$$\n\n其中 $\\mathbf{W}_{xh} \\in \\mathbb{R}^{d \\times h}$、$\\mathbf{W}_{hh} \\in \\mathbb{R}^{h \\times h}$、$\\mathbf{b}_h \\in \\mathbb{R}^{1 \\times h}$，$\\odot$ 表示 Hadamard 积（按元素乘积），tanh 保证候选值落在 $(-1,1)$。与普通循环网络相比，$\\mathbf{R}_t$ 与 $\\mathbf{H}_{t-1}$ 逐元素相乘削弱了旧状态的影响：当 $\\mathbf{R}_t$ 的各项接近 1 时恢复普通循环网络；当各项接近 0 时，候选隐状态变成以 $\\mathbf{X}_t$ 为输入的多层感知机结果，旧隐状态被重置为默认值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000061"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "门控隐状态",
+                "候选隐状态"
+              ],
+              "lineStart": 3478,
+              "lineEnd": 3508,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/gru-2.svg"
+              ],
+              "excerptSha256": "a47f1eb24d40e62389de6a48e766d1ec6252901074c4b44330d0056ce6f5ee7b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reset-extremes",
+        "moduleId": "candidate-and-update",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：重置门逐元素作用",
+        "markdown": "设某个隐藏单元上旧状态 $h_{t-1} = 0.8$，当前输入项与偏置合计为 $0.5$，并近似认为 $\\mathbf{W}_{hh}$ 在该单元上接近 1，则候选值约为 $\\tanh(0.5 + R \\cdot 0.8)$：\n\n- 当 $R = 0.9$ 时，$\\tanh(1.22) \\approx 0.84$，旧状态仍明显参与候选状态；\n- 当 $R = 0.1$ 时，$\\tanh(0.58) \\approx 0.52$，候选状态几乎只由当前输入决定。\n\n这说明重置门是按隐藏单元调节“旧状态还能进来多少”，而不是把整个隐状态一次清零。上面的数值为便于说明做了权重近似，实际值由训练得到。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-candidate-state"
+          ]
+        }
+      },
+      {
+        "id": "textbook-final-state",
+        "moduleId": "candidate-and-update",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材公式：隐状态更新",
+        "markdown": "候选状态只是中间结果，最终隐状态还要由更新门在旧状态与候选状态之间做按元素的凸组合：\n\n$$\n\\mathbf{H}_t = \\mathbf{Z}_t \\odot \\mathbf{H}_{t-1} + (1 - \\mathbf{Z}_t) \\odot \\tilde{\\mathbf{H}}_t.\n$$\n\n当 $\\mathbf{Z}_t$ 接近 1 时，模型倾向只保留旧状态，来自 $\\mathbf{X}_t$ 的信息基本被忽略，相当于跳过时间步 $t$；当 $\\mathbf{Z}_t$ 接近 0 时，新隐状态接近候选隐状态。如果整个子序列所有时间步的更新门都接近 1，那么无论序列多长，序列起始处的旧隐状态都容易一路保留到结尾。教材据此总结：重置门有助于捕获短期依赖，更新门有助于捕获长期依赖。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000062"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "门控隐状态",
+                "隐状态"
+              ],
+              "lineStart": 3509,
+              "lineEnd": 3541,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/gru-3.svg"
+              ],
+              "excerptSha256": "5cca1e89c7096b030653355a1923b7f04cd2f78ccb3b0086ef2e2321f30fb5ea"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-update-ratio",
+        "moduleId": "candidate-and-update",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "用比例视角看更新门",
+        "markdown": "把 $\\mathbf{H}_t$ 看成旧状态与候选状态的加权平均，权重 $\\mathbf{Z}_t$ 与 $1-\\mathbf{Z}_t$ 逐元素相加为 1。$\\mathbf{Z}_t$ 越大，模型越保守，更愿意把已有表示原样带过时间步；$\\mathbf{Z}_t$ 越小，更新越激进，更愿意用当前输入改写表示。连续多个时间步都接近 1 时，隐状态几乎不变，误差可以沿这条近似恒等的路径回传，这正是门控缓解梯度消失问题的直观来源，也是教材列出该设计的动机。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-state"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scratch-params",
+        "moduleId": "implementation-map",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材实现：数据与参数初始化",
+        "markdown": "教材使用时间机器数据集从零实现 GRU，批量大小为 32、时间步为 35。参数从标准差为 0.01 的高斯分布中采样，偏置项初始化为 0，隐藏单元数由 `num_hiddens` 决定。参数按用途分成三组，每组包含输入权重、状态权重和偏置：更新门 $\\mathbf{W}_{xz}, \\mathbf{W}_{hz}, \\mathbf{b}_z$，重置门 $\\mathbf{W}_{xr}, \\mathbf{W}_{hr}, \\mathbf{b}_r$，候选隐状态 $\\mathbf{W}_{xh}, \\mathbf{W}_{hh}, \\mathbf{b}_h$；输出层另有 $\\mathbf{W}_{hq}, \\mathbf{b}_q$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "从零开始实现"
+              ],
+              "lineStart": 3542,
+              "lineEnd": 3588,
+              "assetRefs": [],
+              "excerptSha256": "5fb05f5b992ac72ae4eef6a9b6377fe06d18c0ead56849d73048dbc48ba4816a"
+            },
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000064"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "从零开始实现",
+                "[**初始化模型参数**]"
+              ],
+              "lineStart": 3589,
+              "lineEnd": 3695,
+              "assetRefs": [],
+              "excerptSha256": "573574c8d57e5074f78063812cb977ae9c5ae82ac082dfd3e4e3c01cb91b4f75"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-param-map",
+        "moduleId": "implementation-map",
+        "depth": "support",
+        "kind": "table",
+        "title": "参数与公式的对应表",
+        "markdown": "把参数与前面的公式对齐，可以避免实现时混淆：\n\n| 参数 | 形状 | 作用 |\n| --- | --- | --- |\n| $\\mathbf{W}_{xz}, \\mathbf{W}_{hz}, \\mathbf{b}_z$ | $d \\times h$、$h \\times h$、$1 \\times h$ | 计算更新门 $\\mathbf{Z}_t$ |\n| $\\mathbf{W}_{xr}, \\mathbf{W}_{hr}, \\mathbf{b}_r$ | $d \\times h$、$h \\times h$、$1 \\times h$ | 计算重置门 $\\mathbf{R}_t$ |\n| $\\mathbf{W}_{xh}, \\mathbf{W}_{hh}, \\mathbf{b}_h$ | $d \\times h$、$h \\times h$、$1 \\times h$ | 计算候选隐状态 |\n| $\\mathbf{W}_{hq}, \\mathbf{b}_q$ | $h \\times q$、$1 \\times q$ | 计算输出（$q$ 为输出个数） |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scratch-params"
+          ]
+        }
+      },
+      {
+        "id": "textbook-model-code",
+        "moduleId": "implementation-map",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材实现：前向计算顺序",
+        "markdown": "模型结构仍与基本循环单元相同，只是权重更新公式更复杂；隐状态初始化为全零张量，形状为（批量大小，隐藏单元个数）。每个时间步依次计算更新门 $\\mathbf{Z}_t$、重置门 $\\mathbf{R}_t$、候选隐状态 $\\tilde{\\mathbf{H}}_t$ 和新隐状态 $\\mathbf{H}_t$，再由 $\\mathbf{H}_t$ 经输出层得到输出，并把 $\\mathbf{H}_t$ 传给下一时间步。代码中的 `Z * H + (1 - Z) * H_tilda` 与教材公式的加和顺序一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000065"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "从零开始实现",
+                "定义模型"
+              ],
+              "lineStart": 3696,
+              "lineEnd": 3792,
+              "assetRefs": [],
+              "excerptSha256": "5580f49678faa63a4a55679f51864acabdc316d8c6d9bf7dbbdd97625ec60809"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-code-equation-map",
+        "moduleId": "implementation-map",
+        "depth": "support",
+        "kind": "note",
+        "title": "代码与公式逐行对照",
+        "markdown": "把教材代码按行对照公式：\n\n1. `Z = sigmoid(X @ W_xz + H @ W_hz + b_z)`\n2. `R = sigmoid(X @ W_xr + H @ W_hr + b_r)`\n3. `H_tilda = tanh(X @ W_xh + (R * H) @ W_hh + b_h)`\n4. `H = Z * H + (1 - Z) * H_tilda`\n5. `Y = H @ W_hq + b_q`\n\n注意第 3 行先做 $\\mathbf{R}$ 与 $\\mathbf{H}$ 的逐元素乘再乘权重矩阵；第 4 行使用更新前的旧 $\\mathbf{H}$ 计算新状态，赋值完成后才把新状态带到下一时间步。循环顺序与公式中的下标一一对应。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-model-code"
+          ]
+        }
+      },
+      {
+        "id": "textbook-train-concise",
+        "moduleId": "implementation-map",
+        "depth": "support",
+        "kind": "code",
+        "title": "教材实现：训练、预测与简洁实现",
+        "markdown": "训练和预测的工作方式与普通循环网络完全相同。训练结束后，教材分别打印训练集上的困惑度，以及前缀“time traveler”和“traveler”的预测序列上的困惑度。高层 API 的简洁实现只需实例化 GRU 层并交给统一的训练封装，因为所有门控配置细节都已封装；它的运行速度要快得多，原因是使用编译好的算子而不是 Python 逐项处理细节。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000066"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "从零开始实现",
+                "[**训练**]与预测"
+              ],
+              "lineStart": 3793,
+              "lineEnd": 3828,
+              "assetRefs": [],
+              "excerptSha256": "d372028115eaad92218cdfa8c5d77d33a972694a619d69fbf94b3f5eabd48d4a"
+            },
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000067"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "[**简洁实现**]"
+              ],
+              "lineStart": 3829,
+              "lineEnd": 3873,
+              "assetRefs": [],
+              "excerptSha256": "79a2cafeff9f0e3af966109362367b9c3ceb953267c313a7088647159f2b5954"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-impl-checklist",
+        "moduleId": "implementation-map",
+        "depth": "support",
+        "kind": "note",
+        "title": "实现检查清单",
+        "markdown": "从零实现时按下面几项自查：\n\n- 输入按时间步展开后，每个 $\\mathbf{X}_t$ 的形状要与权重 $\\mathbf{W}_{x\\cdot}$ 的左维对齐，状态形状为（批量大小，隐藏单元个数）；\n- 两个门用 sigmoid，候选用 tanh，二者不能互换；\n- 更新隐状态时要保留旧 $\\mathbf{H}$，先算候选再混合，否则 $\\mathbf{Z} \\odot \\mathbf{H}_{t-1}$ 会用错值；\n- 每个时间步结束后显式把新状态传给下一步，并收集输出；\n- 训练与预测循环可以直接复用普通循环网络的封装。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-train-concise"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "boundary-and-comparison",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材在小结中给出四点：门控循环神经网络可以更好地捕获时间步距离很长的序列上的依赖关系；重置门有助于捕获序列中的短期依赖关系；更新门有助于捕获序列中的长期依赖关系；重置门打开时，门控循环单元包含基本循环神经网络，更新门打开时，它可以跳过子序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "小结"
+              ],
+              "lineStart": 3874,
+              "lineEnd": 3880,
+              "assetRefs": [],
+              "excerptSha256": "e107df1c02f7bc43864d35476ef078f566574ca797029dab80963a092a663526"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gru-vs-vanilla",
+        "moduleId": "boundary-and-comparison",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "与普通循环网络的差别",
+        "markdown": "沿三个维度对照普通循环网络：\n\n| 维度 | 普通循环网络 | 门控循环单元 |\n| --- | --- | --- |\n| 状态更新 | 固定地用当前输入与旧状态算出新状态 | 用学习到的门值决定旧状态与新候选各占多少 |\n| 参数 | 一组输入、状态权重与偏置 | 额外增加更新门、重置门两组参数 |\n| 记忆行为 | 难以选择性地保留或清除 | 可以把旧状态原样带过若干时间步，也可以重置 |\n\n当重置门全部为 1、更新门全部为 0 时，更新公式退化为普通循环网络的隐状态更新，因此 GRU 可以看作普通循环网络的一种可学习扩展。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-gru-vs-lstm",
+        "moduleId": "boundary-and-comparison",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "与 LSTM 的关系",
+        "markdown": "教材说明 LSTM 是更早提出的方法，GRU 是稍简化的变体，通常能提供同等效果，并且计算速度明显更快。因此“门更少”不等于“能力一定更弱”，也不应把二者当成可以随意互换的同一种结构：它们的状态组织方式不同，具体差异留到 LSTM 一节展开。做选择时通常结合任务效果与计算预算，而不是只看门的数量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-three-cases"
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "boundary-and-comparison",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "常见误解与纠正",
+        "markdown": "学习中常见的四个误解：\n\n- **“更新门越大，接纳的新信息越多。”** 相反，$\\mathbf{Z}_t$ 是旧状态的权重，新信息的权重是 $1-\\mathbf{Z}_t$；$\\mathbf{Z}_t$ 接近 1 时几乎忽略当前输入。\n- **“重置门会把隐状态永久清零。”** 重置只作用在候选状态的计算中，最终 $\\mathbf{H}_t$ 仍由更新门混合旧状态，而且是逐元素的。\n- **“有了门控就不会梯度消失。”** 门控提供了近似恒等的传播路径来缓解这一问题，但并不保证消除，实践中仍可能配合梯度裁剪等技巧。\n- **“GRU 与 LSTM 只是门数量不同。”** 两者的状态结构不同，教材也只说明 GRU 通常效果相当、计算更快。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-state",
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "教材给出四道练习：\n\n1. 假设只想使用时间步 $t'$ 的输入来预测时间步 $t > t'$ 的输出，那么每个时间步的重置门和更新门的最佳值是什么？\n2. 调整并分析超参数对运行时间、困惑度和输出顺序的影响。\n3. 比较 `rnn.RNN` 与 `rnn.GRU` 的不同实现在运行时间、困惑度和输出字符串上的差异。\n4. 如果只实现门控循环单元的一部分，例如只有一个重置门或一个更新门，会怎样？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000069"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "门控循环单元（GRU）",
+                "练习"
+              ],
+              "lineStart": 3881,
+              "lineEnd": 3899,
+              "assetRefs": [],
+              "excerptSha256": "56a629aa4f864091da8495178decdda7d37675b22cb9c1ec451ee21f9b26d071"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-hints",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "练习提示与检查要点",
+        "markdown": "第 1 题的推理路径：要在 $t'$ 处把当前输入写进隐状态，应让该步的更新门接近 0（采用候选状态），同时让重置门接近 0（清除更早的旧状态）；对 $t > t'$ 的每一步让更新门接近 1，就能忽略后续输入、原样保留 $t'$ 处的状态。\n\n第 4 题可以从功能缺失分析：只保留重置门时，模型能重置旧状态，却缺少跳过时间步、长期原样保留状态的通道；只保留更新门时，模型能跳过输入或保留状态，却无法在计算候选状态时主动削弱旧状态。第 2、3 题需要实际训练比较，应报告运行时间、困惑度和生成文本，而不是凭公式下结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "textbook-final-state",
+            "textbook-candidate-state"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-lstm",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "通向下一节：LSTM",
+        "markdown": "完成练习后可以带着三个问题进入下一节：LSTM 用什么结构保存长期信息？它的输入门、遗忘门、输出门分别控制什么？多出的细胞状态带来什么代价？LSTM 沿用“门控 + 候选状态”的思路，但把写多少、忘多少、读多少拆成三条控制通道；学完后回到这里比较两类门控的表达能力与计算成本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "textbook-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "gru-extreme-check",
+        "type": "formative-check",
+        "title": "门值极端情形自测",
+        "anchorBlockId": "model-exercise-hints",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-gate-extremes",
+          "compute-gru-gates"
+        ],
+        "learningPurpose": "检查能否把 Z 与 R 的极端取值映射回状态更新公式，并据此判断模型行为。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-final-state",
+            "textbook-exercises"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若只使用时间步 $t'$ 的输入预测 $t > t'$ 的输出，请写出各时间步更新门与重置门应取的极端值，并用更新公式说明理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "trunk",
+  "related": [
+    "point-2-3"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000057"
+      ],
+      "headingPath": [
+        "现代循环神经网络"
+      ],
+      "lineStart": 3359,
+      "lineEnd": 3386,
+      "assetRefs": [],
+      "excerptSha256": "db1524c5a0e02e6cad77b0cb5ef3553cf241ee87cd8a328fbdf39e756d89d189"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000058"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）"
+      ],
+      "lineStart": 3387,
+      "lineEnd": 3423,
+      "assetRefs": [],
+      "excerptSha256": "4bc4093b1818e564d7642e6cf9147a76a7eb1b2e9f3adf2d3647a02ab9de6201"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000059"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "门控隐状态"
+      ],
+      "lineStart": 3424,
+      "lineEnd": 3436,
+      "assetRefs": [],
+      "excerptSha256": "7df590d68cfda80e34c22be09561248e5ea80bd11db5d0b17151e1686363664d"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000060"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "门控隐状态",
+        "重置门和更新门"
+      ],
+      "lineStart": 3437,
+      "lineEnd": 3477,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/gru-1.svg"
+      ],
+      "excerptSha256": "61d7b24974aefcc5e9fe8ca7f902b3ffd5fff42fc2d969cb536ef0ee898c7641"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000061"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "门控隐状态",
+        "候选隐状态"
+      ],
+      "lineStart": 3478,
+      "lineEnd": 3508,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/gru-2.svg"
+      ],
+      "excerptSha256": "a47f1eb24d40e62389de6a48e766d1ec6252901074c4b44330d0056ce6f5ee7b"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000062"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "门控隐状态",
+        "隐状态"
+      ],
+      "lineStart": 3509,
+      "lineEnd": 3541,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/gru-3.svg"
+      ],
+      "excerptSha256": "5cca1e89c7096b030653355a1923b7f04cd2f78ccb3b0086ef2e2321f30fb5ea"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000063"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "从零开始实现"
+      ],
+      "lineStart": 3542,
+      "lineEnd": 3588,
+      "assetRefs": [],
+      "excerptSha256": "5fb05f5b992ac72ae4eef6a9b6377fe06d18c0ead56849d73048dbc48ba4816a"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000064"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "从零开始实现",
+        "[**初始化模型参数**]"
+      ],
+      "lineStart": 3589,
+      "lineEnd": 3695,
+      "assetRefs": [],
+      "excerptSha256": "573574c8d57e5074f78063812cb977ae9c5ae82ac082dfd3e4e3c01cb91b4f75"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000065"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "从零开始实现",
+        "定义模型"
+      ],
+      "lineStart": 3696,
+      "lineEnd": 3792,
+      "assetRefs": [],
+      "excerptSha256": "5580f49678faa63a4a55679f51864acabdc316d8c6d9bf7dbbdd97625ec60809"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000066"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "从零开始实现",
+        "[**训练**]与预测"
+      ],
+      "lineStart": 3793,
+      "lineEnd": 3828,
+      "assetRefs": [],
+      "excerptSha256": "d372028115eaad92218cdfa8c5d77d33a972694a619d69fbf94b3f5eabd48d4a"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000067"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "[**简洁实现**]"
+      ],
+      "lineStart": 3829,
+      "lineEnd": 3873,
+      "assetRefs": [],
+      "excerptSha256": "79a2cafeff9f0e3af966109362367b9c3ceb953267c313a7088647159f2b5954"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000068"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "小结"
+      ],
+      "lineStart": 3874,
+      "lineEnd": 3880,
+      "assetRefs": [],
+      "excerptSha256": "e107df1c02f7bc43864d35476ef078f566574ca797029dab80963a092a663526"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000069"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "门控循环单元（GRU）",
+        "练习"
+      ],
+      "lineStart": 3881,
+      "lineEnd": 3899,
+      "assetRefs": [],
+      "excerptSha256": "56a629aa4f864091da8495178decdda7d37675b22cb9c1ec451ee21f9b26d071"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2436,
+    2314
+  ],
+  "scale": 1.29
+}

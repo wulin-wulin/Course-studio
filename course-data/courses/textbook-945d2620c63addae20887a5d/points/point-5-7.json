@@ -1,0 +1,552 @@
+{
+  "id": "point-5-7",
+  "title": "自然语言推断：微调BERT",
+  "shortSummary": "把前提与假设拼成单个序列输入 BERT，用特殊分类向量完成三分类并报告实验结果。",
+  "keyTerms": [
+    "BERT 微调",
+    "句对编码",
+    "分类向量",
+    "自然语言推断"
+  ],
+  "animationType": "pairTruncation",
+  "animationSuggestion": "并排显示前提与假设的词元条，实时标注各自长度和总长上限；每一步高亮被删除的较长一侧尾词元，直到总长降到 max_len-3，最后展示三个特殊词元占位与补齐结果。",
+  "difficulty": "进阶",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-5-4",
+    "point-5-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的加载、打包、分类头与训练流程及全部数值，按“前置条件—步骤—边界—检查”重排，并补充形状推演与实验解读。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "describe-pipeline",
+          "text": "描述从加载预训练 BERT 到输出三分类的完整微调流程及各步作用。"
+        },
+        {
+          "id": "encode-pair",
+          "text": "解释前提与假设如何打包成单个 BERT 输入序列，并用片段索引区分两者。"
+        },
+        {
+          "id": "classify-cls",
+          "text": "解释特殊分类词元位置的表示如何经多层感知机得到三个类别分数。"
+        },
+        {
+          "id": "explain-finetune-scope",
+          "text": "说明微调时哪些参数更新、哪些预训练专用头参数保持不更新及原因。"
+        },
+        {
+          "id": "evaluate-boundary",
+          "text": "解读实验结果，并说明模型规模与截断策略对精度的边界影响。"
+        }
+      ],
+      "misconceptions": [
+        "把微调理解为只训练新加的输出层：教材中编码器和隐藏层参数同样参与微调。",
+        "认为超长句对可以任意丢弃尾部：截断的是较长一侧的尾词元，可能丢掉判断蕴含关系的关键证据。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-architecture",
+          "title": "任务定位与“编码器加小分类头”",
+          "role": "motivation",
+          "description": "从序列级文本对分类任务出发，明确只需在预训练编码器上加一个多层感知机。",
+          "outcomeRefs": [
+            "describe-pipeline",
+            "classify-cls"
+          ],
+          "order": 0
+        },
+        {
+          "id": "load-pretrained",
+          "title": "前置条件：加载预训练 BERT",
+          "role": "prerequisite",
+          "description": "两个模型规模、模型包内容与加载函数的步骤，以及结构与检查点必须对齐。",
+          "outcomeRefs": [
+            "describe-pipeline",
+            "explain-finetune-scope"
+          ],
+          "order": 1
+        },
+        {
+          "id": "pack-pair",
+          "title": "把句对打包成单个序列",
+          "role": "procedure",
+          "description": "分词、拼接、片段索引、截断、补齐与并行预处理。",
+          "outcomeRefs": [
+            "encode-pair",
+            "evaluate-boundary"
+          ],
+          "order": 2
+        },
+        {
+          "id": "classifier-head",
+          "title": "分类头与前向计算",
+          "role": "procedure",
+          "description": "复用编码器与隐藏层，取分类词元位置表示映射到三个类别。",
+          "outcomeRefs": [
+            "classify-cls",
+            "explain-finetune-scope"
+          ],
+          "order": 3
+        },
+        {
+          "id": "finetune-training",
+          "title": "微调训练与参数更新范围",
+          "role": "procedure",
+          "description": "训练配置、从零学习的输出层与不被更新的预训练专用头。",
+          "outcomeRefs": [
+            "describe-pipeline",
+            "explain-finetune-scope"
+          ],
+          "order": 4
+        },
+        {
+          "id": "results-and-limits",
+          "title": "小结、练习与边界检查",
+          "role": "check",
+          "description": "教材小结、两道练习及精度与截断的取舍检查。",
+          "outcomeRefs": [
+            "evaluate-boundary"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-pipeline",
+          "encode-pair",
+          "classify-cls",
+          "explain-finetune-scope",
+          "evaluate-boundary"
+        ],
+        "method": "按教材流程复述一次微调链路，并对两处边界判断给出依据：哪些参数不更新、截断策略的利弊。",
+        "successCriteria": [
+          "能按顺序说明加载、打包、截断、分类头与训练各步",
+          "能指出分类词元位置表示的来源与形状",
+          "能说明预训练专用头为何不更新",
+          "能为截断方案给出可检验的取舍理由"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-overview",
+        "moduleId": "task-and-architecture",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：任务定位与微调思路",
+        "markdown": "自然语言推断是一个**序列级的文本对分类**任务：给定前提（premise）与假设（hypothesis），模型要在蕴涵、矛盾、中性三类中选择一个。\n\n本节改用微调 BERT 来完成这项任务。与在 BERT 之上另造一套结构不同，微调只需要一个**额外的基于多层感知机的架构**：预训练编码器负责表示句对，多层感知机负责把表示映射成三个输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000304"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：微调BERT"
+              ],
+              "lineStart": 15672,
+              "lineEnd": 15717,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/nlp-map-nli-bert.svg"
+              ],
+              "excerptSha256": "47705f9839b298f8c30c0b0970367ed3bd6df6ec253fbb1c11440fbe954d89da"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-small-head",
+        "moduleId": "task-and-architecture",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么可以只加一个小分类头",
+        "markdown": "预训练阶段的 Transformer 编码器已经把词元上下文压成通用表示，下游任务只需要学习“如何把这对句子的关系读出来”。因此 BERT 在这里同时承担两件事：它既是预训练模型，又成为下游推断模型的一部分。\n\n与基于任务专用注意力层的句对结构相比，句子之间的对齐不再由新写的注意力层完成，而是交给编码器内部的多头自注意力。代价是模型更大、微调算力更高。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-load-pretrained",
+        "moduleId": "load-pretrained",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：加载预训练的 BERT",
+        "markdown": "教材准备两个规模的预训练 BERT：`bert.base` 与原始 BERT 基础模型同规模，微调需要大量算力；`bert.small` 是小版本，便于在普通机器上演示。\n\n每个预训练包包含定义词表的 `vocab.json` 和预训练参数的 `pretrained.params`。`load_pretrained_model` 的步骤是：\n\n1. 下载并解压模型包；\n2. 用 `vocab.json` 重建词表，得到 `idx_to_token` 与 `token_to_idx`；\n3. 按给定超参数构造 `BERTModel`；\n4. 把 `pretrained.params` 载入模型；\n5. 返回 `bert, vocab`。\n\n正文用 `bert.small` 演示，超参数为 num_hiddens=256、ffn_num_hiddens=512、num_heads=4、num_layers=2、dropout=0.1、max_len=512。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000305"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：微调BERT",
+                "[**加载预训练的BERT**]"
+              ],
+              "lineStart": 15718,
+              "lineEnd": 15828,
+              "assetRefs": [],
+              "excerptSha256": "726fb1d8730ec8c246dbab4b0b5589f6b23f4e21a95d932c4f04ff5daa7f33cc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-load-alignment",
+        "moduleId": "load-pretrained",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：结构与检查点必须对齐",
+        "markdown": "加载预训练参数时，构造出的模型结构必须与检查点一致：隐藏维度、前馈维度、头数、层数与最大长度任一不匹配，权重都无法正确对上。教材在 PyTorch 版本中把这些维度直接写进 `BERTModel` 的构造参数，正是为了与 `bert.small` 的检查点对齐。\n\n小模型换来的代价是表示能力有限，这也是后面实验结果仍有提升空间的原因之一。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-load-pretrained"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pair-dataset",
+        "moduleId": "pack-pair",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：打包句对并构造 SNLI 数据集",
+        "markdown": "下游数据集 `SNLIBERTDataset` 把每个样本的前提和假设打包成**一个** BERT 输入序列：\n\n1. 把前提与假设的句子转小写并分词；\n2. 用 `get_tokens_and_segments` 拼接成带特殊词元的序列，并生成片段索引区分前提与假设；\n3. 若两段词元总数超过 `max_len - 3`，反复删除较长一段的最后一个词元，为 `<cls>`、`<sep>`、`<sep>` 保留 3 个位置；\n4. 用 `<pad>` 和片段索引 0 补齐到 `max_len`，记录有效长度 `valid_len`；\n5. 用 4 个工作进程并行生成训练或测试样本。\n\n演示设置 batch_size=512、max_len=128。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000306"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：微调BERT",
+                "[**微调BERT的数据集**]"
+              ],
+              "lineStart": 15829,
+              "lineEnd": 16033,
+              "assetRefs": [],
+              "excerptSha256": "2ae7bedeb21e218cf8e3b32efcc30c9a2b32320678bde709243f175d416bacaa"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-truncation-tradeoff",
+        "moduleId": "pack-pair",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充：截断规则的偏向与代价",
+        "markdown": "截断规则是“谁长删谁”，它只削掉较长一侧的尾部，可能正好丢掉判断蕴含关系所需的关键信息，也可能让前提与假设受到不对称的削减。\n\n教材练习 2 要求比较按长度比例截断与这种做法的利弊：按比例截断能保持两侧的相对信息量，但实现更复杂，且同样无法恢复被删除的词元。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pair-dataset"
+          ]
+        }
+      },
+      {
+        "id": "textbook-classifier",
+        "moduleId": "classifier-head",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：分类头与前向计算",
+        "markdown": "`BERTClassifier` 复用预训练模型的 `bert.encoder` 与 `bert.hidden`，再加一个把 256 维映射到 3 类的输出层 `nn.Linear(256, 3)`。\n\n前向计算：先把 `(tokens, segments, valid_lens)` 送入编码器得到每个位置的表示，再取第 0 个位置（即 `<cls>` 词元）的向量，依次经过隐藏层和输出层，得到蕴涵、矛盾、中性三个类别的分数。原文强调：这个特殊的 `<cls>` 词元同时编码了前提和假设的信息。\n\n在常见实现中，只有输出层的参数从零开始学习；编码器和多层感知机隐藏层的全部参数都参与微调。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000307"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：微调BERT",
+                "微调BERT"
+              ],
+              "lineStart": 16034,
+              "lineEnd": 16123,
+              "assetRefs": [],
+              "excerptSha256": "e66e6d9b6f313d39475587a420e5830d3b6485db1e314853554b7cab3877671e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-walkthrough",
+        "moduleId": "classifier-head",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：一个批次的形状推演",
+        "markdown": "以一个批次为例，张量形状变化如下：\n\n- `tokens_X`：`(batch, max_len)`\n- `segments_X`：`(batch, max_len)`\n- `encoded_X`：`(batch, max_len, 256)`\n- `encoded_X[:, 0, :]`：`(batch, 256)`，只保留第 0 个位置的表示\n- 经过 `hidden` 后仍是 `(batch, 256)`\n- 经过 `output` 后是 `(batch, 3)`，分别对应三个类别\n\n训练目标是三分类交叉熵，所以输出层维度必须等于 3；若把维度写错，损失无法与标签对应。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-classifier"
+          ]
+        }
+      },
+      {
+        "id": "model-stale-params",
+        "moduleId": "finetune-training",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "补充：哪些参数不更新",
+        "markdown": "`bert` 中还带着预训练用的 `MaskLM` 和 `NextSentencePred` 两个头，它们的参数随模型一起被载入，因此也属于 `net` 的参数。但它们只服务预训练的遮蔽语言模型损失和下一句预测损失，与下游自然语言推断无关。\n\n教材因此让这些参数带着“陈旧”（stale）梯度不更新：训练函数设置 `ignore_stale_grad=True`。真正参与微调的是编码器 `net.encoder`、隐藏层 `net.hidden`，以及从零开始学习的输出层 `net.output`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-classifier"
+          ]
+        }
+      },
+      {
+        "id": "model-training-recipe",
+        "moduleId": "finetune-training",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：训练配置与操作检查表",
+        "markdown": "教材的演示训练配置是：学习率 1e-4、Adam、5 个 epoch、batch_size 512、max_len 128，损失为三分类交叉熵（`reduction='none'`）。作者说明，由于计算资源有限，训练与测试精度都可以进一步提高，并把讨论留在练习中。\n\n操作检查表：\n\n1. 检查点维度与模型构造一致；\n2. 句对已按 `max_len - 3` 截断并补齐；\n3. 输出层维度为 3；\n4. 预训练专用头不更新；\n5. 记录每轮训练与测试精度，并注明所用配置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-classifier"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "results-and-limits",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：小结",
+        "markdown": "教材小结有两点：\n\n- 可以针对下游应用微调预训练的 BERT 模型，例如在 SNLI 数据集上进行自然语言推断。\n- 在微调过程中，BERT 模型成为下游应用模型的一部分；仅与预训练损失相关的参数在微调期间不会更新。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000308"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：微调BERT",
+                "小结"
+              ],
+              "lineStart": 16124,
+              "lineEnd": 16128,
+              "assetRefs": [],
+              "excerptSha256": "cbb3f11e9afddeabd18df9680b8ba584284d79fbc836e0c040928c69526d0870"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "results-and-limits",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材：练习",
+        "markdown": "**练习 1**：若计算资源允许，把 `bert.small` 换成 `bert.base`，并将 num_hiddens、ffn_num_hiddens、num_heads、num_layers 分别调到 768、3072、12、12，再增加微调轮数（必要时调其他超参数），看能否取得高于 0.86 的测试精度。\n\n**练习 2**：设计一种按一对序列长度比值截断的方法，并与 `SNLIBERTDataset` 使用的方法比较利弊。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：微调BERT",
+                "练习"
+              ],
+              "lineStart": 16129,
+              "lineEnd": 16145,
+              "assetRefs": [],
+              "excerptSha256": "ecc6189d7e5ed0348932046ef5ccb103e5461a523604a8e0287514284049ba10"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "results-and-limits",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：两道练习的检查点",
+        "markdown": "两题都指向同一个判断：**精度与代价的权衡**。\n\n练习 1 的答案取决于算力预算：更大模型、更多轮数通常带来更高精度，但显存与时间成本同步上升。报告结果时应同时说明模型规模、`max_len`、batch_size 与轮数，避免把不同配置的精度直接比较。\n\n练习 2 的检查点：按比例截断是否保持前提与假设的相对长度？是否会改变“谁提供关键证据”？两种做法都没有恢复被删词元的信息，因此都只是缓解而非消除截断损失。\n\n完成标准：能说清一次微调的完整链路，并能为自己的截断方案给出可检验的取舍理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "textbook-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "finetune-pipeline-check",
+        "type": "formative-check",
+        "title": "检查：一次微调的链路与参数范围",
+        "anchorBlockId": "model-training-recipe",
+        "moduleId": "finetune-training",
+        "depth": "core",
+        "outcomeRefs": [
+          "describe-pipeline",
+          "explain-finetune-scope"
+        ],
+        "learningPurpose": "检查学习者能否按顺序复述微调链路，并正确区分从零学习的输出层、参与微调的编码器参数与不更新的预训练专用头。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-classifier"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按顺序写出：加载预训练 BERT、打包句对、构造分类头、训练四个环节各自的作用；再指出 `net.output`、`net.encoder`、`net.hidden` 与 `MaskLM`/`NextSentencePred` 中哪些参数会更新、哪些不会，并说明理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：应用",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "trunk",
+  "related": [
+    "point-5-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000304"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：微调BERT"
+      ],
+      "lineStart": 15672,
+      "lineEnd": 15717,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/nlp-map-nli-bert.svg"
+      ],
+      "excerptSha256": "47705f9839b298f8c30c0b0970367ed3bd6df6ec253fbb1c11440fbe954d89da"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000305"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：微调BERT",
+        "[**加载预训练的BERT**]"
+      ],
+      "lineStart": 15718,
+      "lineEnd": 15828,
+      "assetRefs": [],
+      "excerptSha256": "726fb1d8730ec8c246dbab4b0b5589f6b23f4e21a95d932c4f04ff5daa7f33cc"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000306"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：微调BERT",
+        "[**微调BERT的数据集**]"
+      ],
+      "lineStart": 15829,
+      "lineEnd": 16033,
+      "assetRefs": [],
+      "excerptSha256": "2ae7bedeb21e218cf8e3b32efcc30c9a2b32320678bde709243f175d416bacaa"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000307"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：微调BERT",
+        "微调BERT"
+      ],
+      "lineStart": 16034,
+      "lineEnd": 16123,
+      "assetRefs": [],
+      "excerptSha256": "e66e6d9b6f313d39475587a420e5830d3b6485db1e314853554b7cab3877671e"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000308"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：微调BERT",
+        "小结"
+      ],
+      "lineStart": 16124,
+      "lineEnd": 16128,
+      "assetRefs": [],
+      "excerptSha256": "cbb3f11e9afddeabd18df9680b8ba584284d79fbc836e0c040928c69526d0870"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000309"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：微调BERT",
+        "练习"
+      ],
+      "lineStart": 16129,
+      "lineEnd": 16145,
+      "assetRefs": [],
+      "excerptSha256": "ecc6189d7e5ed0348932046ef5ccb103e5461a523604a8e0287514284049ba10"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2195,
+    694
+  ],
+  "scale": 1.27
+}

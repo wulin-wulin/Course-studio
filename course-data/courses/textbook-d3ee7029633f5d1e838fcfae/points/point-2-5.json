@@ -1,0 +1,445 @@
+{
+  "id": "point-2-5",
+  "title": "Feature Matching + Homography to find Objects",
+  "shortSummary": "说明用 RANSAC 估计单应矩阵并在新场景中定位目标对象的完整流程。",
+  "keyTerms": [
+    "单应矩阵",
+    "RANSAC",
+    "目标定位",
+    "透视变换"
+  ],
+  "animationType": "ransacHomography",
+  "animationSuggestion": "逐步显示随机抽样的四个点对、拟合出的单应与全体点的重投影误差，用绿色标出内点、红色标出外点并实时更新内点计数；最后用最佳单应把查询图四角映射成场景中的目标框，支持重播同一随机序列和重新生成新序列。",
+  "difficulty": "进阶",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-2-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-pipeline",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的目标、参数与代码流程，按决策点重排为问题导入、几何原理、流程实现、结果与边界、自检桥接，并补充单应自由度、RANSAC 循环与失败恢复的模型解释。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-pipeline",
+          "text": "说明从特征匹配到目标定位的完整流程，并解释每一步解决什么问题。"
+        },
+        {
+          "id": "estimate-homography",
+          "text": "解释单应矩阵为什么至少需要四个正确对应点，以及 RANSAC 如何区分内点与外点。"
+        },
+        {
+          "id": "apply-locate",
+          "text": "给定匹配结果，判断目标能否被定位，并把查询图四角映射到场景中检查结果是否合理。"
+        }
+      ],
+      "misconceptions": [
+        "认为只要匹配数量够多就一定能定位目标，忽略匹配必须在几何上互相一致。",
+        "把 findHomography 返回的 mask 当作匹配质量分数，而不是内点标记。",
+        "认为单应变换可以精确描述任意三维物体在任意视角下的成像，忽略它的平面假设。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-setup",
+          "title": "任务与难点：从匹配到定位",
+          "role": "problem-introduction",
+          "description": "说明本节要解决什么问题，以及为什么只依赖匹配点还不够。",
+          "outcomeRefs": [
+            "explain-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "geometry-and-robust-fit",
+          "title": "单应矩阵与鲁棒拟合",
+          "role": "concept-and-mechanism",
+          "description": "解释单应的自由度、四点下限，以及 RANSAC 如何用采样与投票找到一致的模型。",
+          "outcomeRefs": [
+            "estimate-homography"
+          ],
+          "order": 1
+        },
+        {
+          "id": "pipeline-implementation",
+          "title": "按代码走完定位流程",
+          "role": "worked-example",
+          "description": "按教材参数逐步实现匹配、鲁棒估计、四角映射与结果绘制，并说明分支处理。",
+          "outcomeRefs": [
+            "explain-pipeline",
+            "apply-locate"
+          ],
+          "order": 2
+        },
+        {
+          "id": "result-and-limits",
+          "title": "结果解读与适用边界",
+          "role": "application-and-boundary",
+          "description": "解读教材结果图，并识别平面假设、纹理和阈值对结果的影响。",
+          "outcomeRefs": [
+            "apply-locate",
+            "estimate-homography"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "自检与下一站",
+          "role": "check-and-transfer",
+          "description": "用一组自检问题判断定位是否可信，并桥接到相机标定。",
+          "outcomeRefs": [
+            "explain-pipeline",
+            "apply-locate"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pipeline",
+          "estimate-homography",
+          "apply-locate"
+        ],
+        "method": "完成一道流程判断题：给出匹配数量、内点分布和映射后的四角，判断定位是否可信并说明依据。",
+        "successCriteria": [
+          "能指出匹配不足或内点在几何上不一致时不能定位目标",
+          "能说明四角映射与内点掩膜在结果验证中的用途",
+          "能区分单应的平面映射能力与三维场景的局限"
+        ],
+        "nextPointId": "point-2-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-goal",
+        "moduleId": "task-and-setup",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材目标：在杂乱场景里定位已知对象",
+        "markdown": "教材把本节目标定为：把特征匹配与 calib3d 模块中的 `findHomography()` 结合起来，在一幅复杂图像里找出已经知道的对象。前一节已经用查询图（queryImage）和场景图（trainImage）做过特征匹配，本节要在此基础上再走一步：不只报告哪些点相似，还要给出目标在场景中的确切位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000099"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching + Homography to find Objects"
+              ],
+              "lineStart": 1897,
+              "lineEnd": 1900,
+              "assetRefs": [],
+              "excerptSha256": "436c6973122022f71d89b0375572b9d214d516de3dd2cbe3e75ced866c3a1fe4"
+            },
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching + Homography to find Objects",
+                "Goal"
+              ],
+              "lineStart": 1901,
+              "lineEnd": 1905,
+              "assetRefs": [],
+              "excerptSha256": "89c3d52182b499a8942ccb19285d47ddd92050b4793e962accf457d66303c235"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-geometry",
+        "moduleId": "task-and-setup",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么匹配还不够",
+        "markdown": "匹配只回答“像不像”，不回答“对不对、在哪里”。它给出的是孤立的点对：查询图的某个角点与场景图的某个角点描述子接近。描述子是局部统计，遇到重复纹理、相似部件或遮挡时，错误对应会混进来；若直接把所有点对当作正确对应去平均位置，少数错误点就能把估计拉偏。\n\n因此还需要一个全局约束：同一平面上的点经过透视投影后仍满足同一个映射关系。把这条约束拟合成模型，再让所有点对投票，就能用大量一致的点对压过零散的错误。这正是教材接下来用单应矩阵加 RANSAC 的思路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-goal"
+          ]
+        }
+      },
+      {
+        "id": "textbook-basics",
+        "moduleId": "geometry-and-robust-fit",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材基础：用 findHomography 求透视变换",
+        "markdown": "教材先回顾上一节的做法：在查询图中找特征点、在场景图中找特征点，再在两组特征之间找最佳匹配，于是得到了对象某些部件在另一幅杂乱图像中的位置。这个信息已经足以精确定位目标，前提是把它交给合适的几何模型。\n\n具体使用 calib3d 模块的 `cv.findHomography()`：给它两幅图中的对应点集，它会求出该对象的透视变换；再用 `cv.perspectiveTransform()` 把查询图的角点映射到场景图，就能画出目标位置。这个变换至少需要四个正确对应点。\n\n匹配难免出错。教材指出，算法用 RANSAC 或 LEAST_MEDIAN（由标志位选择）来处理错误匹配：能给出正确估计的好匹配称为内点（inliers），其余称为外点（outliers）。`cv.findHomography()` 返回一个掩膜（mask），标明哪些点是内点、哪些是外点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching + Homography to find Objects",
+                "Basics"
+              ],
+              "lineStart": 1906,
+              "lineEnd": 1923,
+              "assetRefs": [],
+              "excerptSha256": "3648bdcddc75b91997c510b700a89df727a8723819f52dc3335c1c103e246516"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-homography-math",
+        "moduleId": "geometry-and-robust-fit",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：单应矩阵的自由度与四点下限",
+        "markdown": "单应矩阵 $H$ 是 $3 \\times 3$ 的矩阵，作用在齐次坐标上：$[x', y', 1]^T \\sim H [x, y, 1]^T$，其中 $\\sim$ 表示两边相差一个非零比例因子。所以 $H$ 整体缩放不改变映射，独立参数只有 8 个。每对正确对应点提供两个方程，四个点正好给出 8 个方程，因此四点是不共线情况下的最少数量，这正是教材“至少四个正确点”的来源。\n\n需要注意，这一模型描述的是平面到平面的透视关系。教材示例中的目标是包装盒这类近似平面的物体；当目标有显著厚度或发生非平面形变时，单应只能给出近似。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-basics"
+          ]
+        }
+      },
+      {
+        "id": "model-ransac-loop",
+        "moduleId": "geometry-and-robust-fit",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：RANSAC 的采样、拟合与计数循环",
+        "markdown": "RANSAC 把“用全部点拟合”换成“反复用少量点拟合，再让全体点投票”：\n\n1. 从匹配点对中随机抽取能确定模型的最小子集，单应取四个点对。\n2. 用这个子集估计一个候选 $H$。\n3. 把其余点对按 $H$ 投影，计算与真实对应位置的重投影误差；误差小于阈值（教材代码取 5.0 像素）的点记为内点，统计内点数量。\n4. 保留内点最多的候选模型，重复若干次后输出该模型与内点掩膜。\n\n`cv.findHomography()` 的 `mask` 就是最后这组内点的标记。教材提到的 LEAST_MEDIAN 是另一条鲁棒准则，它用误差中位数代替内点计数来抑制外点。RANSAC 是概率算法：迭代次数不够时可能没有抽到一组全为内点的样本，这也解释了为什么同一组数据重复运行会得到略有差异的内点集合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-basics",
+            "model-homography-math"
+          ]
+        }
+      },
+      {
+        "id": "textbook-code",
+        "moduleId": "pipeline-implementation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材代码：从 SIFT 匹配到映射四角",
+        "markdown": "教材给出的完整流程如下，参数取自原代码：\n\n1. 分别对查询图 `box.png` 和场景图 `box_in_scene.png` 用 `cv.SIFT_create()` 检测关键点并计算描述子。\n2. 用 FLANN 的 KD 树匹配器（`trees=5`、`checks=50`）做 `knnMatch(..., k=2)`，为每个查询描述子找两个最近邻。\n3. 按 Lowe 比率检验筛选：只有最近邻距离小于次近邻距离 0.7 倍的匹配才进入 `good`。\n4. 设定 `MIN_MATCH_COUNT = 10`。当 `len(good) > MIN_MATCH_COUNT` 不成立时，直接打印 `Not enough matches are found` 并放弃定位；否则继续。\n5. 从 `good` 中取出两幅图的对应坐标：查询图侧用 `kp1[m.queryIdx].pt`，场景图侧用 `kp2[m.trainIdx].pt`，组成 `src_pts` 与 `dst_pts`。\n6. 调用 `cv.findHomography(src_pts, dst_pts, cv.RANSAC, 5.0)` 得到 $3 \\times 3$ 的单应矩阵 `M` 和内点掩膜 `mask`，并把掩膜转成列表。\n7. 取查询图四个角 `[0,0]`、`[0,h-1]`、`[w-1,h-1]`、`[w-1,0]`，用 `cv.perspectiveTransform(pts, M)` 映射到场景图坐标。\n8. 在场景图上用 `cv.polylines` 画出映射后的四边形，再用 `cv.drawMatches` 配合 `matchesMask` 只绘制内点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching + Homography to find Objects",
+                "Code"
+              ],
+              "lineStart": 1924,
+              "lineEnd": 1996,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_feature_homography/images/homography_findobj.jpg"
+              ],
+              "excerptSha256": "dc6e88094963c8a45f56262deafaf19a6f67fba7850260d8d7df57efc98ad2e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-branches",
+        "moduleId": "pipeline-implementation",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：流程中的分支与失败处理",
+        "markdown": "把上面的代码按决策点拆开，可以看清三条分支：\n\n- 匹配数量分支：`good` 不超过 10 个时不做估计。此时应先检查比率阈值是否过严、图像纹理是否太少，而不是硬把阈值放宽到引入错误匹配。\n- 几何一致分支：单应估计完成后，如果内点数远少于 `good` 的数量，说明多数匹配在几何上互相矛盾，应怀疑重复纹理或目标并不在同一平面上。\n- 绘制分支：估计成功时只画内点与目标四边形；失败时 `matchesMask` 为 `None`，`drawMatches` 会退化为画出全部匹配点，正好用来排查问题。\n\n失败恢复的顺序是：先提高匹配质量（比率检验、特征数量），再调整 RANSAC 阈值与迭代次数，最后才考虑放宽 `MIN_MATCH_COUNT`，因为降低门槛会让更多错误匹配进入估计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-code"
+          ]
+        }
+      },
+      {
+        "id": "textbook-result",
+        "moduleId": "result-and-limits",
+        "depth": "core",
+        "kind": "figure",
+        "title": "教材结果：目标在杂乱场景中被标出",
+        "markdown": "教材在代码之后展示的结果图中，查询对象的四角已经被映射到杂乱场景图上，目标以白色四边形标出；配合 `matchesMask`，绿色连线只保留内点。若匹配不足，代码不会画出四边形，只输出提示信息并退化为显示全部匹配点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Feature Matching + Homography to find Objects",
+                "Code"
+              ],
+              "lineStart": 1924,
+              "lineEnd": 1996,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_feature_homography/images/homography_findobj.jpg"
+              ],
+              "excerptSha256": "dc6e88094963c8a45f56262deafaf19a6f67fba7850260d8d7df57efc98ad2e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-limits",
+        "moduleId": "result-and-limits",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "补充：什么时候不该相信这个结果",
+        "markdown": "- 平面假设：单应描述平面映射。目标有明显三维结构，或场景中看到的是不同表面时，映射出的四边形会明显偏离真实轮廓。\n- 特征与纹理：低纹理或强重复纹理（网格、砖墙、文字阵列）会产生大量相似描述子，比率检验和 RANSAC 都可能被误导。\n- 视角与遮挡：视角变化过大导致描述子不再稳定，或目标被遮挡后内点不足，估计会退化。\n- 阈值敏感性：5.0 像素的重投影阈值、0.7 的比率阈值和 10 个匹配的门槛共同决定成败，不能把它们当作与数据无关的常数。\n\n因此“画出了四边形”不等于定位正确，还要看内点是否沿目标轮廓分布、四边形是否贴合目标边界。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-result"
+          ]
+        }
+      },
+      {
+        "id": "model-check-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "补充：定位结果自检与下一站",
+        "markdown": "在把结果用于后续任务前，按顺序自检：\n\n- `good` 是否明显多于 10，且比率检验确实筛掉了大量弱匹配？\n- `mask` 中内点占 `good` 的比例是否足够高，内点是否沿目标轮廓分布？\n- 映射后的四个角是否构成合理的凸四边形，边长比例与查询图是否大致相符？\n- 换一组随机样本或重新运行，四边形是否稳定？\n\n这四问能区分“几何一致的真实定位”和“碰巧凑出四边形”。下一节把相机成像过程形式化，用棋盘格同时估计内参、外参与畸变系数，为把像素坐标换算成真实三维关系打基础。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-code",
+            "model-limits"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pipeline-credibility-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-locate",
+          "estimate-homography"
+        ],
+        "learningPurpose": "检查学习者能否根据匹配数量、内点比例与四角映射判断定位结果是否可信。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-code",
+            "textbook-result"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "场景：某次运行只得到 8 组好匹配，且这 8 组中有 3 组落在背景的重复纹理上。请判断本次能否定位目标，并写出你会先检查的两个量。"
+        }
+      }
+    ]
+  },
+  "subtitle": "局部特征与几何视觉",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-2-7"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000099"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching + Homography to find Objects"
+      ],
+      "lineStart": 1897,
+      "lineEnd": 1900,
+      "assetRefs": [],
+      "excerptSha256": "436c6973122022f71d89b0375572b9d214d516de3dd2cbe3e75ced866c3a1fe4"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000100"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching + Homography to find Objects",
+        "Goal"
+      ],
+      "lineStart": 1901,
+      "lineEnd": 1905,
+      "assetRefs": [],
+      "excerptSha256": "89c3d52182b499a8942ccb19285d47ddd92050b4793e962accf457d66303c235"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000101"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching + Homography to find Objects",
+        "Basics"
+      ],
+      "lineStart": 1906,
+      "lineEnd": 1923,
+      "assetRefs": [],
+      "excerptSha256": "3648bdcddc75b91997c510b700a89df727a8723819f52dc3335c1c103e246516"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000102"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Feature Matching + Homography to find Objects",
+        "Code"
+      ],
+      "lineStart": 1924,
+      "lineEnd": 1996,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_feature2d/py_feature_homography/images/homography_findobj.jpg"
+      ],
+      "excerptSha256": "dc6e88094963c8a45f56262deafaf19a6f67fba7850260d8d7df57efc98ad2e8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2259,
+    2482
+  ],
+  "scale": 0.67
+}

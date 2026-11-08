@@ -1,0 +1,956 @@
+{
+  "id": "point-5-5",
+  "title": "自然语言推断：使用注意力",
+  "shortSummary": "用注意力在前提与假设之间对齐词元，得到可解释的句子对表示并完成三分类。",
+  "keyTerms": [
+    "注意力对齐",
+    "句对表示",
+    "可分解注意力",
+    "三分类"
+  ],
+  "animationType": "decomposableAttentionAlignment",
+  "animationSuggestion": "逐词显示前提与假设，先生成对齐得分矩阵并归一化为注意力权重，高亮权重加权的 beta 与 alpha，再展示比较向量形成与求和聚合，最后给出三类得分和预测标签；支持重播回到同一初始句对。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-5-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材“对齐—比较—聚合”三步主线、全部公式、维度设置与训练预测流程，围绕学习成果重排为先理解对齐动机、再推导软对齐与分解技巧、最后落到形状、训练和结果解读，并补充直觉、常见误区与练习引导。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-why-align",
+          "text": "说明为什么在前提与假设之间做词元对齐，而不是只比较两个句子向量。"
+        },
+        {
+          "id": "derive-attention",
+          "text": "写出注意力权重与双向软对齐的公式，并解释分解技巧为何把 MLP 调用降到线性复杂度。"
+        },
+        {
+          "id": "explain-compare-aggregate",
+          "text": "说明比较与聚合两步如何把逐词比较结果汇成句对表示并输出三类关系。"
+        },
+        {
+          "id": "apply-model-config",
+          "text": "把公式落实为张量形状，说明 GloVe 初始化、隐藏维度和多输入批处理的配置。"
+        },
+        {
+          "id": "interpret-prediction",
+          "text": "正确解读预测输出的标签映射，并判断模型在何种情境下可能失效。"
+        }
+      ],
+      "misconceptions": [
+        "认为注意力对齐是硬对齐，只把少量词元一一连起来。",
+        "认为函数 f 需要把每对词元拼起来输入，因此计算量必然是 m×n 次 MLP 前向。",
+        "认为可分解注意力模型中仍含有循环层或卷积层。",
+        "认为在软对齐下只有被高亮的词元参与比较，其余词元被忽略。",
+        "认为预测时的 argmax 输出直接就是概率或置信度。"
+      ],
+      "modules": [
+        {
+          "id": "why-align",
+          "title": "问题导入：为什么要对齐句对",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-why-align"
+          ],
+          "order": 0
+        },
+        {
+          "id": "attention-and-alignment",
+          "title": "注意力软对齐与分解技巧",
+          "role": "derivation",
+          "outcomeRefs": [
+            "explain-why-align",
+            "derive-attention"
+          ],
+          "order": 1
+        },
+        {
+          "id": "compare-and-aggregate",
+          "title": "比较、聚合与模型整合",
+          "role": "derivation",
+          "outcomeRefs": [
+            "explain-compare-aggregate",
+            "apply-model-config"
+          ],
+          "order": 2
+        },
+        {
+          "id": "train-and-predict",
+          "title": "训练、预测与结果解读",
+          "role": "application",
+          "outcomeRefs": [
+            "apply-model-config",
+            "interpret-prediction"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一步",
+          "role": "assessment",
+          "outcomeRefs": [
+            "derive-attention",
+            "explain-compare-aggregate",
+            "interpret-prediction"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why-align",
+          "derive-attention",
+          "explain-compare-aggregate",
+          "apply-model-config",
+          "interpret-prediction"
+        ],
+        "method": "完成张量形状与复杂度检查，并口述三步流程、分解技巧收益和预测标签映射。",
+        "successCriteria": [
+          "能写出 e、beta、alpha 的计算式并说明各自形状",
+          "能解释 f 分别作用于两个词元为何带来线性复杂度",
+          "能按 0/1/2 的约定正确读出蕴含、矛盾与中立"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-5-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-intro",
+        "moduleId": "why-align",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：用注意力解决自然语言推断",
+        "markdown": "教材从自然语言推断的任务形式出发，指出许多模型依赖复杂而深度的架构；Parikh 等人提出用注意力机制解决该问题，称为**可分解注意力模型**。它不含循环层或卷积层，在 SNLI 数据集上以更少的参数取得了当时的最佳结果。\n\n本节实现的方法先用预训练 GloVe 词向量表示前提与假设，再通过注意力对齐与多层感知机完成三分类，整体结构如“GloVe → 注意力 → MLP”的架构图所示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000284"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力"
+              ],
+              "lineStart": 15043,
+              "lineEnd": 15053,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/nlp-map-nli-attention.svg"
+              ],
+              "excerptSha256": "9c796ca40e52a91948c9fe6ccd87e3946fb62038aeb38d5aca17a211af1ebbbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-align",
+        "moduleId": "why-align",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么对齐比“两句各压成一个向量”更自然",
+        "markdown": "可以先问：判断“蕴含、矛盾、中立”时，真正需要比较的是什么？如果把前提和假设各自编码成一句向量再比较，模型必须把“我确实需要睡眠”和“我累了”的全部信息压进两个固定向量；而逻辑关系往往取决于局部的词元对应，例如“累”对应“睡眠”。\n\n先把两句的词元相互对齐、再逐词比较，模型看到的就是成对的局部证据，而不是两个已经混合过的句子向量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-intro"
+          ]
+        }
+      },
+      {
+        "id": "textbook-model-overview",
+        "moduleId": "attention-and-alignment",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：模型总览与三个步骤",
+        "markdown": "与保留前提和假设中词元的顺序相比，可以把一个文本序列中的词元与另一个序列中的每个词元对齐，再比较并聚合这些信息来预测逻辑关系；这与机器翻译里源句和目标句之间的词元对齐类似，只是这里用注意力灵活完成。\n\n从高层次看，模型由**三个联合训练**的步骤组成：对齐（注意）、比较、汇总（聚合）。教材图用“硬”对齐示意词元之间的对应，实际模型使用软对齐。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000285"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "模型"
+              ],
+              "lineStart": 15054,
+              "lineEnd": 15088,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/nli-attention.svg"
+              ],
+              "excerptSha256": "cdc5b35b2e92047340ff46001f9b95951721a6fa2c69385786439e662b7b73a9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-three-steps",
+        "moduleId": "attention-and-alignment",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：把三步看成一条流水线",
+        "markdown": "可以把三步理解成一条流水线：\n\n1. **对齐**：为每个词元找出另一句中与它最相关的词元，得到对齐后的表示；\n2. **比较**：把原词元和对齐表示拼在一起，判断这一对是否一致；\n3. **汇总**：把所有逐词比较结果相加，交给分类器输出三类关系。\n\n三个步骤由同一损失联合训练：对齐权重没有人工标注，而是靠最终的分类损失反向传播学出来的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-model-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-attending",
+        "moduleId": "attention-and-alignment",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：注意（Attending）与软对齐",
+        "markdown": "用 $\\mathbf{A} = (\\mathbf{a}_1, \\ldots, \\mathbf{a}_m)$ 和 $\\mathbf{B} = (\\mathbf{b}_1, \\ldots, \\mathbf{b}_n)$ 表示前提和假设，词元数分别为 $m$ 和 $n$，$\\mathbf{a}_i, \\mathbf{b}_j \\in \\mathbb{R}^{d}$ 是 $d$ 维词向量。注意力权重定义为\n\n$$e_{ij} = f(\\mathbf{a}_i)^\\top f(\\mathbf{b}_j),$$\n\n其中 $f$ 是一个多层感知机，输出维度由 `num_hiddens` 指定。注意 $f$ 分别作用于 $\\mathbf{a}_i$ 和 $\\mathbf{b}_j$，而不是把一对词元拼起来输入，这就是**分解**技巧。\n\n对权重做 softmax 归一化后，得到假设对前提第 $i$ 个词元的软对齐表示，以及前提对假设第 $j$ 个词元的软对齐表示：\n\n$$\\boldsymbol{\\beta}_i = \\sum_{j=1}^{n}\\frac{\\exp(e_{ij})}{\\sum_{k=1}^{n}\\exp(e_{ik})}\\,\\mathbf{b}_j,$$\n\n$$\\boldsymbol{\\alpha}_j = \\sum_{i=1}^{m}\\frac{\\exp(e_{ij})}{\\sum_{k=1}^{m}\\exp(e_{kj})}\\,\\mathbf{a}_i.$$\n\n对齐是加权平均的“软”对齐：较大的权重落在应当对齐的词元上，但其他词元仍以较小权重参与。教材以“我确实需要睡眠”与“我累了”为例：假设中的“我”对应前提的“我”，“累”对应“睡眠”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000286"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "模型",
+                "注意（Attending）"
+              ],
+              "lineStart": 15089,
+              "lineEnd": 15227,
+              "assetRefs": [],
+              "excerptSha256": "148520cd866005652a36d59fc55a06ea3fd743f499baefcb9adeb28e90a3f465"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-soft-alignment",
+        "moduleId": "attention-and-alignment",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：软对齐与硬对齐的差别",
+        "markdown": "硬对齐只连一条线，例如把“累”直接指向“睡眠”；软对齐则给出一组权重，$\\boldsymbol{\\beta}_i$ 是所有假设词向量的加权平均，权重由 $e_{ij}$ 的 softmax 决定。\n\n这样做的直接好处是可微：权重来自 $f$ 的输出，梯度可以穿过加权求和回到 $f$，模型因此能自己学出对齐关系，而不需要词对齐标注。教材图中画的硬对齐只是为了便于演示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attending"
+          ]
+        }
+      },
+      {
+        "id": "model-decomposition-complexity",
+        "moduleId": "attention-and-alignment",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：分解技巧省在哪里",
+        "markdown": "分解技巧的收益体现在计算次数上。若把每对词元拼接后送入 $f$，需要处理 $mn$ 个输入；分解后 $f$ 分别作用于 $\\mathbf{a}_i$ 和 $\\mathbf{b}_j$，只需 $m+n$ 次前向计算（线性复杂度）。\n\n之后的 $f(\\mathbf{a}_i)^\\top f(\\mathbf{b}_j)$ 仍需对每对词元做一次点积，但点积比多层感知机便宜得多。可以把 $f$ 看成“先把每个词元编码一次，再让编码互相打分”，避免为每个词对重复运行同一个 MLP。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attending"
+          ]
+        }
+      },
+      {
+        "id": "textbook-compare",
+        "moduleId": "compare-and-aggregate",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：比较（Compare）",
+        "markdown": "在比较步骤中，把一个序列中的词元与和它软对齐的另一个序列的表示拼接起来，送入函数 $g$（另一个多层感知机）：\n\n$$\\mathbf{v}_{A,i} = g([\\mathbf{a}_i, \\boldsymbol{\\beta}_i]), \\quad i = 1, \\ldots, m,$$\n\n$$\\mathbf{v}_{B,j} = g([\\mathbf{b}_j, \\boldsymbol{\\alpha}_j]), \\quad j = 1, \\ldots, n.$$\n\n其中 $\\mathbf{v}_{A,i}$ 表示“所有假设词元与前提第 $i$ 个词元软对齐后，再与它比较”的结果；$\\mathbf{v}_{B,j}$ 同理。注意在软对齐下，一个序列中的所有词元都会以不同权重参与比较，而不是只比较少数硬对齐的词。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000287"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "模型",
+                "比较"
+              ],
+              "lineStart": 15228,
+              "lineEnd": 15277,
+              "assetRefs": [],
+              "excerptSha256": "bd256d29e6892f70b463df6b4ea5aa40256837e38c9622711a7f4733cb76ae18"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-walkthrough",
+        "moduleId": "compare-and-aggregate",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：把公式走成张量形状",
+        "markdown": "设批量大小为 $B$，前提长度 $m$，假设长度 $n$，词向量维度 $d$，MLP 输出维度 $h$：\n\n- 嵌入后 $\\mathbf{A}$ 为 $(B, m, d)$，$\\mathbf{B}$ 为 $(B, n, d)$；\n- $f(\\mathbf{A})$ 为 $(B, m, h)$，$f(\\mathbf{B})$ 为 $(B, n, h)$；\n- 打分矩阵 $\\mathbf{e}$ 为 $(B, m, n)$；沿最后一维 softmax 后与 $\\mathbf{B}$ 相乘，得 $\\boldsymbol{\\beta}$ 为 $(B, m, d)$；对 $\\mathbf{e}$ 转置后沿前提维 softmax，再与 $\\mathbf{A}$ 相乘，得 $\\boldsymbol{\\alpha}$ 为 $(B, n, d)$；\n- 拼接 $[\\mathbf{A}, \\boldsymbol{\\beta}]$ 为 $(B, m, 2d)$，经 $g$ 得 $\\mathbf{V}_A$ 为 $(B, m, h)$；$\\mathbf{V}_B$ 同理。\n\n这两个对齐方向是同一张打分矩阵的两次归一化：一次按假设维归一化，一次按前提维归一化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attending",
+            "textbook-compare"
+          ]
+        }
+      },
+      {
+        "id": "textbook-aggregate",
+        "moduleId": "compare-and-aggregate",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：聚合（Aggregate）",
+        "markdown": "最后一步聚合两组比较向量。先分别求和：\n\n$$\\mathbf{v}_A = \\sum_{i=1}^{m} \\mathbf{v}_{A,i}, \\quad \\mathbf{v}_B = \\sum_{j=1}^{n}\\mathbf{v}_{B,j},$$\n\n再把两个结果拼接，送入函数 $h$（多层感知机）得到逻辑关系的分类结果：\n\n$$\\hat{\\mathbf{y}} = h([\\mathbf{v}_A, \\mathbf{v}_B]).$$\n\n输出为 3 类：蕴含、矛盾、中立。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000288"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "模型",
+                "聚合"
+              ],
+              "lineStart": 15278,
+              "lineEnd": 15343,
+              "assetRefs": [],
+              "excerptSha256": "565c1146489dfce222b08ed496b1e5db5d3a518c5e036073f734325604f77a89"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-sum",
+        "moduleId": "compare-and-aggregate",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：聚合为什么用求和",
+        "markdown": "为什么用求和而不是拼接所有位置的比较向量？拼接会让表示维度随句子长度增长，分类头无法处理不同长度的输入；求和把任意长度的序列压成固定维度，使同一个分类头适用于所有句对。\n\n代价是求和丢掉了“哪个位置贡献了多少”的显式顺序信息。对这类句对分类任务，逐词比较向量已经携带了局部匹配证据，求和相当于把这些证据累加成一个整体判断；如果要利用句法结构，就需要在比较或聚合阶段引入额外结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aggregate"
+          ]
+        }
+      },
+      {
+        "id": "textbook-assembled-model",
+        "moduleId": "compare-and-aggregate",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：整合三个步骤",
+        "markdown": "把注意、比较、聚合三个步骤组合起来，就得到可分解注意力模型 `DecomposableAttention`：先用嵌入层把前提与假设映射为 $\\mathbf{A}$、$\\mathbf{B}$，再由 `Attend` 得到 $\\boldsymbol{\\beta}$、$\\boldsymbol{\\alpha}$，由 `Compare` 得到 $\\mathbf{V}_A$、$\\mathbf{V}_B$，最后由 `Aggregate` 输出 3 类得分。三个步骤在同一个模型里联合训练。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000289"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "模型",
+                "整合代码"
+              ],
+              "lineStart": 15344,
+              "lineEnd": 15411,
+              "assetRefs": [],
+              "excerptSha256": "9863f2546e4b061a0640e4ba599e02524604a38dc5fd5884eea4a438205afb4f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-param-settings",
+        "moduleId": "compare-and-aggregate",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：三个子网络的维度怎么对接",
+        "markdown": "三个子网络的输入维度由前一步的输出决定：\n\n- `Attend` 的输入是词向量，输入维度等于嵌入维度 $d$；\n- `Compare` 的输入是“原词向量 + 对齐向量”的拼接，维度为 $2d$；\n- `Aggregate` 的输入是“两组比较向量之和”的拼接，维度为 $2h$，其中 $h$ 是比较网络的输出维度。\n\n把这些维度对齐，才不会在拼接处出现形状错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-assembled-model"
+          ]
+        }
+      },
+      {
+        "id": "textbook-training-overview",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：训练与评估总览",
+        "markdown": "这一步在 SNLI 数据集上训练并评估定义好的可分解注意力模型，从读取数据集开始。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000290"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "训练和评估模型"
+              ],
+              "lineStart": 15412,
+              "lineEnd": 15415,
+              "assetRefs": [],
+              "excerptSha256": "ac676ec9bea5b3d7d21bf55ff4ffb6b0082871951765c113ab72b59934791282"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-dataset",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：读取 SNLI 数据集",
+        "markdown": "使用自然语言推断与数据集一节定义的函数下载并读取 SNLI，批量大小和序列长度分别设为 $256$ 和 $50$，返回训练迭代器、测试迭代器和词表。序列被统一到固定长度，便于组成规则的小批量张量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000291"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "训练和评估模型",
+                "读取数据集"
+              ],
+              "lineStart": 15416,
+              "lineEnd": 15451,
+              "assetRefs": [],
+              "excerptSha256": "63a73bde0482e4681ef8ab293994b2df9dbfd855a000b0e6c2653c46eeeb8493"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dataset-shapes",
+        "moduleId": "train-and-predict",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：固定长度对张量意味着什么",
+        "markdown": "固定到 50 步后，一个批量的前提和假设分别形成 $(256, 50)$ 的索引张量，嵌入后是 $(256, 50, d)$；打分矩阵 $\\mathbf{e}$ 则是 $(256, 50, 50)$，与实际句子长度无关。\n\n教材展示的实现没有额外的掩码步骤，填充位置和其他位置一样进入注意力计算；如果要严格忽略填充，需要在打分后显式屏蔽这些位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-dataset"
+          ]
+        }
+      },
+      {
+        "id": "textbook-create-model",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：创建模型并加载 GloVe",
+        "markdown": "使用预训练好的 100 维 GloVe 嵌入表示输入词元：$\\mathbf{a}_i$ 和 $\\mathbf{b}_j$ 的维度取 100，$f$ 与 $g$ 的输出维度取 200。创建模型实例并初始化参数后，把 GloVe 中对应词表的向量复制进嵌入层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000292"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "训练和评估模型",
+                "创建模型"
+              ],
+              "lineStart": 15452,
+              "lineEnd": 15482,
+              "assetRefs": [],
+              "excerptSha256": "bd16be8cc9bb6c2d021d20848d387f9381e8f27d2610a5038bcb823051e778a2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-embedding-init",
+        "moduleId": "train-and-predict",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：预训练嵌入是初始化，不是冻结",
+        "markdown": "这里有两个容易混淆的点。\n\n第一，GloVe 只是**初始化**：代码把预训练向量复制到嵌入层权重中，之后这些权重仍属于模型参数，会随训练更新，而不是固定不变。\n\n第二，覆盖范围受词表限制：只有训练词表中出现、且在 GloVe 中能找到的词元才会被预训练向量覆盖；其余词元保持初始化时的取值。因此词表选择会直接影响预训练嵌入能发挥多少作用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-create-model"
+          ]
+        }
+      },
+      {
+        "id": "textbook-train-loop",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：多输入批处理与训练配置",
+        "markdown": "由于模型一次接收前提和假设两个输入，需要专门的 `split_batch_multi_inputs` 把小批量中的多个特征同时切分到各设备，而不是只切分单个输入。训练使用 Adam，学习率 0.001，训练 4 个轮次，损失为交叉熵。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000293"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "训练和评估模型",
+                "训练和评估模型"
+              ],
+              "lineStart": 15483,
+              "lineEnd": 15523,
+              "assetRefs": [],
+              "excerptSha256": "ee032b1e3ceaf3f67b8e667b3b1b30f3d731d0f9ac2d336e56ef733aa8289fca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-multi-input",
+        "moduleId": "train-and-predict",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：多输入切分要保证样本对齐",
+        "markdown": "多输入带来的工程细节在于：前提和假设是两个独立张量，切分到设备时必须保持二者与标签的一一对应，否则同一批里的句子对会错位。`split_batch_multi_inputs` 对特征列表逐个切分后再按样本重新配对，正是为了保证这一点。\n\n另外，代码把交叉熵的 `reduction` 设为 `none`，保留每个样本的损失，再由训练循环统一处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-train-loop"
+          ]
+        }
+      },
+      {
+        "id": "textbook-predict",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：使用模型做预测",
+        "markdown": "预测函数 `predict_snli` 先把前提和假设转成词索引并 reshape 成 $(1, -1)$ 的单个样本，进入评估模式后取输出得分最大的类别：标签 0 对应 entailment，标签 1 对应 contradiction，其余为 neutral。教材用“he is good .”和“he is bad .”演示，模型应判为矛盾关系。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000294"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "训练和评估模型",
+                "使用模型"
+              ],
+              "lineStart": 15524,
+              "lineEnd": 15575,
+              "assetRefs": [],
+              "excerptSha256": "f19abe1510e50599b91ae8eab7a207874b3d46a45ae0cf0f6cc6e6ca44f5799b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-prediction-reading",
+        "moduleId": "train-and-predict",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：怎样正确读预测结果",
+        "markdown": "读预测结果时要注意两点。\n\n第一，`argmax` 只给出类别索引，不给出置信度；如果需要比较把握大小，应对三类得分做 softmax 后看概率。\n\n第二，标签顺序是代码约定：0 → 蕴含、1 → 矛盾、2 → 中立。换数据集或换实现时必须核对这一映射，否则会把“矛盾”读成“蕴含”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-predict"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "- 可分解注意模型包括三个步骤来预测前提和假设之间的逻辑关系：注意、比较和聚合。\n- 通过注意力机制，可以将一个文本序列中的词元与另一个序列中的每个词元对齐，反之亦然；这种对齐是加权平均的软对齐，较大的权重落在应对齐的词元上。\n- 在计算注意力权重时，分解技巧带来比二次复杂度更理想的线性复杂度。\n- 可以使用预训练词向量作为下游自然语言处理任务（如自然语言推断）的输入表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000295"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "小结"
+              ],
+              "lineStart": 15576,
+              "lineEnd": 15582,
+              "assetRefs": [],
+              "excerptSha256": "885e3c02a4393c0d6644f0c717d7b9cd768bcc334e0ce974f5bae74c182a58bd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 使用其他超参数组合训练模型，能在测试集上获得更高的准确度吗？\n2. 自然语言推断的可分解注意模型的主要缺点是什么？\n3. 若想获得任意一对句子的语义相似级别（例如 0～1 之间的连续值），应如何收集和标注数据集？请尝试设计一个有注意力机制的模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000296"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "自然语言推断：使用注意力",
+                "练习"
+              ],
+              "lineStart": 15583,
+              "lineEnd": 15600,
+              "assetRefs": [],
+              "excerptSha256": "af1104a308251bd0f09208a05329f9ba78bfdfeed87f236ba6405b6c0265a325"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：三道练习的思考方向",
+        "markdown": "给出三条思考方向。\n\n- 超参数：可以尝试嵌入维度、隐藏维度、学习率、轮次与序列长度；注意提高序列长度会放大打分矩阵，因为它的规模是 $m\\times n$。\n- 主要缺点：模型靠逐词软对齐和求和聚合，缺少对句法结构和长距离组合的显式建模；当判断需要多步推理或依赖语序时，这种“对齐—比较—求和”的表示可能不够。\n- 相似度任务：可把三分类头换成回归头，用 0～1 的连续标注训练；数据需要成对的句子及人工分级相似度，模型仍可复用注意力对齐与比较结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-aggregate",
+            "textbook-exercises"
+          ]
+        }
+      },
+      {
+        "id": "model-next-point-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：走向微调 BERT",
+        "markdown": "可分解注意力模型把“对齐、比较、汇总”拆成三个可训练模块，但它仍是从零训练的任务专用结构，需要为每个任务设计网络。下一知识点转向另一种思路：不重设计整个架构，而是在预训练 BERT 之上加一个轻量任务头，分别处理序列级分类与词元级标注，再把它用于自然语言推断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "attention-shape-check",
+        "type": "formative-check",
+        "title": "注意力张量形状与复杂度检查",
+        "anchorBlockId": "model-shape-walkthrough",
+        "moduleId": "compare-and-aggregate",
+        "depth": "core",
+        "outcomeRefs": [
+          "derive-attention",
+          "apply-model-config"
+        ],
+        "learningPurpose": "检查学习者能否把软对齐公式落实为张量形状，并说明分解技巧为什么把 MLP 调用从二次降为线性。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-attending",
+            "textbook-compare"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "设 m=6、n=4、d=100、h=200，写出 e、beta、alpha、V_A 的形状，并说明 f 被调用的次数。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "设前提 6 个词元、假设 4 个词元、词向量 100 维、MLP 输出 200 维，写出打分矩阵与两组对齐表示的形状，并说明 f 被调用多少次。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：应用",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [
+    "point-3-4",
+    "point-5-7"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000284"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力"
+      ],
+      "lineStart": 15043,
+      "lineEnd": 15053,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/nlp-map-nli-attention.svg"
+      ],
+      "excerptSha256": "9c796ca40e52a91948c9fe6ccd87e3946fb62038aeb38d5aca17a211af1ebbbb"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000285"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "模型"
+      ],
+      "lineStart": 15054,
+      "lineEnd": 15088,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/nli-attention.svg"
+      ],
+      "excerptSha256": "cdc5b35b2e92047340ff46001f9b95951721a6fa2c69385786439e662b7b73a9"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000286"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "模型",
+        "注意（Attending）"
+      ],
+      "lineStart": 15089,
+      "lineEnd": 15227,
+      "assetRefs": [],
+      "excerptSha256": "148520cd866005652a36d59fc55a06ea3fd743f499baefcb9adeb28e90a3f465"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000287"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "模型",
+        "比较"
+      ],
+      "lineStart": 15228,
+      "lineEnd": 15277,
+      "assetRefs": [],
+      "excerptSha256": "bd256d29e6892f70b463df6b4ea5aa40256837e38c9622711a7f4733cb76ae18"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000288"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "模型",
+        "聚合"
+      ],
+      "lineStart": 15278,
+      "lineEnd": 15343,
+      "assetRefs": [],
+      "excerptSha256": "565c1146489dfce222b08ed496b1e5db5d3a518c5e036073f734325604f77a89"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000289"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "模型",
+        "整合代码"
+      ],
+      "lineStart": 15344,
+      "lineEnd": 15411,
+      "assetRefs": [],
+      "excerptSha256": "9863f2546e4b061a0640e4ba599e02524604a38dc5fd5884eea4a438205afb4f"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000290"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "训练和评估模型"
+      ],
+      "lineStart": 15412,
+      "lineEnd": 15415,
+      "assetRefs": [],
+      "excerptSha256": "ac676ec9bea5b3d7d21bf55ff4ffb6b0082871951765c113ab72b59934791282"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000291"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "训练和评估模型",
+        "读取数据集"
+      ],
+      "lineStart": 15416,
+      "lineEnd": 15451,
+      "assetRefs": [],
+      "excerptSha256": "63a73bde0482e4681ef8ab293994b2df9dbfd855a000b0e6c2653c46eeeb8493"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000292"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "训练和评估模型",
+        "创建模型"
+      ],
+      "lineStart": 15452,
+      "lineEnd": 15482,
+      "assetRefs": [],
+      "excerptSha256": "bd16be8cc9bb6c2d021d20848d387f9381e8f27d2610a5038bcb823051e778a2"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000293"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "训练和评估模型",
+        "训练和评估模型"
+      ],
+      "lineStart": 15483,
+      "lineEnd": 15523,
+      "assetRefs": [],
+      "excerptSha256": "ee032b1e3ceaf3f67b8e667b3b1b30f3d731d0f9ac2d336e56ef733aa8289fca"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000294"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "训练和评估模型",
+        "使用模型"
+      ],
+      "lineStart": 15524,
+      "lineEnd": 15575,
+      "assetRefs": [],
+      "excerptSha256": "f19abe1510e50599b91ae8eab7a207874b3d46a45ae0cf0f6cc6e6ca44f5799b"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000295"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "小结"
+      ],
+      "lineStart": 15576,
+      "lineEnd": 15582,
+      "assetRefs": [],
+      "excerptSha256": "885e3c02a4393c0d6644f0c717d7b9cd768bcc334e0ce974f5bae74c182a58bd"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000296"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "自然语言推断：使用注意力",
+        "练习"
+      ],
+      "lineStart": 15583,
+      "lineEnd": 15600,
+      "assetRefs": [],
+      "excerptSha256": "af1104a308251bd0f09208a05329f9ba78bfdfeed87f236ba6405b6c0265a325"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2042,
+    518
+  ],
+  "scale": 0.9
+}
