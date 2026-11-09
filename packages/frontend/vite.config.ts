@@ -20,6 +20,10 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      // Expose the development UI to other devices on the same LAN. API and
+      // WebSocket traffic still pass through Vite's /api proxy, so the backend
+      // can remain bound to 127.0.0.1.
+      host: "0.0.0.0",
       port: 5173,
       proxy: {
         "/api": {
