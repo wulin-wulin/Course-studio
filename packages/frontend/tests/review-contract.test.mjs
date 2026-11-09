@@ -441,6 +441,24 @@ test("resume delivery stays locked while retry reconciliation is pending", () =>
   );
 });
 
+test("review resume reuses the durable conversation model", () => {
+  assert.equal(
+    contracts.reviewResumeConversationModel({
+      id: "conversation-1",
+      model: "  deepseek-v4-flash  ",
+    }),
+    "deepseek-v4-flash",
+  );
+  assert.throws(
+    () => contracts.reviewResumeConversationModel({ id: "conversation-1" }),
+    /缺少课程创建模型/,
+  );
+  assert.throws(
+    () => contracts.reviewResumeConversationModel(null),
+    /响应格式无效/,
+  );
+});
+
 test("deleted conversations terminate review resume delivery", () => {
   assert.equal(contracts.isReviewResumeConversationGoneStatus(404), true);
   assert.equal(contracts.isReviewResumeConversationGoneStatus(410), true);
