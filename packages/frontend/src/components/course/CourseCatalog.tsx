@@ -29,6 +29,7 @@ import type { CourseEdge, CourseGroupLayout } from "./catalogGraph";
 export type CourseSummary = {
   id: string;
   title: string;
+  presentationType?: "question-bank";
   description?: string;
   language?: string;
   revision?: string | number;
@@ -621,6 +622,7 @@ export function unwrapCourses(payload: unknown): CourseSummary[] | null {
     courses.push({
       id: item.id,
       title: typeof item.title === "string" && item.title.trim() ? item.title : item.id,
+      presentationType: item.presentationType === "question-bank" ? "question-bank" : undefined,
       description: typeof item.description === "string" ? item.description : undefined,
       language: typeof item.language === "string" ? item.language : undefined,
       revision: typeof item.revision === "string" || typeof item.revision === "number" ? item.revision : undefined,

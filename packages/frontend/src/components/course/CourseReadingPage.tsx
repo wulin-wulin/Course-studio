@@ -35,6 +35,11 @@ import type {
 } from "@/course/forest/types";
 import { buildCourseDirectory, normalizeForestIndex } from "@/course/forest/forestAdapter";
 import {
+  buildQuestionPresentation,
+  isQuestionBankCourse,
+  isQuestionPresentationPoint,
+} from "@/course/forest/questionPresentation";
+import {
   normalizeTextbookMarkdown,
   normalizeTextbookContentV2,
   normalizeTextbookLearningAssets,
@@ -125,6 +130,7 @@ export function CourseReadingPage({
   const dockPreferenceRef = useRef<"auto" | "manual">("auto");
   const restoreDockFocusRef = useRef(false);
   const courseApi = `/api/courses/${encodeURIComponent(course.id)}`;
+  const isQuestionBank = isQuestionBankCourse(course);
   const isDockOverlayOpen = isDockOpen && layoutMode !== "wide";
 
   const setDock = useCallback((open: boolean, restoreFocus = true) => {
@@ -158,10 +164,10 @@ export function CourseReadingPage({
         cache: "no-store",
         signal: controller.signal,
       }).then(async (response) => {
-        if (!response.ok) throw new Error(`知识点详情请求失败（${response.status}）`);
+        if (!response.ok) throw new Error(`${isQuestionBank ? "题目" : "知识点"}详情请求失败（${response.status}）`);
         const payload: unknown = await response.json();
         const nextPoint = unwrapPointDetail(payload);
-        if (!nextPoint || nextPoint.id !== pointId) throw new Error("知识点详情格式无效");
+        if (!nextPoint || nextPoint.id !== pointId) throw new Error(`${isQuestionBank ? "题目" : "知识点"}详情格式无效`);
         return nextPoint;
       });
 
@@ -173,11 +179,11 @@ export function CourseReadingPage({
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (controller.signal.aborted) return;
       setPoint(null);
-      setError(reason instanceof Error ? reason.message : "知识点加载失败");
+      setError(reason instanceof Error ? reason.message : `${isQuestionBank ? "题目" : "知识点"}加载失败`);
     } finally {
       if (!controller.signal.aborted) setIsLoading(false);
     }
-  }, [course.id, courseApi, pointId]);
+  }, [course.id, courseApi, isQuestionBank, pointId]);
 
   useEffect(() => {
     void load();
@@ -271,8 +277,8 @@ export function CourseReadingPage({
   }, [course.title, isLoading, point, pointId]);
 
   useEffect(() => () => {
-    document.title = "课程知识森林";
-  }, []);
+    document.title = isQuestionBank ? "题库问题图谱" : "课程知识森林";
+  }, [isQuestionBank]);
 
   const pointMeta = useMemo(
     () => index?.points.find((item) => item.id === pointId) ?? null,
@@ -317,7 +323,7 @@ export function CourseReadingPage({
     <section
       ref={readerRef}
       className={`course-reader course-reader--${layoutMode} ${isDockOpen ? "" : "course-reader--dock-collapsed"}`}
-      aria-label={`${course.title}知识点阅读`}
+      aria-label={`${course.title}${isQuestionBank ? "题目" : "知识点"}阅读`}
       style={readerStyle}
     >
       <div
@@ -338,7 +344,7 @@ export function CourseReadingPage({
             <ChevronRight aria-hidden="true" size={13} />
             <button type="button" onClick={onBackToForest}>
               <MapIcon aria-hidden="true" size={15} />
-              {course.title}知识地图
+              {isQuestionBank ? "问题图谱" : `${course.title}知识地图`}
             </button>
             {activePoint?.title && (
               <>
@@ -351,13 +357,13 @@ export function CourseReadingPage({
           {isLoading && (
             <div className="course-reader__state" role="status">
               <Loader2 aria-hidden="true" size={24} />
-              正在展开知识点内容…
+              正在展开{isQuestionBank ? "题目" : "知识点"}内容…
             </div>
           )}
 
           {!isLoading && error && (
             <div className="course-reader__state course-reader__state--error" role="alert">
-              <strong>无法加载知识点</strong>
+              <strong>无法加载{isQuestionBank ? "题目" : "知识点"}</strong>
               <span>{error}</span>
               <button type="button" onClick={() => void load()}>
                 <RefreshCw aria-hidden="true" size={14} />
@@ -389,7 +395,7 @@ export function CourseReadingPage({
         <button
           type="button"
           className="course-reader__dock-scrim"
-          aria-label="关闭本知识簇目录"
+          aria-label={`关闭本${isQuestionBank ? "题型簇" : "知识簇"}目录`}
           tabIndex={-1}
           onClick={() => setDock(false)}
         />
@@ -399,7 +405,9 @@ export function CourseReadingPage({
         ref={dockRef}
         id="course-cluster-directory"
         className="course-reader__dock"
-        aria-label={usesCourseSequence ? "课程学习目录" : "当前知识簇目录"}
+        aria-label={usesCourseSequence
+          ? isQuestionBank ? "题库目录" : "课程学习目录"
+          : `当前${isQuestionBank ? "题型簇" : "知识簇"}目录`}
         role={isDockOverlayOpen ? "dialog" : undefined}
         aria-modal={isDockOverlayOpen ? true : undefined}
       >
@@ -407,22 +415,34 @@ export function CourseReadingPage({
           <>
             <div className="course-reader__dock-head">
               <div>
-                <span>{usesCourseSequence ? "完整课程目录" : "本知识簇"}</span>
-                <strong>{usesCourseSequence ? course.title : activeCluster?.title ?? "章节目录"}</strong>
+                <span>{usesCourseSequence
+                  ? isQuestionBank ? "完整题库目录" : "完整课程目录"
+                  : `本${isQuestionBank ? "题型簇" : "知识簇"}`}</span>
+                <strong>{usesCourseSequence
+                  ? course.title
+                  : activeCluster?.title ?? (isQuestionBank ? "题型目录" : "章节目录")}</strong>
                 <small>
                   {usesCourseSequence
-                    ? `${courseDirectoryGroups.length} 个知识簇 · ${orderedCoursePoints.length} 个知识点`
-                    : `${clusterPoints.length} 个知识点`}
+                    ? isQuestionBank
+                      ? `${courseDirectoryGroups.length} 个题型簇 · ${orderedCoursePoints.length} 道题`
+                      : `${courseDirectoryGroups.length} 个知识簇 · ${orderedCoursePoints.length} 个知识点`
+                    : isQuestionBank
+                      ? `${clusterPoints.length} 道题`
+                      : `${clusterPoints.length} 个知识点`}
                 </small>
               </div>
               <button
                 ref={dockCloseButtonRef}
                 type="button"
                 onClick={() => setDock(false)}
-                aria-label={usesCourseSequence ? "收起课程目录" : "收起本知识簇目录"}
+                aria-label={usesCourseSequence
+                  ? isQuestionBank ? "收起题库目录" : "收起课程目录"
+                  : `收起本${isQuestionBank ? "题型簇" : "知识簇"}目录`}
                 aria-controls="course-cluster-directory"
                 aria-expanded="true"
-                title={usesCourseSequence ? "收起课程目录" : "收起本知识簇目录"}
+                title={usesCourseSequence
+                  ? isQuestionBank ? "收起题库目录" : "收起课程目录"
+                  : `收起本${isQuestionBank ? "题型簇" : "知识簇"}目录`}
               >
                 <PanelRightClose aria-hidden="true" size={17} />
               </button>
@@ -443,7 +463,7 @@ export function CourseReadingPage({
                       >
                         <i style={{ backgroundColor: group.cluster.accent }} aria-hidden="true" />
                         <span>
-                          <small>知识簇 {String(groupIndex + 1).padStart(2, "0")}</small>
+                          <small>{isQuestionBank ? "题型簇" : "知识簇"} {String(groupIndex + 1).padStart(2, "0")}</small>
                           <strong>{group.cluster.title}</strong>
                         </span>
                         <em>{group.points.length}</em>
@@ -464,7 +484,7 @@ export function CourseReadingPage({
                               >
                                 <span>{String(itemIndex + 1).padStart(2, "0")}</span>
                                 <strong>{item.title}</strong>
-                                {item.origin === "llm-extension" && <small>模型扩展</small>}
+                                {!isQuestionBank && item.origin === "llm-extension" && <small>模型扩展</small>}
                               </button>
                             </li>
                           ))}
@@ -498,7 +518,9 @@ export function CourseReadingPage({
             <div className="course-reader__dock-foot">
               <button type="button" onClick={onBackToForest}>
                 <ChevronLeft aria-hidden="true" size={15} />
-                {usesCourseSequence ? "返回知识森林" : "切换知识簇"}
+                {usesCourseSequence
+                  ? isQuestionBank ? "返回问题图谱" : "返回知识森林"
+                  : `切换${isQuestionBank ? "题型簇" : "知识簇"}`}
               </button>
               <button type="button" onClick={onBackToCatalog}>
                 <Home aria-hidden="true" size={15} />
@@ -512,10 +534,14 @@ export function CourseReadingPage({
             type="button"
             className="course-reader__dock-expand"
             onClick={() => setDock(true)}
-            aria-label={usesCourseSequence ? "展开课程目录" : "展开本知识簇目录"}
+            aria-label={usesCourseSequence
+              ? isQuestionBank ? "展开题库目录" : "展开课程目录"
+              : `展开本${isQuestionBank ? "题型簇" : "知识簇"}目录`}
             aria-controls="course-cluster-directory"
             aria-expanded="false"
-            title={usesCourseSequence ? "展开课程目录" : "展开本知识簇目录"}
+            title={usesCourseSequence
+              ? isQuestionBank ? "展开题库目录" : "展开课程目录"
+              : `展开本${isQuestionBank ? "题型簇" : "知识簇"}目录`}
           >
             <PanelRightOpen aria-hidden="true" size={17} />
             <span>目录</span>
@@ -546,6 +572,9 @@ function ReadingArticle(props: ReadingArticleProps) {
     () => normalizeTextbookContentV2(props.point.content),
     [props.point.content],
   );
+  if (isQuestionPresentationPoint(props.point)) {
+    return <QuestionReadingArticle {...props} />;
+  }
   return textbookContent
     ? <TextbookReadingArticle {...props} content={textbookContent} />
     : <LegacyReadingArticle {...props} />;
@@ -1353,6 +1382,231 @@ function SourceTechnicalDetails({ span }: { span: ForestSourceSpan }) {
   );
 }
 
+function QuestionReadingArticle({
+  point,
+  cluster,
+  course,
+  previous,
+  next,
+  positionInCluster,
+  clusterTotal,
+  usesCourseSequence,
+  headingRef,
+  scrollRootRef,
+  onOpenPoint,
+}: ReadingArticleProps) {
+  const presentation = useMemo(() => buildQuestionPresentation(point), [point]);
+  const sections = useMemo<ArticleSection[]>(() => [
+    presentation.promptMarkdown ? { id: "section-question-prompt", label: "题目" } : null,
+    presentation.abilities.length > 0
+      ? { id: "section-question-abilities", label: "能力目标" }
+      : null,
+    presentation.knowledge.length > 0
+      ? { id: "section-question-knowledge", label: "关联知识" }
+      : null,
+    presentation.guidance.length > 0
+      ? { id: "section-question-guidance", label: "作答提示 / 易错点" }
+      : null,
+    presentation.answers.length > 0
+      ? { id: "section-question-answers", label: "答案与自评" }
+      : null,
+  ].filter((item): item is ArticleSection => Boolean(item)), [presentation]);
+  const [activeSectionId, setActiveSectionId] = useState(sections[0]?.id ?? "");
+
+  useEffect(() => {
+    setActiveSectionId(sections[0]?.id ?? "");
+    const root = scrollRootRef.current;
+    if (!root || sections.length === 0) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const rootTop = root.getBoundingClientRect().top;
+      let current = sections[0]?.id ?? "";
+      for (const section of sections) {
+        const element = document.getElementById(section.id);
+        if (!element) continue;
+        if (element.getBoundingClientRect().top - rootTop <= 180) current = section.id;
+        else break;
+      }
+      setActiveSectionId(current);
+    };
+    const onScroll = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(update);
+    };
+    update();
+    root.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [point.id, scrollRootRef, sections]);
+
+  const scrollToSection = (section: ArticleSection) => {
+    const target = document.getElementById(section.id);
+    const root = scrollRootRef.current;
+    if (!target || !root) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    target.tabIndex = -1;
+    if (!target.hasAttribute("aria-label")) target.setAttribute("aria-label", section.label);
+    root.scrollTo({
+      top: Math.max(
+        0,
+        root.scrollTop + target.getBoundingClientRect().top - root.getBoundingClientRect().top - 72,
+      ),
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+    setActiveSectionId(section.id);
+    window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  };
+
+  const clusterTitle = cluster?.title ?? course.title;
+  const headerTags = [
+    clusterTitle,
+    presentation.questionType && presentation.questionType !== clusterTitle
+      ? presentation.questionType
+      : null,
+    point.difficulty || null,
+  ].filter((tag): tag is string => Boolean(tag));
+
+  return (
+    <article className="course-reader__article course-reader__article--question">
+      <PointNavigation
+        clusterTitle={clusterTitle}
+        previous={previous}
+        next={next}
+        position={positionInCluster}
+        total={clusterTotal}
+        usesCourseSequence={usesCourseSequence}
+        onOpenPoint={onOpenPoint}
+        questionMode
+      />
+
+      <header className="course-reader__heading course-reader__question-heading">
+        <div className="course-reader__tags">
+          {headerTags.map((tag) => <span key={tag}>{tag}</span>)}
+        </div>
+        <h1 ref={headingRef} id="course-point-title" tabIndex={-1}>{point.title}</h1>
+        {point.shortSummary && <RichText content={point.shortSummary} className="course-reader__summary" />}
+        <div className="course-reader__heading-meta" aria-label="题目阅读信息">
+          <span>本题型第 {Math.max(positionInCluster, 1)} / {clusterTotal || 1} 题</span>
+          <span>{sections.length} 个作答模块</span>
+        </div>
+      </header>
+
+      {sections.length > 1 && (
+        <nav className="course-reader__article-toc" aria-label="题目内容目录">
+          <span><ListTree aria-hidden="true" size={14} />题目内容</span>
+          <div>
+            {sections.map((section) => (
+              <button
+                type="button"
+                key={section.id}
+                className={activeSectionId === section.id ? "is-current" : ""}
+                aria-current={activeSectionId === section.id ? "location" : undefined}
+                onClick={() => scrollToSection(section)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      )}
+
+      {presentation.promptMarkdown && (
+        <section
+          id="section-question-prompt"
+          className="course-reader__question-prompt course-reader__anchored-section"
+        >
+          <h2>题目</h2>
+          <RichText content={presentation.promptMarkdown} />
+        </section>
+      )}
+
+      {presentation.abilities.length > 0 && (
+        <section
+          id="section-question-abilities"
+          className="course-reader__section course-reader__question-section course-reader__anchored-section"
+        >
+          <h2>能力目标</h2>
+          <div className="course-reader__question-cards">
+            {presentation.abilities.map((ability, index) => (
+              <article key={`${ability.label}-${ability.title}-${index}`}>
+                <span>{ability.label}</span>
+                <h3>{ability.title}</h3>
+                {ability.purpose && <RichText content={ability.purpose} />}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {presentation.knowledge.length > 0 && (
+        <section
+          id="section-question-knowledge"
+          className="course-reader__section course-reader__question-section course-reader__anchored-section"
+        >
+          <h2>关联知识</h2>
+          <div className="course-reader__question-cards course-reader__question-cards--knowledge">
+            {presentation.knowledge.map((knowledge, index) => (
+              <article key={`${knowledge.title}-${index}`}>
+                {knowledge.relation && <span>{knowledge.relation}关联</span>}
+                <h3>{knowledge.title}</h3>
+                {knowledge.reason && <RichText content={knowledge.reason} />}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <ListSection
+        id="section-question-guidance"
+        title="作答提示 / 易错点"
+        items={presentation.guidance}
+        warning
+      />
+
+      {presentation.answers.length > 0 && (
+        <section
+          id="section-question-answers"
+          className="course-reader__section course-reader__question-answers course-reader__anchored-section"
+        >
+          <h2>答案与自评</h2>
+          <p className="course-reader__section-intro">
+            完成作答后，再展开参考答案、解析与评分要点进行自评。
+          </p>
+          <div className="course-reader__qa-list course-reader__question-answer-list">
+            {presentation.answers.map((item, index) => (
+              <details key={`${item.label}-${index}`}>
+                <summary>
+                  <span>{index + 1}</span>
+                  <strong>{item.label}</strong>
+                  <ChevronDown aria-hidden="true" size={16} />
+                </summary>
+                <div className="course-reader__qa-answer">
+                  <RichText content={item.markdown} />
+                </div>
+              </details>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <PointNavigation
+        clusterTitle={clusterTitle}
+        previous={previous}
+        next={next}
+        position={positionInCluster}
+        total={clusterTotal}
+        usesCourseSequence={usesCourseSequence}
+        onOpenPoint={onOpenPoint}
+        questionMode
+        footer
+      />
+    </article>
+  );
+}
+
 function LegacyReadingArticle({
   point,
   cluster,
@@ -1660,6 +1914,7 @@ function PointNavigation({
   total,
   usesCourseSequence,
   onOpenPoint,
+  questionMode = false,
   footer = false,
 }: {
   clusterTitle: string;
@@ -1669,22 +1924,30 @@ function PointNavigation({
   total: number;
   usesCourseSequence: boolean;
   onOpenPoint: (point: ForestPoint) => void;
+  questionMode?: boolean;
   footer?: boolean;
 }) {
   return (
-    <nav className={`course-reader__point-nav ${footer ? "course-reader__point-nav--footer" : ""}`} aria-label={footer ? "继续学习" : "知识点推进"}>
+    <nav
+      className={`course-reader__point-nav ${footer ? "course-reader__point-nav--footer" : ""}`}
+      aria-label={footer ? (questionMode ? "继续作答" : "继续学习") : (questionMode ? "题目推进" : "知识点推进")}
+    >
       <button type="button" disabled={!previous} onClick={() => previous && onOpenPoint(previous)}>
         <ChevronLeft aria-hidden="true" size={17} />
         <span>
           <small>上一个</small>
-          <strong>{previous?.title ?? (usesCourseSequence ? "已是学习路径起点" : "已是本簇第一点")}</strong>
+          <strong>{previous?.title ?? (usesCourseSequence
+            ? questionMode ? "已是题库第一题" : "已是学习路径起点"
+            : questionMode ? "已是本题型第一题" : "已是本簇第一点")}</strong>
         </span>
       </button>
-      <span>{usesCourseSequence ? "课程学习路径" : clusterTitle} · {Math.max(position, 1)}/{total || 1}</span>
+      <span>{usesCourseSequence ? (questionMode ? "题库题目顺序" : "课程学习路径") : clusterTitle} · {Math.max(position, 1)}/{total || 1}</span>
       <button type="button" disabled={!next} onClick={() => next && onOpenPoint(next)}>
         <span>
           <small>下一个</small>
-          <strong>{next?.title ?? (usesCourseSequence ? "已是学习路径终点" : "已是本簇最后一点")}</strong>
+          <strong>{next?.title ?? (usesCourseSequence
+            ? questionMode ? "已是题库最后一题" : "已是学习路径终点"
+            : questionMode ? "已是本题型最后一题" : "已是本簇最后一点")}</strong>
         </span>
         <ChevronRight aria-hidden="true" size={17} />
       </button>
