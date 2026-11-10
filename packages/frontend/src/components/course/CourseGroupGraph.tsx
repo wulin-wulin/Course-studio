@@ -2,8 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Maximize, Maximize2, Minimize2, Minus, Plus } from "lucide-react";
 import type { CourseSummary } from "./CourseCatalog";
 import { layoutCourses, relatedCourses, validEdges, type CourseEdge, type CourseGroupLayout, type CourseLayoutPosition, type MapPosition } from "./catalogGraph";
+import { courseGroupCanvasElements, extendCanvasBounds, positionCanvasElements } from "./courseGroupCanvasElements";
 
 type Props = {
+  groupId: string;
   courses: CourseSummary[];
   edges: CourseEdge[];
   layout?: CourseGroupLayout;
@@ -13,7 +15,7 @@ type Props = {
 
 const NODE_COLORS = ["#d98958", "#c95c57", "#4d6982", "#52a89c", "#5b9bc0", "#d59a55"];
 
-export function CourseGroupGraph({ courses, edges: rawEdges, layout: savedLayout, onOpenCourse, onSaveLayout }: Props) {
+export function CourseGroupGraph({ groupId, courses, edges: rawEdges, layout: savedLayout, onOpenCourse, onSaveLayout }: Props) {
   const markerId = useId().replace(/:/g, "");
   const mapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -48,10 +50,16 @@ export function CourseGroupGraph({ courses, edges: rawEdges, layout: savedLayout
     flexible: true,
     manualPositions,
   }), [ids, edges, canvasSize.width, compact, independentColumns, manualPositions]);
+  const canvasElements = positionCanvasElements(courseGroupCanvasElements(groupId), {
+    availableWidth: layout.width,
+    compact,
+    nodePositions: layout.positions.values(),
+  });
+  const graphBounds = extendCanvasBounds(layout, canvasElements);
   const before = useMemo(() => selectedId ? relatedCourses(selectedId, edges, "before") : new Set<string>(), [selectedId, edges]);
   const after = useMemo(() => selectedId ? relatedCourses(selectedId, edges, "after") : new Set<string>(), [selectedId, edges]);
   const stacked = canvasSize.mapWidth <= 850;
-  const adaptiveCanvasHeight = stacked ? Math.max(canvasSize.width < 500 ? 520 : 490, layout.height + 18) : undefined;
+  const adaptiveCanvasHeight = stacked ? Math.max(canvasSize.width < 500 ? 520 : 490, graphBounds.height + 18) : undefined;
 
   const svgPoint = (clientX: number, clientY: number) => {
     const matrix = svgRef.current?.getScreenCTM();
@@ -140,7 +148,7 @@ export function CourseGroupGraph({ courses, edges: rawEdges, layout: savedLayout
         <svg
           ref={svgRef}
           className="course-map__svg"
-          viewBox={`0 0 ${layout.width} ${layout.height}`}
+          viewBox={`0 0 ${graphBounds.width} ${graphBounds.height}`}
           aria-label="课程先后关系图谱，可拖动平移、滚轮缩放，点击课程进入对应课程"
           onPointerDown={(event) => {
             if (event.button !== 0) return;
@@ -193,6 +201,26 @@ export function CourseGroupGraph({ courses, edges: rawEdges, layout: savedLayout
             <marker id={`${markerId}-active`} markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker>
           </defs>
           <g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
+            {canvasElements.map((element) => (
+              <g
+                key={element.id}
+                className="course-map__canvas-image"
+                data-canvas-image={element.id}
+                role="img"
+                aria-label={element.alt}
+                pointerEvents="none"
+              >
+                <desc>{element.description}</desc>
+                <image
+                  href={element.src}
+                  x={element.x}
+                  y={element.y}
+                  width={element.width}
+                  height={element.height}
+                  preserveAspectRatio="xMidYMid meet"
+                />
+              </g>
+            ))}
             {layout.independentStart !== null && <text x="60" y={layout.independentStart - 44} className="course-map__section-label">独立课程 · 暂未设置关系</text>}
             {edges.map((edge) => {
               const source = layout.positions.get(edge.fromId)!;
@@ -227,7 +255,7 @@ export function CourseGroupGraph({ courses, edges: rawEdges, layout: savedLayout
               const visibleTitle = course.title.length > labelLimit ? `${course.title.slice(0, labelLimit - 1)}…` : course.title;
               const labelWidth = Math.max(72, Math.min(220, [...visibleTitle].length * 12 + 18));
               const labelRectX = labelOnRight ? radius + 8 : -(radius + 8 + labelWidth);
-              return <g key={course.id} data-course-node="true" data-course-id={course.id} transform={`translate(${point.x} ${point.y})`} style={{ color: NODE_COLORS[index % NODE_COLORS.length] }} role="button" tabIndex={0} aria-label={`${editingLayout ? "移动" : course.placeholder ? "打开" : "进入"}${course.title}课程节点`} aria-pressed={isSelected} className={`course-map__node ${editingLayout ? "is-layout-editing" : ""} ${manualPositions[course.id]?.pinned === true ? "is-pinned" : ""} ${isSelected ? "is-selected" : related ? "is-related" : selectedId ? "is-dimmed" : ""}`} onClick={() => { if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (editingLayout) { setSelectedId(course.id); return; } if (onOpenCourse) { onOpenCourse(course); return; } setSelectedId(course.id); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (editingLayout) { setSelectedId(course.id); return; } if (onOpenCourse) { onOpenCourse(course); return; } setSelectedId(course.id); } }}>
+              return <g key={course.id} data-course-node="true" data-course-id={course.id} transform={`translate(${point.x} ${point.y})`} style={{ color: NODE_COLORS[index % NODE_COLORS.length] }} role="button" tabIndex={0} aria-label={editingLayout ? `移动${course.title}课程节点` : course.presentationType === "question-bank" ? `打开${course.title}问题图谱` : `${course.placeholder ? "打开" : "进入"}${course.title}课程节点`} aria-pressed={isSelected} className={`course-map__node ${editingLayout ? "is-layout-editing" : ""} ${manualPositions[course.id]?.pinned === true ? "is-pinned" : ""} ${isSelected ? "is-selected" : related ? "is-related" : selectedId ? "is-dimmed" : ""}`} onClick={() => { if (suppressClickRef.current) { suppressClickRef.current = false; return; } if (editingLayout) { setSelectedId(course.id); return; } if (onOpenCourse) { onOpenCourse(course); return; } setSelectedId(course.id); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (editingLayout) { setSelectedId(course.id); return; } if (onOpenCourse) { onOpenCourse(course); return; } setSelectedId(course.id); } }}>
                 <title>{course.title}</title>
                 <circle className="course-map__halo" r={radius + 9} />
                 <circle className="course-map__core" r={isSelected ? radius + 3 : radius} />

@@ -9,6 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { buildSceneInputs, normalizeForestIndex } from "@/course/forest/forestAdapter";
+import { isQuestionBankCourse } from "@/course/forest/questionPresentation";
 import type {
   CourseDataChangedDetail,
   CourseMeta,
@@ -62,6 +63,7 @@ export function CourseForestViewport({
   const requestRef = useRef(0);
   const sceneRef = useRef<SceneHandle | null>(null);
   const courseApi = `/api/courses/${encodeURIComponent(course.id)}`;
+  const isQuestionBank = isQuestionBankCourse(course);
 
   useEffect(() => {
     // React StrictMode deliberately mounts, cleans up, and mounts once more in
@@ -256,7 +258,7 @@ export function CourseForestViewport({
   );
 
   return (
-    <section className="course-forest" aria-label={`${course.title}知识森林`}>
+    <section className="course-forest" aria-label={`${course.title}${isQuestionBank ? "问题图谱" : "知识森林"}`}>
       <div className="course-forest__toolbar">
         <button
           type="button"
@@ -273,8 +275,10 @@ export function CourseForestViewport({
             <strong>{course.title}</strong>
             <span>
               {index
-                ? `${index.points.length} 个知识点 · ${index.clusters.length} 个知识簇`
-                : course.subtitle || course.description || "课程知识森林"}
+                ? isQuestionBank
+                  ? `${index.points.length} 道题 · ${index.clusters.length} 个题型簇`
+                  : `${index.points.length} 个知识点 · ${index.clusters.length} 个知识簇`
+                : course.subtitle || course.description || (isQuestionBank ? "题库问题图谱" : "课程知识森林")}
             </span>
           </div>
         </div>
@@ -285,8 +289,8 @@ export function CourseForestViewport({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索知识点"
-            aria-label="搜索知识点"
+            placeholder={isQuestionBank ? "搜索题目" : "搜索知识点"}
+            aria-label={isQuestionBank ? "搜索题目" : "搜索知识点"}
           />
           {searchResults.length > 0 && (
             <div className="course-forest__search-results" role="listbox">
@@ -302,7 +306,7 @@ export function CourseForestViewport({
 
         <select
           className="course-forest__cluster-select"
-          aria-label="定位知识簇"
+          aria-label={isQuestionBank ? "定位题型簇" : "定位知识簇"}
           defaultValue=""
           onChange={(event) => {
             const clusterId = event.target.value;
@@ -310,7 +314,7 @@ export function CourseForestViewport({
             event.currentTarget.value = "";
           }}
         >
-          <option value="">定位知识簇</option>
+          <option value="">{isQuestionBank ? "定位题型簇" : "定位知识簇"}</option>
           {(index?.clusters ?? []).map((cluster) => (
             <option key={cluster.id} value={cluster.id}>
               {cluster.title}
@@ -327,14 +331,16 @@ export function CourseForestViewport({
           title={sequenceCount > 0
             ? showSequences
               ? `隐藏当前顺序（${displayedSequenceCount} 条）`
-              : `显示学习顺序（${sequenceCount} 条可用）`
-            : "当前课程暂无学习顺序"}
+              : `显示${isQuestionBank ? "题目" : "学习"}顺序（${sequenceCount} 条可用）`
+            : isQuestionBank ? "当前题库暂无题目顺序" : "当前课程暂无学习顺序"}
         >
           <ListOrdered aria-hidden="true" size={16} />
           <span>
             {showSequences
-              ? sequenceLayer === "cluster" ? "簇顺序" : "本簇顺序"
-              : "学习顺序"}
+              ? sequenceLayer === "cluster"
+                ? isQuestionBank ? "题型簇顺序" : "簇顺序"
+                : isQuestionBank ? "本题型顺序" : "本簇顺序"
+              : isQuestionBank ? "题目顺序" : "学习顺序"}
           </span>
         </button>
 
@@ -360,12 +366,13 @@ export function CourseForestViewport({
           sceneRef={sceneRef}
           sequences={displayedSequences}
           onPointClick={openPoint}
+          ariaLabel={isQuestionBank ? "可交互的问题图谱" : "可交互的知识森林地图"}
         />
       )}
 
-      {isLoading && !index && <ForestLoading />}
+      {isLoading && !index && <ForestLoading questionBank={isQuestionBank} />}
       {loadError && !index && <ForestError message={loadError} onRetry={() => void loadIndex()} />}
-      {index && !hasForestData && <ForestEmpty index={index} />}
+      {index && !hasForestData && <ForestEmpty index={index} questionBank={isQuestionBank} />}
       {isRefreshing && index && (
         <div className="course-forest__syncing" role="status">
           <Loader2 aria-hidden="true" size={14} />
@@ -374,9 +381,9 @@ export function CourseForestViewport({
       )}
 
       {index && hasForestData && !legendHidden && (
-        <aside className="course-forest__legend" aria-label="知识簇图例">
+        <aside className="course-forest__legend" aria-label={isQuestionBank ? "题型簇图例" : "知识簇图例"}>
           <div className="course-forest__legend-head">
-            <h2>知识簇</h2>
+            <h2>{isQuestionBank ? "题型簇" : "知识簇"}</h2>
             <button type="button" onClick={() => setLegendHidden(true)}>
               隐藏
             </button>
@@ -396,7 +403,7 @@ export function CourseForestViewport({
               </button>
             ))}
           </div>
-          {hasOriginLegend && (
+          {hasOriginLegend && !isQuestionBank && (
             <div className="course-forest__origin-legend" aria-label="知识点来源图例">
               <strong>知识点来源</strong>
               {originCounts.textbook > 0 && (
@@ -418,13 +425,13 @@ export function CourseForestViewport({
 
       {index && hasForestData && legendHidden && (
         <button type="button" className="course-forest__legend-restore" onClick={() => setLegendHidden(false)}>
-          显示知识簇
+          显示{isQuestionBank ? "题型簇" : "知识簇"}
         </button>
       )}
 
       {index && hasForestData && showSequences && sequenceCount > 0 && (
-        <aside className="course-forest__sequence-legend" aria-label="学习顺序图例">
-          <strong>学习顺序</strong>
+        <aside className="course-forest__sequence-legend" aria-label={isQuestionBank ? "题目顺序图例" : "学习顺序图例"}>
+          <strong>{isQuestionBank ? "题目顺序" : "学习顺序"}</strong>
           <div className="course-forest__sequence-scope" role="group" aria-label="顺序显示层级">
             <button
               type="button"
@@ -433,7 +440,7 @@ export function CourseForestViewport({
               aria-pressed={sequenceLayer === "cluster"}
               onClick={() => setSequenceLayer("cluster")}
             >
-              知识簇
+              {isQuestionBank ? "题型簇" : "知识簇"}
             </button>
             <button
               type="button"
@@ -442,24 +449,26 @@ export function CourseForestViewport({
               aria-pressed={sequenceLayer === "point"}
               onClick={() => setSequenceLayer("point")}
               title={!focusedClusterId
-                ? "请先定位一个知识簇"
+                ? `请先定位一个${isQuestionBank ? "题型簇" : "知识簇"}`
                 : focusedPointSequences.length === 0
-                  ? "当前知识簇没有知识点顺序"
-                  : `显示${focusedClusterTitle ?? "当前知识簇"}的知识点顺序`}
+                  ? `当前${isQuestionBank ? "题型簇没有题目" : "知识簇没有知识点"}顺序`
+                  : `显示${focusedClusterTitle ?? (isQuestionBank ? "当前题型簇" : "当前知识簇")}的${isQuestionBank ? "题目" : "知识点"}顺序`}
             >
-              本簇知识点
+              {isQuestionBank ? "本题型题目" : "本簇知识点"}
             </button>
           </div>
           <p>
             {sequenceLayer === "cluster"
-              ? "总览只显示知识簇之间的先后关系"
+              ? `总览只显示${isQuestionBank ? "题型簇" : "知识簇"}之间的先后关系`
               : focusedClusterTitle
                 ? `当前：${focusedClusterTitle}`
-                : "请先定位一个知识簇"}
+                : `请先定位一个${isQuestionBank ? "题型簇" : "知识簇"}`}
           </p>
           <span>
             <i className={sequenceLayer === "cluster" ? "is-cluster" : "is-point"} aria-hidden="true" />
-            {sequenceLayer === "cluster" ? "知识簇" : "知识点"} {displayedSequenceCount}
+            {sequenceLayer === "cluster"
+              ? isQuestionBank ? "题型簇" : "知识簇"
+              : isQuestionBank ? "题目" : "知识点"} {displayedSequenceCount}
           </span>
         </aside>
       )}
@@ -472,11 +481,13 @@ function ForestScene({
   sceneRef,
   sequences,
   onPointClick,
+  ariaLabel,
 }: {
   index: ForestIndex;
   sceneRef: MutableRefObject<SceneHandle | null>;
   sequences: ForestSequences | null;
   onPointClick: (id: string) => void;
+  ariaLabel: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const onPointClickRef = useRef(onPointClick);
@@ -558,25 +569,27 @@ function ForestScene({
     }
   }, [sceneRef, sequences]);
 
-  return <div ref={containerRef} className="course-forest__canvas" aria-label="可交互的知识森林地图" />;
+  return <div ref={containerRef} className="course-forest__canvas" aria-label={ariaLabel} />;
 }
 
-function ForestLoading() {
+function ForestLoading({ questionBank }: { questionBank: boolean }) {
   return (
     <div className="course-forest__state" role="status">
       <Loader2 aria-hidden="true" size={26} className="course-forest__spinner" />
-      <span>正在加载知识森林…</span>
+      <span>正在加载{questionBank ? "问题图谱" : "知识森林"}…</span>
     </div>
   );
 }
 
-function ForestEmpty({ index }: { index: ForestIndex }) {
-  const missing = index.clusters.length === 0 ? "知识簇" : "知识点";
+function ForestEmpty({ index, questionBank }: { index: ForestIndex; questionBank: boolean }) {
+  const missing = index.clusters.length === 0
+    ? questionBank ? "题型簇" : "知识簇"
+    : questionBank ? "题目" : "知识点";
   return (
     <div className="course-forest__state" role="status">
       <BookOpen aria-hidden="true" size={26} />
-      <strong>这门课程还没有可展示的知识森林</strong>
-      <span>课程索引中缺少{missing}，请重新生成或检查发布结果。</span>
+      <strong>{questionBank ? "这个题库还没有可展示的问题图谱" : "这门课程还没有可展示的知识森林"}</strong>
+      <span>{questionBank ? "题库" : "课程"}索引中缺少{missing}，请重新生成或检查发布结果。</span>
     </div>
   );
 }

@@ -54,6 +54,7 @@ import {
   queueReviewResume,
   reconcileReviewResume,
   REVIEW_RESUME_AVAILABLE_EVENT,
+  reviewResumeConversationModel,
   reviewResumeDeliveryOutcome,
   reviewResumeRetryDelay,
   shouldDeliverReviewResume,
@@ -923,13 +924,30 @@ export function AgentPanel({ onCollapse, onOpenReview }: AgentPanelProps) {
     workflowRef.current = "course-create";
     setPendingReview(null);
     useCourseGenerationStore.getState().resumeLive(request.conversationId);
-    submitRequest({
-      conversationId: request.conversationId,
-      message: request.resumeMessage,
-      workflow: "course-create",
-      displayContent: request.displayContent,
-      reviewResumeId: request.reviewId,
-    });
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/conversations/${encodeURIComponent(request.conversationId)}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const modelOverride = reviewResumeConversationModel(await response.json());
+        if (inFlightReviewResumeRef.current?.reviewId !== request.reviewId) return;
+        submitRequest({
+          conversationId: request.conversationId,
+          message: request.resumeMessage,
+          workflow: "course-create",
+          displayContent: request.displayContent,
+          reviewResumeId: request.reviewId,
+          modelOverride,
+        });
+      } catch {
+        if (inFlightReviewResumeRef.current?.reviewId === request.reviewId) {
+          inFlightReviewResumeRef.current = null;
+        }
+        window.setTimeout(() => reconcileReviewResumeRef.current(), 0);
+      }
+    })();
   }, [isRunning, setActiveConversation, setMode, submitRequest]);
 
   const reconcilePendingReviewResume = useCallback(async () => {

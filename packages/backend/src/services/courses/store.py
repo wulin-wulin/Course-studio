@@ -1254,7 +1254,7 @@ class CourseStore:
                     # from the service entirely. It is exposed as invalid instead.
                     courses.append({"id": directory.name, "invalid": True})
                     continue
-                courses.append({
+                summary = {
                     "id": directory.name,
                     "title": course.get("title", directory.name),
                     "description": course.get("description", ""),
@@ -1263,7 +1263,11 @@ class CourseStore:
                     "clusters": len(index.get("clusters") or []),
                     "points": len(index.get("points") or []),
                     "placeholder": course.get("placeholder") is True,
-                })
+                }
+                presentation_type = course.get("presentationType")
+                if isinstance(presentation_type, str) and presentation_type.strip():
+                    summary["presentationType"] = presentation_type.strip()
+                courses.append(summary)
             return courses
 
     # ------------------------------------------------------------------

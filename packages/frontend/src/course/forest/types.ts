@@ -196,6 +196,7 @@ export type ForestIndex = {
 export type CourseMeta = {
   id: string;
   title: string;
+  presentationType?: "question-bank";
   subtitle?: string;
   description?: string;
   language?: string;
@@ -206,6 +207,8 @@ export type CourseMeta = {
 };
 
 export type CoursePointDetail = ForestPoint & {
+  /** Selects the learner-facing question layout without reclassifying every practice point. */
+  presentationType?: "question";
   subtitle?: string;
   kind?: string;
   role?: string;

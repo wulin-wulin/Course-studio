@@ -1,16 +1,87 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { build } from "esbuild";
 
 let graph;
+let canvasElements;
+const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 before(async () => {
-  const result = await build({
-    entryPoints: [path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/components/course/catalogGraph.ts")],
-    bundle: true, platform: "node", format: "esm", target: "node20", write: false,
-  });
-  graph = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+  const [graphResult, canvasResult] = await Promise.all([
+    build({
+      entryPoints: [path.resolve(testDirectory, "../src/components/course/catalogGraph.ts")],
+      bundle: true, platform: "node", format: "esm", target: "node20", write: false,
+    }),
+    build({
+      entryPoints: [path.resolve(testDirectory, "../src/components/course/courseGroupCanvasElements.ts")],
+      bundle: true, platform: "node", format: "esm", target: "node20", write: false,
+      loader: { ".png": "dataurl" },
+    }),
+  ]);
+  graph = await import(`data:text/javascript;base64,${Buffer.from(graphResult.outputFiles[0].text).toString("base64")}`);
+  canvasElements = await import(`data:text/javascript;base64,${Buffer.from(canvasResult.outputFiles[0].text).toString("base64")}`);
+});
+
+test("the case course group has one locked canvas image with the original PNG dimensions", async () => {
+  const catalog = JSON.parse(await readFile(path.resolve(testDirectory, "../../../course-data/course-catalog.json"), "utf8"));
+  const caseGroup = catalog.groups.find((group) => group.id === canvasElements.CASE_COURSE_GROUP_ID);
+  assert.equal(caseGroup?.name, "案例");
+
+  const elements = canvasElements.courseGroupCanvasElements(canvasElements.CASE_COURSE_GROUP_ID);
+  assert.equal(elements.length, 1);
+  assert.deepEqual(
+    { kind: elements[0].kind, x: elements[0].x, y: elements[0].y, width: elements[0].width, height: elements[0].height, locked: elements[0].locked },
+    { kind: "image", x: 280, y: 110, width: 821, height: 283, locked: true },
+  );
+  assert.match(elements[0].src, /^data:image\/png;base64,/);
+  assert.deepEqual(canvasElements.courseGroupCanvasElements("another-group"), []);
+
+  const png = await readFile(path.resolve(testDirectory, "../src/assets/course-catalog/teacher-ai-ecosystem.png"));
+  assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(png.readUInt32BE(16), 821);
+  assert.equal(png.readUInt32BE(20), 283);
+});
+
+test("canvas images only extend bounds and never enter course layout or edges", () => {
+  const ids = ["teacher-ai-literacy-training", "placeholder-da8e9ef22a13417b", "placeholder-b541cd49d90249a5"];
+  const layout = graph.layoutCourses(ids, []);
+  const positionsBefore = [...layout.positions.entries()].map(([id, position]) => [id, { ...position }]);
+  const edgesBefore = graph.validEdges(ids, []);
+  const elements = canvasElements.courseGroupCanvasElements(canvasElements.CASE_COURSE_GROUP_ID);
+  const bounds = canvasElements.extendCanvasBounds(layout, elements);
+
+  assert.deepEqual([...layout.positions.entries()], positionsBefore);
+  assert.deepEqual(graph.validEdges(ids, []), edgesBefore);
+  assert.equal(layout.positions.has(elements[0].id), false);
+  assert.ok(bounds.width >= elements[0].x + elements[0].width + 36);
+  assert.ok(bounds.height >= elements[0].y + elements[0].height + 96);
+  assert.ok(bounds.width >= layout.width);
+  assert.ok(bounds.height >= layout.height);
+});
+
+test("narrow canvases keep the image below nodes without shrinking the graph width", () => {
+  const ids = ["knowledge", "ability", "questions"];
+  for (const availableWidth of [375, 500, 900, 1000, 1100]) {
+    const compact = availableWidth < 940;
+    const layout = graph.layoutCourses(ids, [], {
+      availableWidth,
+      compact,
+      independentColumns: availableWidth < 500 ? 1 : 2,
+    });
+    const elements = canvasElements.positionCanvasElements(
+      canvasElements.courseGroupCanvasElements(canvasElements.CASE_COURSE_GROUP_ID),
+      { availableWidth: layout.width, compact, nodePositions: layout.positions.values() },
+    );
+    const bounds = canvasElements.extendCanvasBounds(layout, elements);
+    const lastNodeY = Math.max(...[...layout.positions.values()].map((position) => position.y));
+
+    assert.ok(elements[0].y > lastNodeY + 24, `${availableWidth}px image should be below every node`);
+    assert.ok(elements[0].x >= 0);
+    assert.ok(elements[0].x + elements[0].width <= layout.width);
+    assert.ok(availableWidth / bounds.width >= 0.95, `${availableWidth}px labels should retain their scale`);
+  }
 });
 
 test("courses with no explicit edges remain independent in a deterministic grid", () => {

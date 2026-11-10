@@ -497,6 +497,7 @@ function unwrapCourse(payload: unknown): CourseMeta | null {
   return {
     id: candidate.id,
     title: candidate.title,
+    presentationType: candidate.presentationType === "question-bank" ? "question-bank" : undefined,
     description:
       typeof candidate.description === "string" ? candidate.description : undefined,
   };

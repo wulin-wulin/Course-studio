@@ -137,6 +137,22 @@ export function shouldDeliverReviewResume({
   return socketOpen && !inFlight && !retryScheduled && !reconcileInProgress;
 }
 
+/**
+ * A structured-review resume is part of the existing course-creation run.
+ * Always reuse that durable conversation's model instead of the browser's
+ * currently selected (and potentially unrelated) default model.
+ */
+export function reviewResumeConversationModel(conversation: unknown) {
+  if (!isRecord(conversation)) {
+    throw new InvalidReviewPayloadError("历史会话响应格式无效");
+  }
+  const model = readNonEmptyString(conversation.model);
+  if (!model) {
+    throw new InvalidReviewPayloadError("历史会话缺少课程创建模型");
+  }
+  return model;
+}
+
 export function reviewResumeDeliveryOutcome(
   active: ActiveReviewResume,
   event: { type: string; payload?: Record<string, unknown> },

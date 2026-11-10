@@ -106,6 +106,17 @@ class CourseCatalogStoreTest(unittest.TestCase):
         listed = next(item for item in self.store.list_courses() if item["id"] == placeholder["id"])
         self.assertTrue(listed["placeholder"])
 
+    def test_list_courses_preserves_optional_presentation_type(self):
+        course_path = self.store.root / "algebra" / "course.json"
+        course = json.loads(course_path.read_text(encoding="utf-8"))
+        course["presentationType"] = "question-bank"
+        course_path.write_text(json.dumps(course), encoding="utf-8")
+
+        listed = next(item for item in self.store.list_courses() if item["id"] == "algebra")
+        self.assertEqual(listed["presentationType"], "question-bank")
+        ordinary = next(item for item in self.store.list_courses() if item["id"] == "physics")
+        self.assertNotIn("presentationType", ordinary)
+
     def test_create_group_rejects_catalog_limit_without_corrupting_catalog(self):
         path = self.store.root.parent / "course-catalog.json"
         groups = [
