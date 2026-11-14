@@ -1,0 +1,601 @@
+{
+  "id": "point-5-3",
+  "title": "LangGraph 的核心构建模块",
+  "shortSummary": "梳理 State、Node、Edge 与编译执行等核心模块，说明它们如何共同构成可运行的状态图。",
+  "keyTerms": [
+    "State",
+    "Node",
+    "Edge",
+    "编译"
+  ],
+  "animationType": "stateGraphExecution",
+  "animationSuggestion": "按教材示例逐步播放：初始状态进入入口，node_1 追加文字，条件边根据状态选出 node_3，node_3 再追加文字后抵达 END，同时高亮当前节点、当前边和状态字段的变化。",
+  "difficulty": "中等",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-5-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材四个模块的讲解顺序与代码示例，围绕“状态如何在图中流动”补充职责边界、执行追踪与下一节的迁移检查。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-blocks",
+          "text": "说明 State、Node、Edge、StateGraph 与编译各自的职责，以及它们如何组成一张可运行的图。"
+        },
+        {
+          "id": "trace-execution",
+          "text": "给定初始状态，按节点与边读出执行路径与最终状态。"
+        },
+        {
+          "id": "choose-edge",
+          "text": "区分直接边与条件边，并为给定的分支需求选择正确的连接方式。"
+        }
+      ],
+      "misconceptions": [
+        "把节点当成决定下一步的控制者；实际上下一步由边决定，条件边的路由函数才负责选择目标节点。",
+        "把节点返回的字典当成整份状态的覆盖；实际上是状态更新，会与已有状态合并。",
+        "以为写好 StateGraph 就能直接调用；实际上必须先编译，才能得到可运行的图对象。"
+      ],
+      "modules": [
+        {
+          "id": "overview",
+          "title": "从入口到 END：四个模块的分工",
+          "role": "concept-frame",
+          "description": "先建立整张图的轮廓，知道 State、Node、Edge 与 StateGraph 分别回答哪个问题。",
+          "outcomeRefs": [
+            "explain-blocks"
+          ],
+          "order": 0
+        },
+        {
+          "id": "state",
+          "title": "State：跨节点传递的数据",
+          "role": "concept-definition",
+          "description": "明确状态的来源、内容与设计检查点。",
+          "outcomeRefs": [
+            "explain-blocks"
+          ],
+          "order": 1
+        },
+        {
+          "id": "nodes",
+          "title": "Node：读状态、返回更新",
+          "role": "mechanism",
+          "description": "厘清节点的输入、内部动作与返回值约定。",
+          "outcomeRefs": [
+            "explain-blocks"
+          ],
+          "order": 2
+        },
+        {
+          "id": "edges",
+          "title": "Edge：直接边与条件边的路由",
+          "role": "mechanism",
+          "description": "区分两种边的适用条件，并划清路由函数与节点的职责。",
+          "outcomeRefs": [
+            "choose-edge",
+            "explain-blocks"
+          ],
+          "order": 3
+        },
+        {
+          "id": "assembly",
+          "title": "StateGraph 与编译：把声明变成可运行对象",
+          "role": "procedure",
+          "description": "按注册节点、连接边、编译的顺序装配一张图，并理解编译与调用的分工。",
+          "outcomeRefs": [
+            "explain-blocks",
+            "trace-execution"
+          ],
+          "order": 4
+        },
+        {
+          "id": "trace-and-transfer",
+          "title": "追踪一次运行并迁移到下一节",
+          "role": "worked-example",
+          "description": "逐行对照教材示例的输出，读出路径与状态累积，再把四件套用到下一个任务。",
+          "outcomeRefs": [
+            "trace-execution",
+            "choose-edge"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-blocks",
+          "trace-execution",
+          "choose-edge"
+        ],
+        "method": "完成执行路径自检，并为一个新的邮件处理任务写出状态字段、节点与条件边各自出现的位置。",
+        "successCriteria": [
+          "能说明四个模块各自负责什么",
+          "能从初始状态推出执行路径与最终状态",
+          "能指出给定流程中哪一处必须是条件边"
+        ],
+        "exerciseBlockId": "model-trace-check",
+        "nextPointId": "point-5-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-entrypoint-overview",
+        "moduleId": "overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "一张从入口走到 END 的图",
+        "markdown": "LangGraph 把一个应用建模成一张有向图：执行从 **entrypoint**（入口点）开始，根据实际执行情况流向不同的函数，直到抵达 **END**。整个流程不是一段从头到尾的线性脚本，而是一张预先声明好“有哪些处理步骤、步骤之间如何连通”的图。\n\n建造这样一张图可以拆成四个问题：数据放在哪里（State）、每一步做什么（Node）、步骤之间怎么走（Edge）、整张图放在哪个容器里并如何变成可运行对象（StateGraph 与编译）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000172"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块"
+              ],
+              "lineStart": 4618,
+              "lineEnd": 4630,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/Building_blocks.png",
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/application.png"
+              ],
+              "excerptSha256": "aa971f9192f822491eac100d8db33d6fe5f186119652c2d530de3bd1a9b34a0a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-graph-rationale",
+        "moduleId": "overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么用图而不是一条链",
+        "markdown": "线性链只能表达“第一步、第二步、第三步”，一旦需要在中间判断、回退或重复，控制流就会埋进层层分支里。图把控制流显式画出来：每条边都是一次可能的跳转，条件边还能在执行到那里时根据状态决定下一站。于是“智能体为什么走了这一步”变成可检查的图结构与状态值，而不是散落在代码里的隐式逻辑。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-entrypoint-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-state-definition",
+        "moduleId": "state",
+        "depth": "core",
+        "kind": "definition",
+        "title": "State：流经应用的全部信息",
+        "markdown": "**State（状态）** 是流经应用的所有信息，也是 LangGraph 的核心概念。它由用户自己定义，教材用 `TypedDict` 声明：\n\n```python\nfrom typing_extensions import TypedDict\n\nclass State(TypedDict):\n    graph_state: str\n```\n\n因为状态完全由用户设计，字段必须覆盖决策过程需要的全部数据；漏掉的字段，后续节点与条件边就无从判断。教材的提示很直接：先想清楚应用需要在步骤之间跟踪哪些信息，再动手写 `State`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块",
+                "状态（State）"
+              ],
+              "lineStart": 4631,
+              "lineEnd": 4645,
+              "assetRefs": [],
+              "excerptSha256": "3aa6c5f722ce69619747086c9c5d3b39f3d00a06ea29f5c407398e1ff209208b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-state-design-checks",
+        "moduleId": "state",
+        "depth": "support",
+        "kind": "note",
+        "title": "状态设计的两个检查点",
+        "markdown": "第一，**可决策性**：每个条件边要用到的信息都必须在状态里，否则路由函数只能靠猜或读取外部变量。第二，**可增量更新**：节点返回的是状态的一部分而不是整份状态，所以字段要设计得能独立、可组合地更新。教材示例只放了一个 `graph_state: str`，正是为了让“追加一段文字”这种更新语义一眼可见。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-state-definition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-nodes-contract",
+        "moduleId": "nodes",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Node：接收状态、执行操作、返回更新",
+        "markdown": "**Node（节点）** 是普通的 Python 函数。每个节点遵守同一套约定：接收状态作为输入、执行某些操作、返回状态更新。教材的三个节点都只做一件事——在 `graph_state` 后面追加一小段文字：\n\n```python\ndef node_1(state):\n    print(\"---Node 1---\")\n    return {\"graph_state\": state['graph_state'] + \" I am\"}\n\ndef node_2(state):\n    print(\"---Node 2---\")\n    return {\"graph_state\": state['graph_state'] + \" happy!\"}\n\ndef node_3(state):\n    print(\"---Node 3---\")\n    return {\"graph_state\": state['graph_state'] + \" sad!\"}\n```\n\n节点里可以放四类工作：LLM 调用（生成文本或做决策）、工具调用（与外部系统交互）、条件逻辑（决定后续步骤）、人工干预（获取用户输入）。此外，`START` 和 `END` 是 LangGraph 内置的必要节点，不需要自己实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000174"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块",
+                "节点（Nodes）"
+              ],
+              "lineStart": 4646,
+              "lineEnd": 4675,
+              "assetRefs": [],
+              "excerptSha256": "7a8f3124a23229c4b2f87efe777d62e5c40b595582bc3a17bb0c8e7c0d8dabb3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-node-update-contract",
+        "moduleId": "nodes",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "关键在“返回更新”而不是“返回全量”",
+        "markdown": "三个节点返回的都是只含 `graph_state` 的字典，而不是整份状态；把这些更新合并回状态是框架的工作。理解这一点就能解释两件事：为什么节点可以只关心自己改动的字段；为什么节点内部并不决定“下一步去哪”——普通节点的职责边界就是“读状态、改状态”，选择去向是边的事。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-nodes-contract"
+          ]
+        }
+      },
+      {
+        "id": "textbook-edges-routing",
+        "moduleId": "edges",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Edge：直接边与条件边",
+        "markdown": "**Edge（边）** 连接节点，定义图中的可能路径。教材区分两种边：\n\n- **直接边**：始终从节点 A 到节点 B，没有分支；\n- **条件边**：根据当前状态选择下一个节点。\n\n条件边的去向由一个路由函数给出。下面的 `decide_mood` 读取状态里的 `graph_state`，并返回目标节点名：\n\n```python\nfrom typing import Literal\n\ndef decide_mood(state) -> Literal[\"node_2\", \"node_3\"]:\n    user_input = state['graph_state']\n    if random.random() < 0.5:\n        return \"node_2\"\n    return \"node_3\"\n```\n\n教材用 50/50 的随机分配，只是为了演示“去向由函数决定”；真实应用通常依据状态内容选择分支。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000175"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块",
+                "边（Edges）"
+              ],
+              "lineStart": 4676,
+              "lineEnd": 4702,
+              "assetRefs": [],
+              "excerptSha256": "c83ca977f277458b201ac55ff3b932ccc18a652cfdc58ff41d8f7ef6430d4699"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-conditional-edge-scope",
+        "moduleId": "edges",
+        "depth": "core",
+        "kind": "note",
+        "title": "路由函数与节点的职责边界",
+        "markdown": "路由函数只做一件事：读状态、返回一个目标节点的名字。它不执行任务、不修改状态、不产生副作用——那些都属于节点。反过来，节点也不该偷偷决定下一站，否则图结构与实际执行就会脱节。把“做什么”和“去哪”分开，图才是可读、可追踪、可画的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-edges-routing"
+          ]
+        }
+      },
+      {
+        "id": "textbook-stategraph-build",
+        "moduleId": "assembly",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "StateGraph：装配与编译",
+        "markdown": "**StateGraph（状态图）** 是包含整个智能体工作流的容器。教材用四步把前面三个概念装起来：\n\n```python\nfrom langgraph.graph import StateGraph, START, END\n\nbuilder = StateGraph(State)\nbuilder.add_node(\"node_1\", node_1)\nbuilder.add_node(\"node_2\", node_2)\nbuilder.add_node(\"node_3\", node_3)\n\nbuilder.add_edge(START, \"node_1\")\nbuilder.add_conditional_edges(\"node_1\", decide_mood)\nbuilder.add_edge(\"node_2\", END)\nbuilder.add_edge(\"node_3\", END)\n\ngraph = builder.compile()\n```\n\n依次是：用 `State` 类型构造容器、用 `add_node` 注册节点、用 `add_edge` 与 `add_conditional_edges` 连线、最后 `compile()` 得到可运行的图。编译之后还可以把它画出来检查结构：\n\n```python\ndisplay(Image(graph.get_graph().draw_mermaid_png()))\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块",
+                "状态图（StateGraph）"
+              ],
+              "lineStart": 4703,
+              "lineEnd": 4744,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/basic_graph.jpeg"
+              ],
+              "excerptSha256": "f3b365b107c5c6b9cc70b0d80f05b7d0111bc9001f17d5bb6b46dc938172c215"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compile-and-invoke",
+        "moduleId": "assembly",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "编译与调用各自负责什么",
+        "markdown": "`compile()` 把声明式的节点和边整理成可执行对象，并检查图的基本连通性；此后图不再修改。调用时传入一个初始状态字典，它被交给入口，之后每一步都按边推进：执行节点、合并返回值、选择下一条边，直到 END，最后返回终态。两个常见的错误正好对应这两步：还没编译就调用；或者漏连某条通往 `END` 的边，让流程找不到出口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-stategraph-build"
+          ]
+        }
+      },
+      {
+        "id": "textbook-execution-trace",
+        "moduleId": "trace-and-transfer",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "跟着教材跑一遍",
+        "markdown": "调用\n\n```python\ngraph.invoke({\"graph_state\": \"Hi, this is Lance.\"})\n```\n\n得到输出：\n\n```text\n---Node 1---\n---Node 3---\n{'graph_state': 'Hi, this is Lance. I am sad!'}\n```\n\n逐行对齐：入口把初始状态送进 `node_1`，它追加 ` I am` 并打印第一行；随后条件边 `decide_mood` 根据状态返回 `node_3`；`node_3` 追加 ` sad!` 并打印第二行；`node_3` 连到 `END`，流程结束并返回最终状态。终态里两段追加都还在，说明状态是跨节点累积传递的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块",
+                "状态图（StateGraph）"
+              ],
+              "lineStart": 4703,
+              "lineEnd": 4744,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/basic_graph.jpeg"
+              ],
+              "excerptSha256": "f3b365b107c5c6b9cc70b0d80f05b7d0111bc9001f17d5bb6b46dc938172c215"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-check",
+        "moduleId": "trace-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：读出路径",
+        "markdown": "对照上面的运行结果回答三个问题：\n\n1. 最终状态里的 `I am` 和 `sad!` 分别由哪个节点写入？\n2. 为什么 `---Node 2---` 没有出现？决定这一点的是节点内部的逻辑，还是条件边？\n3. 如果删掉 `node_2` 到 `END` 的那条边，会发生什么？\n\n参考思路：两段文字分别来自 `node_1` 与 `node_3`；`node_2` 没有执行，是因为 `decide_mood` 返回了 `node_3`；删掉出口边后，流程一旦走到 `node_2` 就无路可走，图也不再是一条能完整运行到 `END` 的流程。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-execution-trace",
+            "model-compile-and-invoke"
+          ]
+        }
+      },
+      {
+        "id": "textbook-next-preview",
+        "moduleId": "trace-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "下一步：构建第一张图",
+        "markdown": "下一节会把本节的概念变成实践：构建第一张图，让 Alfred 处理电子邮件——读取来信、把它分类为垃圾邮件或合法邮件，并在邮件合法时起草初步回复。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000177"
+              ],
+              "headingPath": [
+                "第 2.3 单元. LangGraph 框架",
+                "LangGraph 的核心构建模块",
+                "下一步？"
+              ],
+              "lineStart": 4745,
+              "lineEnd": 4748,
+              "assetRefs": [],
+              "excerptSha256": "d20fbdcbff80150d1ada2f4f649e293a0ebb356ba196937cbf7b068dc0054c5d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-checklist",
+        "moduleId": "trace-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "迁移到新任务时的四问",
+        "markdown": "拿到一个邮件处理任务，先用本节的四件套定位：状态里放哪些字段（邮件正文、分类结果、草稿）、需要哪些节点（读取、分类、起草）、哪里必须是条件边（分类之后走垃圾邮件分支还是起草分支）、哪一步之后可以到 `END`。这四点说清楚，剩下的只是把它们翻译成 `State`、`add_node` 和 `add_edge`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-next-preview",
+            "textbook-execution-trace"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "blocks-relationship-map",
+        "type": "diagram",
+        "anchorBlockId": "model-graph-rationale",
+        "moduleId": "overview",
+        "depth": "support",
+        "outcomeRefs": [
+          "explain-blocks"
+        ],
+        "learningPurpose": "把四个模块放进同一张图的同一视野里，帮助学习者在进入细节前建立分工印象。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-entrypoint-overview",
+            "model-graph-rationale"
+          ]
+        },
+        "config": {
+          "layout": "layered",
+          "showLabels": true
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "State 存放数据，Node 读状态并返回更新，Edge 决定走向，StateGraph 装下全部节点与边，编译之后才能运行。"
+        }
+      },
+      {
+        "id": "graph-trace-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-trace-check",
+        "moduleId": "trace-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-execution"
+        ],
+        "learningPurpose": "检查学习者能否从初始状态和边结构独立推出执行路径与最终状态，而不只是记住示例输出。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-execution-trace",
+            "textbook-stategraph-build"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请复述教材示例的执行路径，并指出最终状态中的每一段文字分别由哪个节点写入、由哪条边决定走向。"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 2.3 单元. LangGraph 框架",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [
+    "point-4-6"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000172"
+      ],
+      "headingPath": [
+        "第 2.3 单元. LangGraph 框架",
+        "LangGraph 的核心构建模块"
+      ],
+      "lineStart": 4618,
+      "lineEnd": 4630,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/Building_blocks.png",
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/application.png"
+      ],
+      "excerptSha256": "aa971f9192f822491eac100d8db33d6fe5f186119652c2d530de3bd1a9b34a0a"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000173"
+      ],
+      "headingPath": [
+        "第 2.3 单元. LangGraph 框架",
+        "LangGraph 的核心构建模块",
+        "状态（State）"
+      ],
+      "lineStart": 4631,
+      "lineEnd": 4645,
+      "assetRefs": [],
+      "excerptSha256": "3aa6c5f722ce69619747086c9c5d3b39f3d00a06ea29f5c407398e1ff209208b"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000174"
+      ],
+      "headingPath": [
+        "第 2.3 单元. LangGraph 框架",
+        "LangGraph 的核心构建模块",
+        "节点（Nodes）"
+      ],
+      "lineStart": 4646,
+      "lineEnd": 4675,
+      "assetRefs": [],
+      "excerptSha256": "7a8f3124a23229c4b2f87efe777d62e5c40b595582bc3a17bb0c8e7c0d8dabb3"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000175"
+      ],
+      "headingPath": [
+        "第 2.3 单元. LangGraph 框架",
+        "LangGraph 的核心构建模块",
+        "边（Edges）"
+      ],
+      "lineStart": 4676,
+      "lineEnd": 4702,
+      "assetRefs": [],
+      "excerptSha256": "c83ca977f277458b201ac55ff3b932ccc18a652cfdc58ff41d8f7ef6430d4699"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000176"
+      ],
+      "headingPath": [
+        "第 2.3 单元. LangGraph 框架",
+        "LangGraph 的核心构建模块",
+        "状态图（StateGraph）"
+      ],
+      "lineStart": 4703,
+      "lineEnd": 4744,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/LangGraph/basic_graph.jpeg"
+      ],
+      "excerptSha256": "f3b365b107c5c6b9cc70b0d80f05b7d0111bc9001f17d5bb6b46dc938172c215"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000177"
+      ],
+      "headingPath": [
+        "第 2.3 单元. LangGraph 框架",
+        "LangGraph 的核心构建模块",
+        "下一步？"
+      ],
+      "lineStart": 4745,
+      "lineEnd": 4748,
+      "assetRefs": [],
+      "excerptSha256": "d20fbdcbff80150d1ada2f4f649e293a0ebb356ba196937cbf7b068dc0054c5d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1819,
+    1554
+  ],
+  "scale": 0.9
+}

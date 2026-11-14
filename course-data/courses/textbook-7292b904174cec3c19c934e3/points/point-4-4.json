@@ -1,0 +1,504 @@
+{
+  "id": "point-4-4",
+  "title": "在 LlamaIndex 中使用工具",
+  "shortSummary": "说明如何在 LlamaIndex 中定义与注册工具，让查询引擎或智能体在需要时调用外部能力。",
+  "keyTerms": [
+    "工具注册",
+    "FunctionTool",
+    "调用参数",
+    "查询引擎"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-4-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的四类工具划分与代码示例，按「先理解工具接口、再分别创建、最后按数据规模取舍」的操作顺序重排，并补充取舍对照与自检题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-tool-types",
+          "text": "说明 LlamaIndex 四类主要工具各自负责什么。"
+        },
+        {
+          "id": "create-function-tool",
+          "text": "用 FunctionTool 封装一个 Python 函数，并给出可被 LLM 识别的名称与描述。"
+        },
+        {
+          "id": "convert-query-engine-tool",
+          "text": "把已有的查询引擎转换为 QueryEngineTool 交给智能体使用。"
+        },
+        {
+          "id": "choose-tool-composition",
+          "text": "根据数据规模与复用需求，在 Toolspecs 和实用工具之间做出选择。"
+        }
+      ],
+      "misconceptions": [
+        "把工具的名称和描述当成无关紧要的注释，认为只要函数写对，LLM 就能正确选择并填写参数。",
+        "认为 QueryEngine 只能直接回答问题，不能被包装成智能体可调用的工具。",
+        "认为工具越好越多，忽略过量返回数据会挤占上下文并浪费 token。"
+      ],
+      "modules": [
+        {
+          "id": "tool-interface",
+          "title": "问题导入：为什么工具接口必须清楚",
+          "role": "concept-framing",
+          "description": "从 LLM 选择工具的角度说明名称、描述与参数的作用，并列出四类工具。",
+          "outcomeRefs": [
+            "explain-tool-types"
+          ],
+          "order": 0
+        },
+        {
+          "id": "function-tool",
+          "title": "用 FunctionTool 封装 Python 函数",
+          "role": "worked-procedure",
+          "description": "按代码示例走通定义函数、创建工具、直接调用的步骤。",
+          "outcomeRefs": [
+            "create-function-tool"
+          ],
+          "order": 1
+        },
+        {
+          "id": "query-engine-tool",
+          "title": "用 QueryEngineTool 复用查询引擎",
+          "role": "worked-procedure",
+          "description": "把上一点构建出的查询引擎转换成工具，并说明其复用含义。",
+          "outcomeRefs": [
+            "convert-query-engine-tool"
+          ],
+          "order": 2
+        },
+        {
+          "id": "toolspecs",
+          "title": "用 Toolspecs 装载成套工具",
+          "role": "comparison",
+          "description": "说明预设工具集的用途，并与单独 FunctionTool 做取舍对照。",
+          "outcomeRefs": [
+            "explain-tool-types",
+            "choose-tool-composition"
+          ],
+          "order": 3
+        },
+        {
+          "id": "utility-tools",
+          "title": "用实用工具控制数据规模",
+          "role": "comparison",
+          "description": "针对过量返回数据，对比按需加载与加载后搜索两种做法。",
+          "outcomeRefs": [
+            "choose-tool-composition"
+          ],
+          "order": 4
+        },
+        {
+          "id": "integrate-and-check",
+          "title": "综合自检与下一步",
+          "role": "formative-check",
+          "description": "用情境题检查工具类型选择，并桥接到使用智能体。",
+          "outcomeRefs": [
+            "create-function-tool",
+            "convert-query-engine-tool",
+            "choose-tool-composition"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-tool-types",
+          "create-function-tool",
+          "convert-query-engine-tool",
+          "choose-tool-composition"
+        ],
+        "method": "完成情境自检题，并说明每个选择对应的工具类型与数据规模理由。",
+        "successCriteria": [
+          "能区分四类工具各自的职责",
+          "能为具体任务写出带名称和描述的工具创建代码",
+          "能指出何时需要用实用工具限制返回数据量"
+        ],
+        "exerciseBlockId": "tool-selection-check",
+        "summaryBlockId": "tool-point-summary",
+        "nextPointId": "point-4-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tool-types-overview",
+        "moduleId": "tool-interface",
+        "depth": "core",
+        "kind": "definition",
+        "title": "四类工具与工具接口",
+        "markdown": "在 LlamaIndex 中，智能体的能力来自一组**清晰、明确的工具**。正如工程师依赖容易读懂的软件 API，工具的工作方式越容易理解，LLM 越能正确判断何时、如何调用它。\n\nLlamaIndex 提供四类主要工具：\n\n1. `FunctionTool`：把任意 Python 函数转换为智能体可用的工具，并自动识别函数的工作方式。\n2. `QueryEngineTool`：让智能体使用查询引擎；由于智能体本身也基于查询引擎构建，因此可以把其他智能体当作工具使用。\n3. `Toolspecs`：社区为特定服务（如 Gmail）打包好的预设工具集。\n4. `Utility Tools`：处理其他工具返回的大量数据的特殊工具。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000140"
+              ],
+              "headingPath": [
+                "第 2.2 单元. LlamaIndex 框架",
+                "在 LlamaIndex 中使用工具"
+              ],
+              "lineStart": 3946,
+              "lineEnd": 3964,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/llama-index/tools.png"
+              ],
+              "excerptSha256": "8e73c2d12929735c44481d1660a68616f6988edd8db7b55a34d35da4a7c50a05"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tool-description-intuition",
+        "moduleId": "tool-interface",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把工具描述当成写给 LLM 的说明书",
+        "markdown": "不妨把工具名称和描述理解成写给 LLM 的**使用说明**：名称回答“这是做什么的”，描述回答“什么情况下该用、参数是什么意思”，函数签名的参数名则参与调用参数的生成。接口写得含糊，模型就可能选错工具或填错参数——这和人类工程师看不懂 API 文档时容易误用是同一件事。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tool-types-overview"
+          ]
+        }
+      },
+      {
+        "id": "function-tool-create",
+        "moduleId": "function-tool",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "创建 FunctionTool",
+        "markdown": "`FunctionTool` 提供了把任意 Python 函数封装成工具的简单方式。你可以传入同步或异步函数，并可选地指定 `name` 与 `description`。下面的例子创建并调用一个查询天气的工具：\n\n```python\nfrom llama_index.core.tools import FunctionTool\n\ndef get_weather(location: str) -> str:\n    \"\"\"Useful for getting the weather for a given location.\"\"\"\n    print(f\"Getting weather for {location}\")\n    return f\"The weather in {location} is sunny\"\n\ntool = FunctionTool.from_defaults(\n    get_weather,\n    name=\"my_weather_tool\",\n    description=\"Useful for getting the weather for a given location.\",\n)\ntool.call(\"New York\")\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000141"
+              ],
+              "headingPath": [
+                "第 2.2 单元. LlamaIndex 框架",
+                "在 LlamaIndex 中使用工具",
+                "创建FunctionTool"
+              ],
+              "lineStart": 3965,
+              "lineEnd": 3993,
+              "assetRefs": [],
+              "excerptSha256": "0f50448c873fba2fda33231d2625c2a6e8e9d3f03e3655c02197b810204961ff"
+            }
+          ]
+        }
+      },
+      {
+        "id": "function-tool-notes",
+        "moduleId": "function-tool",
+        "depth": "support",
+        "kind": "note",
+        "title": "两处容易忽略的细节",
+        "markdown": "`from_defaults` 会从函数签名和文档字符串推断参数与用途，所以即使不显式传 `name`、`description` 也能工作；但显式写好它们，能让支持函数调用的模型更稳定地选择工具。同步函数和异步函数都能封装。示例里的 `tool.call(\"New York\")` 直接调用工具本身，验证的是函数行为，而不是智能体的决策。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "function-tool-create"
+          ]
+        }
+      },
+      {
+        "id": "query-engine-tool-create",
+        "moduleId": "query-engine-tool",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "创建 QueryEngineTool",
+        "markdown": "上一节用组件构建出的 `QueryEngine`，可以直接用 `QueryEngineTool` 转换成工具，让智能体把“检索并回答”这一步交给查询引擎完成。\n\n```python\nfrom llama_index.core.tools import QueryEngineTool\n\ntool = QueryEngineTool.from_defaults(\n    query_engine,\n    name=\"some useful name\",\n    description=\"some useful description\",\n)\n```\n\n这段代码假定 `query_engine = index.as_query_engine(llm=llm)` 已经建好。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000142"
+              ],
+              "headingPath": [
+                "第 2.2 单元. LlamaIndex 框架",
+                "在 LlamaIndex 中使用工具",
+                "创建 QueryEngineTool"
+              ],
+              "lineStart": 3994,
+              "lineEnd": 4018,
+              "assetRefs": [],
+              "excerptSha256": "ac99ae2bfa9008ed6b3319fd3a13245392a24a3d677b92eb903f58c720603d98"
+            }
+          ]
+        }
+      },
+      {
+        "id": "query-engine-tool-notes",
+        "moduleId": "query-engine-tool",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "两层复用：组件复用与工具复用",
+        "markdown": "这里叠了两层复用：`QueryEngine` 复用了索引、检索器和 LLM 的组合（见上一知识点），`QueryEngineTool` 又把整个查询引擎包装成智能体可以一步调用的动作。教材还指出，智能体本身也是基于查询引擎构建的，因此同样的包装方式可以把一个智能体变成另一个智能体的工具。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "query-engine-tool-create"
+          ]
+        }
+      },
+      {
+        "id": "toolspecs-create",
+        "moduleId": "toolspecs",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "创建 Toolspecs",
+        "markdown": "`Toolspec` 可以理解为**可以协同工作的一组工具**，就像技师的工具箱里装着互补的维修工具。例如会计智能体的 `ToolSpec` 可以同时集成电子表格、邮件和计算能力。\n\n安装 Google toolspec 后，可以把它加载成一个工具列表：\n\n```python\nfrom llama_index.tools.google import GmailToolSpec\n\ntool_spec = GmailToolSpec()\ntool_spec_list = tool_spec.to_tool_list()\n```\n\n查看每个工具的元数据，即可了解它们各自的名称与描述：\n\n```python\n[(tool.metadata.name, tool.metadata.description) for tool in tool_spec_list]\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000143"
+              ],
+              "headingPath": [
+                "第 2.2 单元. LlamaIndex 框架",
+                "在 LlamaIndex 中使用工具",
+                "创建 Toolspecs"
+              ],
+              "lineStart": 4019,
+              "lineEnd": 4048,
+              "assetRefs": [],
+              "excerptSha256": "57e7a680e811373c6e15b7d47d16582f5fea1c26cad2c749b451fea2dd9fb285"
+            }
+          ]
+        }
+      },
+      {
+        "id": "toolspec-vs-single-tool",
+        "moduleId": "toolspecs",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "Toolspecs 与单独 FunctionTool 怎么选",
+        "markdown": "把两种做法放在一起对照：\n\n| 做法 | 适合的情况 | 代价 |\n|---|---|---|\n| 单独 `FunctionTool` | 只需一两个自定义函数，接口完全由自己掌控 | 相关能力要逐个定义和维护 |\n| `Toolspecs` | 同一外部服务有一组配套能力，社区已经维护 | 需要安装对应包，工具集可能超出当前任务所需 |\n\n选择标准不是“哪个更高级”，而是这项能力是否成套、是否需要自己维护。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "toolspecs-create",
+            "function-tool-create"
+          ]
+        }
+      },
+      {
+        "id": "utility-tools",
+        "moduleId": "utility-tools",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "实用工具：处理过量的返回数据",
+        "markdown": "直接查询 API 常常**返回过量数据**：其中一部分可能无关、超出 LLM 的上下文窗口，或白白消耗 token。两个实用工具专门处理这种情况：\n\n1. `OnDemandToolLoader`：把任意 LlamaIndex 数据加载器（`BaseReader` 子类）变成工具。调用时传入 `load_data` 所需的参数和自然语言查询；它在一次工具调用内完成加载数据、建立索引和按需查询三个步骤。\n2. `LoadAndSearchToolSpec`：接受任何现有工具作为输入，`to_tool_list()` 返回“加载”和“搜索”两个工具。加载工具执行底层工具并为输出建立索引（默认使用向量索引），搜索工具接受查询字符串并检索该索引。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "第 2.2 单元. LlamaIndex 框架",
+                "在 LlamaIndex 中使用工具",
+                "实用工具"
+              ],
+              "lineStart": 4049,
+              "lineEnd": 4061,
+              "assetRefs": [],
+              "excerptSha256": "3c408b26222045e7f7c40aece22ab45e58b48cf6b1946e1c1f2568e75946c80f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "utility-tool-choice",
+        "moduleId": "utility-tools",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "两个实用工具的适用边界",
+        "markdown": "两者的差别在于**过量的来源不同**：`OnDemandToolLoader` 面对的是“有加载器但还没有数据”，于是一次调用里连加载带查询；`LoadAndSearchToolSpec` 面对的是“已有工具，但它的返回太大”，于是把一个工具拆成先加载、后搜索两步。选择时先问一句：过量的来源是数据加载本身，还是某个已有工具的返回。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "utility-tools"
+          ]
+        }
+      },
+      {
+        "id": "tool-selection-check",
+        "moduleId": "integrate-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "情境自检",
+        "markdown": "**自检**：你需要让智能体查询本地 PDF 并回答摘要问题，同时避免把整篇文档塞进上下文。\n\n1. 用哪一类工具把“读取 PDF”暴露给智能体？\n2. 用哪一类工具把“基于 PDF 回答”变成一次工具调用？\n3. 如果某个已有工具返回的表格有上千行，应改用哪个实用工具？\n\n参考思路：`FunctionTool` 或基于 `BaseReader` 的 `OnDemandToolLoader` 负责读取，`QueryEngineTool` 负责把查询引擎包装成工具，返回过大时用 `LoadAndSearchToolSpec` 拆成加载与搜索。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tool-types-overview",
+            "utility-tools",
+            "utility-tool-choice"
+          ]
+        }
+      },
+      {
+        "id": "tool-point-summary",
+        "moduleId": "integrate-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "本知识点的要点：先想清楚工具接口（名称、描述、参数）是否让 LLM 一看就懂；再用 `FunctionTool` 封装函数、用 `QueryEngineTool` 复用查询引擎、用 `Toolspecs` 装载成套能力、用实用工具控制数据规模。工具准备好之后，下一步就是把这些工具交给智能体，让它在推理循环中自行决定调用时机。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tool-types-overview",
+            "function-tool-create",
+            "query-engine-tool-create",
+            "toolspecs-create",
+            "utility-tools"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "tool-plan-check",
+        "type": "formative-check",
+        "anchorBlockId": "tool-selection-check",
+        "moduleId": "integrate-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-tool-composition"
+        ],
+        "learningPurpose": "检查学习者能否按数据规模与复用需求选择正确的工具类型。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "toolspecs-create",
+            "utility-tools",
+            "utility-tool-choice"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用一段话说明你会用哪类工具读取 PDF、如何把查询封装成工具，以及如何限制过大的返回内容。"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 2.2 单元. LlamaIndex 框架",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000140"
+      ],
+      "headingPath": [
+        "第 2.2 单元. LlamaIndex 框架",
+        "在 LlamaIndex 中使用工具"
+      ],
+      "lineStart": 3946,
+      "lineEnd": 3964,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/llama-index/tools.png"
+      ],
+      "excerptSha256": "8e73c2d12929735c44481d1660a68616f6988edd8db7b55a34d35da4a7c50a05"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000141"
+      ],
+      "headingPath": [
+        "第 2.2 单元. LlamaIndex 框架",
+        "在 LlamaIndex 中使用工具",
+        "创建FunctionTool"
+      ],
+      "lineStart": 3965,
+      "lineEnd": 3993,
+      "assetRefs": [],
+      "excerptSha256": "0f50448c873fba2fda33231d2625c2a6e8e9d3f03e3655c02197b810204961ff"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000142"
+      ],
+      "headingPath": [
+        "第 2.2 单元. LlamaIndex 框架",
+        "在 LlamaIndex 中使用工具",
+        "创建 QueryEngineTool"
+      ],
+      "lineStart": 3994,
+      "lineEnd": 4018,
+      "assetRefs": [],
+      "excerptSha256": "ac99ae2bfa9008ed6b3319fd3a13245392a24a3d677b92eb903f58c720603d98"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000143"
+      ],
+      "headingPath": [
+        "第 2.2 单元. LlamaIndex 框架",
+        "在 LlamaIndex 中使用工具",
+        "创建 Toolspecs"
+      ],
+      "lineStart": 4019,
+      "lineEnd": 4048,
+      "assetRefs": [],
+      "excerptSha256": "57e7a680e811373c6e15b7d47d16582f5fea1c26cad2c749b451fea2dd9fb285"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000144"
+      ],
+      "headingPath": [
+        "第 2.2 单元. LlamaIndex 框架",
+        "在 LlamaIndex 中使用工具",
+        "实用工具"
+      ],
+      "lineStart": 4049,
+      "lineEnd": 4061,
+      "assetRefs": [],
+      "excerptSha256": "3c408b26222045e7f7c40aece22ab45e58b48cf6b1946e1c1f2568e75946c80f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2970,
+    1307
+  ],
+  "scale": 0.92
+}

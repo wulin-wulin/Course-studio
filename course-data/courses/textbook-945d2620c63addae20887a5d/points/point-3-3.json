@@ -1,0 +1,544 @@
+{
+  "id": "point-3-3",
+  "title": "注意力评分函数",
+  "shortSummary": "比较加性注意力与缩放点积注意力的打分方式、计算复杂度和数值稳定性差异。",
+  "keyTerms": [
+    "评分函数",
+    "加性注意力",
+    "缩放点积",
+    "数值稳定性"
+  ],
+  "animationType": "maskedAttentionPooling",
+  "animationSuggestion": "对同一组小批量样本（例如 2×4 分数、有效长度 [2, 3]）分四步显示：标出填充位置，显示被替换成负值后的分数，用条形图展示只有有效位置获得概率的权重，最后用这些权重合成输出向量；每一步都标出实际数值，重播回到同一组初始分数。",
+  "difficulty": "中等",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-3-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对评分函数、掩蔽 softmax 与两种打分方式的定义、公式和参数形状，围绕「如何选择」重排为机制位置、掩蔽处理、两种方案与统一比较四段，并补充推导、算例和练习思路。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-scoring-role",
+          "text": "解释评分函数如何把查询—键对映射成标量，并经 softmax 变成注意力权重。"
+        },
+        {
+          "id": "apply-masked-softmax",
+          "text": "说明掩蔽 softmax 如何排除填充位置，并判断给定有效长度下各位置的权重。"
+        },
+        {
+          "id": "derive-additive-attention",
+          "text": "写出加性注意力的评分公式并说明其参数形状与适用条件。"
+        },
+        {
+          "id": "derive-scaled-dot-product",
+          "text": "写出缩放点积的评分公式，并用方差论证解释除以 $\\sqrt{d}$ 的理由。"
+        },
+        {
+          "id": "choose-scoring-function",
+          "text": "按向量长度、计算代价与数值稳定性为新场景选择合适的评分函数。"
+        }
+      ],
+      "misconceptions": [
+        "把评分函数的输出直接当成注意力权重，忽略后面还要经过 softmax 归一化。",
+        "认为除以 $\\sqrt{d}$ 只是经验技巧，看不出它来自点积方差随向量维度增长。",
+        "认为掩蔽 softmax 只是把填充位置的输出置 0，忽略概率质量会重新分配到有效位置。"
+      ],
+      "modules": [
+        {
+          "id": "scoring-role",
+          "title": "评分函数在注意力汇聚中的位置",
+          "role": "concept",
+          "description": "从汇聚公式出发说明评分函数与 softmax 的分工。",
+          "outcomeRefs": [
+            "explain-scoring-role",
+            "choose-scoring-function"
+          ],
+          "order": 0
+        },
+        {
+          "id": "masked-softmax",
+          "title": "掩蔽 softmax 与有效长度",
+          "role": "procedure",
+          "description": "处理填充位置，只在有效位置上分配权重。",
+          "outcomeRefs": [
+            "apply-masked-softmax"
+          ],
+          "order": 1
+        },
+        {
+          "id": "additive-attention",
+          "title": "加性注意力",
+          "role": "worked-example",
+          "description": "不同长度的查询与键如何用隐藏层打分。",
+          "outcomeRefs": [
+            "derive-additive-attention",
+            "choose-scoring-function"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scaled-dot-product",
+          "title": "缩放点积注意力",
+          "role": "mechanism",
+          "description": "同长度向量上的高效打分与缩放因子来源。",
+          "outcomeRefs": [
+            "derive-scaled-dot-product",
+            "choose-scoring-function"
+          ],
+          "order": 3
+        },
+        {
+          "id": "choice-and-check",
+          "title": "统一维度比较与达成检查",
+          "role": "comparison",
+          "description": "用同一组维度比较两种评分函数，并完成练习与自评。",
+          "outcomeRefs": [
+            "choose-scoring-function"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-scoring-role",
+          "apply-masked-softmax",
+          "derive-additive-attention",
+          "derive-scaled-dot-product",
+          "choose-scoring-function"
+        ],
+        "method": "给定查询与键的维度选择一种评分函数，并写出给定有效长度下掩蔽 softmax 后的权重分布。",
+        "successCriteria": [
+          "能写出两种评分函数的公式并说明参数形状",
+          "能用方差论证解释 $\\sqrt{d}$ 的作用",
+          "能判断哪些位置在掩蔽后权重为 0"
+        ],
+        "exerciseBlockId": "tb-exercise",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-3-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-scoring-role",
+        "moduleId": "scoring-role",
+        "depth": "core",
+        "kind": "definition",
+        "title": "评分函数：把查询—键对变成标量分数",
+        "markdown": "在注意力汇聚中，查询 $\\mathbf{q}$ 与第 $i$ 个键 $\\mathbf{k}_i$ 先由一个**注意力评分函数**（attention scoring function，简称评分函数）$a$ 映射成标量，再经 softmax 归一化成注意力权重：\n\n$$\\alpha(\\mathbf{q}, \\mathbf{k}_i) = \\frac{\\exp\\left(a(\\mathbf{q}, \\mathbf{k}_i)\\right)}{\\sum_{j=1}^{m}\\exp\\left(a(\\mathbf{q}, \\mathbf{k}_j)\\right)} \\in \\mathbb{R}.$$\n\n汇聚输出是所有值的加权和：\n\n$$f\\left(\\mathbf{q}, (\\mathbf{k}_1, \\mathbf{v}_1), \\ldots, (\\mathbf{k}_m, \\mathbf{v}_m)\\right) = \\sum_{i=1}^{m}\\alpha(\\mathbf{q}, \\mathbf{k}_i)\\,\\mathbf{v}_i \\in \\mathbb{R}^{v}.$$\n\n权重是一组概率分布，因此加权和的本质是**加权平均**。评分函数是决定「如何比较查询与键」的唯一环节：换一个评分函数，就得到一种不同的注意力汇聚操作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000143"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力评分函数"
+              ],
+              "lineStart": 7688,
+              "lineEnd": 7764,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/attention-output.svg"
+              ],
+              "excerptSha256": "66c17823a0d31125e7e0548134abff3ed45fee716e9d6106bec0068b9c2461e2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scoring-intuition",
+        "moduleId": "scoring-role",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：评分函数与 softmax 的分工",
+        "markdown": "评分函数只负责给出「谁更相关」的相对分数，它本身不是权重；softmax 才把分数变成总额为 1 的分配。理解这个分工可以推出两个结论：\n\n- 给所有分数同时加上同一个常数不改变权重，因为分子分母同乘 $e^{c}$ 后约掉；\n- 分数之间的差距越大，softmax 越集中，权重越接近「只选一个」。\n\n因此调评分函数是在调「比较方式」，而 softmax 固定负责「把比较结果变成预算分配」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scoring-role"
+          ]
+        }
+      },
+      {
+        "id": "tb-masked-softmax",
+        "moduleId": "masked-softmax",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "掩蔽 softmax：只让有效位置参与归一化",
+        "markdown": "softmax 输出的是概率分布，但并非所有位置都应参与汇聚。批量处理文本时，短序列会被填充无意义的特殊词元；为了只让有意义的词元贡献权重，需要指定每个样本（或每一行）的**有效长度**，并把超出有效长度的位置在 softmax 之前掩蔽掉。\n\n掩蔽 softmax 的规则是：把最后一轴上超出有效长度的元素替换成一个非常大的负数（教材实现取 `-1e6`），再做 softmax。指数函数把这样的分数压到 0 附近，于是这些位置的权重为 0，概率质量全部落到有效位置上。有效长度既可以用一维张量给每个样本一个值，也可以用二维张量为每个样本的每一行分别指定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000144"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力评分函数",
+                "[**掩蔽softmax操作**]"
+              ],
+              "lineStart": 7765,
+              "lineEnd": 7903,
+              "assetRefs": [],
+              "excerptSha256": "6790c8f9fcf478747f3365b1b9e5f9fd3a3025d9892fbef059c353602e44ab82"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-masked-example",
+        "moduleId": "masked-softmax",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：有效长度 2 的掩蔽 softmax",
+        "markdown": "取一行分数 $[1, 2, 3, 4]$，有效长度为 2。掩蔽后分数变成 $[1, 2, -10^6, -10^6]$，指数项中后两项下溢为 0，于是\n\n$$\\alpha = \\left[\\frac{e^{1}}{e^{1}+e^{2}},\\ \\frac{e^{2}}{e^{1}+e^{2}},\\ 0,\\ 0\\right] \\approx [0.269,\\ 0.731,\\ 0,\\ 0].$$\n\n两个要点：被掩蔽位置的权重恰好为 0；剩余权重会重新归一化到总和 1，而不是停留在不掩蔽时较小的份额（该行四个分数的 softmax 中前两项合计约 0.12）。使用 $-10^6$ 而不是负无穷，是因为有限大的负数在浮点表示下已经足以让指数下溢。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-masked-softmax"
+          ]
+        }
+      },
+      {
+        "id": "tb-additive-attention",
+        "moduleId": "additive-attention",
+        "depth": "core",
+        "kind": "formula",
+        "title": "加性注意力的评分公式与实现要点",
+        "markdown": "当查询与键是不同长度的向量时，可以把两者先投影到同一个隐藏维度再相加，用一个带隐藏层的多层感知机打分，这就是**加性注意力**（additive attention）：\n\n$$a(\\mathbf{q}, \\mathbf{k}) = \\mathbf{w}_v^\\top \\tanh\\left(\\mathbf{W}_q\\mathbf{q} + \\mathbf{W}_k\\mathbf{k}\\right) \\in \\mathbb{R},$$\n\n其中可学习参数为 $\\mathbf{W}_q \\in \\mathbb{R}^{h \\times q}$、$\\mathbf{W}_k \\in \\mathbb{R}^{h \\times k}$ 和 $\\mathbf{w}_v \\in \\mathbb{R}^{h}$，隐藏单元数 $h$ 是超参数。它的计算可以理解为：把查询和键分别投影到 $h$ 维，按广播逐对相加，过 $\\tanh$ 激活，再用 $\\mathbf{w}_v$ 压成一个标量；教材实现中不使用偏置项。\n\n把多个查询与键组合起来时，分数张量的形状是（批量大小，查询个数，键－值对个数）；随后对它做掩蔽 softmax 得到权重，再与值相乘。若小批量中所有键都相同，任何查询都无法区分它们，注意力权重会变成由有效长度决定的均匀分布。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000145"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力评分函数",
+                "[**加性注意力**]"
+              ],
+              "lineStart": 7904,
+              "lineEnd": 8105,
+              "assetRefs": [],
+              "excerptSha256": "11e53b3382e4f307b19a24ddd7f9e28158d6f745afb79df99e2b8be943850c97"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-additive-shapes",
+        "moduleId": "additive-attention",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：加性注意力的形状与计算代价",
+        "markdown": "沿用教材中的小批量：查询形状 $(2, 1, 20)$、键形状 $(2, 10, 2)$，隐藏单元数 $h = 8$。此时 $\\mathbf{W}_q \\in \\mathbb{R}^{8 \\times 20}$、$\\mathbf{W}_k \\in \\mathbb{R}^{8 \\times 2}$、$\\mathbf{w}_v \\in \\mathbb{R}^{8}$。投影后查询是 $(2, 1, 8)$、键是 $(2, 10, 8)$，广播相加得到 $(2, 1, 10, 8)$ 的特征，过 $\\tanh$ 与 $\\mathbf{w}_v$ 后得到形状为 $(2, 1, 10)$ 的分数。若有效长度为 $[2, 6]$，掩蔽 softmax 后每个样本分别只有前 2 个和前 6 个位置有非零权重。\n\n权重 $(2, 1, 10)$ 与值 $(2, 10, 4)$ 相乘，输出形状为 $(2, 1, 4)$，即（批量大小，查询个数，值的维度）。\n\n代价方面，逐对要做 $h$ 维的相加、$h$ 次 $\\tanh$ 和 $h$ 维内积，约为 $3h$ 次逐元素运算；此外每个查询和每个键各需要一次投影（$h \\times q$ 与 $h \\times k$）。与缩放点积的逐对 $d$ 次乘法相比，加性注意力的代价随隐藏维度 $h$ 增长。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-additive-attention"
+          ]
+        }
+      },
+      {
+        "id": "tb-scaled-dot-product",
+        "moduleId": "scaled-dot-product",
+        "depth": "core",
+        "kind": "formula",
+        "title": "缩放点积注意力：公式与缩放理由",
+        "markdown": "点积能给出计算效率更高的评分函数，但要求查询和键长度相同，记作 $d$。**缩放点积注意力**（scaled dot-product attention）的评分函数为\n\n$$a(\\mathbf{q}, \\mathbf{k}) = \\frac{\\mathbf{q}^\\top \\mathbf{k}}{\\sqrt{d}}.$$\n\n除以 $\\sqrt{d}$ 的理由来自方差：假设查询和键的元素都是相互独立、零均值、单位方差的随机变量，那么两个长度为 $d$ 的向量点积的均值为 0、方差为 $d$。要让点积的方差不随向量长度增长、始终保持在 1 附近，就把它除以 $\\sqrt{d}$。\n\n按小批量计算时，设 $n$ 个查询组成 $\\mathbf{Q} \\in \\mathbb{R}^{n \\times d}$、$m$ 个键组成 $\\mathbf{K} \\in \\mathbb{R}^{m \\times d}$、$m$ 个值组成 $\\mathbf{V} \\in \\mathbb{R}^{m \\times v}$，则\n\n$$\\mathrm{softmax}\\left(\\frac{\\mathbf{Q}\\mathbf{K}^\\top}{\\sqrt{d}}\\right)\\mathbf{V} \\in \\mathbb{R}^{n \\times v}.$$\n\n实现时先做批量矩阵乘法得到分数，除以 $\\sqrt{d}$，再经掩蔽 softmax 得到权重，最后与值相乘；教材实现还在这两步之间加入暂退法做正则化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000146"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力评分函数",
+                "[**缩放点积注意力**]"
+              ],
+              "lineStart": 8106,
+              "lineEnd": 8257,
+              "assetRefs": [],
+              "excerptSha256": "1c7cd393f26438f0e198777ee14cdd726a88135c6a73e1e2bbcf3d08530dcfd3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-variance-derivation",
+        "moduleId": "scaled-dot-product",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充推导：缩放因子 $\\sqrt{d}$ 的来源",
+        "markdown": "设 $\\mathbf{q}, \\mathbf{k} \\in \\mathbb{R}^{d}$，各分量独立、均值为 0、方差为 1。点积展开为 $\\sum_{i=1}^{d} q_i k_i$，每一项满足\n\n$$\\mathbb{E}[q_i k_i] = \\mathbb{E}[q_i]\\,\\mathbb{E}[k_i] = 0, \\qquad \\mathrm{Var}(q_i k_i) = \\mathbb{E}[q_i^2]\\,\\mathbb{E}[k_i^2] = 1.$$\n\n各项相互独立，所以点积的方差是这 $d$ 项之和，即 $d$。除以 $\\sqrt{d}$ 后方差回到 1，分数的量级不再随向量长度漂移。\n\n这个缩放的实际意义是让 softmax 工作在合适的温度上：不做缩放时，维度 $d$ 越大分数越分散，softmax 越接近 one-hot，权重对分数的细微变化不再敏感；缩放后，不同 $d$ 下的分数分布量级相当，掩蔽与归一化的行为也更稳定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scaled-dot-product"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "choice-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "* 注意力汇聚的输出可以看作值的加权平均；选择不同的注意力评分函数会带来不同的汇聚操作。\n* 当查询和键是不同长度的向量时，可以使用加性注意力评分函数；当它们的长度相同时，缩放点积注意力评分函数的计算效率更高。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000147"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力评分函数",
+                "小结"
+              ],
+              "lineStart": 8258,
+              "lineEnd": 8262,
+              "assetRefs": [],
+              "excerptSha256": "6bb54b4380d1a0ed3b88d76d49b9daa129c7a1c8ba72c17383127ecba3f78aac"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-table",
+        "moduleId": "choice-and-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充对比：按统一维度比较两种评分函数",
+        "markdown": "| 比较维度 | 加性注意力 | 缩放点积注意力 |\n|---|---|---|\n| 长度要求 | 查询与键可以不同维，投影到同一 $h$ 维即可 | 查询与键必须同为 $d$ 维 |\n| 可学习参数 | $\\mathbf{W}_q$、$\\mathbf{W}_k$、$\\mathbf{w}_v$，共 $h q + h k + h$ 个 | 评分本身无参数，投影由外层模块提供 |\n| 单对计算量 | 逐对约 $3h$ 次逐元素运算，另有每个查询、每个键的投影 | 逐对 $d$ 次乘法，再加一次缩放 |\n| 数值稳定性 | 经 $\\tanh$ 压缩，单对分数范围由 $\\mathbf{w}_v$ 的范数控制 | 未缩放时方差随 $d$ 线性增长，需要除以 $\\sqrt{d}$ |\n| 适用情境 | 查询与键长度不同，或需要非线性交互 | 长度相同，追求批量矩阵乘法的效率 |\n\n取舍顺序是：先看长度约束——长度不同只能用加性；再看代价——长度相同时缩放点积的逐对运算更少，而且能直接用批量矩阵乘法实现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-additive-attention",
+            "tb-scaled-dot-product",
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercise",
+        "moduleId": "choice-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 修改小例子中的键，并可视化注意力权重。加性注意力与缩放点积注意力是否仍然产生相同的结果？为什么？\n1. 只使用矩阵乘法，能否为长度不同的查询和键设计新的评分函数？\n1. 当查询和键长度相同时，用向量求和作为评分函数是否比点积更好？为什么？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000148"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力评分函数",
+                "练习"
+              ],
+              "lineStart": 8263,
+              "lineEnd": 8280,
+              "assetRefs": [],
+              "excerptSha256": "0b2c8ca52917cbe5e1be86a8f95451162db5cfec3a79c3c45af9661d7f2350c5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "choice-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "练习思路（模型补充）",
+        "markdown": "下面是教材三道练习的检查要点，便于自评：\n\n1. 若小批量中键完全相同，任何只依赖「查询—键比较」的评分函数都无法区分它们，权重自然均匀；修改某个键后，两种评分函数都会让该位置权重上升，但上升幅度不一定相同，因为比较方式不同。\n2. 可以：先用矩阵乘法把长度不同的查询和键分别投影到同一维度，再做点积或缩放点积，评分过程就只剩矩阵乘法。\n3. 向量求和 $\\mathbf{q} + \\mathbf{k}$ 不含逐元素乘积，无法表达两个向量在方向上的对齐程度；不同键与同一查询的和不同，分数就会不同，但这个分数不衡量相似性，因此一般不如点积。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercise"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "choice-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "桥接：评分函数在下一知识点的位置",
+        "markdown": "上面的比较和练习都在回答「选哪种评分函数」。到了下一个知识点，这个可替换的组件会被放进跨序列对齐的场景：解码器状态作为查询，编码器各时间步的表示作为键和值，评分函数决定解码时应当关注输入的哪些位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-exercise-guidance"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "scoring-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-comparison-table",
+        "moduleId": "choice-and-check",
+        "depth": "core",
+        "title": "按约束选择评分函数",
+        "outcomeRefs": [
+          "choose-scoring-function",
+          "derive-scaled-dot-product"
+        ],
+        "learningPurpose": "检查学习者能否在长度约束与计算代价之间做出有依据的选择，而不是记住默认答案。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-summary",
+            "model-comparison-table"
+          ]
+        },
+        "config": {
+          "scenario": "场景 A：查询维度为 20，键维度为 2，需要在两者之间打分。场景 B：查询与键的维度同为 64，样本量很大，希望用批量矩阵乘法一次算完。",
+          "expectedReasoning": [
+            "场景 A 的查询与键长度不同，加性注意力可以把两者投影到同一隐藏维度后打分",
+            "场景 B 长度相同，缩放点积可以直接用矩阵乘法并在缩放后保持分数方差稳定"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别写出两个场景应选择的评分函数，并用长度约束和单对计算量各给出一条理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000143"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力评分函数"
+      ],
+      "lineStart": 7688,
+      "lineEnd": 7764,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/attention-output.svg"
+      ],
+      "excerptSha256": "66c17823a0d31125e7e0548134abff3ed45fee716e9d6106bec0068b9c2461e2"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000144"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力评分函数",
+        "[**掩蔽softmax操作**]"
+      ],
+      "lineStart": 7765,
+      "lineEnd": 7903,
+      "assetRefs": [],
+      "excerptSha256": "6790c8f9fcf478747f3365b1b9e5f9fd3a3025d9892fbef059c353602e44ab82"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000145"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力评分函数",
+        "[**加性注意力**]"
+      ],
+      "lineStart": 7904,
+      "lineEnd": 8105,
+      "assetRefs": [],
+      "excerptSha256": "11e53b3382e4f307b19a24ddd7f9e28158d6f745afb79df99e2b8be943850c97"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000146"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力评分函数",
+        "[**缩放点积注意力**]"
+      ],
+      "lineStart": 8106,
+      "lineEnd": 8257,
+      "assetRefs": [],
+      "excerptSha256": "1c7cd393f26438f0e198777ee14cdd726a88135c6a73e1e2bbcf3d08530dcfd3"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000147"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力评分函数",
+        "小结"
+      ],
+      "lineStart": 8258,
+      "lineEnd": 8262,
+      "assetRefs": [],
+      "excerptSha256": "6bb54b4380d1a0ed3b88d76d49b9daa129c7a1c8ba72c17383127ecba3f78aac"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000148"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力评分函数",
+        "练习"
+      ],
+      "lineStart": 8263,
+      "lineEnd": 8280,
+      "assetRefs": [],
+      "excerptSha256": "0b2c8ca52917cbe5e1be86a8f95451162db5cfec3a79c3c45af9661d7f2350c5"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2507,
+    1271
+  ],
+  "scale": 1.26
+}
