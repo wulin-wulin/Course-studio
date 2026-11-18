@@ -1,0 +1,796 @@
+{
+  "id": "point-3-3",
+  "title": "构建使用代码的智能体",
+  "shortSummary": "解释代码智能体为何把动作写成 Python 代码，以及执行、记录与复用中间变量的具体方式。",
+  "keyTerms": [
+    "代码智能体",
+    "Python",
+    "动作即代码",
+    "执行器"
+  ],
+  "animationType": "agentLoop",
+  "animationSuggestion": "逐步展示日志条数增长、消息渲染、解析出的代码高亮、执行结果回填为新的 ActionStep，并高亮跨步骤复用的变量；同时标出一次被沙盒拦截的导入作为反例。",
+  "difficulty": "中等",
+  "importance": 0.86,
+  "prerequisites": [
+    "point-1-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-to-practice",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的动机、执行循环与示例顺序，把分散在示例中的执行与安全约束显式化，并补充代码动作与 JSON 动作的对照。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-code-action",
+          "text": "解释代码智能体把动作写成 Python 代码的理由，并说出代码动作的主要优势。"
+        },
+        {
+          "id": "trace-agent-loop",
+          "text": "按执行日志、消息、模型、解析、执行、记录的顺序说明代码智能体的一轮循环。"
+        },
+        {
+          "id": "build-with-tools",
+          "text": "说明如何用工具列表和模型构建一个可运行的代码智能体，并读懂它输出的代码动作。"
+        },
+        {
+          "id": "explain-safety",
+          "text": "说明沙盒与导入白名单如何限制代码智能体的执行范围。"
+        },
+        {
+          "id": "inspect-run",
+          "text": "说明如何分享智能体并用 OpenTelemetry 与 Langfuse 追踪一次运行。"
+        }
+      ],
+      "misconceptions": [
+        "把代码动作理解为把 JSON 参数换成一段字符串，认为两者只是格式差异。",
+        "认为模型生成的代码可以执行任意 Python，忽略沙盒的导入白名单。",
+        "认为代码顺利执行就等于任务完成，不再检查结果是否符合任务要求。"
+      ],
+      "modules": [
+        {
+          "id": "why-code-actions",
+          "title": "动作即代码：动机与优势",
+          "role": "concept",
+          "description": "从 JSON 动作的解析负担出发，说明为什么要让模型直接写 Python 代码。",
+          "outcomeRefs": [
+            "explain-code-action"
+          ],
+          "order": 0
+        },
+        {
+          "id": "code-agent-loop",
+          "title": "代码智能体的执行循环",
+          "role": "mechanism",
+          "description": "拆解 write_memory_to_messages、模型补全、解析、执行与 ActionStep 记录。",
+          "outcomeRefs": [
+            "trace-agent-loop"
+          ],
+          "order": 1
+        },
+        {
+          "id": "build-first-agent",
+          "title": "从示例构建代码智能体",
+          "role": "worked-example",
+          "description": "用播放列表与菜单示例走通工具注册、代码动作生成与执行结果回填。",
+          "outcomeRefs": [
+            "build-with-tools"
+          ],
+          "order": 2
+        },
+        {
+          "id": "execute-safely",
+          "title": "沙盒执行与导入授权",
+          "role": "procedure",
+          "description": "说明默认导入白名单、additional_authorized_imports 与授权边界。",
+          "outcomeRefs": [
+            "explain-safety"
+          ],
+          "order": 3
+        },
+        {
+          "id": "share-and-inspect",
+          "title": "分享与追踪运行",
+          "role": "application",
+          "description": "把智能体发布到 Hub，并用 OpenTelemetry 与 Langfuse 回看每一步。",
+          "outcomeRefs": [
+            "inspect-run"
+          ],
+          "order": 4
+        },
+        {
+          "id": "recap",
+          "title": "主线复盘与检查",
+          "role": "summary",
+          "description": "把动机、循环、安全与可观测性压缩成一条主线并给出达成检查。",
+          "outcomeRefs": [
+            "explain-code-action",
+            "trace-agent-loop",
+            "build-with-tools",
+            "explain-safety",
+            "inspect-run"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-code-action",
+          "trace-agent-loop",
+          "build-with-tools",
+          "explain-safety",
+          "inspect-run"
+        ],
+        "method": "用一次具体的代码智能体运行说明每一步的输入输出，并指出一次越权导入会被如何拦截。",
+        "successCriteria": [
+          "能按顺序说出循环的五个阶段并区分每阶段的产物",
+          "能说明代码动作相比 JSON 动作在组合与中间结果上的差别",
+          "能指出沙盒限制的是执行能力而不是结果正确性"
+        ],
+        "nextPointId": "point-3-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-code-agent-definition",
+        "moduleId": "why-code-actions",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：代码智能体是默认类型",
+        "markdown": "`CodeAgent` 是 `smolagents` 中的默认智能体类型。它不把动作表示成“工具名加参数字符串”，而是让模型直接生成 **Python 工具调用**并由运行器执行。因此一次动作可以是一段完整代码，而不是一条还要由外部系统解析并调度的指令。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000084"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体"
+              ],
+              "lineStart": 2113,
+              "lineEnd": 2127,
+              "assetRefs": [
+                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/code_vs_json_actions.png"
+              ],
+              "excerptSha256": "e45b7ef035fa73517ba25c9fa01b24e77605fa72a34ccb61a32552d29960cadd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-code-action-intuition",
+        "moduleId": "why-code-actions",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：从填调用单到直接写函数调用",
+        "markdown": "传统做法是让模型填一张“调用单”，系统再按字段决定调用哪个函数；代码智能体则直接把要做的事写成可运行的函数调用。教材提到 `smolagents` 用约 1,000 行代码实现这套机制，说明核心抽象并不复杂：给模型一个可以写代码的上下文，再准备一个执行代码的地方，剩下的工作由循环本身推进。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-code-agent-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-why-code",
+        "moduleId": "why-code-actions",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材依据：代码动作的四项优势",
+        "markdown": "教材把“直接使用代码工作更有效”作为 `smolagents` 的核心原则，并列出四项优势：\n\n- **可组合性（Composability）**：操作可以轻松组合和重用；\n- **对象管理（Object Management）**：可以直接处理图像等复杂结构；\n- **通用性（Generality）**：能表达任何计算上可能的任务；\n- **适合大语言模型**：高质量代码本来就大量存在于训练数据中。\n\n在多步骤过程中，JSON 方案要求系统先解析工具名和参数再决定执行哪个工具，而代码方案把这一步交给代码本身。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000085"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "为什么选择代码智能体？"
+              ],
+              "lineStart": 2128,
+              "lineEnd": 2140,
+              "assetRefs": [],
+              "excerptSha256": "ca57c3e5267eddebe855b47318952977115e8f38900f08d04896b00754155edf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-code-vs-json",
+        "moduleId": "why-code-actions",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "对照：代码动作与 JSON 动作",
+        "markdown": "把两种表示放在同一组维度上比较，差别会更具体：\n\n| 维度 | JSON 动作 | 代码动作 |\n|---|---|---|\n| 表达单位 | 一次一个工具调用 | 一段可包含多个调用的代码 |\n| 组合方式 | 由外部系统串联 | 在代码中直接组合与复用 |\n| 中间结果 | 需要另存为消息或状态 | 保留为同名变量供后续步骤使用 |\n| 解析成本 | 需要解析参数并调度工具 | 直接执行解析出的代码 |\n| 典型风险 | 参数结构不合法 | 代码越权或超出沙盒许可 |\n\n这张表的最后一行不是否定代码动作，而是提醒：代码带来的表达力与安全边界必须一起理解。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-code-agent-definition",
+            "tb-why-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-run-loop",
+        "moduleId": "code-agent-loop",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材依据：CodeAgent.run() 的循环",
+        "markdown": "`CodeAgent` 复用 `MultiStepAgent` 的核心结构，并通过一系列步骤把已有变量和知识整合进上下文。开始时，系统提示存入 `SystemPromptStep`，用户查询记入 `TaskStep`。之后每一步重复同一个循环：\n\n1. `agent.write_memory_to_messages()` 把执行日志写成模型可读的聊天消息；\n2. 这些消息交给 `Model`，生成补全；\n3. 解析补全内容以提取动作，对 `CodeAgent` 来说动作就是代码片段；\n4. 执行该动作；\n5. 把结果记录到内存中的 `ActionStep`。\n\n每一步结束时，如果配置了 `agent.step_callback`，其中的函数调用也会被执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000086"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "代码智能体如何工作？"
+              ],
+              "lineStart": 2141,
+              "lineEnd": 2164,
+              "assetRefs": [
+                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/smolagents/codeagent_docs.png"
+              ],
+              "excerptSha256": "16467cb2bef3a0287faf6c9f8b9bf7b23311becef291f111303e7c4f68511c4a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-memory-and-variables",
+        "moduleId": "code-agent-loop",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充解释：执行日志为什么能复用变量",
+        "markdown": "把执行日志理解成一份不断追加的运行记录，就能看清中间变量的来路：代码在同一会话的执行环境中运行，`results` 这样的变量一旦创建，后续步骤可以直接引用，不必像 JSON 动作那样把结果重新序列化进上下文。日志里的每个 `ActionStep` 既是历史记录，也是下一步推理的输入，这正是“把已有变量和知识整合进上下文”的具体含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-run-loop"
+          ]
+        }
+      },
+      {
+        "id": "model-loop-trace-table",
+        "moduleId": "code-agent-loop",
+        "depth": "support",
+        "kind": "table",
+        "title": "一轮循环的输入与产物",
+        "markdown": "| 阶段 | 读入 | 产出 |\n|---|---|---|\n| 写记忆 | 完整执行日志 | 聊天消息列表 |\n| 调模型 | 聊天消息 | 补全文本 |\n| 解析 | 补全文本 | 一段 Python 代码 |\n| 执行 | 代码与已有变量 | 返回值或异常 |\n| 记录 | 执行结果 | 新的 `ActionStep` |\n\n循环在模型给出最终答案时结束；示例中的 `max_steps` 则提供一个硬性步数上限，避免无休止尝试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-run-loop"
+          ]
+        }
+      },
+      {
+        "id": "tb-example-setup",
+        "moduleId": "build-first-agent",
+        "depth": "support",
+        "kind": "example",
+        "title": "教材示例：派对准备任务与初始设置",
+        "markdown": "教材用一个具体任务串起后续示例：阿尔弗雷德要在韦恩庄园办派对，需要挑选播放列表、安排菜单，并估算准备时间。示例先安装并登录：运行 `pip install smolagents -U`，再用 `from huggingface_hub import login` 与 `login()` 取得无服务器推理 API 的访问权限。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000087"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "让我们看一些例子"
+              ],
+              "lineStart": 2165,
+              "lineEnd": 2187,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-party.jpg"
+              ],
+              "excerptSha256": "d16d7e0e62ed659ebd8cad3713e81009b65a256ea8393616f8e59332b7181db3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-playlist-agent",
+        "moduleId": "build-first-agent",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材示例：搜索播放列表的代码智能体",
+        "markdown": "最小的代码智能体只需要工具列表与模型两项：\n\n```python\nfrom smolagents import CodeAgent, DuckDuckGoSearchTool, InferenceClientModel\n\nagent = CodeAgent(tools=[DuckDuckGoSearchTool()], model=InferenceClientModel())\n\nagent.run(\"Search for the best music recommendations for a party at the Wayne's mansion.\")\n```\n\n运行时输出会显示工作流步骤的跟踪，并打印正在执行的 Python 代码，例如 `results = web_search(query=\"best music for a Batman party\")`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "让我们看一些例子",
+                "使用 `smolagents` 为派对选择播放列表"
+              ],
+              "lineStart": 2188,
+              "lineEnd": 2216,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-playlist.jpg"
+              ],
+              "excerptSha256": "041ed2255a6007c7e921ecdd7a33a90250c7eb491763486ca0fa7bbffa2100b5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parse-action",
+        "moduleId": "build-first-agent",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "把输出对应回循环的解析与执行",
+        "markdown": "这段打印正好对应循环里的两个阶段：模型给出的代码是 `results = web_search(query=...)`，运行器把它当作 Python 执行，而 `web_search` 就是注册进智能体的工具。学习者看到的是可读的动作本身，而不是一条还需要再解释的工具调用参数；变量 `results` 随后留在执行环境中，供下一步引用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-run-loop",
+            "tb-playlist-agent"
+          ]
+        }
+      },
+      {
+        "id": "tb-custom-tool",
+        "moduleId": "build-first-agent",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材示例：用 @tool 定义菜单工具",
+        "markdown": "工具可以来自库，也可以由使用者定义。用一个 `@tool` 装饰的函数即可加入 `tools` 列表，函数签名和文档字符串会成为模型判断如何调用的依据：\n\n```python\nfrom smolagents import CodeAgent, tool, InferenceClientModel\n\n@tool\ndef suggest_menu(occasion: str) -> str:\n    \"\"\"Suggests a menu based on the occasion.\"\"\"\n    if occasion == \"casual\":\n        return \"Pizza, snacks, and drinks.\"\n    elif occasion == \"formal\":\n        return \"3-course dinner with wine and dessert.\"\n    elif occasion == \"superhero\":\n        return \"Buffet with high-energy and healthy food.\"\n    return \"Custom menu for the butler.\"\n\nagent = CodeAgent(tools=[suggest_menu], model=InferenceClientModel())\nagent.run(\"Prepare a formal menu for the party.\")\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000089"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "让我们看一些例子",
+                "使用自定义工具准备菜单"
+              ],
+              "lineStart": 2217,
+              "lineEnd": 2255,
+              "assetRefs": [
+                "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-menu.jpg"
+              ],
+              "excerptSha256": "81f8a0a5a6f5db66dbfb7b1918c5ad5b18fa35b31f5b3f567dfc9a819998deef"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tool-as-variable",
+        "moduleId": "build-first-agent",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：工具在代码动作里就是可调用对象",
+        "markdown": "在代码动作中，工具就是一个可调用对象：模型按签名写成 `suggest_menu(occasion=\"formal\")`，执行环境直接调用它，返回值再成为下一步可用的变量。这也解释了为什么工具的描述要和函数签名保持一致——模型读到的正是这段声明，而不是另一份外部说明书。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-custom-tool"
+          ]
+        }
+      },
+      {
+        "id": "tb-python-imports",
+        "moduleId": "execute-safely",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材依据：沙盒执行与导入授权",
+        "markdown": "代码执行带来能力，也带来风险。`smolagents` 把代码放在沙盒环境中运行，默认只允许安全列表内的导入；其余模块必须显式授权。下面这段把 `datetime` 加入白名单，让智能体自己计算各任务的耗时：\n\n```python\nagent = CodeAgent(\n    tools=[],\n    model=InferenceClientModel(),\n    additional_authorized_imports=['datetime']\n)\n\nagent.run(\n    \"Alfred needs to prepare for the party. \"\n    \"Drinks: 30 minutes. Decorate the mansion: 60 minutes. \"\n    \"Set up the menu: 45 minutes. Prepare the music and playlist: 45 minutes. \"\n    \"If we start right now, at what time will the party be ready?\"\n)\n```\n\n教材总结说，`smolagents` 专注于编写和执行 Python 代码片段，提供安全的沙盒环境，并同时支持本地与基于 API 的语言模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000090"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "让我们看一些例子",
+                "在智能体内部使用 Python 导入"
+              ],
+              "lineStart": 2256,
+              "lineEnd": 2293,
+              "assetRefs": [],
+              "excerptSha256": "6533e858240ae119d316066cf31cc4531f0921892d1c5a31a0541bbecc76659f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sandbox-boundary",
+        "moduleId": "execute-safely",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充解释：授权范围就是能力边界",
+        "markdown": "授权导入的范围划出了代码智能体的能力边界：把 `datetime` 放进来，它才能做时间运算；没有授权的模块导入会失败。这条边界只限制代码能触碰的资源，并不保证执行结果自动可信，仍需检查它调用了哪些工具、产生了什么副作用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-python-imports"
+          ]
+        }
+      },
+      {
+        "id": "tb-share-hub",
+        "moduleId": "share-and-inspect",
+        "depth": "support",
+        "kind": "application",
+        "title": "教材示例：分享智能体到 Hub",
+        "markdown": "构建好的智能体可以整体分享：用 `agent.push_to_hub('sergiopaniego/AlfredAgent')` 上传，用 `agent.from_hub('sergiopaniego/AlfredAgent')` 取回并运行。教材最后的完整示例把多个工具交给同一个 `CodeAgent`：\n\n```python\nagent = CodeAgent(\n    tools=[\n        DuckDuckGoSearchTool(),\n        VisitWebpageTool(),\n        suggest_menu,\n        catering_service_tool,\n        SuperheroPartyThemeTool()\n    ],\n    model=InferenceClientModel(),\n    max_steps=10,\n    verbosity_level=2\n)\n```\n\n与单个工具的版本相比，这里多了网页访问、自定义工具类，以及 `max_steps` 与 `verbosity_level` 两个运行参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "让我们看一些例子",
+                "将我们的自定义派对准备智能体分享到 Hub"
+              ],
+              "lineStart": 2294,
+              "lineEnd": 2409,
+              "assetRefs": [],
+              "excerptSha256": "88415ca8728126fa20b42dd9fbd1d0f3a75d5b9ca7222707d06d4d82bf59cd89"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-multi-tool-composition",
+        "moduleId": "share-and-inspect",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充解释：多工具下的组合优势与步数上限",
+        "markdown": "多个工具同时可用时，代码动作的组合优势才真正显现：一次动作里可以先检索主题，再据此调用菜单工具，把中间结果放进变量而不必来回序列化。`max_steps` 则给循环设了硬性上限，避免智能体在无法收敛时无限尝试；`verbosity_level` 控制过程输出的详细程度，方便调试。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-custom-tool",
+            "tb-share-hub"
+          ]
+        }
+      },
+      {
+        "id": "tb-otel-langfuse",
+        "moduleId": "share-and-inspect",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "教材依据：用 OpenTelemetry 与 Langfuse 追踪",
+        "markdown": "智能体行为本质上难以预测，调试和上线都需要可追踪性。`smolagents` 采用 OpenTelemetry 标准检测运行，配合 Langfuse 记录与查看轨迹。设置分三步：\n\n1. 安装依赖：`pip install opentelemetry-sdk opentelemetry-exporter-otlp openinference-instrumentation-smolagents langfuse`；\n2. 在环境中配置 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY` 与 `LANGFUSE_HOST`，并用 `get_client()` 与 `auth_check()` 验证连接；\n3. 运行 `SmolagentsInstrumentor().instrument()` 开启跟踪。\n\n之后 `CodeAgent` 的每次运行都会记录到 Langfuse，可以回看具体步骤。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000092"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "让我们看一些例子",
+                "使用 OpenTelemetry 和 Langfuse 检查我们的派对准备智能体 📡"
+              ],
+              "lineStart": 2410,
+              "lineEnd": 2476,
+              "assetRefs": [],
+              "excerptSha256": "4f1601377e3e5d162a48cb423e9123aa9cc04400ecce6784b763b970cec0df46"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-reading",
+        "moduleId": "share-and-inspect",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：trace 把结果检查变成过程检查",
+        "markdown": "有了 trace，一次运行就从“最后答案对不对”变成可检查的过程：哪一步写了什么代码、调用了哪个工具、返回了什么、在哪一步结束。这对定位“工具参数填错”和“循环提前终止”两类问题尤其直接。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-otel-langfuse"
+          ]
+        }
+      },
+      {
+        "id": "tb-resources",
+        "moduleId": "recap",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材依据：延伸资源",
+        "markdown": "教材为本节列出的延伸资源包括：smolagents 博客（smolagents 与代码交互的介绍）、smolagents 构建好智能体的教程、Anthropic 的《构建有效的智能体》设计原则，以及使用 OpenTelemetry 分享运行轨迹的指南。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000093"
+              ],
+              "headingPath": [
+                "第 2.1 单元. smolagents 框架",
+                "构建使用代码的智能体",
+                "资源"
+              ],
+              "lineStart": 2477,
+              "lineEnd": 2483,
+              "assetRefs": [],
+              "excerptSha256": "1d4da67917864367a2efd87b877cce623112782aee43b6886bb3c52b1d6f7a34"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-recap",
+        "moduleId": "recap",
+        "depth": "core",
+        "kind": "summary",
+        "title": "主线复盘",
+        "markdown": "把本节压缩成一条主线：动作写成代码，使智能体能组合工具并复用中间变量；`CodeAgent` 用“写记忆—调模型—解析—执行—记录”的循环推进任务；工具与授权导入共同界定它能做什么；最后用分享与追踪把智能体带进可复用的工程流程。判断自己是否掌握，可以试着复述一次具体运行中每个阶段的输入与产物，并指出哪里可能触发沙盒拦截。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-code",
+            "tb-run-loop",
+            "tb-resources"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "trace-loop-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-recap",
+        "moduleId": "recap",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-agent-loop",
+          "explain-safety"
+        ],
+        "learningPurpose": "检查学习者能否把执行循环与安全边界对应到具体运行现象上，而不是停留在术语记忆。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-run-loop",
+            "tb-python-imports"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "某个代码智能体在第二步打印出 `import requests`，运行随即报导入错误，而任务并未完成。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请判断：这次失败发生在循环的哪个阶段？说明沙盒为什么拦住了它，并给出两种让任务继续推进的合理做法。"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 2.1 单元. smolagents 框架",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000084"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体"
+      ],
+      "lineStart": 2113,
+      "lineEnd": 2127,
+      "assetRefs": [
+        "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/code_vs_json_actions.png"
+      ],
+      "excerptSha256": "e45b7ef035fa73517ba25c9fa01b24e77605fa72a34ccb61a32552d29960cadd"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000085"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "为什么选择代码智能体？"
+      ],
+      "lineStart": 2128,
+      "lineEnd": 2140,
+      "assetRefs": [],
+      "excerptSha256": "ca57c3e5267eddebe855b47318952977115e8f38900f08d04896b00754155edf"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000086"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "代码智能体如何工作？"
+      ],
+      "lineStart": 2141,
+      "lineEnd": 2164,
+      "assetRefs": [
+        "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/smolagents/codeagent_docs.png"
+      ],
+      "excerptSha256": "16467cb2bef3a0287faf6c9f8b9bf7b23311becef291f111303e7c4f68511c4a"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000087"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "让我们看一些例子"
+      ],
+      "lineStart": 2165,
+      "lineEnd": 2187,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-party.jpg"
+      ],
+      "excerptSha256": "d16d7e0e62ed659ebd8cad3713e81009b65a256ea8393616f8e59332b7181db3"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000088"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "让我们看一些例子",
+        "使用 `smolagents` 为派对选择播放列表"
+      ],
+      "lineStart": 2188,
+      "lineEnd": 2216,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-playlist.jpg"
+      ],
+      "excerptSha256": "041ed2255a6007c7e921ecdd7a33a90250c7eb491763486ca0fa7bbffa2100b5"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000089"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "让我们看一些例子",
+        "使用自定义工具准备菜单"
+      ],
+      "lineStart": 2217,
+      "lineEnd": 2255,
+      "assetRefs": [
+        "https://huggingface.co/datasets/agents-course/course-images/resolve/main/en/unit2/smolagents/alfred-menu.jpg"
+      ],
+      "excerptSha256": "81f8a0a5a6f5db66dbfb7b1918c5ad5b18fa35b31f5b3f567dfc9a819998deef"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000090"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "让我们看一些例子",
+        "在智能体内部使用 Python 导入"
+      ],
+      "lineStart": 2256,
+      "lineEnd": 2293,
+      "assetRefs": [],
+      "excerptSha256": "6533e858240ae119d316066cf31cc4531f0921892d1c5a31a0541bbecc76659f"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000091"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "让我们看一些例子",
+        "将我们的自定义派对准备智能体分享到 Hub"
+      ],
+      "lineStart": 2294,
+      "lineEnd": 2409,
+      "assetRefs": [],
+      "excerptSha256": "88415ca8728126fa20b42dd9fbd1d0f3a75d5b9ca7222707d06d4d82bf59cd89"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000092"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "让我们看一些例子",
+        "使用 OpenTelemetry 和 Langfuse 检查我们的派对准备智能体 📡"
+      ],
+      "lineStart": 2410,
+      "lineEnd": 2476,
+      "assetRefs": [],
+      "excerptSha256": "4f1601377e3e5d162a48cb423e9123aa9cc04400ecce6784b763b970cec0df46"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000093"
+      ],
+      "headingPath": [
+        "第 2.1 单元. smolagents 框架",
+        "构建使用代码的智能体",
+        "资源"
+      ],
+      "lineStart": 2477,
+      "lineEnd": 2483,
+      "assetRefs": [],
+      "excerptSha256": "1d4da67917864367a2efd87b877cce623112782aee43b6886bb3c52b1d6f7a34"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3022,
+    2184
+  ],
+  "scale": 1.27
+}

@@ -1,0 +1,864 @@
+{
+  "id": "point-5-13",
+  "title": "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+  "shortSummary": "以 CIFAR-10 为例说明图像分类竞赛的数据处理、训练与提交流程。",
+  "keyTerms": [
+    "CIFAR-10",
+    "图像分类",
+    "Kaggle",
+    "模型训练"
+  ],
+  "animationType": "trainingCurves",
+  "animationSuggestion": "左栏按周期绘制训练损失与训练、验证准确率曲线，右栏同步显示学习率的阶梯变化，并标出每次衰减的位置与验证准确率最高的周期。",
+  "difficulty": "中等",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-4-6",
+    "point-5-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "guided-practice-workflow",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按完整竞赛流程重排教材代码段，保留数据集规模、目录结构、超参数与提交格式等事实，补充每步的取舍理由和常见错误。",
+      "estimatedMinutes": 28,
+      "outcomes": [
+        {
+          "id": "oc-organize-dataset",
+          "text": "把以图像文件形式发布的竞赛数据集整理成按类别分目录的结构，并按类别划出验证集。"
+        },
+        {
+          "id": "oc-augment-pipeline",
+          "text": "为训练集与评估集分别设计增广和预处理流水线，并解释两者为何不同。"
+        },
+        {
+          "id": "oc-train-select",
+          "text": "用 ResNet-18 完成训练循环，并依据验证准确率判断该保留还是调整超参数。"
+        },
+        {
+          "id": "oc-submit",
+          "text": "用训练集加验证集重训模型，预测测试集并生成符合 Kaggle 要求的 submission.csv。"
+        }
+      ],
+      "misconceptions": [
+        "把训练时的随机增广同样用在验证或预测阶段，导致同一模型在同样数据上给出波动的准确率。",
+        "以为竞赛测试集的 300000 张图像都参与评分，实际上只有其中 10000 张被用于评估。",
+        "调好超参数后直接用在 train 上训练的模型提交，没有用包含验证集的全部有标签数据重训。",
+        "忽略提交文件 id 与图像的一一对应关系，生成连续编号但顺序错位的预测。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-dataset",
+          "title": "竞赛任务与数据集",
+          "role": "case-setup",
+          "description": "说明任务背景、数据规模、类别与文件构成。",
+          "outcomeRefs": [
+            "oc-organize-dataset"
+          ],
+          "order": 0
+        },
+        {
+          "id": "reorganize-and-validate",
+          "title": "整理目录与划分验证集",
+          "role": "procedure",
+          "description": "把原始图像文件组织成可被目录读取器直接加载的结构。",
+          "outcomeRefs": [
+            "oc-organize-dataset"
+          ],
+          "order": 1
+        },
+        {
+          "id": "augmentation-and-loading",
+          "title": "增广、标准化与批量读取",
+          "role": "procedure",
+          "description": "区分训练与评估的数据流水线，并让数据流与用途对应。",
+          "outcomeRefs": [
+            "oc-augment-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "model-and-training",
+          "title": "模型与训练循环",
+          "role": "mechanism",
+          "description": "用 ResNet-18 和交叉熵损失搭建训练函数，理解各超参数的作用。",
+          "outcomeRefs": [
+            "oc-train-select"
+          ],
+          "order": 3
+        },
+        {
+          "id": "hyperparameter-decision",
+          "title": "训练调参与模型选择",
+          "role": "decision",
+          "description": "依据验证集表现决定周期数、学习率与衰减节奏。",
+          "outcomeRefs": [
+            "oc-train-select"
+          ],
+          "order": 4
+        },
+        {
+          "id": "submit-and-reflect",
+          "title": "全量重训、提交与迁移",
+          "role": "application",
+          "description": "生成提交文件，并用练习检验各环节决策的作用。",
+          "outcomeRefs": [
+            "oc-submit"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "oc-organize-dataset",
+          "oc-augment-pipeline",
+          "oc-train-select",
+          "oc-submit"
+        ],
+        "method": "按流水线完成一次小样本训练并生成 submission.csv，再说明每个环节的输入、输出与判断依据。",
+        "successCriteria": [
+          "数据集目录结构能被按目录读取的方式直接加载，验证集按类别划出且每类至少一张",
+          "训练与评估使用不同的增广流水线，并给出理由",
+          "能依据训练与验证曲线判断是欠拟合还是过拟合",
+          "提交文件的 id 与图像顺序一致，label 全部是 10 个合法类别名之一"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-5-14"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-task-overview",
+        "moduleId": "task-and-dataset",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：从原始图像文件到竞赛提交",
+        "markdown": "前面几节一直在用深度学习框架的高级 API 直接获取张量格式的图像数据集，而在实践中，图像数据集通常以图像文件的形式出现。本节从原始图像文件开始，逐步把它们组织、读取并转换为张量，并把这套流程用在 CIFAR-10 图像分类的 Kaggle 竞赛上。\n\n竞赛页面提供数据集下载入口，要提交结果首先需要注册一个 Kaggle 账户。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000327"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)"
+              ],
+              "lineStart": 12963,
+              "lineEnd": 13025,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/kaggle-cifar10.png"
+              ],
+              "excerptSha256": "bfee969b695a0c958fa105296f8fbd63d7425ecbd5364aad483afb5251a44dfb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-task-map",
+        "moduleId": "task-and-dataset",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "把整节看成一条五段流水线",
+        "markdown": "后面的代码段并不是零散技巧，而是一条顺序固定的工程流水线，每一步的产物都是下一步的输入：\n\n1. **整理数据**：解压下载文件，把「文件名→标签」的标注转成按类别分目录的图像文件夹，并划出验证集。\n2. **设计预处理**：训练集用随机增广加标准化，评估集只用确定性标准化。\n3. **批量读取**：按目录加载四个数据集，并为训练、验证、测试分别设置打乱与丢弃策略。\n4. **训练与选模**：用 ResNet-18 和交叉熵损失训练，按周期观察训练损失与验证准确率。\n5. **全量重训与提交**：用训练集加验证集重训，预测测试集，写出 submission.csv。\n\n读代码时可以始终问一句：这一段属于哪一步、它的输出交给谁。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-dataset-scale",
+        "moduleId": "task-and-dataset",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：数据集的规模与构成",
+        "markdown": "比赛数据集分为训练集和测试集，训练集包含 50000 张图像，测试集包含 300000 张图像。测试集中只有 10000 张会被用于评估，其余 290000 张不参与评分，把它们放进来只是为了防止有人手工标注测试集再提交标注结果。\n\n| 部分 | 数量 | 用途 |\n|---|---|---|\n| 训练集 | 50000 张 | 提供图像与 trainLabels.csv 中的标签 |\n| 测试集（评估） | 10000 张 | 参与评分 |\n| 测试集（其余） | 290000 张 | 不参与评分，防止手工标注 |\n\n两个数据集中的图像都是 PNG 格式，高和宽均为 32 像素，含三个 RGB 颜色通道。这些图像共涵盖 10 个类别：飞机、汽车、鸟类、猫、鹿、狗、青蛙、马、船和卡车。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000328"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "获取并组织数据集"
+              ],
+              "lineStart": 13026,
+              "lineEnd": 13033,
+              "assetRefs": [],
+              "excerptSha256": "c54a23f9e7c938b323ec64288f250a79762a9f10dcf16c42dd34ce366f682f86"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-download",
+        "moduleId": "reorganize-and-validate",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "教材：下载并解开数据集",
+        "markdown": "登录 Kaggle 后，在 CIFAR-10 图像分类竞赛页面的 Data 选项卡点击 Download All 下载数据集。把下载的文件解压到 `../data`，并在其中解压 `train.7z` 与 `test.7z` 后，可以得到以下路径：\n\n- `../data/cifar-10/train/[1-50000].png`\n- `../data/cifar-10/test/[1-300000].png`\n- `../data/cifar-10/trainLabels.csv`\n- `../data/cifar-10/sampleSubmission.csv`\n\n`train` 和 `test` 文件夹分别存放训练与测试图像，`trainLabels.csv` 含有训练图像的标签，`sampleSubmission.csv` 是提交文件的范例。\n\n教材还提供一个只含前 1000 张训练图像和 5 张随机测试图像的小规模样本，便于入门。使用完整的竞赛数据集时，需要把 `demo` 变量设为 `False`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000329"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "获取并组织数据集",
+                "下载数据集"
+              ],
+              "lineStart": 13034,
+              "lineEnd": 13064,
+              "assetRefs": [],
+              "excerptSha256": "06b1de23b5f8473ec9f05e68e97517f0de876a0c406388c9ef23c1876e2d6485"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-reorg",
+        "moduleId": "reorganize-and-validate",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：整理数据集与划分验证集",
+        "markdown": "整理数据集由三个函数接力完成。\n\n`read_csv_labels` 读取 CSV 标签文件，跳过表头行，返回一个字典，把文件名中不带扩展名的部分映射到标签。\n\n`reorg_train_valid` 把验证集从原始训练集中拆出来。参数 `valid_ratio` 是验证集样本数与原始训练集样本数之比。令 $n$ 等于样本最少的类别中的图像数量、$r$ 为该比率，验证集将为每个类别拆分出 $\\max(\\lfloor nr \\rfloor, 1)$ 张图像。以 `valid_ratio=0.1` 为例，原始训练集有 50000 张图像，因此 `train_valid_test/train` 中有 45000 张用于训练，剩下 5000 张作为 `train_valid_test/valid` 中的验证集。\n\n`reorg_test` 在预测期间整理测试集，把测试图像复制到 `test/unknown` 以便读取。最后 `reorg_cifar10_data` 依次调用这三个函数。组织完成后，同类别的图像被放在同一文件夹下。\n\n小样本数据集把批量大小设为 32；实际训练和测试应使用完整数据集并把批量大小设为更大的整数，例如 128。教材用 10% 的训练样本作为调整超参数的验证集。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000330"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "获取并组织数据集",
+                "[**整理数据集**]"
+              ],
+              "lineStart": 13065,
+              "lineEnd": 13157,
+              "assetRefs": [],
+              "excerptSha256": "bf9275ea98782d8caa2c6ce3aab19dd517bcae3000be00d5635d7a36551fdf09"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-valid-split",
+        "moduleId": "reorganize-and-validate",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "两个容易忽略的设计",
+        "markdown": "第一，验证集是**按类别**划出的，而且下限为 1 张。如果只按总体比例随机切分，小类别可能在验证集中一张都不出现，验证准确率就会因类别构成不同而大幅波动。用样本最少的类别数 $n$ 作为基数，正是为了让每个类别按同一节奏划出样本。\n\n第二，目录名本身就是标签。`train/<label>/`、`valid/<label>/`、`test/unknown/` 的层级结构让后面的按目录读取器不必再读标签文件，`unknown` 这个占位类别名对测试集也没有影响。`train_valid` 目录保存的是全部训练图像（含验证集），它只在调参结束、需要重训时使用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-reorg"
+          ]
+        }
+      },
+      {
+        "id": "tb-augment",
+        "moduleId": "augmentation-and-loading",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：训练与测试的两套图像变换",
+        "markdown": "教材用图像增广来解决过拟合问题。训练流水线依次执行：把图像在高度和宽度上放大到 40 像素的正方形；随机裁剪出面积是原面积 0.64～1 倍的 40 像素正方形，并缩放为 32×32；随机水平翻转；转为张量；再对三个 RGB 通道按均值 `[0.4914, 0.4822, 0.4465]` 和标准差 `[0.2023, 0.1994, 0.2010]` 做标准化。\n\n测试期间只对图像执行转张量与同样的标准化，不做随机裁剪与翻转，以消除评估结果中的随机性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000331"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "[**图像增广**]"
+              ],
+              "lineStart": 13158,
+              "lineEnd": 13238,
+              "assetRefs": [],
+              "excerptSha256": "7e23373ed19f40e078a75922008c14442eb8f654a9125f3dd50255ef15f675ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-augment-why",
+        "moduleId": "augmentation-and-loading",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么两套流水线必须不同",
+        "markdown": "训练与测试的区别不是为了省事，而是为了让评估可重复。随机裁剪和翻转会改变同一张图像每次得到的输入；如果验证或预测阶段也这样做，同一模型在同样数据上会给出波动的准确率，调参时就分不清收益来自模型还是来自这次的随机运气。\n\n标准化用的均值与标准差取自训练集统计量，训练和推理必须一致，否则两边的输入分布对不上。顺序也不能颠倒：先转张量把像素缩放到 $[0,1]$，标准化才有正确含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-augment"
+          ]
+        }
+      },
+      {
+        "id": "tb-loading",
+        "moduleId": "augmentation-and-loading",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：四个数据集与四个数据迭代器",
+        "markdown": "按目录读取 `train`、`valid`、`train_valid`、`test` 四个数据集，每个样本包括一张图片和一个标签。训练集与 `train_valid` 绑定训练变换，验证集与测试集绑定测试变换。\n\nDataLoader 的设置各不相同：训练集与 `train_valid` 打乱顺序；验证集与测试集不打乱；训练与验证丢弃最后不足一批的样本，测试集保留最后一批。\n\n验证集只在调整超参数时用于模型评估，不应引入图像增广的随机性。在最终预测之前，教材用训练集和验证集组合成的 `train_valid` 重新训练，以充分利用所有标记的数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000332"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "读取数据集"
+              ],
+              "lineStart": 13239,
+              "lineEnd": 13315,
+              "assetRefs": [],
+              "excerptSha256": "79f0274504604f0ee7ed9350132016d4106b88ccd99135a0409cd39eed55652e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loading-checkpoints",
+        "moduleId": "augmentation-and-loading",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "四条数据流各司其职",
+        "markdown": "把四个数据集和它们的用途对齐，代码就不再难读：`train` 与 `valid` 用于调参与选模型，`train_valid` 用于最终重训，`test` 用于生成提交。\n\n打乱训练集能让每个批次的类别分布更接近整体；测试集不打乱且保留最后一批，是为了让预测顺序与文件名编号一一对应。预测结果最终要按顺序写成提交文件的 id 列，一旦这里错位，后面的标签再准也拿不到分数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loading"
+          ]
+        }
+      },
+      {
+        "id": "tb-model",
+        "moduleId": "model-and-training",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：用 ResNet-18 做 10 类分类",
+        "markdown": "模型是输出 10 类的 ResNet-18。教材先定义残差块 `Residual`：两个 3×3 卷积（填充 1，可设置步幅），每个卷积后接批量规范化；需要改变形状时用 1×1 卷积调整输入；最后把卷积结果与（可能变换过的）输入相加，再过 ReLU。\n\n`resnet18` 先用 3×3 卷积、批量规范化和 ReLU 构成主干，再依次堆叠通道数为 64、128、256、512 的残差块，每块含 2 个残差单元；非首块的第一个残差单元使用步幅 2 和 1×1 卷积做降采样。网络最后接全局平均汇聚层和输出 10 类的全连接层。\n\n损失函数用交叉熵。训练开始前，教材用 Xavier 初始化给网络参数一个合适的初始尺度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000333"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "定义[**模型**]"
+              ],
+              "lineStart": 13316,
+              "lineEnd": 13413,
+              "assetRefs": [],
+              "excerptSha256": "22d19ecb4a7500edf1c1f63ae48615598c0807cbe80e5bb8c114e37fa3128ba7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-resnet-recap",
+        "moduleId": "model-and-training",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么这里选 ResNet-18",
+        "markdown": "残差连接让恒等映射成为容易学到的解：如果某个残差单元没有增益，网络可以让 $F(x)+x$ 中的 $F(x)$ 接近 0，而不必用卷积层重新学出恒等变换，深层网络的退化问题因此缓解。这也是本课前面讲残差网络时的核心结论，本节只是把它用进竞赛流程。\n\nCIFAR-10 的图像只有 32×32，ResNet-18 的容量和训练成本对入门场景比较平衡：比 LeNet 类网络表达能力强，又不至于在完整数据集上难以训练。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-train-fn",
+        "moduleId": "model-and-training",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：训练函数的结构",
+        "markdown": "训练函数 `train` 封装了完整循环。优化器用动量为 0.9 的 SGD，并设置权重衰减 `wd`；学习率按 `lr_period` 与 `lr_decay` 做阶梯衰减。\n\n每个周期遍历训练批次，累计损失与正确数；大约每五分之一的批数和最后一批，把当前训练损失与训练准确率记录到曲线上。若提供了验证集，每个周期结束后计算验证准确率并记录。训练结束打印训练损失、训练准确率、验证准确率与每秒处理样本数。\n\n验证集在超参数调整过程中承担模型选择的职责，因此它的评估不做随机增广。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000334"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "定义[**训练函数**]"
+              ],
+              "lineStart": 13414,
+              "lineEnd": 13534,
+              "assetRefs": [],
+              "excerptSha256": "e1904f4cb8eaf8f7cd5d0fa0de8c5cabf5792a4a049fd7fec957f912fe1b6e6e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-train-mechanics",
+        "moduleId": "model-and-training",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "几个超参数各自在管什么",
+        "markdown": "- **动量 0.9**：让更新方向在连续批次之间保留惯性，平滑掉单批梯度的噪声。\n- **权重衰减**：惩罚过大的参数，相当于对权重施加 $L_2$ 正则，和图像增广一起抑制过拟合。\n- **阶梯衰减**：训练后期缩小步长，让模型在较小的学习率下细化参数，而不是在最优点附近来回跳。\n\n把训练准确率与验证准确率放在同一条曲线上看，可以判断状态：两者都低说明欠拟合，训练准确率明显高于验证准确率说明过拟合。教材正是用这条曲线来选择模型与调整超参数，而不是只看训练损失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-train-fn"
+          ]
+        }
+      },
+      {
+        "id": "tb-training",
+        "moduleId": "hyperparameter-decision",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材：一次完整的训练配置",
+        "markdown": "教材的超参数设置为：训练 20 个周期，权重衰减 $5\\times10^{-4}$，`lr_period=4`、`lr_decay=0.9`，也就是每 4 个周期把学习率乘以 0.9；PyTorch 版本的学习率为 $2\\times10^{-4}$。批大小在完整数据集上建议取 128。\n\n这些超参数都可以调整，例如增加周期数。一次训练结束后，根据验证集上的表现决定是否更换配置，而不是凭训练损失判断。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000335"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "[**训练和验证模型**]"
+              ],
+              "lineStart": 13535,
+              "lineEnd": 13564,
+              "assetRefs": [],
+              "excerptSha256": "11db0f9f43b752df751d9529f287cc223ab377be2e1d2f879e1461908f372421"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hparam-rationale",
+        "moduleId": "hyperparameter-decision",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "调参的顺序与判断标准",
+        "markdown": "这套设置对应一个明确的调参顺序：先固定模型结构与增广方案，再用验证准确率比较周期数、学习率和批大小。学习率的衰减节奏要和总周期数匹配——20 个周期里每 4 个衰减一次，总共衰减 4 次；如果把总周期改成 100，就应把 `lr_period` 相应拉长，否则大部分训练会在很小的学习率下进行。\n\n判断标准只看验证集。若用测试集反复试配置，就等于拿评估数据参与决策，最终分数会高估模型的真实泛化能力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training"
+          ]
+        }
+      },
+      {
+        "id": "tb-submit",
+        "moduleId": "submit-and-reflect",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：全量重训、预测与提交",
+        "markdown": "得到满意的超参数后，用所有标记的数据（包括验证集，即 `train_valid`）重新训练模型，再对测试集分类。\n\n预测时逐批取网络输出的 argmax 作为类别下标，把所有批次的预测拼成一个列表。生成提交文件时，教材用 `list(range(1, len(test_ds) + 1))` 生成编号，并按字符串排序后作为 `id` 列；再把类别下标映射回类别名，写入 `submission.csv` 的 `label` 列。这个文件的格式符合 Kaggle 竞赛的要求。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000336"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "在 Kaggle 上[**对测试集进行分类并提交结果**]"
+              ],
+              "lineStart": 13565,
+              "lineEnd": 13619,
+              "assetRefs": [],
+              "excerptSha256": "30468b304beca1946b947ca7913d7519461e62332f0acba788243ae6adef1563"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-submit-format",
+        "moduleId": "submit-and-reflect",
+        "depth": "support",
+        "kind": "warning",
+        "title": "提交环节的两个静默失败来源",
+        "markdown": "其一是 id 顺序。测试文件名是数字字符串，按目录读取时也按字符串顺序排，所以 `\"10\"` 会排在 `\"2\"` 之前；教材显式把编号按字符串排序，正是为了让 id 列的排列顺序与图像被读取的顺序一致。这个问题不会让程序报错，只会让分数低得莫名其妙。\n\n其二是列名与索引。提交文件需要 `id`、`label` 两列，且不写出 Pandas 的行号索引，所以保存时用 `index=False`。生成后抽查前几行，确认 id 连续且从 1 开始，label 全部是那 10 个合法类别名之一。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-submit"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "submit-and-reflect",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：小结",
+        "markdown": "教材的小结给出两条结论：\n\n- 把包含原始图像文件的数据集组织为所需格式后，我们就可以读取它们。\n- 在图像分类竞赛中，可以使用卷积神经网络和图像增广。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000337"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "小结"
+              ],
+              "lineStart": 13620,
+              "lineEnd": 13635,
+              "assetRefs": [],
+              "excerptSha256": "1aa8acacb514d0587ddd4a34822d5b551605a1b691cd06f0482dc195d3dd2ca9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "submit-and-reflect",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材：练习",
+        "markdown": "1. 在完整 CIFAR-10 数据集上，把超参数设为 `batch_size = 128`、`num_epochs = 100`、`lr = 0.1`、`lr_period = 50`、`lr_decay = 0.1`，看看能在这场比赛里达到什么准确度和排名，并尝试进一步改进。\n2. 不使用图像增广时，能获得怎样的准确度？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000338"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+                "练习"
+              ],
+              "lineStart": 13636,
+              "lineEnd": 13652,
+              "assetRefs": [],
+              "excerptSha256": "54f2759e4f5b147f23a9bc73a53b81be4f1712ec1339947207f2216eb69a9c1b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-transfer",
+        "moduleId": "submit-and-reflect",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "两条练习分别在检验什么",
+        "markdown": "第一题把周期数从 20 提到 100，同时把衰减周期拉长到 50、每次乘 0.1，对应的是「训练更久、后期步长更小」这一组合；学习率 0.1 明显大于演示设置，这要求相应地使用更大的批大小。调整这些数值时，应当保持它们之间的配合关系，而不是单独改动其中一个。\n\n第二题去掉图像增广，是这条流水线里唯一被单独拿掉的环节，因此它的准确度变化可以直接说明增广在这里贡献了什么。\n\n迁移到其他图像分类竞赛时，流水线本身不变：替换数据组织方式、类别数和提交格式，其余环节——划分验证集、两套变换、按验证集选模、全量重训——都可以沿用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises",
+            "tb-training"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "dataset-split-check",
+        "type": "formative-check",
+        "title": "验证集划分检查",
+        "anchorBlockId": "model-valid-split",
+        "moduleId": "reorganize-and-validate",
+        "depth": "core",
+        "outcomeRefs": [
+          "oc-organize-dataset"
+        ],
+        "learningPurpose": "检查学习者能否根据每类样本数和 valid_ratio 推出验证集规模，并解释为什么验证集要按类别划分。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-reorg",
+            "model-valid-split"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某类别共有 800 张训练图像，`valid_ratio` 取 0.05。请写出该类别划入验证集的图像数量，并说明如果改成对全部图像随机切分，可能带来什么问题。"
+        }
+      },
+      {
+        "id": "submission-format-check",
+        "type": "formative-check",
+        "title": "提交文件格式检查",
+        "anchorBlockId": "model-submit-format",
+        "moduleId": "submit-and-reflect",
+        "depth": "core",
+        "outcomeRefs": [
+          "oc-submit"
+        ],
+        "learningPurpose": "检查学习者能否识别提交文件中 id 顺序与列结构这两个不报错的错误来源。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-submit",
+            "model-submit-format"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某同学按测试集的读取顺序拼好了 300000 个预测，但提交时直接用 `list(range(1, 300001))` 作为 id，既没有按字符串排序，保存时也没有设置 `index=False`。请指出这个文件存在哪两个问题，以及各自会造成什么后果。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000327"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)"
+      ],
+      "lineStart": 12963,
+      "lineEnd": 13025,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/kaggle-cifar10.png"
+      ],
+      "excerptSha256": "bfee969b695a0c958fa105296f8fbd63d7425ecbd5364aad483afb5251a44dfb"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000328"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "获取并组织数据集"
+      ],
+      "lineStart": 13026,
+      "lineEnd": 13033,
+      "assetRefs": [],
+      "excerptSha256": "c54a23f9e7c938b323ec64288f250a79762a9f10dcf16c42dd34ce366f682f86"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000329"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "获取并组织数据集",
+        "下载数据集"
+      ],
+      "lineStart": 13034,
+      "lineEnd": 13064,
+      "assetRefs": [],
+      "excerptSha256": "06b1de23b5f8473ec9f05e68e97517f0de876a0c406388c9ef23c1876e2d6485"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000330"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "获取并组织数据集",
+        "[**整理数据集**]"
+      ],
+      "lineStart": 13065,
+      "lineEnd": 13157,
+      "assetRefs": [],
+      "excerptSha256": "bf9275ea98782d8caa2c6ce3aab19dd517bcae3000be00d5635d7a36551fdf09"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000331"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "[**图像增广**]"
+      ],
+      "lineStart": 13158,
+      "lineEnd": 13238,
+      "assetRefs": [],
+      "excerptSha256": "7e23373ed19f40e078a75922008c14442eb8f654a9125f3dd50255ef15f675ca"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000332"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "读取数据集"
+      ],
+      "lineStart": 13239,
+      "lineEnd": 13315,
+      "assetRefs": [],
+      "excerptSha256": "79f0274504604f0ee7ed9350132016d4106b88ccd99135a0409cd39eed55652e"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000333"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "定义[**模型**]"
+      ],
+      "lineStart": 13316,
+      "lineEnd": 13413,
+      "assetRefs": [],
+      "excerptSha256": "22d19ecb4a7500edf1c1f63ae48615598c0807cbe80e5bb8c114e37fa3128ba7"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000334"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "定义[**训练函数**]"
+      ],
+      "lineStart": 13414,
+      "lineEnd": 13534,
+      "assetRefs": [],
+      "excerptSha256": "e1904f4cb8eaf8f7cd5d0fa0de8c5cabf5792a4a049fd7fec957f912fe1b6e6e"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000335"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "[**训练和验证模型**]"
+      ],
+      "lineStart": 13535,
+      "lineEnd": 13564,
+      "assetRefs": [],
+      "excerptSha256": "11db0f9f43b752df751d9529f287cc223ab377be2e1d2f879e1461908f372421"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000336"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "在 Kaggle 上[**对测试集进行分类并提交结果**]"
+      ],
+      "lineStart": 13565,
+      "lineEnd": 13619,
+      "assetRefs": [],
+      "excerptSha256": "30468b304beca1946b947ca7913d7519461e62332f0acba788243ae6adef1563"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000337"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "小结"
+      ],
+      "lineStart": 13620,
+      "lineEnd": 13635,
+      "assetRefs": [],
+      "excerptSha256": "1aa8acacb514d0587ddd4a34822d5b551605a1b691cd06f0482dc195d3dd2ca9"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000338"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战 Kaggle 比赛：图像分类 (CIFAR-10)",
+        "练习"
+      ],
+      "lineStart": 13636,
+      "lineEnd": 13652,
+      "assetRefs": [],
+      "excerptSha256": "54f2759e4f5b147f23a9bc73a53b81be4f1712ec1339947207f2216eb69a9c1b"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2175,
+    450
+  ],
+  "scale": 0.96
+}

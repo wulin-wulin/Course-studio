@@ -1,0 +1,572 @@
+{
+  "id": "point-2-8",
+  "title": "Depth Map from Stereo Images",
+  "shortSummary": "说明双目视差与深度的关系，以及视差图计算的基本流程和主要限制。",
+  "keyTerms": [
+    "立体视觉",
+    "视差",
+    "深度图",
+    "基线"
+  ],
+  "animationType": "stereoDisparity",
+  "animationSuggestion": "逐步显示左图匹配窗口、右图候选窗口在极线上滑动、代价曲线取最小值，扫完一行后把视差按颜色映射成深度图，并允许重播。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-2-6",
+    "point-2-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-derivation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的相似三角形推导、公式、OpenCV 示例与参数清单，重排为目标直觉、公式推导、计算流程、调参诊断、练习的顺序，并补充单位、量化与误差放大等模型说明。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-disparity-depth",
+          "text": "解释视差与深度为什么成反比，以及基线 $B$ 与焦距 $f$ 各自的作用。"
+        },
+        {
+          "id": "apply-depth-formula",
+          "text": "在给定 $B$、$f$ 和视差的条件下计算深度，并说明单位与像素量化带来的影响。"
+        },
+        {
+          "id": "describe-disparity-pipeline",
+          "text": "描述从双目图像到视差图再到深度图的计算流程与块匹配的作用。"
+        },
+        {
+          "id": "diagnose-stereo-artifacts",
+          "text": "根据视差图的空洞、碎斑和远景缺失判断原因，并选择需要调整的参数。"
+        }
+      ],
+      "misconceptions": [
+        "认为视差越大物体越远；由 $Z = \\frac{Bf}{d}$ 可知视差越大深度反而越小。",
+        "把视差图直接当作以米为单位的深度图；它只是像素位移，必须结合 $B$ 与 $f$ 才能换算深度。",
+        "认为弱纹理区域只要调参也能得到可靠视差；参数只能过滤结果，不能凭空产生可匹配的纹理。",
+        "认为基线越大结果一定越好；基线增大会压缩可匹配的视差范围并加剧遮挡。"
+      ],
+      "modules": [
+        {
+          "id": "stereo-goal-and-intuition",
+          "title": "本节目标与双目直觉",
+          "role": "orientation",
+          "description": "从同一场景的两幅图像出发，建立左右视角差异与远近的联系。",
+          "outcomeRefs": [
+            "explain-disparity-depth"
+          ],
+          "order": 0
+        },
+        {
+          "id": "disparity-depth-derivation",
+          "title": "视差与深度的定量关系",
+          "role": "quantitative-derivation",
+          "description": "用相似三角形推出视差公式，并讨论单位、量化与数值算例。",
+          "outcomeRefs": [
+            "explain-disparity-depth",
+            "apply-depth-formula"
+          ],
+          "order": 1
+        },
+        {
+          "id": "disparity-map-pipeline",
+          "title": "视差图的计算流程",
+          "role": "procedure",
+          "description": "按校正、极线搜索、块匹配、视差换算的顺序组织计算步骤。",
+          "outcomeRefs": [
+            "describe-disparity-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "artifacts-and-tuning",
+          "title": "限制、伪影与参数调节",
+          "role": "diagnosis",
+          "description": "按症状到原因再到参数的证据链解释视差图质量问题。",
+          "outcomeRefs": [
+            "diagnose-stereo-artifacts",
+            "describe-disparity-pipeline"
+          ],
+          "order": 3
+        },
+        {
+          "id": "practice-and-bridge",
+          "title": "练习与下一步",
+          "role": "practice",
+          "description": "通过手算与参数对照实验巩固换算方向，并衔接卷积神经网络章节。",
+          "outcomeRefs": [
+            "apply-depth-formula",
+            "diagnose-stereo-artifacts"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-disparity-depth",
+          "apply-depth-formula",
+          "describe-disparity-pipeline",
+          "diagnose-stereo-artifacts"
+        ],
+        "method": "完成一道视差到深度的换算题，并对一张视差图的典型伪影给出参数调整建议。",
+        "successCriteria": [
+          "换算时单位一致且深度与视差的变化方向正确",
+          "能说明每个参数改变的是搜索范围、匹配窗口还是后处理过滤",
+          "能指出弱纹理与遮挡属于数据本身的限制"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "nextPointId": "point-3-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-and-goal",
+        "moduleId": "stereo-goal-and-intuition",
+        "depth": "core",
+        "kind": "note",
+        "title": "本节目标",
+        "markdown": "本节要解决的问题是：给定同一场景的左右两幅图像，如何得到一幅表示各像素远近的深度图。教材原文取自 OpenCV 官方立体视觉教程（Apache-2.0 许可），并假定读者已经掌握对极约束等概念。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000119"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images"
+              ],
+              "lineStart": 2377,
+              "lineEnd": 2380,
+              "assetRefs": [],
+              "excerptSha256": "a0f160409be54ed086603c9f308ad16b6985fdfd0e755ad89c719290709858f1"
+            },
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000120"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images",
+                "Goal"
+              ],
+              "lineStart": 2381,
+              "lineEnd": 2384,
+              "assetRefs": [],
+              "excerptSha256": "89d5e5785db206e6652bdd8289c63993d3cd66b10b28dfa3c09b0d3720c9c7f3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stereo-intuition",
+        "moduleId": "stereo-goal-and-intuition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：为什么左右视角差能反映远近",
+        "markdown": "用手指分别遮住左眼和右眼观察同一个物体，会看到它在背景上的位置发生横向跳动。物体离得越近，跳动越大；离得越远，跳动越小。双目视觉正是把这个日常现象变成可计算的量：左右图像中同一个场景点的横向位置差就是视差，视差的大小携带了深度信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-and-goal"
+          ]
+        }
+      },
+      {
+        "id": "tb-disparity-formula",
+        "moduleId": "disparity-depth-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材公式：视差与深度成反比",
+        "markdown": "教材用一对相似三角形推出结论。设 $x$ 与 $x'$ 分别为场景点在左右图像平面上相对各自相机中心的横向位置，$B$ 为两相机间距（基线），$f$ 为焦距，$Z$ 为场景点到相机的深度，则视差为\n\n$$disparity = x - x' = \\frac{Bf}{Z}$$\n\n其中 $B$ 与 $f$ 都是已知量，因此场景深度与左右对应像点的位置之差成反比。求出每个像素的视差，就能反推整幅图像的深度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images",
+                "Basics"
+              ],
+              "lineStart": 2385,
+              "lineEnd": 2407,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_calib3d/py_depthmap/images/stereo_depth.jpg"
+              ],
+              "excerptSha256": "c4d4d3f5bd810215fd4d56b698fecffa904dc89aadfafa17a6be2537a7e50419"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-similar-triangles",
+        "moduleId": "disparity-depth-derivation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充推导：相似三角形给出什么",
+        "markdown": "把两个相机光心的连线看作长度为 $B$ 的基线，场景点与两个光心构成一个大三角形，其高为深度 $Z$；两幅像平面上的对应像点与各自光心构成一个小三角形，其高为焦距 $f$，底为视差 $d$。两个三角形相似，底与高的比值相等：\n\n$$\\frac{d}{B} = \\frac{f}{Z}$$\n\n整理即得 $Z = \\frac{Bf}{d}$。这个推导同时说明反比关系的来源：基线或焦距固定时，视差越大，同一个底长对应的深度越小。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-disparity-formula"
+          ]
+        }
+      },
+      {
+        "id": "model-units-and-sensitivity",
+        "moduleId": "disparity-depth-derivation",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充说明：单位、边界与误差放大",
+        "markdown": "使用公式时三者单位要一致：$B$ 与 $Z$ 用同一长度单位（如米），$f$ 与视差用像素，得到的深度就以米为单位。由此还能读出两个边界。其一，视差接近 0 时深度趋于无穷，对应极远点或错误匹配点。其二，视差以整像素量化，量化误差 $\\Delta d$ 引起的深度误差约为 $\\Delta Z \\approx \\frac{Z^2}{Bf}\\Delta d$，同一个像素误差在远处会被显著放大，所以远距离深度通常更不可靠。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-disparity-formula"
+          ]
+        }
+      },
+      {
+        "id": "model-worked-example",
+        "moduleId": "disparity-depth-derivation",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充算例：代入公式算一次",
+        "markdown": "设基线 $B = 0.12$ m、焦距 $f = 600$ px，某点视差 $d = 24$ px，则\n\n$$Z = \\frac{Bf}{d} = \\frac{0.12 \\times 600}{24} = 3\\ \\text{m}$$\n\n若同一点测得的视差变为 $12$ px，则 $Z = \\frac{0.12 \\times 600}{12} = 6$ m。视差减半，深度加倍，正好体现反比关系；这也提示换算时必须先确认 $B$、$f$ 与视差的单位是否配套。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-disparity-formula",
+            "model-similar-triangles"
+          ]
+        }
+      },
+      {
+        "id": "tb-stereo-code",
+        "moduleId": "disparity-map-pipeline",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材示例：用 StereoBM 计算视差图",
+        "markdown": "教材给出的最小流程只有三步：读入左右灰度图，创建块匹配器，调用 `compute` 得到视差图。\n\n```python\nstereo = cv.StereoBM.create(numDisparities=16, blockSize=15)\ndisparity = stereo.compute(imgL, imgR)\n```\n\n其中 `numDisparities=16` 限制搜索的视差范围，`blockSize=15` 是匹配窗口的边长。教材同时提醒，这一默认结果噪声很大，需要调节这两个参数才能得到更平滑的结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images",
+                "Code"
+              ],
+              "lineStart": 2408,
+              "lineEnd": 2440,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_calib3d/py_depthmap/images/disparity_map.jpg"
+              ],
+              "excerptSha256": "b0e44eb370e1361536822096601dd8be13afc0029aef25fb3ce4c0993101d831"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-steps",
+        "moduleId": "disparity-map-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充梳理：从双目图像到深度图的四步",
+        "markdown": "把教材示例展开，完整流程是：\n\n1. 用极线校正让左右图的对应点落在同一条水平扫描线上；\n2. 对左图每个像素，在右图同一扫描线的搜索范围内滑动匹配窗口，找出代价最小的候选；\n3. 记录候选位置与左图像素的横坐标差，得到该像素的视差；\n4. 按 $Z = \\frac{Bf}{d}$ 把视差图换算为深度图。\n\n极线约束把二维搜索降为一维，这是整个流程可行的前提；第 4 步只是逐像素的代数换算，误差主要在第 2 步的匹配中产生。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stereo-code",
+            "tb-disparity-formula"
+          ]
+        }
+      },
+      {
+        "id": "model-block-matching",
+        "moduleId": "disparity-map-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充机制：块匹配在比较什么",
+        "markdown": "块匹配是一次局部搜索。以左图某像素为中心取 $blockSize \\times blockSize$ 的窗口，在右图极线的候选位置上逐个比较窗口内容，代价最小处被当作同名点，横坐标差就是视差。窗口越大，匹配越稳定但边界越模糊；窗口越小，细节保留越好但更容易被噪声和弱纹理干扰。这也解释了为什么 `blockSize` 会同时影响平滑度和边缘精度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stereo-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-stereo-parameters",
+        "moduleId": "artifacts-and-tuning",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材参数清单",
+        "markdown": "教材列出 StereoBM 的主要参数及作用：\n\n| 参数 | 作用 |\n|---|---|\n| `texture_threshold` | 过滤纹理不足、无法可靠匹配的区域 |\n| `speckle_size` / `speckle_range` | 抑制块匹配在物体边界产生的碎斑与伪匹配 |\n| `numDisparities` | 窗口在极线上滑动的像素数，决定可测深度范围与计算量 |\n| `min_disparity` | 从左图像素位置开始搜索的偏移 |\n| `uniqueness_ratio` | 最优视差不够突出时把该像素过滤掉 |\n| `prefilter_size` / `prefilter_cap` | 匹配前归一化亮度、增强纹理，通常无需调整 |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images",
+                "Code"
+              ],
+              "lineStart": 2408,
+              "lineEnd": 2440,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_calib3d/py_depthmap/images/disparity_map.jpg"
+              ],
+              "excerptSha256": "b0e44eb370e1361536822096601dd8be13afc0029aef25fb3ce4c0993101d831"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-artifact-diagnosis",
+        "moduleId": "artifacts-and-tuning",
+        "depth": "core",
+        "kind": "warning",
+        "title": "补充诊断：按症状选参数",
+        "markdown": "调参可以按症状定位：\n\n- 桌面等弱纹理区域出现大片空洞：先看 `texture_threshold` 是否过滤过狠，但弱纹理本身只能匹配失败；\n- 物体边缘出现碎斑：匹配窗口同时压住前景和背景，用 `speckle_size` 与 `speckle_range` 清理；\n- 远处深度整片缺失：`numDisparities` 不够大，但增大它也会提高计算量；\n- 仍有个别错误匹配：用 `uniqueness_ratio` 把最优结果不够突出的像素滤掉。\n\n没有一组参数能同时消除空洞又保留细节，取舍取决于任务更怕漏测还是更怕误测。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-stereo-parameters",
+            "tb-stereo-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-additional-resources",
+        "moduleId": "practice-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材延伸阅读",
+        "markdown": "教材把 ROS 的 stereo image proc 选参指南列为延伸阅读，用于系统了解不同场景下立体匹配参数的取舍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000123"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images",
+                "Additional Resources"
+              ],
+              "lineStart": 2441,
+              "lineEnd": 2443,
+              "assetRefs": [],
+              "excerptSha256": "307dfee9bdfbc8c7aafecad551f371c0ba89a0edbbf103d9586c09dc31e24ee9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "practice-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "运行 OpenCV 自带的 `stereo_match.py` 示例，生成视差图并进一步做三维重建，观察参数变化对视差结果的影响。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "局部特征与几何视觉",
+                "Depth Map from Stereo Images",
+                "Exercises"
+              ],
+              "lineStart": 2444,
+              "lineEnd": 2447,
+              "assetRefs": [],
+              "excerptSha256": "e4d078d41cbdaeb8f7d64198053c866eea5cd9ae1b3b323e5252c3207b8c8ec3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "practice-and-bridge",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "补充自检清单",
+        "markdown": "做练习时可以用两个检查点自测：\n\n1. 已知 $B$、$f$ 和某点视差，先手算深度，再与程序的数值对照，确认单位与换算方向没有弄反；\n2. 只改 `numDisparities` 或 `blockSize` 中的一个，记录视差图在弱纹理区、物体边缘和远景处的变化，说明该参数改变的是搜索范围还是匹配窗口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises",
+            "tb-stereo-parameters"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "disparity-check",
+        "type": "formative-check",
+        "title": "换算方向检查",
+        "anchorBlockId": "model-worked-example",
+        "moduleId": "disparity-depth-derivation",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-depth-formula"
+        ],
+        "learningPurpose": "检查学习者能否正确代入公式，并由视差变化推断深度的变化方向。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-disparity-formula",
+            "model-worked-example"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若 $B = 0.1$ m、$f = 500$ px，某像素视差为 $10$ px，深度是多少？视差减为 $5$ px 时深度如何变化？参考答案：$Z = 5$ m；视差减半后 $Z = 10$ m，深度加倍。"
+        }
+      }
+    ]
+  },
+  "subtitle": "局部特征与几何视觉",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000119"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Depth Map from Stereo Images"
+      ],
+      "lineStart": 2377,
+      "lineEnd": 2380,
+      "assetRefs": [],
+      "excerptSha256": "a0f160409be54ed086603c9f308ad16b6985fdfd0e755ad89c719290709858f1"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000120"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Depth Map from Stereo Images",
+        "Goal"
+      ],
+      "lineStart": 2381,
+      "lineEnd": 2384,
+      "assetRefs": [],
+      "excerptSha256": "89d5e5785db206e6652bdd8289c63993d3cd66b10b28dfa3c09b0d3720c9c7f3"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000121"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Depth Map from Stereo Images",
+        "Basics"
+      ],
+      "lineStart": 2385,
+      "lineEnd": 2407,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_calib3d/py_depthmap/images/stereo_depth.jpg"
+      ],
+      "excerptSha256": "c4d4d3f5bd810215fd4d56b698fecffa904dc89aadfafa17a6be2537a7e50419"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000122"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Depth Map from Stereo Images",
+        "Code"
+      ],
+      "lineStart": 2408,
+      "lineEnd": 2440,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/opencv/opencv/6d381e029fe26248675f48b2d44df23f4f288d11/doc/py_tutorials/py_calib3d/py_depthmap/images/disparity_map.jpg"
+      ],
+      "excerptSha256": "b0e44eb370e1361536822096601dd8be13afc0029aef25fb3ce4c0993101d831"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000123"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Depth Map from Stereo Images",
+        "Additional Resources"
+      ],
+      "lineStart": 2441,
+      "lineEnd": 2443,
+      "assetRefs": [],
+      "excerptSha256": "307dfee9bdfbc8c7aafecad551f371c0ba89a0edbbf103d9586c09dc31e24ee9"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000124"
+      ],
+      "headingPath": [
+        "局部特征与几何视觉",
+        "Depth Map from Stereo Images",
+        "Exercises"
+      ],
+      "lineStart": 2444,
+      "lineEnd": 2447,
+      "assetRefs": [],
+      "excerptSha256": "e4d078d41cbdaeb8f7d64198053c866eea5cd9ae1b3b323e5252c3207b8c8ec3"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2592,
+    2509
+  ],
+  "scale": 0.69
+}

@@ -1,0 +1,525 @@
+{
+  "id": "point-2-6",
+  "title": "编码器-解码器架构",
+  "shortSummary": "编码器把长度可变的输入序列转换为固定形状的编码状态，解码器再据此逐步生成输出序列。",
+  "keyTerms": [
+    "编码器",
+    "解码器",
+    "编码状态",
+    "序列转换",
+    "逐词元生成"
+  ],
+  "animationType": "seq2seqGeneration",
+  "animationSuggestion": "左侧逐词元扫过源句并点亮编码状态，随后把状态移动到解码器一侧；右侧按步高亮「上一步输出 → 当前状态 → 当前词元」，并保留已生成词元的轨迹，让学习者看出编码只发生一次、解码是串行的。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-2-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-with-forward-trace",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对编码器、解码器与合并前向顺序的定义与接口约定，围绕数据流追踪补充直觉、边界判断和练习引导。",
+      "estimatedMinutes": 14,
+      "outcomes": [
+        {
+          "id": "explain-architecture",
+          "text": "说明编码器与解码器各自的职责，以及该架构为什么能处理长度可变的输入和输出。"
+        },
+        {
+          "id": "trace-forward-flow",
+          "text": "追踪一次前向传播中 enc_X、enc_outputs、dec_state 与解码输出之间的数据流顺序。"
+        },
+        {
+          "id": "distinguish-roles",
+          "text": "区分编码器与解码器的接口分工，特别是 init_state 在两者衔接中的作用。"
+        },
+        {
+          "id": "apply-architecture",
+          "text": "把该架构迁移到新的序列转换任务，并判断它是否适用、编码器与解码器能否采用不同网络。"
+        }
+      ],
+      "misconceptions": [
+        "认为编码器和解码器必须是同一类型的神经网络，实际上架构只要求接口形状对得上。",
+        "认为解码器可以一次性并行输出整句，忽略它每个时间步都依赖前一时间步生成词元。",
+        "认为固定形状的编码状态意味着输入信息被无损保存，实际上保留哪些信息由具体编码器设计决定。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-and-definition",
+          "title": "变长序列与架构定义",
+          "role": "concept-framing",
+          "description": "从机器翻译的变长输入输出引出编码器与解码器的分工。",
+          "outcomeRefs": [
+            "explain-architecture"
+          ],
+          "order": 0
+        },
+        {
+          "id": "encoder-role",
+          "title": "编码器接口",
+          "role": "concept-and-interface",
+          "description": "编码器只约定接收变长序列并给出固定形状的编码状态。",
+          "outcomeRefs": [
+            "explain-architecture",
+            "distinguish-roles"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decoder-role",
+          "title": "解码器接口与逐词元生成",
+          "role": "concept-and-interface",
+          "description": "init_state 承接编码器输出，解码器按时间步生成输出词元。",
+          "outcomeRefs": [
+            "explain-architecture",
+            "trace-forward-flow",
+            "distinguish-roles"
+          ],
+          "order": 2
+        },
+        {
+          "id": "composition-and-forward-flow",
+          "title": "合并后的前向数据流",
+          "role": "worked-example",
+          "description": "把编码器与解码器串成一次前向传播并逐步追踪张量流向。",
+          "outcomeRefs": [
+            "trace-forward-flow"
+          ],
+          "order": 3
+        },
+        {
+          "id": "boundary-and-transfer",
+          "title": "适用边界与任务迁移",
+          "role": "boundary-and-transfer",
+          "description": "澄清常见误解，判断适用条件，并回应教材练习。",
+          "outcomeRefs": [
+            "distinguish-roles",
+            "apply-architecture"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-architecture",
+          "trace-forward-flow",
+          "distinguish-roles",
+          "apply-architecture"
+        ],
+        "method": "用一句话说清两个组件的分工，写出一次前向传播的三步顺序，并回答教材的两道练习。",
+        "successCriteria": [
+          "能指出编码器输出与解码器初始状态之间的转换发生在哪一步",
+          "能解释解码为何必须逐词元进行",
+          "能给出一个非机器翻译的适用任务并说明理由"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-2-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-motivation",
+        "moduleId": "motivation-and-definition",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材引入：两个组成部分",
+        "markdown": "机器翻译是序列转换模型的核心问题：输入和输出都是长度可变的序列。为处理这类输入与输出，可以设计一个含两个主要组件的架构。第一个是**编码器**（encoder），它接受一个长度可变的序列作为输入，并把它转换为具有固定形状的编码状态。第二个是**解码器**（decoder），它把固定形状的编码状态映射到长度可变的序列。这就是**编码器-解码器**架构。\n\n以英语到法语的翻译为例：给定输入序列 'They' 'are' 'watching' '.'，该架构先把变长输入编码成一个状态，再对这个状态解码，一个词元接着一个词元地生成 'Ils' 'regordent' '.'。教材特别说明，这一架构是后续各种序列转换模型的基础，因此本节把它整理成便于代码实现的接口。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000105"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "编码器-解码器架构"
+              ],
+              "lineStart": 5196,
+              "lineEnd": 5226,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/encoder-decoder.svg"
+              ],
+              "excerptSha256": "4e3ae2865c9db9acd7c0a196e594b1805478424a2c97dd99feec20a73e816e4c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-fixed-shape",
+        "moduleId": "motivation-and-definition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么中间要有一个固定形状的状态",
+        "markdown": "如果直接用只接受固定长度向量的网络，长度不同的句子就无法进入同一套参数。编码器-解码器把一个中间状态放在两端之间，使上游只需处理变长序列、下游只需从一个形状稳定的张量出发，两段各自的长度问题就被隔开了。\n\n可以用口译做类比：译员先听完并整理原句（编码），再依据这份整理逐步说出译文（解码）。整理结果不是原句的逐字复制，而是一份供后续组织译句使用的中间表示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-motivation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-encoder-interface",
+        "moduleId": "encoder-role",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材编码器接口",
+        "markdown": "编码器接口只规定一件事：把长度可变的序列作为输入 `X`，其余由继承该基类的具体模型实现。教材给出的 `Encoder` 基类在 `forward(self, X, *args)` 中直接抛出 `NotImplementedError`，说明接口本身不决定状态怎么算。\n\n因此，接口承诺的是「输入是变长序列、输出是编码状态」这一契约；至于状态由多少维张量构成、是否保留每一步的信息，都由具体实现填写。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000106"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "编码器-解码器架构",
+                "(**编码器**)"
+              ],
+              "lineStart": 5227,
+              "lineEnd": 5288,
+              "assetRefs": [],
+              "excerptSha256": "6040f6a0346fe797fadf29651165db2349ac1fc34631979e83fb3919f3df376f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-fixed-shape-not-lossless",
+        "moduleId": "encoder-role",
+        "depth": "support",
+        "kind": "warning",
+        "title": "澄清：固定形状不等于信息无损",
+        "markdown": "「固定形状」描述的是下游收到的张量形状稳定，而不是说输入的全部细节都被原样保存。编码器保留什么、丢掉什么，由它的具体结构决定；这也是同一个架构可以搭配不同编码器、并因此表现出不同翻译质量的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-encoder-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-decoder-interface",
+        "moduleId": "decoder-role",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材解码器接口",
+        "markdown": "解码器接口比编码器多出一个 `init_state` 函数，用来把编码器的输出 `enc_outputs` 转换成编码后的状态。教材提醒，这一步可能需要额外输入，例如输入序列的有效长度。\n\n为了逐个地生成长度可变的词元序列，解码器的 `forward(X, state)` 在每个时间步把当前输入（例如在前一时间步生成的词元）和编码后的状态一起映射成当前时间步的输出词元。也就是说，解码不是一次给出整句，而是按时间步推进。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000107"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "编码器-解码器架构",
+                "[**解码器**]"
+              ],
+              "lineStart": 5289,
+              "lineEnd": 5358,
+              "assetRefs": [],
+              "excerptSha256": "c65c775dd8ff0fd746d20ed255a064d141cf83f4cf1fa331c839d49f5b23e7e2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-step-dependency",
+        "moduleId": "decoder-role",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：逐步生成带来的依赖关系",
+        "markdown": "因为每一步都要用到前一时间步的输出词元，解码器天然是串行的：第 $t$ 步算不出来，第 $t+1$ 步就没有输入。输出序列的长度也由这个生成过程决定，而不是由输入长度决定。\n\n这与一次性预测一个固定长度标签的分类器不同：分类器错一次只影响一个标签，而逐步生成中前一步的错误会被当作后一步的输入继续传递下去。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-decoder-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-composition",
+        "moduleId": "composition-and-forward-flow",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材合并方式与前向顺序",
+        "markdown": "教材用一个 `EncoderDecoder` 基类把两个组件合并，构造时接收 `encoder` 与 `decoder`，并允许额外参数。前向传播 `forward(enc_X, dec_X, *args)` 的顺序是：\n\n1. 编码器处理输入序列，得到 `enc_outputs = encoder(enc_X, *args)`；\n2. 解码器把编码器输出转换成初始状态，得到 `dec_state = decoder.init_state(enc_outputs, *args)`；\n3. 解码器带着该状态处理解码输入，返回 `decoder(dec_X, dec_state)`。\n\n教材把这一过程概括为：编码器的输出用于生成编码状态，这个状态又被解码器作为输入的一部分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "编码器-解码器架构",
+                "[**合并编码器和解码器**]"
+              ],
+              "lineStart": 5359,
+              "lineEnd": 5433,
+              "assetRefs": [],
+              "excerptSha256": "90d90d8c9b682e7e0879e12da5be94e536c4b5f4ed7acc681d4e1d0d54ef664c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-forward-trace",
+        "moduleId": "composition-and-forward-flow",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "逐步追踪一次翻译的前向传播",
+        "markdown": "把 'They' 'are' 'watching' '.' 送入编码器，得到编码状态 `enc_outputs`；`init_state` 再把它变成解码器可用的 `dec_state`。随后解码器在第一步结合 `dec_state` 与当前解码输入产出第一个词元 'Ils'；第二步以刚生成的 'Ils' 为输入、沿用同一套解码参数产出 'regordent'；第三步同理产出 '.'。\n\n整个过程中变化的是输入位置和解码状态，编码器与解码器的参数保持不变。检查自己是否理解时，可以指着代码顺序复述：`enc_outputs` 在前，`dec_state` 居中，解码器输出在最后。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-composition",
+            "textbook-decoder-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "boundary-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "* 编码器-解码器架构可以把长度可变的序列作为输入和输出，因此适用于机器翻译等序列转换问题。\n* 编码器将长度可变的序列作为输入，并将其转换为具有固定形状的编码状态。\n* 解码器将具有固定形状的编码状态映射为长度可变的序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000109"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "编码器-解码器架构",
+                "小结"
+              ],
+              "lineStart": 5434,
+              "lineEnd": 5439,
+              "assetRefs": [],
+              "excerptSha256": "b296cbf8e4b554e0d12e8974708a8992a3558bf1d5414994779cb3dff3a3f203"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundary-checks",
+        "moduleId": "boundary-and-transfer",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "边界判断：哪些说法站得住",
+        "markdown": "| 常见说法 | 判断 | 依据 |\n|---|---|---|\n| 编码器和解码器必须是同一种网络 | 不成立 | 架构只要求 `enc_outputs` 与 `init_state`、`forward` 的接口衔接得上，两个组件各自可换 |\n| 固定形状的状态把输入信息无损保存 | 不成立 | 接口只承诺形状固定，保留哪些信息由具体编码器决定 |\n| 解码器一次输出整句 | 不成立 | 每个时间步都要接收当前输入与状态，逐词元生成 |\n| 该架构只适用于机器翻译 | 不成立 | 教材的适用条件是「变长输入到变长输出」的序列转换 |\n| 该架构要求输入输出等长 | 不成立 | 两端长度都可变，正是它存在的理由 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-encoder-interface",
+            "textbook-decoder-interface"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "boundary-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 假设我们使用神经网络来实现编码器-解码器架构，那么编码器和解码器必须是同一类型的神经网络吗？\n2. 除了机器翻译，还有其它可以适用于编码器-解码器架构的应用吗？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000110"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "编码器-解码器架构",
+                "练习"
+              ],
+              "lineStart": 5440,
+              "lineEnd": 5456,
+              "assetRefs": [],
+              "excerptSha256": "823326c092b56c84aa1ba1c00b84d2ccdd3e7d0944ad9290667a115ece0989ed"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "boundary-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "练习提示",
+        "markdown": "第 1 题的入手点是接口而不是网络类型：只要编码器给出的输出形状能被解码器的 `init_state` 接受、解码器的 `forward` 能消费对应状态，两端就可以是不同结构；需要额外约定的是状态维度与语义如何对齐。\n\n第 2 题可以按「变长输入、变长输出」这一条件去找：文本摘要把长文变成短摘要，对话系统把一句提问变成一段回复，都是同一骨架可以覆盖的任务。回答时说明输入输出各自的长度为何可变，比只列任务名更有说服力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "model-boundary-checks"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "forward-trace-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-forward-trace",
+        "moduleId": "composition-and-forward-flow",
+        "depth": "core",
+        "title": "前向顺序小测",
+        "outcomeRefs": [
+          "trace-forward-flow"
+        ],
+        "learningPurpose": "检查学习者能否不依赖代码，按正确顺序说出编码器输出、解码初始状态与解码输出之间的关系。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-composition",
+            "textbook-decoder-interface"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "把下列三步按前向传播顺序排列：解码器带状态生成词元 / 编码器处理 enc_X / init_state 转换 enc_outputs。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 `encoder(enc_X)`、`decoder.init_state(enc_outputs)`、`decoder(dec_X, dec_state)` 三者的执行顺序，并说明 `dec_state` 来自哪一步。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000105"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "编码器-解码器架构"
+      ],
+      "lineStart": 5196,
+      "lineEnd": 5226,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/encoder-decoder.svg"
+      ],
+      "excerptSha256": "4e3ae2865c9db9acd7c0a196e594b1805478424a2c97dd99feec20a73e816e4c"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000106"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "编码器-解码器架构",
+        "(**编码器**)"
+      ],
+      "lineStart": 5227,
+      "lineEnd": 5288,
+      "assetRefs": [],
+      "excerptSha256": "6040f6a0346fe797fadf29651165db2349ac1fc34631979e83fb3919f3df376f"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000107"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "编码器-解码器架构",
+        "[**解码器**]"
+      ],
+      "lineStart": 5289,
+      "lineEnd": 5358,
+      "assetRefs": [],
+      "excerptSha256": "c65c775dd8ff0fd746d20ed255a064d141cf83f4cf1fa331c839d49f5b23e7e2"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000108"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "编码器-解码器架构",
+        "[**合并编码器和解码器**]"
+      ],
+      "lineStart": 5359,
+      "lineEnd": 5433,
+      "assetRefs": [],
+      "excerptSha256": "90d90d8c9b682e7e0879e12da5be94e536c4b5f4ed7acc681d4e1d0d54ef664c"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000109"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "编码器-解码器架构",
+        "小结"
+      ],
+      "lineStart": 5434,
+      "lineEnd": 5439,
+      "assetRefs": [],
+      "excerptSha256": "b296cbf8e4b554e0d12e8974708a8992a3558bf1d5414994779cb3dff3a3f203"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000110"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "编码器-解码器架构",
+        "练习"
+      ],
+      "lineStart": 5440,
+      "lineEnd": 5456,
+      "assetRefs": [],
+      "excerptSha256": "823326c092b56c84aa1ba1c00b84d2ccdd3e7d0944ad9290667a115ece0989ed"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2159,
+    2318
+  ],
+  "scale": 0.92
+}

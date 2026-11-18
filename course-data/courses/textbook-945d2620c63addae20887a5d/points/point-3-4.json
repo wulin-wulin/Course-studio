@@ -1,0 +1,584 @@
+{
+  "id": "point-3-4",
+  "title": "Bahdanau 注意力",
+  "shortSummary": "解码时对编码器各时间步状态加权求和，让模型动态对齐源语言与目标语言片段。",
+  "keyTerms": [
+    "Bahdanau 注意力",
+    "对齐",
+    "编码器状态",
+    "解码器查询"
+  ],
+  "animationType": "additiveAttentionAlignment",
+  "animationSuggestion": "逐步展示每个解码步：高亮当前查询，依次显示各源位置的打分与归一化权重条，再按权重汇聚出上下文变量并推进到下一解码步，同时留下已解码步的权重轨迹，让学习者看出源端焦点位置如何随目标词元移动。",
+  "difficulty": "进阶",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-2-7",
+    "point-3-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的上下文变量公式、查询键值角色与实现要点，按「问题—公式—实现—观察—检查」重排讲解顺序，补充张量形状、掩码和热图读法的模型说明。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-dynamic-context",
+          "text": "说明固定上下文变量的局限，以及 Bahdanau 注意力为何能让上下文随解码步变化。"
+        },
+        {
+          "id": "formulate-context-vector",
+          "text": "写出解码时间步 t′ 的上下文变量表达式，指认其中的查询、键和值分别是什么。"
+        },
+        {
+          "id": "trace-decoder-steps",
+          "text": "说明带注意力的解码器在每个时间步如何得到查询、汇聚上下文并更新隐藏状态。"
+        },
+        {
+          "id": "interpret-alignment",
+          "text": "根据注意力权重热图判断对齐是否合理，并解释注意力带来的训练代价。"
+        }
+      ],
+      "misconceptions": [
+        "以为 Bahdanau 注意力给每个源语言词元分配固定不变的权重。",
+        "以为编码器隐状态只充当键，值需要另外计算一份向量。",
+        "以为注意力权重来自外部的词对齐词典，而不是模型自己学出来的。"
+      ],
+      "modules": [
+        {
+          "id": "problem-motivation",
+          "title": "问题导入：固定上下文为什么不合适",
+          "role": "concept-introduction",
+          "description": "从 seq2seq 的固定上下文瓶颈出发，引出按需对齐的可微注意力。",
+          "outcomeRefs": [
+            "explain-dynamic-context"
+          ],
+          "order": 0
+        },
+        {
+          "id": "weighted-context-formula",
+          "title": "定量机理：加权求和的上下文变量",
+          "role": "worked-example",
+          "description": "用公式和查询-键-值对照表说明上下文如何由加性打分与 softmax 权重汇聚而成。",
+          "outcomeRefs": [
+            "explain-dynamic-context",
+            "formulate-context-vector"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decoder-internals",
+          "title": "解码器实现：占位状态与每步查询",
+          "role": "procedure",
+          "description": "按初始状态、单步查询、拼接、循环、输出的顺序走一遍实现，并补充张量形状。",
+          "outcomeRefs": [
+            "trace-decoder-steps"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-and-alignment",
+          "title": "训练与对齐观察",
+          "role": "application",
+          "description": "说明训练配置与代价，并用注意力热图判断源端与目标端的对应关系。",
+          "outcomeRefs": [
+            "interpret-alignment"
+          ],
+          "order": 3
+        },
+        {
+          "id": "synthesis-and-bridge",
+          "title": "小结、练习与后续衔接",
+          "role": "summary",
+          "description": "收束两点结论，用教材练习检验理解，并衔接多头注意力。",
+          "outcomeRefs": [
+            "explain-dynamic-context",
+            "formulate-context-vector",
+            "trace-decoder-steps",
+            "interpret-alignment"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-dynamic-context",
+          "formulate-context-vector",
+          "trace-decoder-steps",
+          "interpret-alignment"
+        ],
+        "method": "完成一次对齐判断练习：给定解码步的注意力权重分布，判断模型此刻聚焦哪些源位置，并说明该结论由公式中的哪一项支撑。",
+        "successCriteria": [
+          "能写出上下文变量表达式并标出查询、键、值",
+          "能指出有效长度在汇聚时排除了哪些位置",
+          "能用热图读出不同解码步聚焦的源端位置差异"
+        ],
+        "exerciseBlockId": "model-practice",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-3-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-motivation",
+        "moduleId": "problem-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "固定上下文变量带来的限制",
+        "markdown": "机器翻译的编码器-解码器架构先用循环神经网络编码器把长度可变的源序列转换成**固定形状的上下文变量**，再由循环神经网络解码器根据已生成的词元和这个上下文变量逐词元生成目标序列。\n\n问题在于：即使并非所有输入（源）词元对解码当前词元都有用，每个解码步骤仍然使用编码**相同**的上下文变量。Bahdanau 注意力要回答的就是：能否让上下文变量随解码步骤改变？\n\n教材给出的线索来自 Graves 为手写生成设计的可微注意力模型：它把文本字符与更长的笔迹对齐，但对齐方式只能单向移动。受这一「学习对齐」思想启发，Bahdanau 等人提出了**没有严格单向对齐限制**的可微注意力模型。预测某个词元时，如果并非所有输入词元都相关，模型就只对齐（或参与）输入序列中与当前预测相关的部分——这是通过把上下文变量视为注意力汇聚的输出来实现的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000149"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Bahdanau 注意力"
+              ],
+              "lineStart": 8281,
+              "lineEnd": 8305,
+              "assetRefs": [],
+              "excerptSha256": "abc58c33df7864f8324d45b977ca1806169eeb23c3fcaa3eb1b1d7448fae496f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bottleneck-intuition",
+        "moduleId": "problem-motivation",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：固定向量丢的是「按需取用」的能力",
+        "markdown": "把整句源语言压进一个固定维度的向量，相当于让解码器每一步都翻同一张摘要卡片：句子越长，越难保证当前这一步需要的细节没有被挤掉。\n\n注意力并不否认编码器仍会输出各时间步的隐状态，它改变的是解码器的取用方式——每一步重新分配权重，把当前最相关的那部分隐状态汇总成这一小步专用的上下文。因此「对齐」不是查词典得到的硬映射，而是由打分函数和 softmax 产生的、可随训练调整的软权重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-motivation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-attention-context",
+        "moduleId": "weighted-context-formula",
+        "depth": "core",
+        "kind": "formula",
+        "title": "解码时间步 t′ 的上下文变量",
+        "markdown": "Bahdanau 注意力沿用编码器-解码器原有的符号，只把上下文变量 $\\mathbf{c}$ 替换成随解码时间步变化的 $\\mathbf{c}_{t'}$。设输入序列中有 $T$ 个词元，解码时间步 $t'$ 的上下文变量是注意力汇聚的输出：\n\n$$\\mathbf{c}_{t'} = \\sum_{t=1}^{T} \\alpha(\\mathbf{s}_{t'-1}, \\mathbf{h}_t)\\,\\mathbf{h}_t$$\n\n其中：\n\n- 时间步 $t'-1$ 时的解码器隐状态 $\\mathbf{s}_{t'-1}$ 是**查询**；\n- 编码器隐状态 $\\mathbf{h}_t$ 既是**键**，也是**值**；\n- 注意力权重 $\\alpha$ 由**加性注意力打分函数**计算得到（打分函数本身见「注意力评分函数」一节）。\n\n与原来的 seq2seq 模型相比，架构其余部分不变，唯一的改动就是上下文变量从一份固定的 $\\mathbf{c}$ 变成每个解码步重新计算的 $\\mathbf{c}_{t'}$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000150"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Bahdanau 注意力",
+                "模型"
+              ],
+              "lineStart": 8306,
+              "lineEnd": 8357,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/seq2seq-attention-details.svg"
+              ],
+              "excerptSha256": "f907e9ca5cd283a5addcce47c5b2943f52012dbe3d01c04e9772ef9d8ac1edc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-query-key-value",
+        "moduleId": "weighted-context-formula",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：查询、键、值在本模型中的对应物",
+        "markdown": "| 角色 | 在本模型中对应什么 | 直觉 |\n|---|---|---|\n| 查询 query | 解码器上一时间步的隐状态 $\\mathbf{s}_{t'-1}$ | 这一步「想看什么」 |\n| 键 key | 每个输入时间步的编码器隐状态 $\\mathbf{h}_t$ | 每个源位置的「可检索标签」 |\n| 值 value | 同样取 $\\mathbf{h}_t$ | 真正被加权汇总的内容 |\n\n权重 $\\alpha$ 经 softmax 归一化，因此对所有源位置非负且和为 1，$\\mathbf{c}_{t'}$ 是这些隐状态的**加权平均**。权重集中在一两个位置，说明当前解码步主要取用那几处源端信息；权重分散，则说明这一步依赖较宽的上下文。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attention-context"
+          ]
+        }
+      },
+      {
+        "id": "model-additive-score",
+        "moduleId": "weighted-context-formula",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "模型补充：权重是怎么算出来的",
+        "markdown": "加性注意力先为每个「查询—键」对算一个标量得分，再在源位置维度上做 softmax：\n\n$$e_{t't} = \\mathbf{v}^\\top \\tanh(\\mathbf{W}_s \\mathbf{s}_{t'-1} + \\mathbf{W}_h \\mathbf{h}_t), \\qquad \\alpha(\\mathbf{s}_{t'-1}, \\mathbf{h}_t) = \\frac{\\exp(e_{t't})}{\\sum_{k=1}^{T} \\exp(e_{t'k})}$$\n\n之所以叫「加性」，是因为查询和键先各自线性变换再**相加**，然后过一层 $\\tanh$ 得到非线性，最后由向量 $\\mathbf{v}$ 投成标量。$T$ 个得分一起 softmax，保证权重构成一个概率分布；把 $T$ 个加权后的 $\\mathbf{h}_t$ 相加，就得到本步的 $\\mathbf{c}_{t'}$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-attention-context",
+            "model-query-key-value"
+          ]
+        }
+      },
+      {
+        "id": "textbook-decoder",
+        "moduleId": "decoder-internals",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "带 Bahdanau 注意力的解码器如何实现",
+        "markdown": "实现上只需重新定义解码器。教材先给出 `AttentionDecoder` 作为带注意力解码器的基本接口，它规定子类必须能提供 `attention_weights`，以便把学到的权重显示出来。\n\n初始化解码器状态需要三类输入：\n\n1. 编码器在**所有时间步**的最终层隐状态——它们将作为注意力的键和值；\n2. 上一时间步的编码器全层隐状态——用来初始化解码器的隐状态；\n3. 编码器的**有效长度**——在注意力汇聚中排除填充词元。\n\n在每一个解码时间步，解码器上一个时间步的最终层隐状态用作查询；注意力输出与当前输入词元的嵌入在特征维度上连结，作为循环神经网络解码器的输入。循环中收集每一步的输出和该步的注意力权重，最后经全连接层映射到词表大小，得到该步的词元分布。教材用 4 条长度为 7 的序列做了一次形状测试（词表 10、嵌入 8、隐藏单元 16、层数 2），确认前向传播可以跑通。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000151"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Bahdanau 注意力",
+                "定义注意力解码器"
+              ],
+              "lineStart": 8358,
+              "lineEnd": 8643,
+              "assetRefs": [],
+              "excerptSha256": "176e5f11f52f8eea6003c6fe522055aabf4e02e13e35c6da265f58f9bef39774"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tensor-shapes",
+        "moduleId": "decoder-internals",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：把一次解码步的张量走一遍",
+        "markdown": "教材代码里最容易看错的是形状。以 `batch_size=4`、`num_steps=7`、`num_hiddens=16`、`embed_size=8` 为例：\n\n1. `init_state` 把编码器输出从 (num_steps, batch, hidden) 调换为 (batch, num_steps, hidden)，便于按批取用；\n2. 取上一时间步最终层隐状态并扩一维，查询变成 (batch, 1, hidden)；\n3. 注意力对 (batch, 1, hidden) 的查询和 (batch, num_steps, hidden) 的键值算出上下文 (batch, 1, hidden)；\n4. 上下文与当前词元嵌入 (batch, 1, embed) 在最后一维拼接，得到 (batch, 1, embed + hidden)，这正是解码器循环层的输入维度；\n5. 循环层输出仍为 (batch, 1, hidden)，全连接层把它投成 (batch, 1, vocab_size)，即这一步的词元分布。\n\n循环层的输入维度比普通 seq2seq 多了 hidden 这一项，正是因为每步都要额外接收上下文。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-decoder"
+          ]
+        }
+      },
+      {
+        "id": "model-valid-length",
+        "moduleId": "decoder-internals",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：为什么必须传有效长度",
+        "markdown": "一个批次里的句子往往长度不同，短句会被填充到统一长度。如果把填充位置也当作键参与打分，softmax 就会把一部分权重分给这些「假词元」，上下文被稀释，甚至让模型学会关注填充。\n\n因此 `enc_valid_lens` 在注意力汇聚时把超出真实长度的位置屏蔽掉，只让有效源位置参与归一化。这也是为什么初始状态要把有效长度和编码器输出一起保存下来，并在每个解码步随状态传递。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-decoder"
+          ]
+        }
+      },
+      {
+        "id": "textbook-training",
+        "moduleId": "training-and-alignment",
+        "depth": "core",
+        "kind": "application",
+        "title": "训练、翻译与注意力热图",
+        "markdown": "训练流程与普通 seq2seq 相同：指定超参数，实例化带 Bahdanau 注意力的编码器和解码器，在机器翻译数据上训练。教材使用的配置是嵌入与隐藏单元各 32、2 层、dropout 0.1、批量 64、时间步 10、学习率 0.005、训练 250 个 epoch。由于新增了注意力机制，训练要比没有注意力机制的版本**慢得多**。\n\n模型训练后，把几个英语句子译成法语并计算 BLEU 分数。随后把所有解码步的注意力权重拼成矩阵并画成热图，横轴是键的位置（源端词元），纵轴是查询的位置（目标端解码步）。可视化结果显示：每个查询都会在键值对上分配不同的权重，说明在每个解码步中，输入序列的不同部分被选择性地聚集在注意力池中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000152"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Bahdanau 注意力",
+                "[**训练**]"
+              ],
+              "lineStart": 8644,
+              "lineEnd": 8723,
+              "assetRefs": [],
+              "excerptSha256": "908ba7877d1c3e65aa6847183390cad2af8b47c9b50ffde84a6b687343ca54b8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-cost",
+        "moduleId": "training-and-alignment",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：慢在哪里",
+        "markdown": "不带注意力的 seq2seq 只需编码一次，上下文变量就固定下来；带注意力时，**每一个解码步**都要对所有 $T$ 个源位置重新打分、softmax 并加权求和，再做一次拼接和循环层计算。\n\n代价随目标序列长度与源序列长度同时增长：解码步数为 $T'$ 时，额外打分次数约为 $T' \\times T$。这解释了教材中「训练慢得多」的现象；也解释了为什么后面会考虑用缩放点积注意力来降低打分环节的开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-training"
+          ]
+        }
+      },
+      {
+        "id": "model-heatmap-reading",
+        "moduleId": "training-and-alignment",
+        "depth": "advanced",
+        "kind": "example",
+        "title": "模型补充：怎么读一张对齐热图",
+        "markdown": "读热图时按行看：固定一行（一个目标端解码步），颜色最深的格子表示这一步主要取用了哪些源端位置。\n\n- 若某行只有一个明显高权重，说明该步几乎只依赖一个源词，适合逐词对应的句子；\n- 若权重在对角线附近铺开，说明目标词元与源词元大致同序，符合语序相近的语言对；\n- 若出现交叉、跳跃或某列长期被关注，通常对应语序调整、冠词省略或多词共享同一源词。\n\n要注意热图展示的是**软对齐**：权重是模型为降低翻译损失学出来的连续分布，不代表人工标注的词对齐，也不能只凭一张热图断定翻译正确。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-training",
+            "model-training-cost"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "- 预测词元时，如果不是所有输入词元都相关，带 Bahdanau 注意力的循环神经网络编码器-解码器会有选择地统计输入序列的不同部分；这是通过把上下文变量视为**加性注意力池化**的输出来实现的。\n- 在循环神经网络编码器-解码器中，Bahdanau 注意力把**上一时间步的解码器隐状态**视为查询，把**所有时间步的编码器隐状态**同时视为键和值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000153"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Bahdanau 注意力",
+                "小结"
+              ],
+              "lineStart": 8724,
+              "lineEnd": 8728,
+              "assetRefs": [],
+              "excerptSha256": "12353f18fc1fb5957558c8c469e940faa1592d633c7a247d28613cbc93514f7a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-position",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：与相邻知识点各管一段",
+        "markdown": "三者的分工可以这样串起来：\n\n- 「注意力评分函数」提供打分与归一化的工具（加性打分或缩放点积）；\n- 「Bahdanau 注意力」把这个工具接进**循环解码器**，让上下文变量逐步变化；\n- 后续的「多头注意力」把同一套查询-键-值计算并行复制成多组子空间，摆脱逐时间步循环的结构限制。\n\n所以 Bahdanau 注意力的关键贡献不在于发明打分函数，而在于证明「上下文应当随解码步变化」这一设计能在端到端训练中学出来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 在实验中用 LSTM 替换 GRU。\n2. 修改实验，把加性注意力打分函数替换为缩放点积注意力，它如何影响训练效率？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000154"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Bahdanau 注意力",
+                "练习"
+              ],
+              "lineStart": 8729,
+              "lineEnd": 8745,
+              "assetRefs": [],
+              "excerptSha256": "bf29ad629db23130ff8ac25fd6e90231fe6d90efdd110689ad04dd264c3ec373"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-practice",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：两道练习该怎么答",
+        "markdown": "**换 LSTM**：只需替换解码器（以及编码器）里的循环单元，注意力部分不动——输入的查询仍然是上一时间步的最终层隐状态，键和值仍是编码器各时间步隐状态。比较时留意收敛速度、最终 BLEU 与参数量，而不是只看能否跑通。\n\n**换成缩放点积打分**：把「线性变换后相加再 tanh 再投影」换成查询与键的点积除以 $\\sqrt{d}$。加性打分的计算量与维度成线性关系，点积打分可以写成矩阵乘法，通常更快；但两者对维度缩放比较敏感，效率变化的幅度还取决于隐藏单元维度与批量大小，应当用同一套超参数做对照实验再下结论。\n\n做判断时请回到公式：无论换哪种打分函数，$\\alpha$ 都要沿源位置做 softmax，$\\mathbf{c}_{t'}$ 都要对 $\\mathbf{h}_t$ 加权求和这一结构不变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "model-position"
+          ]
+        }
+      },
+      {
+        "id": "model-next-bridge",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：走向多头注意力",
+        "markdown": "Bahdanau 注意力里，每个解码步只用**一组**权重描述「当前该看哪里」。如果希望同时捕捉多种关系——比如既看相邻词、又看远距离的谓语——单组权重就会互相妥协。下一知识点「多头注意力」正是沿着这个方向：并行多组查询-键-值投影，各自汇聚后拼接融合，并且不再依赖循环结构来对齐位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-practice"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "alignment-self-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-practice",
+        "moduleId": "synthesis-and-bridge",
+        "depth": "support",
+        "title": "对齐判断自检",
+        "outcomeRefs": [
+          "formulate-context-vector",
+          "interpret-alignment"
+        ],
+        "learningPurpose": "检查学习者能否把上下文变量公式与热图观察对应起来，而不是凭语感猜对齐。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-attention-context",
+            "model-query-key-value",
+            "model-heatmap-reading"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "promptCount": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "假设某个解码步的注意力权重为：源位置 1 为 0.05、位置 2 为 0.80、位置 3 为 0.15，其余接近 0。请回答：(1) 这一步的上下文主要由哪个位置的隐状态决定；(2) 该结论对应公式中的哪一项；(3) 若第 3 个源位置是填充词元，权重应如何处理。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [
+    "point-5-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000149"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Bahdanau 注意力"
+      ],
+      "lineStart": 8281,
+      "lineEnd": 8305,
+      "assetRefs": [],
+      "excerptSha256": "abc58c33df7864f8324d45b977ca1806169eeb23c3fcaa3eb1b1d7448fae496f"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000150"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Bahdanau 注意力",
+        "模型"
+      ],
+      "lineStart": 8306,
+      "lineEnd": 8357,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/seq2seq-attention-details.svg"
+      ],
+      "excerptSha256": "f907e9ca5cd283a5addcce47c5b2943f52012dbe3d01c04e9772ef9d8ac1edc1"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000151"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Bahdanau 注意力",
+        "定义注意力解码器"
+      ],
+      "lineStart": 8358,
+      "lineEnd": 8643,
+      "assetRefs": [],
+      "excerptSha256": "176e5f11f52f8eea6003c6fe522055aabf4e02e13e35c6da265f58f9bef39774"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000152"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Bahdanau 注意力",
+        "[**训练**]"
+      ],
+      "lineStart": 8644,
+      "lineEnd": 8723,
+      "assetRefs": [],
+      "excerptSha256": "908ba7877d1c3e65aa6847183390cad2af8b47c9b50ffde84a6b687343ca54b8"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000153"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Bahdanau 注意力",
+        "小结"
+      ],
+      "lineStart": 8724,
+      "lineEnd": 8728,
+      "assetRefs": [],
+      "excerptSha256": "12353f18fc1fb5957558c8c469e940faa1592d633c7a247d28613cbc93514f7a"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000154"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Bahdanau 注意力",
+        "练习"
+      ],
+      "lineStart": 8729,
+      "lineEnd": 8745,
+      "assetRefs": [],
+      "excerptSha256": "bf29ad629db23130ff8ac25fd6e90231fe6d90efdd110689ad04dd264c3ec373"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2354,
+    1276
+  ],
+  "scale": 0.97
+}

@@ -1,0 +1,1039 @@
+{
+  "id": "point-5-7",
+  "title": "单发多框检测（SSD）",
+  "shortSummary": "讲解 SSD 如何利用多尺度特征图、锚框分类与回归实现端到端的单阶段目标检测。",
+  "keyTerms": [
+    "SSD",
+    "单阶段检测",
+    "多尺度特征",
+    "锚框回归"
+  ],
+  "animationType": "ssdMultiScale",
+  "animationSuggestion": "按尺度逐步展示特征图缩小、锚框变大和预测汇合，并在结尾标出锚框总数与后续的置信度过滤步骤。",
+  "difficulty": "进阶",
+  "importance": 0.87,
+  "prerequisites": [
+    "point-5-3",
+    "point-5-4",
+    "point-5-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的模型结构、锚框尺寸与数值示例，围绕“多尺度特征如何变成锚框预测”重排讲解并补充算例与推理步骤。",
+      "estimatedMinutes": 28,
+      "outcomes": [
+        {
+          "id": "explain-ssd-pipeline",
+          "text": "解释 SSD 从输入图像经多尺度特征图到锚框类别与偏移量预测的整体流程。"
+        },
+        {
+          "id": "interpret-prediction-heads",
+          "text": "说明类别预测层与边界框预测层的通道组织和索引含义。"
+        },
+        {
+          "id": "compute-multiscale-outputs",
+          "text": "根据特征图尺寸、每单元锚框数和类别数计算预测输出规模与锚框总数。"
+        },
+        {
+          "id": "explain-training-objective",
+          "text": "解释训练时类别损失、偏移量损失与掩码如何配合。"
+        },
+        {
+          "id": "apply-inference-postprocess",
+          "text": "说明预测阶段从锚框与偏移量得到最终检测框的步骤。"
+        },
+        {
+          "id": "evaluate-improvement-directions",
+          "text": "判断更换损失函数或调整训练设置会改变 SSD 的哪些部分。"
+        }
+      ],
+      "misconceptions": [
+        "把 SSD 当成只在单一尺度特征图上检测的模型，忽略多尺度特征块的作用。",
+        "认为 SSD 需要先独立生成候选区域再逐区域分类。",
+        "把类别预测的通道数记成类别数 q，忽略背景类后应为 q+1。",
+        "认为偏移量回归的损失就是普通平方损失，忽略教材使用的掩码 L1 损失。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-architecture",
+          "title": "问题与整体结构",
+          "role": "concept",
+          "description": "说明 SSD 的单阶段定位、基础网络与多尺度特征块的分工。",
+          "outcomeRefs": [
+            "explain-ssd-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "prediction-heads",
+          "title": "类别与边界框预测头",
+          "role": "mechanism",
+          "description": "拆解两类预测层的通道设计、索引方式与彼此关系。",
+          "outcomeRefs": [
+            "interpret-prediction-heads"
+          ],
+          "order": 1
+        },
+        {
+          "id": "multiscale-blocks-and-linking",
+          "title": "多尺度特征与输出连结",
+          "role": "mechanism",
+          "description": "从减半块、基本网络块到完整模型，计算各尺度锚框与拼接后的输出规模。",
+          "outcomeRefs": [
+            "explain-ssd-pipeline",
+            "compute-multiscale-outputs"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-objective",
+          "title": "训练目标与数据流",
+          "role": "procedure",
+          "description": "串联数据读取、目标分配、两项损失与训练循环。",
+          "outcomeRefs": [
+            "explain-training-objective"
+          ],
+          "order": 3
+        },
+        {
+          "id": "inference-postprocess",
+          "title": "推理与后处理",
+          "role": "procedure",
+          "description": "说明从预测输出解码边界框、抑制重复框并过滤低置信度结果。",
+          "outcomeRefs": [
+            "apply-inference-postprocess"
+          ],
+          "order": 4
+        },
+        {
+          "id": "summary-and-extensions",
+          "title": "小结与改进方向",
+          "role": "transfer",
+          "description": "回顾模型要点并分析教材练习中的损失函数与训练改进。",
+          "outcomeRefs": [
+            "evaluate-improvement-directions"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-ssd-pipeline",
+          "interpret-prediction-heads",
+          "compute-multiscale-outputs",
+          "explain-training-objective",
+          "apply-inference-postprocess",
+          "evaluate-improvement-directions"
+        ],
+        "method": "完成锚框规模计算并说明从多尺度特征到最终检测框的完整链路。",
+        "successCriteria": [
+          "能按五个尺度算出 5444 个锚框",
+          "能区分 q+1 类预测与 4 个偏移量的通道组织",
+          "能说明掩码 L1 与推理后处理各自解决什么问题"
+        ],
+        "exerciseBlockId": "tb-exercise",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-5-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "problem-and-architecture",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：SSD 的定位",
+        "markdown": "单发多框检测（SSD）把边界框、锚框、多尺度目标检测与检测数据集组合成一个目标检测模型。教材强调它简单、快速且被广泛使用，并指出本节的设计原则和实现细节也适用于其他目标检测模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000268"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）"
+              ],
+              "lineStart": 9879,
+              "lineEnd": 9888,
+              "assetRefs": [],
+              "excerptSha256": "d223c8fefa0f76641b3a53b41d0e1ce684afefe8c9142e5f7a38a01590ddeaeb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-single-stage-position",
+        "moduleId": "problem-and-architecture",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：单阶段的含义",
+        "markdown": "“单发”指模型在一次前向传播中直接在每个尺度的特征图单元上输出锚框的类别分数与偏移量，不需要先单独生成候选区域再逐区域分类。教材用“简单、快速”概括这一路线；后续 R-CNN 系列会采用区域提议的另一条路线。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-architecture",
+        "moduleId": "problem-and-architecture",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：基础网络与多尺度特征块",
+        "markdown": "SSD 由一个基础网络和若干多尺度特征块串联组成。基础网络从输入图像提取特征，可以使用深度卷积网络：原论文选用在分类层之前截断的 VGG，也常用 ResNet 替代。让基础网络输出较大高宽的特征图，可以铺设更多锚框来检测小目标；随后的每个多尺度特征块把上一层特征图的高宽缩小（如减半），同时扩大每个单元在输入图像上的感受野。靠近顶部的特征图较小但感受野较大，适合检测数量较少而尺寸较大的物体。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000269"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型"
+              ],
+              "lineStart": 9889,
+              "lineEnd": 9908,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/ssd.svg"
+              ],
+              "excerptSha256": "9b0ff8e56c17c998639bfd1fef065090409c9aacdcd5258e5c2f549b541e08f1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-receptive-field-intuition",
+        "moduleId": "problem-and-architecture",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：由细到粗的观察窗口",
+        "markdown": "可以把多尺度特征图理解为一组“由细到粗”的观察窗口：底层分辨率高、单元多，锚框密集而尺度小；高层分辨率低、单元少，但每个单元覆盖原图更大范围，锚框更大。因此同一张输入图像会在不同层级上被反复检查，而不是只在一个尺度上检测。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-architecture"
+          ]
+        }
+      },
+      {
+        "id": "tb-class-predictor",
+        "moduleId": "prediction-heads",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：类别预测层",
+        "markdown": "设目标类别数为 $q$，加上背景类后每个锚框要分成 $q+1$ 类。某个尺度下特征图高、宽分别为 $h$ 和 $w$，每个单元生成 $a$ 个锚框，就需要对 $hwa$ 个锚框分类。若用全连接层输出会带来过多参数，SSD 改用保持输入高宽的卷积层：输出与输入空间坐标一一对应，输出通道数为 $a(q+1)$，其中通道索引 $i(q+1)+j$ 表示第 $i$ 个锚框属于类别 $j$ 的预测。教材实现使用填充为 1 的 $3\\times3$ 卷积，使输入输出宽高不变。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000270"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型",
+                "[**类别预测层**]"
+              ],
+              "lineStart": 9909,
+              "lineEnd": 9968,
+              "assetRefs": [],
+              "excerptSha256": "41ab526b0d1b37e50a1068b4ca9f0862dbbca9bd6fb7595d5111e35f2c0545a2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-class-example",
+        "moduleId": "prediction-heads",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：通道数的算例",
+        "markdown": "以 $h=20$、$w=20$、$a=5$、$q=10$ 为例，每个空间位置输出 $5\\times(10+1)=55$ 个通道，整张特征图对应 $20\\times20\\times5=2000$ 个锚框。通道按“锚框优先、类别在后”排列，因此同一空间位置的输出向量可以逐段拆成每个锚框的 $q+1$ 个类别分数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-class-predictor"
+          ]
+        }
+      },
+      {
+        "id": "tb-bbox-predictor",
+        "moduleId": "prediction-heads",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：边界框预测层",
+        "markdown": "边界框预测层与类别预测层结构类似，区别在于每个锚框只预测 4 个偏移量而不是 $q+1$ 个类别，因此输出通道数为 $4a$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000271"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型",
+                "(**边界框预测层**)"
+              ],
+              "lineStart": 9969,
+              "lineEnd": 9990,
+              "assetRefs": [],
+              "excerptSha256": "0248207c1d3f9428542581fad5ae6486e0ee378239c34fc8d42b3b694d84c6b7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-head-comparison",
+        "moduleId": "prediction-heads",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：两个预测头的关系",
+        "markdown": "两个预测头共享同一个特征图：类别头给出每个锚框在 $q+1$ 个类别上的分数，边界框头给出每个锚框相对其锚框的 4 个偏移量。分开设置卷积头可以让两种预测各自学习，但都基于同一组锚框和同一层特征。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-class-predictor",
+            "tb-bbox-predictor"
+          ]
+        }
+      },
+      {
+        "id": "tb-multiscale-concat",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：连结多尺度的预测",
+        "markdown": "不同尺度的特征图形状不同，同一单元生成的锚框数量也可能不同，因此预测输出形状不一致。教材用两个尺度举例：`Y1` 和 `Y2` 每个单元分别生成 5 个和 3 个锚框，类别数为 10 时，类别预测输出通道数分别为 $5\\times(10+1)=55$ 和 $3\\times(10+1)=33$，输出形状都是（批量大小，通道数，高，宽）。为了连结，先把通道维移到最后一维，再展平成（批量大小，高 $\\times$ 宽 $\\times$ 通道数），最后在维度 1 上拼接。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000272"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型",
+                "[**连结多尺度的预测**]"
+              ],
+              "lineStart": 9991,
+              "lineEnd": 10069,
+              "assetRefs": [],
+              "excerptSha256": "36a2dae6d93371f3526e1357eb7db93f6a68990865942cd3b66d8cb44e03f1c5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-flatten-example",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：展平与拼接的规模",
+        "markdown": "沿用上面的例子，若 `Y1` 为 $20\\times20$、`Y2` 为 $10\\times10$，展平后每个样本分别得到 $20\\times20\\times55=22000$ 和 $10\\times10\\times33=3300$ 个数值，拼接后为 25300 个数值。这样不同尺度的预测就被整理成一份按锚框排列的连续输出，便于统一解码和计算损失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-multiscale-concat"
+          ]
+        }
+      },
+      {
+        "id": "tb-downsample",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：高和宽减半块",
+        "markdown": "高和宽减半块沿用 VGG 块的设计：先接两个填充为 1 的 $3\\times3$ 卷积层，再接一个步幅为 2 的 $2\\times2$ 最大汇聚层。填充为 1 的 $3\\times3$ 卷积不改变特征图形状，而汇聚层把高和宽各减半。由于 $1\\times2+(3-1)+(3-1)=6$，输出中每个单元在输入上的感受野扩大到 $6\\times6$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000273"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型",
+                "[**高和宽减半块**]"
+              ],
+              "lineStart": 10070,
+              "lineEnd": 10132,
+              "assetRefs": [],
+              "excerptSha256": "a7d296ebf350069ba939e9727b882b7f42b9071f0cc260a819c6a99698203e7e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-receptive-field-calc",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：感受野为何扩大",
+        "markdown": "感受野的变化可以分步看：第一个 $3\\times3$ 卷积让单元看到输入的 $3\\times3$ 区域，第二个 $3\\times3$ 卷积把它扩大到 $5\\times5$，最后的 $2\\times2$ 汇聚按步幅 2 采样，使相邻输出单元在原图上的间隔翻倍，等效感受野达到 $6\\times6$。因此每经过一个减半块，特征图变小而单元“看得更宽”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-downsample"
+          ]
+        }
+      },
+      {
+        "id": "tb-base-net",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：基本网络块",
+        "markdown": "基本网络块从输入图像抽取特征。教材为了计算简洁，串联 3 个高和宽减半块，并逐步把通道数翻倍。输入图像为 $256\\times256$ 时，输出特征图为 $32\\times32$，因为 $256/2^3=32$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000274"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型",
+                "[**基本网络块**]"
+              ],
+              "lineStart": 10133,
+              "lineEnd": 10172,
+              "assetRefs": [],
+              "excerptSha256": "84825856441a2c5a3a81a7fcd33a594d6cb3378b047edd37182557ca26aba324"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-base-net-scaling",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：三次减半的尺度变化",
+        "markdown": "三次减半正好把边长缩小 $2^3=8$ 倍：$256\\to128\\to64\\to32$，通道数则由 16、32 增到 64。这个 $32\\times32$ 的高分辨率特征图单元多，适合铺设较密的锚框来捕捉小目标，后续模块再逐级降低分辨率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-base-net"
+          ]
+        }
+      },
+      {
+        "id": "tb-full-model",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：完整的模型与锚框规模",
+        "markdown": "完整的 SSD 模型由五个模块组成：第一个是基本网络块，第二到第四个是高和宽减半块，最后一个用全局最大池把高宽都降到 1。每个模块输出的特征图既用于生成锚框，又用于预测这些锚框的类别和偏移量。以 $256\\times256$ 输入为例，五个尺度的特征图尺寸依次为 $32\\times32$、$16\\times16$、$8\\times8$、$4\\times4$ 和 $1\\times1$。教材把 0.2 到 1.05 的区间均匀分成五段，得到各尺度较小锚框尺寸 0.2、0.37、0.54、0.71、0.88，较大的尺寸由相邻两值的几何平均给出，例如 $\\sqrt{0.2\\times0.37}=0.272$。取宽高比 $[1,2,0.5]$ 时每个单元生成 4 个锚框，因此每个图像共生成 $(32^2+16^2+8^2+4^2+1)\\times4=5444$ 个锚框。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000275"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "模型",
+                "完整的模型"
+              ],
+              "lineStart": 10173,
+              "lineEnd": 10388,
+              "assetRefs": [],
+              "excerptSha256": "36c62e98bb56fb03c8e4316c75a7b62e438d5583e6c3cbc7589c8666305328ce"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tinyssd-shapes",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：5444 个锚框的拆解",
+        "markdown": "5444 个锚框可以按尺度拆开核对：$32^2\\times4=4096$、$16^2\\times4=1024$、$8^2\\times4=256$、$4^2\\times4=64$、$1^2\\times4=4$，合计 5444。若背景加香蕉一类共 2 类，类别预测输出为（批量大小，5444，2），边界框预测输出为（批量大小，5444，4），两者与锚框一一对应。尺度越大、特征图越小，锚框数量越少但单个锚框越大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-full-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-setup",
+        "moduleId": "training-objective",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：读取数据集与初始化",
+        "markdown": "训练前先读取香蕉检测数据集并初始化模型与优化器：批量大小为 32，目标类别数为 1；参数用 Xavier 初始化，优化器采用学习率 0.2、权重衰减 $5\\times10^{-4}$ 的随机梯度下降。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000276"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "训练模型"
+              ],
+              "lineStart": 10389,
+              "lineEnd": 10392,
+              "assetRefs": [],
+              "excerptSha256": "4a789336a747586877873f0c326422effd3ad99ba71e685b91eec75ae1d3cfd0"
+            },
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000277"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "训练模型",
+                "读取数据集和初始化"
+              ],
+              "lineStart": 10393,
+              "lineEnd": 10426,
+              "assetRefs": [],
+              "excerptSha256": "70e4128f0a0f67e99b92010fff49def5617008c462a080ff141305d53f96f2e9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-setup-note",
+        "moduleId": "training-objective",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：初始化设定的作用",
+        "markdown": "教材把数据读取与初始化放在训练一节的开头：固定批量大小和类别数后，模型结构与损失函数的形状才能确定；优化器超参数（学习率 0.2、权重衰减 $5\\times10^{-4}$）则决定参数更新的步长与正则强度。这些取值是教材示例的设定，不是 SSD 原理的硬性要求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training-setup"
+          ]
+        }
+      },
+      {
+        "id": "tb-loss",
+        "moduleId": "training-objective",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：损失函数与评价函数",
+        "markdown": "目标检测有两类损失。第一类是锚框类别损失，可直接复用图像分类的交叉熵损失；第二类是正类锚框偏移量的回归损失，教材没有使用平方损失，而使用 $L_1$ 范数损失，即预测值与真实值之差的绝对值。掩码变量 `bbox_masks` 让负类锚框和填充锚框不参与偏移量损失计算。最后把类别损失与偏移量损失相加得到总损失。评价时分类沿用准确率，偏移量用平均绝对误差。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000278"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "训练模型",
+                "[**定义损失函数和评价函数**]"
+              ],
+              "lineStart": 10427,
+              "lineEnd": 10508,
+              "assetRefs": [],
+              "excerptSha256": "f12424ef2130a3a410442be1fc45fd9c75d49a06987f2236ffbefee0e75444a1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-rationale",
+        "moduleId": "training-objective",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：掩码与两项损失的配合",
+        "markdown": "掩码的意义在于把回归损失限制在真正负责定位的正类锚框上：负类锚框没有要回归的目标，填充锚框只是为对齐张量形状而存在，若让它们参与会稀释梯度。教材把两项损失直接相加，因此类别分支与回归分支会同时被优化；练习中也提出可以给两项设置不同权重。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loss"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-loop",
+        "moduleId": "training-objective",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：训练循环",
+        "markdown": "训练循环在每个批次里生成多尺度锚框并预测类别和偏移量，再根据标签得到 `cls_labels`、`bbox_labels` 和 `bbox_masks`，计算损失后反向传播并更新参数。教材示例训练 20 个 epoch，记录分类错误率与边界框平均绝对误差。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000279"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "训练模型",
+                "[**训练模型**]"
+              ],
+              "lineStart": 10509,
+              "lineEnd": 10614,
+              "assetRefs": [],
+              "excerptSha256": "0953fd70985952626e0a1661c2d7651c296928c6a21fc26eb0a953e1fca07f64"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-dataflow",
+        "moduleId": "training-objective",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "补充：一个批次的完整链路",
+        "markdown": "一个训练批次可以概括为：`net(X)` 输出锚框、类别预测和偏移量预测，`multibox_target` 按真实框为锚框分配标签和掩码，`calc_loss` 计算交叉熵与掩码 $L_1$ 之和，反向传播更新参数。分类错误率用预测类别与 `cls_labels` 比较，边界框误差只在掩码有效的位置上统计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loss",
+            "tb-training-loop"
+          ]
+        }
+      },
+      {
+        "id": "tb-prediction",
+        "moduleId": "inference-postprocess",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：预测目标",
+        "markdown": "预测阶段把测试图像调整为 $256\\times256$ 并转成卷积层需要的四维格式。`multibox_detection` 根据锚框和预测偏移量得到边界框，再用非极大值抑制移除相似的预测框。教材最后筛选所有置信度不低于 0.9 的边界框作为输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000280"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "[**预测目标**]"
+              ],
+              "lineStart": 10615,
+              "lineEnd": 10728,
+              "assetRefs": [],
+              "excerptSha256": "d7179473e8489d9d790bfde4bf85d35d38497f50b6891c99d818b2250f363073"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-postprocess-steps",
+        "moduleId": "inference-postprocess",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：推理后处理的四步",
+        "markdown": "推理可以按四步理解：先对类别预测做 softmax 得到每个锚框各类别的概率；再根据锚框与预测偏移量解码出实际边界框；然后用非极大值抑制合并高度重叠的同类框；最后按置信度阈值（教材取 0.9）过滤。阈值越低保留的框越多，误检也可能增加，因此它需要按任务调整。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-prediction"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "summary-and-extensions",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：小结",
+        "markdown": "单发多框检测是一种多尺度目标检测模型：基于基础网络块和各个多尺度特征块，它生成不同数量和不同大小的锚框，并通过预测这些锚框的类别和偏移量来检测不同大小的目标。训练时，损失函数根据锚框类别和偏移量的预测值与标注值计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000281"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "小结"
+              ],
+              "lineStart": 10729,
+              "lineEnd": 10733,
+              "assetRefs": [],
+              "excerptSha256": "db96036ed48e333d7ee811da79a0112d34cb4746e3b06fd4646411f21167515d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-exercise",
+        "moduleId": "summary-and-extensions",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材：练习中的改进方向",
+        "markdown": "教材练习提出两类改进方向。其一是修改损失函数：把偏移量的 $L_1$ 损失换成平滑 $L_1$ 损失，或用焦点损失替代交叉熵，以更关注难分类样本。其二是改进训练与评估：目标远小于图像时可放大输入，负锚框过多时可把其高宽减半以平衡类别分布，也可给类别损失和偏移损失设置不同权重，或采用论文中的其他评估方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000282"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "单发多框检测（SSD）",
+                "练习"
+              ],
+              "lineStart": 10734,
+              "lineEnd": 10860,
+              "assetRefs": [],
+              "excerptSha256": "9c5aad5df26ef6b1e8faf91b448e788faf9f943a4bbe61cf2ab48000fb780209"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-extensions",
+        "moduleId": "summary-and-extensions",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：两种替代损失的直觉",
+        "markdown": "平滑 $L_1$ 损失在零点附近使用平方函数、远离零点时退化为线性，由超参数 $\\sigma$ 控制平滑区域；焦点损失写成 $-\\alpha(1-p_j)^{\\gamma}\\log p_j$，当正类概率 $p_j$ 已较高时权重被压低，从而把训练集中到困难样本上。这些改动只替换损失项，不改变 SSD 的多尺度锚框与预测结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercise",
+            "tb-loss"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "ssd-anchor-count-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-tinyssd-shapes",
+        "moduleId": "multiscale-blocks-and-linking",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-multiscale-outputs"
+        ],
+        "learningPurpose": "检查学习者能否独立按五个尺度拆解并核对锚框总数与预测输出形状。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-full-model",
+            "model-tinyssd-shapes"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出五个尺度的特征图尺寸、每单元锚框数，并计算锚框总数；再说明类别预测与边界框预测的输出形状。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-5-8",
+    "point-5-11"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000268"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）"
+      ],
+      "lineStart": 9879,
+      "lineEnd": 9888,
+      "assetRefs": [],
+      "excerptSha256": "d223c8fefa0f76641b3a53b41d0e1ce684afefe8c9142e5f7a38a01590ddeaeb"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000269"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型"
+      ],
+      "lineStart": 9889,
+      "lineEnd": 9908,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/ssd.svg"
+      ],
+      "excerptSha256": "9b0ff8e56c17c998639bfd1fef065090409c9aacdcd5258e5c2f549b541e08f1"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000270"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型",
+        "[**类别预测层**]"
+      ],
+      "lineStart": 9909,
+      "lineEnd": 9968,
+      "assetRefs": [],
+      "excerptSha256": "41ab526b0d1b37e50a1068b4ca9f0862dbbca9bd6fb7595d5111e35f2c0545a2"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000271"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型",
+        "(**边界框预测层**)"
+      ],
+      "lineStart": 9969,
+      "lineEnd": 9990,
+      "assetRefs": [],
+      "excerptSha256": "0248207c1d3f9428542581fad5ae6486e0ee378239c34fc8d42b3b694d84c6b7"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000272"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型",
+        "[**连结多尺度的预测**]"
+      ],
+      "lineStart": 9991,
+      "lineEnd": 10069,
+      "assetRefs": [],
+      "excerptSha256": "36a2dae6d93371f3526e1357eb7db93f6a68990865942cd3b66d8cb44e03f1c5"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000273"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型",
+        "[**高和宽减半块**]"
+      ],
+      "lineStart": 10070,
+      "lineEnd": 10132,
+      "assetRefs": [],
+      "excerptSha256": "a7d296ebf350069ba939e9727b882b7f42b9071f0cc260a819c6a99698203e7e"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000274"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型",
+        "[**基本网络块**]"
+      ],
+      "lineStart": 10133,
+      "lineEnd": 10172,
+      "assetRefs": [],
+      "excerptSha256": "84825856441a2c5a3a81a7fcd33a594d6cb3378b047edd37182557ca26aba324"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000275"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "模型",
+        "完整的模型"
+      ],
+      "lineStart": 10173,
+      "lineEnd": 10388,
+      "assetRefs": [],
+      "excerptSha256": "36c62e98bb56fb03c8e4316c75a7b62e438d5583e6c3cbc7589c8666305328ce"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000276"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "训练模型"
+      ],
+      "lineStart": 10389,
+      "lineEnd": 10392,
+      "assetRefs": [],
+      "excerptSha256": "4a789336a747586877873f0c326422effd3ad99ba71e685b91eec75ae1d3cfd0"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000277"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "训练模型",
+        "读取数据集和初始化"
+      ],
+      "lineStart": 10393,
+      "lineEnd": 10426,
+      "assetRefs": [],
+      "excerptSha256": "70e4128f0a0f67e99b92010fff49def5617008c462a080ff141305d53f96f2e9"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000278"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "训练模型",
+        "[**定义损失函数和评价函数**]"
+      ],
+      "lineStart": 10427,
+      "lineEnd": 10508,
+      "assetRefs": [],
+      "excerptSha256": "f12424ef2130a3a410442be1fc45fd9c75d49a06987f2236ffbefee0e75444a1"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000279"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "训练模型",
+        "[**训练模型**]"
+      ],
+      "lineStart": 10509,
+      "lineEnd": 10614,
+      "assetRefs": [],
+      "excerptSha256": "0953fd70985952626e0a1661c2d7651c296928c6a21fc26eb0a953e1fca07f64"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000280"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "[**预测目标**]"
+      ],
+      "lineStart": 10615,
+      "lineEnd": 10728,
+      "assetRefs": [],
+      "excerptSha256": "d7179473e8489d9d790bfde4bf85d35d38497f50b6891c99d818b2250f363073"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000281"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "小结"
+      ],
+      "lineStart": 10729,
+      "lineEnd": 10733,
+      "assetRefs": [],
+      "excerptSha256": "db96036ed48e333d7ee811da79a0112d34cb4746e3b06fd4646411f21167515d"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000282"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "单发多框检测（SSD）",
+        "练习"
+      ],
+      "lineStart": 10734,
+      "lineEnd": 10860,
+      "assetRefs": [],
+      "excerptSha256": "9c5aad5df26ef6b1e8faf91b448e788faf9f943a4bbe61cf2ab48000fb780209"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2128,
+    938
+  ],
+  "scale": 0.65
+}

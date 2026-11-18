@@ -1,0 +1,580 @@
+{
+  "id": "point-2-8",
+  "title": "束搜索",
+  "shortSummary": "解码时保留得分最高的若干候选序列，用长度归一化的对数概率权衡搜索广度与计算成本。",
+  "keyTerms": [
+    "束搜索",
+    "候选序列",
+    "长度归一化",
+    "贪心搜索"
+  ],
+  "animationType": "beamSearchDecoding",
+  "animationSuggestion": "用候选树或候选列表逐步展示束宽为 2 的扩展与剪枝，标出每步得分和保留下来的序列，最后高亮按长度归一化得分选出的输出。",
+  "difficulty": "中等",
+  "importance": 0.83,
+  "prerequisites": [
+    "point-2-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的搜索问题设定、贪心与穷举的对比以及束搜索公式，按「问题—基线—代价—机制—得分与选择」重排，并补充逐步追踪、策略对照表和练习提示。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-search-goal",
+          "text": "用条件概率、词表大小和最大长度描述序列搜索问题，说明候选空间为什么无法直接枚举。"
+        },
+        {
+          "id": "compare-search-strategies",
+          "text": "比较贪心搜索、穷举搜索和束搜索在最优性与计算量上的取舍。"
+        },
+        {
+          "id": "trace-beam-search",
+          "text": "按给定束宽逐步追踪候选序列的扩展、打分与剪枝，写出每步保留的候选集合。"
+        },
+        {
+          "id": "apply-scoring",
+          "text": "解释长度归一化得分，并据此在不同长度的候选序列中选出最终输出。"
+        }
+      ],
+      "misconceptions": [
+        "把束搜索当成一定能找到全局最优序列的算法；束宽有限时，最优序列仍可能在剪枝中被丢弃。",
+        "把每步计算误解为重新枚举所有完整序列；束搜索只在上一时刻保留的 k 条前缀上做扩展。",
+        "认为长度归一化只是装饰性的缩放，不影响不同长度候选之间的比较。",
+        "认为贪心搜索与束搜索互不相干，忽略贪心搜索就是束宽为 1 的束搜索。"
+      ],
+      "modules": [
+        {
+          "id": "search-problem",
+          "title": "序列搜索问题",
+          "role": "problem-intro",
+          "outcomeRefs": [
+            "explain-search-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "greedy-baseline",
+          "title": "贪心搜索及其失效",
+          "role": "baseline",
+          "outcomeRefs": [
+            "compare-search-strategies"
+          ],
+          "order": 1
+        },
+        {
+          "id": "exhaustive-cost",
+          "title": "穷举搜索的代价",
+          "role": "cost-analysis",
+          "outcomeRefs": [
+            "compare-search-strategies"
+          ],
+          "order": 2
+        },
+        {
+          "id": "beam-mechanism",
+          "title": "束搜索的扩展与剪枝",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "trace-beam-search"
+          ],
+          "order": 3
+        },
+        {
+          "id": "scoring-and-choice",
+          "title": "得分归一化与策略选择",
+          "role": "scoring-and-choice",
+          "outcomeRefs": [
+            "apply-scoring",
+            "compare-search-strategies"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与迁移",
+          "role": "check-and-transfer",
+          "outcomeRefs": [
+            "explain-search-goal",
+            "compare-search-strategies",
+            "trace-beam-search",
+            "apply-scoring"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-search-goal",
+          "compare-search-strategies",
+          "trace-beam-search",
+          "apply-scoring"
+        ],
+        "method": "用一个小词表和给定束宽走完一轮候选扩展与筛选，并在贪心、束搜索和穷举之间说明取舍。",
+        "successCriteria": [
+          "能写出每一步保留的候选序列及其依据",
+          "能说明束宽对计算量和结果的影响",
+          "能按长度归一化得分选出最终序列"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-3-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-problem",
+        "moduleId": "search-problem",
+        "depth": "core",
+        "kind": "definition",
+        "title": "搜索问题与概率目标",
+        "markdown": "在序列到序列解码中，时间步 $t'$ 的输出 $y_{t'}$ 取决于此前生成的子序列 $y_1, \\ldots, y_{t'-1}$ 与编码器给出的上下文变量 $\\mathbf{c}$：\n\n$$P(y_{t'} \\mid y_1, \\ldots, y_{t'-1}, \\mathbf{c})$$\n\n设输出词表为 $\\mathcal{Y}$，其基数为 $|\\mathcal{Y}|$，输出序列的最大词元数为 $T'$。序列搜索的目标，是从所有 $\\mathcal{O}(|\\mathcal{Y}|^{T'})$ 个可能序列中找出理想的输出；实际输出中 `<eos>` 之后的部分会被丢弃。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000120"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 6584,
+              "lineEnd": 6609,
+              "assetRefs": [],
+              "excerptSha256": "b8f611bd0c0a39650b8ed08c96916d1f9c798ec8acb16d6a7f9a6f2ca25b4f2d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-problem-space",
+        "moduleId": "search-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么候选空间难以直接枚举",
+        "markdown": "候选空间随长度指数增长：每个时间步都有 $|\\mathcal{Y}|$ 种选择，$T'$ 步就是 $|\\mathcal{Y}|^{T'}$ 条完整序列。搜索策略的差别，本质上是在「少算一些候选」和「不漏掉好序列」之间取舍；下面先看两种极端做法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-problem"
+          ]
+        }
+      },
+      {
+        "id": "tb-greedy",
+        "moduleId": "greedy-baseline",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "贪心搜索",
+        "markdown": "贪心搜索在每个时间步只取条件概率最高的词元：\n\n$$y_{t'} = \\operatorname*{argmax}_{y \\in \\mathcal{Y}} P(y \\mid y_1, \\ldots, y_{t'-1}, \\mathbf{c})$$\n\n一旦生成 `<eos>` 或达到最大长度 $T'$，输出就结束。最优序列应当最大化整条序列的条件概率乘积 $\\prod_{t'=1}^{T'} P(y_{t'} \\mid y_1, \\ldots, y_{t'-1}, \\mathbf{c})$，而贪心搜索只保证每一步局部最优，无法保证得到这个最优序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索",
+                "贪心搜索"
+              ],
+              "lineStart": 6610,
+              "lineEnd": 6663,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/s2s-prob1.svg",
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/s2s-prob2.svg"
+              ],
+              "excerptSha256": "773038525dd5d9003c353395c05775ed7f7eab2db6f6718e7e2b7ed8d66892ae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-greedy-counterexample",
+        "moduleId": "greedy-baseline",
+        "depth": "support",
+        "kind": "example",
+        "title": "贪心失效的具体算例",
+        "markdown": "教材给出的两组概率显示差距：贪心路径「A B C `<eos>`」的概率为 $0.5 \\times 0.4 \\times 0.4 \\times 0.6 = 0.048$；若在时间步 2 改选第二高概率的词元 C，后续条件概率随之改变，序列「A C B `<eos>`」的概率为 $0.5 \\times 0.3 \\times 0.6 \\times 0.6 = 0.054$。后者整体概率更高，却因为贪心搜索不再回头而被排除。\n\n关键点是：前缀一旦确定，后续所有条件概率都以前缀为条件；错误的前缀无法在后续步骤中纠正。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-greedy"
+          ]
+        }
+      },
+      {
+        "id": "tb-exhaustive",
+        "moduleId": "exhaustive-cost",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "穷举搜索",
+        "markdown": "穷举搜索列举所有可能的输出序列及其条件概率，再取条件概率最高者，因此能得到最优序列。但它的计算量是 $\\mathcal{O}(|\\mathcal{Y}|^{T'})$：当 $|\\mathcal{Y}| = 10000$、$T' = 10$ 时，需要评估 $10000^{10} = 10^{40}$ 条序列，现有计算机几乎不可能完成。作为对照，贪心搜索只需 $\\mathcal{O}(|\\mathcal{Y}|T')$，同一组参数下约为 $10000 \\times 10 = 10^5$ 条序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索",
+                "穷举搜索"
+              ],
+              "lineStart": 6664,
+              "lineEnd": 6681,
+              "assetRefs": [],
+              "excerptSha256": "47a7ba90e0c727809089c0299f1ab06ac2cb3be2dc2b3fc0a94b56dd7b0684db"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-beam-rule",
+        "moduleId": "beam-mechanism",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "束搜索的保留规则",
+        "markdown": "束搜索是贪心搜索的改进版本，多了一个超参数：束宽 $k$。\n\n- 时间步 1：从词表中选出条件概率最高的 $k$ 个词元，作为 $k$ 条候选序列的第一个词元。\n- 后续每个时间步：基于上一时刻保留的 $k$ 条候选序列，枚举它们与全部词元的组合，共 $k|\\mathcal{Y}|$ 个候选，再从中挑出条件概率最高的 $k$ 条。\n\n教材示例设 $\\mathcal{Y} = \\{A, B, C, D, E\\}$、束宽 $k = 2$、最大长度 $T' = 3$。时间步 1 保留 $A$ 和 $C$；时间步 2 在 $P(A, y_2 \\mid \\mathbf{c})$ 与 $P(C, y_2 \\mid \\mathbf{c})$ 的十个值中选出最大的两个，得到 $AB$ 和 $CE$；时间步 3 同理得到 $ABD$ 和 $CED$。最终候选集合包含各时间步保留过的序列：$A$、$C$、$AB$、$CE$、$ABD$、$CED$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000123"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索",
+                "束搜索"
+              ],
+              "lineStart": 6682,
+              "lineEnd": 6739,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/beam-search.svg"
+              ],
+              "excerptSha256": "c99ffcb8401682316c1ea1ceea24896b23e64db79d60ffb0a6731fbe4f978a50"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-beam-trace",
+        "moduleId": "beam-mechanism",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "逐步追踪一次束搜索",
+        "markdown": "把上例拆成一次可跟踪的剪枝过程：\n\n1. 时间步 1：计算 $P(A \\mid \\mathbf{c})$ 与 $P(C \\mid \\mathbf{c})$，它们排在前两位，保留 $A$、$C$。\n2. 时间步 2：对 $A$ 和 $C$ 分别接上五个词元，得到 10 条长度为 2 的前缀，例如 $AA$、$AB$、$CA$、$CE$ 等；按累计条件概率排序，保留前两条 $AB$ 与 $CE$。\n3. 时间步 3：对 $AB$、$CE$ 做同样的扩展，从 10 条长度为 3 的候选中保留 $ABD$ 与 $CED$。\n\n这里容易忽略的一点是：最终候选不是只取最后一步的 2 条，而是把每个时间步保留过的序列都留下，所以示例中有 6 条候选。若某条候选生成了 `<eos>`，它之后的部分会被丢弃；最后再在这批长短不一的候选之间比较得分。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-beam-rule"
+          ]
+        }
+      },
+      {
+        "id": "tb-beam-score",
+        "moduleId": "scoring-and-choice",
+        "depth": "core",
+        "kind": "formula",
+        "title": "长度归一化得分",
+        "markdown": "得到候选集合后，用长度归一化的对数概率给每条候选打分：\n\n$$\\frac{1}{L^\\alpha} \\log P(y_1, \\ldots, y_L \\mid \\mathbf{c}) = \\frac{1}{L^\\alpha} \\sum_{t'=1}^{L} \\log P(y_{t'} \\mid y_1, \\ldots, y_{t'-1}, \\mathbf{c})$$\n\n其中 $L$ 是候选序列的长度，$\\alpha$ 通常取 $0.75$。较长的序列在求和中会有更多对数项，分母 $L^\\alpha$ 用于对长度做惩罚与归一化。束搜索的计算量为 $\\mathcal{O}(k|\\mathcal{Y}|T')$，介于贪心搜索和穷举搜索之间；贪心搜索可以看作束宽为 $1$ 的特例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000123"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索",
+                "束搜索"
+              ],
+              "lineStart": 6682,
+              "lineEnd": 6739,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/beam-search.svg"
+              ],
+              "excerptSha256": "c99ffcb8401682316c1ea1ceea24896b23e64db79d60ffb0a6731fbe4f978a50"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-length-penalty",
+        "moduleId": "scoring-and-choice",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "长度归一化在做什么",
+        "markdown": "对数把概率乘积变成求和：$\\log \\prod P = \\sum \\log P$。每个 $\\log P \\le 0$，序列越长，求和中的负项越多，累计对数概率就越依赖长度，长短候选无法直接比较。分母 $L^\\alpha$ 是对长度的归一化与惩罚因子：$\\alpha = 1$ 时完全按长度平均，$\\alpha = 0$ 时不做长度平滑，教材取 $\\alpha = 0.75$ 作为折中。束搜索最终比较的是归一化后的得分，而不是原始的累计概率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-beam-score"
+          ]
+        }
+      },
+      {
+        "id": "model-cost-table",
+        "moduleId": "scoring-and-choice",
+        "depth": "support",
+        "kind": "table",
+        "title": "三种搜索策略对照",
+        "markdown": "把三种策略放在同一组维度上对照（模型根据前文教材整理）：\n\n| 策略 | 每步保留的候选 | 计算量 | 最优性 |\n|---|---|---|---|\n| 贪心搜索 | 1 条前缀 | $\\mathcal{O}(\\lvert\\mathcal{Y}\\rvert T')$ | 不保证最优 |\n| 束搜索（束宽 $k$） | $k$ 条前缀 | $\\mathcal{O}(k\\lvert\\mathcal{Y}\\rvert T')$ | 比贪心更可能找到高概率序列，但仍无最优保证 |\n| 穷举搜索 | 全部前缀 | $\\mathcal{O}(\\lvert\\mathcal{Y}\\rvert^{T'})$ | 保证最优 |\n\n当 $k = 1$ 时束搜索退化为贪心搜索；若束宽随步数增长到足以容纳每一步的全部扩展，束搜索就退化为穷举搜索。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-problem",
+            "tb-greedy",
+            "tb-exhaustive",
+            "tb-beam-rule",
+            "tb-beam-score"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "scoring-and-choice",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "- 序列搜索策略包括贪心搜索、穷举搜索和束搜索。\n- 贪心搜索选取序列的计算量最小，但精度相对较低。\n- 穷举搜索选取序列的精度最高，但计算量最大。\n- 束搜索通过灵活选择束宽，在正确率和计算代价之间进行权衡。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索",
+                "小结"
+              ],
+              "lineStart": 6740,
+              "lineEnd": 6746,
+              "assetRefs": [],
+              "excerptSha256": "fcaf9b8e39d758a0cacf7b4cfbd29303004797b42d22629fca14a99f07342785"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-strategy-choice",
+        "moduleId": "scoring-and-choice",
+        "depth": "support",
+        "kind": "application",
+        "title": "按约束选择搜索策略",
+        "markdown": "实际选择可以按约束反推：\n\n- 延迟和算力优先：用束宽 1，也就是贪心搜索，代价最低。\n- 输出质量优先且能接受随 $k$ 线性增长的开销：增大束宽，让更多前缀参与后续扩展。\n- 只有词表和最大长度都很小、穷举代价可以承受时，才直接穷举。\n\n需要强调的是，束搜索提高的是「找到高概率序列的机会」，并不提供最优性保证；束宽越大，被剪掉的好序列越少，但每步要评估的 $k|\\mathcal{Y}|$ 个候选也越多。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-beam-score",
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 可以把穷举搜索看作一种特殊的束搜索吗？为什么？\n2. 在机器翻译中应用束搜索，束宽如何影响预测的速度和结果？\n3. 基于用户提供的前缀、用语言模型生成文本时，使用的是哪种搜索策略？可以怎样改进？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000125"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索",
+                "练习"
+              ],
+              "lineStart": 6747,
+              "lineEnd": 6756,
+              "assetRefs": [],
+              "excerptSha256": "8548bab3699204ee9d717ab875c8878b91c5883c3efdd956c537e0664a0091ce"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-hints",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "练习提示（模型补充）",
+        "markdown": "下面是模型补充的解题提示，不是教材原文：\n\n1. 可以，但要把束宽设得足够大：当某个时间步的全部候选都能被保留而不剪枝时，束搜索与穷举搜索评估的是同一批序列。固定束宽 $k = |\\mathcal{Y}|$ 做不到这一点，因为第二步就有 $|\\mathcal{Y}|^2$ 个扩展；需要让束宽随步数增长到足以容纳全部候选。\n2. 束宽越大，每步评估的候选越多，解码越慢；同时更少的好前缀被过早丢弃，通常能得到更高概率或更通顺的结果，但收益会递减。\n3. 教材前面的前缀续写示例逐步取条件概率最高的词元，用的是贪心搜索（束宽为 1 的束搜索）；可改为束搜索，以一定计算代价换取更优的续写。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "beam-search-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise-hints",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-search-strategies",
+          "trace-beam-search"
+        ],
+        "learningPurpose": "检查学习者能否在给定预算下选择搜索策略，并说明束宽对候选集合的影响。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-beam-rule"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某机器翻译系统必须在固定延迟内完成解码，且词表很大。请说明你会选择贪心搜索、束搜索还是穷举搜索，并写出两个理由；再指出增大束宽会同时改变哪两个量。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000120"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索"
+      ],
+      "lineStart": 6584,
+      "lineEnd": 6609,
+      "assetRefs": [],
+      "excerptSha256": "b8f611bd0c0a39650b8ed08c96916d1f9c798ec8acb16d6a7f9a6f2ca25b4f2d"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000121"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索",
+        "贪心搜索"
+      ],
+      "lineStart": 6610,
+      "lineEnd": 6663,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/s2s-prob1.svg",
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/s2s-prob2.svg"
+      ],
+      "excerptSha256": "773038525dd5d9003c353395c05775ed7f7eab2db6f6718e7e2b7ed8d66892ae"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000122"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索",
+        "穷举搜索"
+      ],
+      "lineStart": 6664,
+      "lineEnd": 6681,
+      "assetRefs": [],
+      "excerptSha256": "47a7ba90e0c727809089c0299f1ab06ac2cb3be2dc2b3fc0a94b56dd7b0684db"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000123"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索",
+        "束搜索"
+      ],
+      "lineStart": 6682,
+      "lineEnd": 6739,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/beam-search.svg"
+      ],
+      "excerptSha256": "c99ffcb8401682316c1ea1ceea24896b23e64db79d60ffb0a6731fbe4f978a50"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000124"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索",
+        "小结"
+      ],
+      "lineStart": 6740,
+      "lineEnd": 6746,
+      "assetRefs": [],
+      "excerptSha256": "fcaf9b8e39d758a0cacf7b4cfbd29303004797b42d22629fca14a99f07342785"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000125"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索",
+        "练习"
+      ],
+      "lineStart": 6747,
+      "lineEnd": 6756,
+      "assetRefs": [],
+      "excerptSha256": "8548bab3699204ee9d717ab875c8878b91c5883c3efdd956c537e0664a0091ce"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2256,
+    2056
+  ],
+  "scale": 0.65
+}

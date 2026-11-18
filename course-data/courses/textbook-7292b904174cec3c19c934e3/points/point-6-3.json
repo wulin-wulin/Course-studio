@@ -1,0 +1,734 @@
+{
+  "id": "point-6-3",
+  "title": "创建宾客信息检索生成（RAG）工具",
+  "shortSummary": "把宾客数据集转换为 Document 列表，用 BM25 建立检索器并封装成智能体可调用的检索工具。",
+  "keyTerms": [
+    "RAG",
+    "BM25Retriever",
+    "Document",
+    "检索工具",
+    "智能体工具"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-1-4",
+    "point-6-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "operation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三步搭建顺序、代码结构与字段约定，按操作流程补足前置条件、失败分支和检查表。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-rag-need",
+          "text": "说明宾客信息场景为什么需要检索增强生成，而不只依赖大语言模型的参数知识。"
+        },
+        {
+          "id": "describe-pipeline",
+          "text": "复述从原始数据集到可被智能体调用的检索工具的完整链路，并说明各环节的输入与输出。"
+        },
+        {
+          "id": "build-retrieval-tool",
+          "text": "为给定数据集设计并实现一个检索工具，正确写出工具描述、参数、检索调用与无结果分支。"
+        },
+        {
+          "id": "evaluate-limits",
+          "text": "判断词面检索工具的适用边界，并在给定情境下选择合理的升级方向。"
+        }
+      ],
+      "misconceptions": [
+        "把 RAG 理解为给模型「补一段背景文字」，忽略检索结果必须按查询实时取回。",
+        "认为 BM25 检索会理解语义近义词，因而用它处理概念改写的查询。",
+        "只把宾客姓名写进文档，漏掉邮箱等字段却期待模型能回答联系方式。"
+      ],
+      "modules": [
+        {
+          "id": "why-rag",
+          "title": "问题导入：为什么需要 RAG",
+          "role": "problem-intro",
+          "description": "从晚会现场的即时查询需求出发，归纳传统大语言模型的三类困难。",
+          "outcomeRefs": [
+            "explain-rag-need"
+          ],
+          "order": 0
+        },
+        {
+          "id": "project-and-data",
+          "title": "工程骨架与数据准备",
+          "role": "procedure-setup",
+          "description": "先明确 tools.py、retriever.py、app.py 的分工，再把数据集记录转换成可检索的文档。",
+          "outcomeRefs": [
+            "describe-pipeline",
+            "build-retrieval-tool"
+          ],
+          "order": 1
+        },
+        {
+          "id": "retriever-tool",
+          "title": "检索工具与接口契约",
+          "role": "procedure-core",
+          "description": "用 BM25Retriever 实现检索，并把检索逻辑包装成智能体可读的工具描述与参数。",
+          "outcomeRefs": [
+            "build-retrieval-tool",
+            "describe-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "integration-check",
+          "title": "集成、验证与故障恢复",
+          "role": "practice-diagnosis",
+          "description": "把工具挂到智能体上，用真实查询走通链路，并按症状定位与修复常见故障。",
+          "outcomeRefs": [
+            "describe-pipeline",
+            "build-retrieval-tool"
+          ],
+          "order": 3
+        },
+        {
+          "id": "limits-and-next",
+          "title": "边界与升级路径",
+          "role": "extension",
+          "description": "识别词面检索的边界，比较教材给出的四类增强方向及其代价。",
+          "outcomeRefs": [
+            "evaluate-limits"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-rag-need",
+          "describe-pipeline",
+          "build-retrieval-tool",
+          "evaluate-limits"
+        ],
+        "method": "独立完成数据转换、检索工具封装与一次端到端查询，并为一条失败查询写出定位路径。",
+        "successCriteria": [
+          "每条宾客记录都成为独立文档且包含全部字段",
+          "工具描述能让智能体判断何时调用",
+          "查询无结果时返回明确提示而不是空字符串",
+          "能说明为何在语义查询场景下需要替换 BM25"
+        ],
+        "summaryBlockId": "model-upgrade-tradeoffs",
+        "nextPointId": "point-6-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-rag-need",
+        "moduleId": "why-rag",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材情境：晚会上需要即时调取宾客信息",
+        "markdown": "Alfred 正在筹备晚会，需要在宾客之间穿梭时即时调取详细信息。教材把这类需求交给一个基于专属数据集的定制检索增强生成（RAG）工具来解决。\n\n传统大语言模型在这个场景里会同时遇到三类困难：\n\n1. 宾客名单属于特定活动数据，不在模型训练范围内；\n2. 宾客信息可能频繁变更或更新；\n3. 需要精确检索电子邮件地址这类细节信息。\n\n检索增强生成把检索系统与大语言模型结合：Alfred 先按需取回准确的宾客记录，再让模型基于这些记录组织回答。教材也提示，本用例可以用课程涵盖的任意框架实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000207"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具"
+              ],
+              "lineStart": 5442,
+              "lineEnd": 5448,
+              "assetRefs": [],
+              "excerptSha256": "14ac1e67806381c86dc3b44e72cbec43b04641c3eeeda5daa96f1c1ff5059f23"
+            },
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000208"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "为何选择 RAG 技术？"
+              ],
+              "lineStart": 5449,
+              "lineEnd": 5460,
+              "assetRefs": [],
+              "excerptSha256": "14d8307214c9a368b6955eef9482f0297ec80e39239617a832448a25e21f2370"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rag-fit",
+        "moduleId": "why-rag",
+        "depth": "support",
+        "kind": "summary",
+        "title": "把三类困难归纳成 RAG 适用判据",
+        "markdown": "上面三类困难可以改写成三条通用判据，用来判断一个任务该不该引入检索：\n\n| 判据 | 提问方式 | 宾客场景中的表现 |\n|---|---|---|\n| 知识不在参数里 | 这些事实在训练数据中出现过吗？ | 本次活动的宾客名单 |\n| 知识会变 | 数据会不会在部署后更新？ | 宾客关系与联系方式变更 |\n| 需要精确取值 | 答案能否容忍大致的复述？ | 邮箱地址必须逐字正确 |\n\n只要有一条成立，就值得把事实放进可检索的外部存储，而不是期待模型记住。三条同时成立时，检索几乎是必需环节。\n\n需要注意，RAG 并不是把整份名单塞进提示词：检索发生在每次查询时，取回的是与当前问题相关的少量记录。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-rag-need"
+          ]
+        }
+      },
+      {
+        "id": "tb-project",
+        "moduleId": "project-and-data",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材做法：应用搭建与项目结构",
+        "markdown": "教材以 Hugging Face Space 为开发环境，采用结构化的 Python 项目来构建智能体，理由是功能模块化能让代码更整洁，也更贴近实际部署。\n\n项目结构划分为三个文件：\n\n- `tools.py`：为智能体提供辅助工具；\n- `retriever.py`：实现支持知识访问的检索功能；\n- `app.py`：整合所有组件形成完整功能的智能体，在本单元最后完成。\n\n也就是说，检索能力先作为独立模块开发和验证，再被智能体调用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000209"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "应用搭建"
+              ],
+              "lineStart": 5461,
+              "lineEnd": 5464,
+              "assetRefs": [],
+              "excerptSha256": "4416ff4ff45dd94f06462cd3176399c30e497fe5195a5a614879d4cd07d0b2f2"
+            },
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000210"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "应用搭建",
+                "项目结构"
+              ],
+              "lineStart": 5465,
+              "lineEnd": 5474,
+              "assetRefs": [],
+              "excerptSha256": "5753abeac021c782db1c35795f9debce1548c5512238d5f8d3c31c767795be4e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-dataset",
+        "moduleId": "project-and-data",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材数据集：字段与用途",
+        "markdown": "教材使用的数据集是 `agents-course/unit3-invitees`，每条记录包含以下字段：\n\n| 字段 | 含义 | 在检索中的作用 |\n|---|---|---|\n| Name | 宾客全名 | 按姓名精确查找 |\n| Relation | 与主办方的关系 | 按关系线索查找 |\n| Description | 简要传记或趣闻 | 支撑介绍性回答 |\n| Email Address | 邀请函发送及跟进联系方式 | 回答联系方式问题 |\n\n教材提示，实际场景还可以扩展饮食偏好、礼品兴趣、禁忌话题等对主持人有用的字段。字段越多，预处理时越要保证它们都进入可检索文本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000211"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "数据集概览"
+              ],
+              "lineStart": 5475,
+              "lineEnd": 5488,
+              "assetRefs": [],
+              "excerptSha256": "f71300e29a45bd5feb29f27337dcc152cdce4fb06b2fd38e4bb796ed13559553"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-doc-flatten",
+        "moduleId": "project-and-data",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么把每条记录拍平成一段带标签的文本",
+        "markdown": "检索器不是数据库，它按文本片段匹配查询词。因此需要把一条结构化记录拍平成一段自然语言式的文本：\n\n```text\nName: Ada Lovelace\nRelation: friend\nDescription: ...\nEmail: ada.lovelace@example.com\n```\n\n这样做有两个直接好处：\n\n1. 每位宾客恰好是一个检索单元，取回一条文档就等于取回一个人的完整资料，不会出现「姓名在一条、邮箱在另一条」的割裂；\n2. 字段名本身成为查询词的一部分，用户问「邮箱」时 `Email` 这个标签也能参与匹配。\n\n同时需要保留 `metadata={\"name\": guest[\"name\"]}`。正文用于匹配与生成，元数据用于回指原始记录、去重或后续按姓名过滤；两者职责不同，不能省掉元数据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-project",
+            "tb-dataset"
+          ]
+        }
+      },
+      {
+        "id": "tb-three-steps",
+        "moduleId": "project-and-data",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材路线图：三步搭建宾客信息工具",
+        "markdown": "教材把构建过程拆成三个有先后依赖的步骤：\n\n1. 加载并预处理数据集；\n2. 创建检索工具；\n3. 将工具与 Alfred 集成。\n\n依赖关系很直接：第二步的检索器要用第一步产出的文档列表初始化，第三步的智能体要用第二步产出的工具实例。跳过任何一步，后一步都没有可用输入。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000212"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "构建宾客信息工具"
+              ],
+              "lineStart": 5489,
+              "lineEnd": 5495,
+              "assetRefs": [],
+              "excerptSha256": "9cdeeed7ce205981407744bcb32f29515356e73b38e867403f2686a07a8276b0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-prep-docs",
+        "moduleId": "project-and-data",
+        "depth": "core",
+        "kind": "code",
+        "title": "步骤一：加载并预处理数据集",
+        "markdown": "教材先加载数据集，再把每条宾客记录转换成 `Document` 对象，最后把这些对象放进列表。以 smolagents 与 LangGraph 使用的写法为例：\n\n```python\nfrom langchain_core.documents import Document\n\nguest_dataset = datasets.load_dataset(\"agents-course/unit3-invitees\", split=\"train\")\n\ndocs = [\n    Document(\n        page_content=\"\\n\".join([\n            f\"Name: {guest['name']}\",\n            f\"Relation: {guest['relation']}\",\n            f\"Description: {guest['description']}\",\n            f\"Email: {guest['email']}\",\n        ]),\n        metadata={\"name\": guest[\"name\"]},\n    )\n    for guest in guest_dataset\n]\n```\n\nLlamaIndex 的写法语义相同，只是文档类的来源和字段名不同：`Document` 来自 `llama_index.core.schema`，正文写入 `text=`，并且通过下标 `guest_dataset['name'][i]` 逐列取值。\n\n教材对这一步的总结是：加载数据集、把每条房客记录转换成包含格式化内容的 Document 对象、再把这些对象存入列表；此时数据已经准备好，可以开始配置检索功能。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000213"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "构建宾客信息工具",
+                "步骤一：加载并预处理数据集"
+              ],
+              "lineStart": 5496,
+              "lineEnd": 5589,
+              "assetRefs": [],
+              "excerptSha256": "d95a6a616d101e762269169092001e8601c93cdf484a5835629a8d7d3f1cc847"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-prep-check",
+        "moduleId": "project-and-data",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "数据准备的四项自检",
+        "markdown": "预处理一旦漏字段，后面任何检索器都补不回来。落笔前按顺序检查：\n\n1. **字段齐全**：`Name`、`Relation`、`Description`、`Email` 都写进了正文；少一个字段，对应类型的问题就只能靠模型编造。\n2. **一记录一文档**：列表长度等于数据集行数，没有把多人合并成一条。\n3. **元数据正确**：`metadata[\"name\"]` 与正文里的 `Name` 一致，便于回指。\n4. **空值有交代**：某条记录缺邮箱时，决定写占位符还是跳过该字段，并让这个决定对所有记录一致。\n\n第 4 项容易被忽略：直接拼接空字符串会得到 `Email: ` 这样的残句，虽然不报错，但会让检索与生成都拿不到有效信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-prep-docs"
+          ]
+        }
+      },
+      {
+        "id": "tb-retriever",
+        "moduleId": "retriever-tool",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "步骤二：用 BM25 创建检索工具",
+        "markdown": "第二步是创建 Alfred 可以调用的自定义工具。教材选用 `BM25Retriever`，并说明它是一种强大的文本检索算法，不需要嵌入；同时提示 BM25 是很好的起点，更高级的语义搜索可以考虑基于嵌入的检索器。\n\n以 smolagents 为例，工具是一个继承 `Tool` 的类：\n\n```python\nfrom smolagents import Tool\nfrom langchain_community.retrievers import BM25Retriever\n\nclass GuestInfoRetrieverTool(Tool):\n    name = \"guest_info_retriever\"\n    description = \"Retrieves detailed information about gala guests based on their name or relation.\"\n    inputs = {\n        \"query\": {\n            \"type\": \"string\",\n            \"description\": \"The name or relation of the guest you want information about.\",\n        }\n    }\n    output_type = \"string\"\n\n    def __init__(self, docs):\n        self.retriever = BM25Retriever.from_documents(docs)\n\n    def forward(self, query: str):\n        results = self.retriever.get_relevant_documents(query)\n        if results:\n            return \"\\n\\n\".join([doc.page_content for doc in results[:3]])\n        return \"No matching guest information found.\"\n\nguest_info_tool = GuestInfoRetrieverTool(docs)\n```\n\n另外两个框架的组织方式不同：LlamaIndex 用 `BM25Retriever.from_defaults(nodes=docs)` 建索引，再用 `FunctionTool.from_defaults(函数)` 把函数变成工具，靠文档字符串说明用途；LangGraph 直接构造 `Tool(name=..., func=..., description=...)`。三者的共同点是：检索算法相同，差别只在于工具的外壳。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000214"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "构建宾客信息工具",
+                "步骤 2：创建检索工具"
+              ],
+              "lineStart": 5590,
+              "lineEnd": 5708,
+              "assetRefs": [],
+              "excerptSha256": "ef3b0d8bcdd1b85355e92493347435e8cc54a271cbd930dc1d93cd4390c6803a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tool-contract",
+        "moduleId": "retriever-tool",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "工具契约四要素：模型看什么，代码做什么",
+        "markdown": "这段代码里有两类信息，作用完全不同：\n\n| 要素 | 读者 | 作用 |\n|---|---|---|\n| `name`、`description` | 智能体（模型） | 判断什么时候该调用这个工具；教材强调它们帮助智能体了解何时以及如何使用工具 |\n| `inputs`、`output_type` | 智能体与运行时 | 声明参数名、类型与含义，以及返回值的类型约定 |\n| `forward`（或 `func`） | 运行时 | 真正执行查询并返回文本 |\n\n设计时最容易被低估的是 `description`。如果只写「检索宾客信息」，模型可能把它用在无关问题上；教材的写法明确限定为「基于姓名或关系」，这既是能力声明，也是调用条件的约束。\n\n`forward` 里有两个细节值得固定下来：\n\n- **只返回前 3 条**：结果全部拼接会让上下文迅速膨胀，`results[:3]` 是用少量牺牲换稳定长度。\n- **空结果返回明确文本**：返回 `\"No matching guest information found.\"` 而不是空字符串，智能体才能观察到「查不到」这个事实，进而改写查询或如实告知用户。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retriever"
+          ]
+        }
+      },
+      {
+        "id": "tb-integration",
+        "moduleId": "integration-check",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "步骤三：把工具交给 Alfred",
+        "markdown": "最后一步是创建智能体并为其配备自定义工具。三个框架分别这样组装：\n\n- smolagents：用 `InferenceClientModel()` 初始化模型，再构造 `CodeAgent(tools=[guest_info_tool], model=model)`，它能执行 Python 代码来解决问题；\n- LlamaIndex：用 `HuggingFaceInferenceAPI` 初始化模型，再调用 `AgentWorkflow.from_tools_or_functions([guest_info_tool], llm=llm)`；\n- LangGraph：构造 `chat.bind_tools(tools)`，在 `StateGraph` 中加入 `assistant` 与 `ToolNode(tools)` 两个节点，用 `tools_condition` 决定是否需要进入工具节点，并添加 `tools` 回到 `assistant` 的边，最后 `compile()`。\n\n教材用同一个查询验证链路：`Tell me about our guest named 'Lady Ada Lovelace'.` 三种实现的预期输出都包含她的身份介绍和邮箱 `ada.lovelace@example.com`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000215"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "构建宾客信息工具",
+                "步骤 3：将工具与 Alfred 集成"
+              ],
+              "lineStart": 5709,
+              "lineEnd": 5849,
+              "assetRefs": [],
+              "excerptSha256": "aeadd944d35851d4a0aec5c97115b12d1a4ac64f32a0ccc7d585434e6f29d3b5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-end-to-end",
+        "moduleId": "integration-check",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "一次查询的端到端走查",
+        "markdown": "把上面的组件按时间顺序放一遍，就能看清工具在哪里介入：\n\n1. 用户提出 `Tell me about our guest named 'Lady Ada Lovelace'.`；\n2. 模型判断需要外部资料，生成一次工具调用，参数 `query` 取值为 `Lady Ada Lovelace`；\n3. 运行时执行 `forward`，BM25 在文档列表上按词项匹配，返回最相关的前 3 条记录文本；\n4. 这些文本作为观察结果追加回上下文；\n5. 模型据此组织回答，邮箱等具体取值直接来自第 3 步取回的文档。\n\n第 5 步是判断 RAG 是否真正生效的关键：如果回答里的邮箱与数据集不一致，说明模型在凭记忆补全，而不是使用检索结果。\n\n这条链路正是「思考—行动—观察」循环在检索场景中的实例：检索是行动，返回的文档是观察，下一轮思考基于观察继续。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retriever",
+            "tb-integration"
+          ]
+        }
+      },
+      {
+        "id": "tb-interactive",
+        "moduleId": "integration-check",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材互动示例：一次真实对话",
+        "markdown": "教材给出一段晚会上的对话：你问「Alfred，那位正在和大使说话的先生是谁？」，Alfred 快速搜索嘉宾数据库后回答：那是尼古拉·特斯拉博士，你大学时代的老朋友，最近申请了新的无线能量传输系统专利，并且对鸽子很感兴趣，可以作为闲聊话题。\n\n这次检索命中的记录形如：\n\n```json\n{\n  \"name\": \"Dr. Nikola Tesla\",\n  \"relation\": \"old friend from university days\",\n  \"description\": \"...\",\n  \"email\": \"nikola.tesla@gmail.com\"\n}\n```\n\n值得注意的是，用户问的是「和大使说话的那位先生」，记录里并没有「大使」这个字段。这个例子成立的前提是检索器仍能用姓名或关系线索命中目标文档，回答中的细节则来自 `description`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000216"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "互动示例"
+              ],
+              "lineStart": 5850,
+              "lineEnd": 5866,
+              "assetRefs": [],
+              "excerptSha256": "43b5fa63b3987f4bc4093f2238056a939f288ba51c3e6559f2e27295501e3fbd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-failure-recovery",
+        "moduleId": "integration-check",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "四类典型故障：症状、成因与修复",
+        "markdown": "集成之后，问题通常不会报错，而是表现为「答得不对」。按症状倒推比逐行读代码更快：\n\n| 症状 | 可能成因 | 修复动作 |\n|---|---|---|\n| 智能体从不调用工具 | `description` 没写清适用条件 | 像教材那样限定「基于姓名或关系」 |\n| 查询直接返回 No matching | 查询词与文档字段无共同词项 | 换成记录中出现的姓名或关系说法 |\n| 回答缺少邮箱 | 预处理时没把 `Email` 写进正文 | 回到步骤一补齐字段并重建文档 |\n| 上下文过长、回答被截断 | 返回条数过多 | 收紧 `results[:3]` 的上限 |\n\n第二行暴露的是 BM25 的固有边界：它按词项匹配，不做语义改写。用户说「老朋友」而记录写「old friend」时，中文查询很可能落空。此时不是调参能解决的，需要换检索方式或补双语表述。\n\n教材在步骤二和「更进一步」中都提示了同一件事：BM25 是起点，语义搜索应交给基于嵌入的检索器。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-retriever",
+            "tb-integration",
+            "tb-interactive"
+          ]
+        }
+      },
+      {
+        "id": "tb-next",
+        "moduleId": "limits-and-next",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材给出的四条增强方向",
+        "markdown": "在 Alfred 已经能检索宾客信息之后，教材列出四个可以继续增强的方向：\n\n1. 改进检索器，使用更复杂的算法，例如 sentence-transformers；\n2. 实现对话记忆，让 Alfred 记住之前的互动；\n3. 结合网页搜索，获取陌生宾客的最新信息；\n4. 整合多个索引，从经过验证的来源获取更完整的信息。\n\n教材还留了一个练习：扩展检索工具，使其能根据每位宾客的兴趣或背景返回对话开场白，并要求在 `retriever.py` 中实现自己的宾客检索工具。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-7292b904174cec3c19c934e3",
+              "blockIds": [
+                "block-000217"
+              ],
+              "headingPath": [
+                "第 3 单元. Agentic RAG 的用例",
+                "创建宾客信息检索生成（RAG）工具",
+                "更进一步"
+              ],
+              "lineStart": 5867,
+              "lineEnd": 5883,
+              "assetRefs": [],
+              "excerptSha256": "c58067713f80ae8cbea217d6c3f84cb9258ef9733d4d2ff41d72f2a01469dfa4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-upgrade-tradeoffs",
+        "moduleId": "limits-and-next",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "升级方向的取舍：解决什么，付出什么",
+        "markdown": "四条增强方向不是并列的「加分项」，各自解决不同故障，代价也不同：\n\n| 方向 | 首先解决 | 主要代价 | 何时值得优先做 |\n|---|---|---|---|\n| 换嵌入检索 | 词面不匹配、跨语言改写 | 需要嵌入模型与向量索引，启动与运维成本上升 | 用户提问经常与记录用词不同 |\n| 对话记忆 | 反复介绍同一批宾客 | 需要管理会话状态与遗忘策略 | 多轮交谈是主要交互形态 |\n| 网页搜索 | 库外陌生宾客的实时信息 | 外部依赖带来延迟与结果不可控 | 宾客名单不完整或时效性强 |\n| 多索引整合 | 单一来源覆盖不全 | 需要来源校验与冲突消解 | 需要交叉验证的事实型问题 |\n\n判断顺序建议是：先确认故障属于哪一类，再选对应方向。若故障是「记录里根本没有这个字段」，换检索算法无济于事，应该回到数据准备或引入新数据源——这也呼应了教材在数据集一节提示的字段扩展。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-next"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "tool-contract-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-tool-contract",
+        "moduleId": "retriever-tool",
+        "depth": "core",
+        "title": "检查你的工具契约",
+        "outcomeRefs": [
+          "build-retrieval-tool"
+        ],
+        "learningPurpose": "检查学习者能否独立写出让智能体正确调用的工具描述、参数与无结果分支。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-retriever",
+            "model-tool-contract"
+          ]
+        },
+        "config": {
+          "prompt": "给定一个存放活动日程的数据集，写出检索工具的 name、description、inputs 与无结果返回值，并说明每项为什么这样写。",
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请为活动日程数据集写出检索工具的 `name`、`description`、`inputs` 和无结果返回值，并逐项说明理由：描述是否限定了调用条件？参数是否说明了取值含义？无结果时模型能观察到什么？"
+        }
+      }
+    ]
+  },
+  "subtitle": "第 3 单元. Agentic RAG 的用例",
+  "clusterId": "chapter-6",
+  "clusterIds": [
+    "chapter-6"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000207"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具"
+      ],
+      "lineStart": 5442,
+      "lineEnd": 5448,
+      "assetRefs": [],
+      "excerptSha256": "14ac1e67806381c86dc3b44e72cbec43b04641c3eeeda5daa96f1c1ff5059f23"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000208"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "为何选择 RAG 技术？"
+      ],
+      "lineStart": 5449,
+      "lineEnd": 5460,
+      "assetRefs": [],
+      "excerptSha256": "14d8307214c9a368b6955eef9482f0297ec80e39239617a832448a25e21f2370"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000209"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "应用搭建"
+      ],
+      "lineStart": 5461,
+      "lineEnd": 5464,
+      "assetRefs": [],
+      "excerptSha256": "4416ff4ff45dd94f06462cd3176399c30e497fe5195a5a614879d4cd07d0b2f2"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000210"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "应用搭建",
+        "项目结构"
+      ],
+      "lineStart": 5465,
+      "lineEnd": 5474,
+      "assetRefs": [],
+      "excerptSha256": "5753abeac021c782db1c35795f9debce1548c5512238d5f8d3c31c767795be4e"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000211"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "数据集概览"
+      ],
+      "lineStart": 5475,
+      "lineEnd": 5488,
+      "assetRefs": [],
+      "excerptSha256": "f71300e29a45bd5feb29f27337dcc152cdce4fb06b2fd38e4bb796ed13559553"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000212"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "构建宾客信息工具"
+      ],
+      "lineStart": 5489,
+      "lineEnd": 5495,
+      "assetRefs": [],
+      "excerptSha256": "9cdeeed7ce205981407744bcb32f29515356e73b38e867403f2686a07a8276b0"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000213"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "构建宾客信息工具",
+        "步骤一：加载并预处理数据集"
+      ],
+      "lineStart": 5496,
+      "lineEnd": 5589,
+      "assetRefs": [],
+      "excerptSha256": "d95a6a616d101e762269169092001e8601c93cdf484a5835629a8d7d3f1cc847"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000214"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "构建宾客信息工具",
+        "步骤 2：创建检索工具"
+      ],
+      "lineStart": 5590,
+      "lineEnd": 5708,
+      "assetRefs": [],
+      "excerptSha256": "ef3b0d8bcdd1b85355e92493347435e8cc54a271cbd930dc1d93cd4390c6803a"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000215"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "构建宾客信息工具",
+        "步骤 3：将工具与 Alfred 集成"
+      ],
+      "lineStart": 5709,
+      "lineEnd": 5849,
+      "assetRefs": [],
+      "excerptSha256": "aeadd944d35851d4a0aec5c97115b12d1a4ac64f32a0ccc7d585434e6f29d3b5"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000216"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "互动示例"
+      ],
+      "lineStart": 5850,
+      "lineEnd": 5866,
+      "assetRefs": [],
+      "excerptSha256": "43b5fa63b3987f4bc4093f2238056a939f288ba51c3e6559f2e27295501e3fbd"
+    },
+    {
+      "materialId": "doc-7292b904174cec3c19c934e3",
+      "blockIds": [
+        "block-000217"
+      ],
+      "headingPath": [
+        "第 3 单元. Agentic RAG 的用例",
+        "创建宾客信息检索生成（RAG）工具",
+        "更进一步"
+      ],
+      "lineStart": 5867,
+      "lineEnd": 5883,
+      "assetRefs": [],
+      "excerptSha256": "c58067713f80ae8cbea217d6c3f84cb9258ef9733d4d2ff41d72f2a01469dfa4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    956,
+    1375
+  ],
+  "scale": 0.67
+}

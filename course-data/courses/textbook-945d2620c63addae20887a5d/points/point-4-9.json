@@ -1,0 +1,538 @@
+{
+  "id": "point-4-9",
+  "title": "用于预训练BERT的数据集",
+  "shortSummary": "说明 BERT 预训练所需的语料规模、WordPiece 词表以及掩码语言建模样本的构造流程。",
+  "keyTerms": [
+    "WordPiece",
+    "预训练语料",
+    "掩码样本",
+    "下一句对"
+  ],
+  "animationType": "maskedLanguageModelSampling",
+  "animationSuggestion": "以一条句子序列为初始状态，逐步显示位置被选中的过程，再在每个选中位置展示 80/10/10 分支的替换结果并标注原始标签，最后补上填充位和 0 权重，支持用同一种子重播并能重新生成样本。",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-4-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "data-pipeline-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的语料选择、50/50 下一句采样、15% 与 80/10/10 掩码规则以及填充约定，按数据流水线的先后顺序重排讲解，并补充分支原因与形状核对。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "o-corpus-requirements",
+          "text": "说明 BERT 预训练语料需要满足的条件，并解释 WikiText-2 相对 PTB 的三点差异。"
+        },
+        {
+          "id": "o-build-nsp",
+          "text": "按 50/50 规则为相邻句对生成 is_next 标签，并说明长度预算如何扣除特殊词元。"
+        },
+        {
+          "id": "o-build-mlm",
+          "text": "按 15% 选位与 80/10/10 替换规则构造遮蔽语言模型的输入、预测位置和标签。"
+        },
+        {
+          "id": "o-pad-batch",
+          "text": "说明词表构建、定长填充、有效长度与损失权重如何组装成可训练的批次。"
+        },
+        {
+          "id": "o-transfer",
+          "text": "判断替换句子切分方法或取消低频词过滤后，数据集的哪些环节会随之改变。"
+        }
+      ],
+      "misconceptions": [
+        "把 15% 理解成整条序列中有 15% 的词元被换成 `<mask>`；实际上 15% 是被选中参与预测的位置，其中只有约 80% 会变成 `<mask>`。",
+        "认为下一句预测的负例一定来自同一段落；教材的实现是从全部段落中随机抽取一个句子。",
+        "以为填充用的 0 会被自动忽略；实现中要用 0 权重显式屏蔽填充位置的损失。"
+      ],
+      "modules": [
+        {
+          "id": "corpus-and-goal",
+          "title": "语料选择与目标",
+          "role": "motivation",
+          "description": "明确数据集要服务哪两个预训练任务，并对照 PTB 说明 WikiText-2 的特征。",
+          "outcomeRefs": [
+            "o-corpus-requirements"
+          ],
+          "order": 0
+        },
+        {
+          "id": "nsp-samples",
+          "title": "下一句预测样本",
+          "role": "procedure-step",
+          "description": "从句对采样到长度校验，构造二分类样本。",
+          "outcomeRefs": [
+            "o-build-nsp"
+          ],
+          "order": 1
+        },
+        {
+          "id": "mlm-samples",
+          "title": "遮蔽语言模型样本",
+          "role": "procedure-step",
+          "description": "选定预测位置，按分支规则替换词元并保留原始标签。",
+          "outcomeRefs": [
+            "o-build-mlm"
+          ],
+          "order": 2
+        },
+        {
+          "id": "padding-and-dataset",
+          "title": "词表、填充与数据集封装",
+          "role": "procedure-step",
+          "description": "建词表、统一定长、记录有效长度与损失权重，逐项核对张量形状。",
+          "outcomeRefs": [
+            "o-pad-batch"
+          ],
+          "order": 3
+        },
+        {
+          "id": "checks-and-transfer",
+          "title": "检查与迁移",
+          "role": "check",
+          "description": "用小结和练习检验改动单个环节带来的连锁影响。",
+          "outcomeRefs": [
+            "o-transfer"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "o-corpus-requirements",
+          "o-build-nsp",
+          "o-build-mlm",
+          "o-pad-batch",
+          "o-transfer"
+        ],
+        "method": "写出给定句对的 is_next 标签与其中一次掩码决策，并说明填充权重的作用。",
+        "successCriteria": [
+          "50/50 标签与 3 个特殊词元的长度预算都正确",
+          "15%、80/10/10 与标签取原始词元三处无混淆",
+          "能指出取消低频词过滤后词表规模和未登录词的对应变化"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-4-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-corpus-selection",
+        "moduleId": "corpus-and-goal",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：语料规模与 WikiText-2 的选择",
+        "markdown": "BERT 的两个预训练任务都需要按固定格式组织的样本，所以第一步是确定语料。最初的 BERT 在英国图书语料库与英语维基百科的合集上预训练，这个规模对本书的大多数读者来说难以复制；另一方面，现成的预训练模型未必适合医学这类特定领域，因此在定制语料上预训练越来越常见。\n\n教材为了演示完整流程，选用较小的 WikiText-2。与预训练 word2vec 时常用的 PTB 相比，WikiText-2 有三点差别：\n\n- 保留原始标点符号，因此可以据此切分句子，供下一句预测使用；\n- 保留原始的大小写和数字；\n- 规模比 PTB 大一倍以上。\n\n在 WikiText-2 中每一行是一个段落，标点与其前面的词元之间已经插入了空格。读取时只保留至少含两句话的段落，用句号作为唯一分隔符切分句子，把段落转成小写并打乱顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000241"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集"
+              ],
+              "lineStart": 12924,
+              "lineEnd": 12981,
+              "assetRefs": [],
+              "excerptSha256": "90dc24491b6a4193fffcea0879cbcd84a7cd4535d68a23a3b51bb0c21aa82d21"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-corpus-tradeoff",
+        "moduleId": "corpus-and-goal",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：小语料演示与真实预训练的取舍",
+        "markdown": "教材选 WikiText-2 的理由是让整条流程可以下载、处理并跑通，而不是它最接近 BERT 的理想预训练语料。判断真实场景该不该在定制语料上预训练时，可以把三件事当成前置检查：\n\n1. 语料是否覆盖目标领域的术语与写法，例如医学文本中的缩写和剂量表达；\n2. 规模是否足以支撑多层 Transformer 的训练；\n3. 标点与大小写是否保留，因为下一句预测依赖句子边界，而遮蔽语言模型依赖原始词形。\n\n这三项检查能解释为什么同一套代码在不同语料上效果差别很大：代码只保证样本格式正确，语料本身决定模型能学到什么。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-corpus-selection"
+          ]
+        }
+      },
+      {
+        "id": "tb-nsp-construction",
+        "moduleId": "nsp-samples",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：下一句预测样本的生成规则",
+        "markdown": "教材先为两个预训练任务各写一组辅助函数，它们会在把原始文本转换成数据集时被调用。\n\n下一句预测的样本由 `_get_next_sentence` 决定：以 0.5 的概率把紧邻的下一句作为第二句，标记 `is_next = True`；否则从全部段落中随机选一个句子作为第二句，标记 `is_next = False`。\n\n`_get_nsp_data_from_paragraph` 对段落中每一对相邻句子，即第 i 句与第 i+1 句，调用上面的函数，并检查 `len(tokens_a) + len(tokens_b) + 3 <= max_len`。额外的 3 个位置留给 1 个 `<cls>` 和 2 个 `<sep>`。超长的句对直接跳过，合格的句对再由 `get_tokens_and_segments` 拼成词元序列和段编号。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000242"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集",
+                "为预训练任务定义辅助函数"
+              ],
+              "lineStart": 12982,
+              "lineEnd": 12985,
+              "assetRefs": [],
+              "excerptSha256": "f4b0a9a31f45c57cb246df9b7b1b574c8eee9eb466af00db46d4c0096ffb433b"
+            },
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000243"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集",
+                "为预训练任务定义辅助函数",
+                "生成下一句预测任务的数据"
+              ],
+              "lineStart": 12986,
+              "lineEnd": 13020,
+              "assetRefs": [],
+              "excerptSha256": "c2b3e9d4c9412890b24903dae3a0b43fbf25632aa55d5cfce406fcb632219ebb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-nsp-design",
+        "moduleId": "nsp-samples",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么固定 50%，以及为什么要从全部段落抽句",
+        "markdown": "按 0.5 生成标签让正负样本数量大致均衡，模型就无法靠猜测多数类拿到高分。负例从全部段落而不是同一段落内抽取，是为了迫使模型判断两句话在话题和语义上是否连贯，而不是依靠位置相邻或局部词汇重合。\n\n这里有两个容易出错的边界：\n\n- 随机抽到的句子在极少数情况下可能恰好是真正的下一句，这时标签为 False 但语义连贯，会给训练带来少量噪声；\n- 3 个特殊词元的长度预算必须在切分句对时就扣除，否则拼装后才发现超长，只能整条样本丢弃。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-nsp-construction"
+          ]
+        }
+      },
+      {
+        "id": "tb-mlm-construction",
+        "moduleId": "mlm-samples",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：遮蔽语言模型样本的生成规则",
+        "markdown": "遮蔽语言模型的样本由 `_replace_mlm_tokens` 和 `_get_mlm_data_from_tokens` 共同生成。\n\n先收集候选预测位置：遍历词元序列，跳过 `<cls>`、`<sep>` 等特殊词元，其余位置才允许被预测。预测数量取 `num_mlm_preds = max(1, round(len(tokens) * 0.15))`，即约 15%，且至少 1 个。\n\n随后打乱候选位置并逐个决定替换方式：以 0.8 的概率替换为 `<mask>`；否则以 0.5 的概率保持原词不变；再否则从词表中随机取一个词替换。每处理一个位置就记录「位置与原始词元」这一对作为标签，记录数量达到 `num_mlm_preds` 便停止。\n\n最后按位置排序，返回可能已被替换的输入词元、发生预测的位置和标签。标签始终是原始词元，而不是替换后的词元。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000244"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集",
+                "为预训练任务定义辅助函数",
+                "生成遮蔽语言模型任务的数据"
+              ],
+              "lineStart": 13021,
+              "lineEnd": 13079,
+              "assetRefs": [],
+              "excerptSha256": "8a807aab9167164d69546e34eee6691260247626f4de0844dd9f76164ae03b3b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mlm-why",
+        "moduleId": "mlm-samples",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：15% 与 80/10/10 各自解决什么问题",
+        "markdown": "如果被选中的位置全部换成 `<mask>`，预训练输入里会大量出现下游微调时根本不存在的符号，模型学到的可能是「见到 `<mask>` 才预测」的特殊模式。保留 10% 的原词让模型在正常输入上也要给出相同预测，随机替换 10% 则迫使模型依靠上下文而不是词形本身做判断。\n\n两层比例要分清：15% 是被选中参与预测的位置比例，80/10/10 是在这 15% 内部再分支。长度为 64 的输入序列平均只有约 10 个位置进入损失计算，其余位置不提供遮蔽语言模型的监督信号，这也是预训练需要大规模语料的原因之一。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-mlm-construction"
+          ]
+        }
+      },
+      {
+        "id": "tb-dataset-assembly",
+        "moduleId": "padding-and-dataset",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：词表、填充与数据集封装",
+        "markdown": "样本进入模型前还要统一长度并建好词表。\n\n词表方面，最初的 BERT 使用大小为 30000 的 WordPiece 词表，WordPiece 是对字节对编码算法的轻微修改。教材为简单起见直接用 `d2l.tokenize` 按词切分，用 `min_freq = 5` 过滤出现少于 5 次的低频词元，并保留 `<pad>`、`<mask>`、`<cls>`、`<sep>` 四个特殊词元。\n\n`_WikiTextDataset` 的构造顺序是：先把段落切成句子并建词表；再用 `_get_nsp_data_from_paragraph` 生成句对和 `is_next`；接着用 `_get_mlm_data_from_tokens` 为每条句对补上掩码输入、预测位置和标签；最后由 `_pad_bert_inputs` 统一填充。\n\n填充时先算 `max_num_mlm_preds = round(max_len * 0.15)`。词元编号和段编号用 0 补齐，`valid_lens` 记录填充前的真实长度；预测位置补 0；遮蔽语言模型的权重对真实预测位置记 1.0，对填充位置记 0.0，让填充部分不进入损失；标签同样补 0，下一句预测的标签原样保留。以 `batch_size = 512`、`max_len = 64` 加载时，每条输入序列对应约 10 个预测位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000245"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集",
+                "将文本转换为预训练数据集"
+              ],
+              "lineStart": 13080,
+              "lineEnd": 13353,
+              "assetRefs": [],
+              "excerptSha256": "631db4d820d514e1f89daf2a896cbc4c55e3d277c64c4822c807d493e02b11b1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-padding-why",
+        "moduleId": "padding-and-dataset",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么要用权重屏蔽填充位",
+        "markdown": "补 0 只是让张量形状一致，0 本身是词表中的一个合法编号，如果直接参与损失就会被当作真实标签，因此必须用 0 权重把填充位置排除在外。`valid_lens` 则告诉需要区分真实长度的组件哪些位置有效。\n\n张量形状也可以用来检查流程是否走对：批次维度是 512；词元编号与段编号的第二维是 `max_len = 64`；预测位置、掩码权重和掩码标签的第二维是 `round(64 × 0.15) = 10`；下一句标签每个样本一个值。哪一维对不上，通常说明填充或拼接环节出现了错位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dataset-assembly"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "checks-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材：小结",
+        "markdown": "与 PTB 相比，WikiText-2 保留了原始标点符号、大小写和数字，规模比 PTB 大两倍多。在这份语料上，可以从一对句子任意生成遮蔽语言模型和下一句预测的预训练样本，并把它们封装成可按索引访问的数据集。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000246"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集",
+                "小结"
+              ],
+              "lineStart": 13354,
+              "lineEnd": 13358,
+              "assetRefs": [],
+              "excerptSha256": "e20241c480740dc8acef82494c5f42e89e38b026361f3457fdf72cc607356ec4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "checks-and-transfer",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材：练习",
+        "markdown": "教材在末尾留下两个练习：\n\n1. 把「只用句号切分」换成更完整的句子切分技术，例如 spaCy 或 NLTK；NLTK 的 `sent_tokenize` 会把 `This is great ! Why not ?` 切成两个句子。\n2. 如果不做低频词过滤，词量会有多大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000247"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练BERT的数据集",
+                "练习"
+              ],
+              "lineStart": 13359,
+              "lineEnd": 13375,
+              "assetRefs": [],
+              "excerptSha256": "d1c03cf61db7457228efb937d95867adbd8963b4001e1a58ac5236001f0b7a2f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "checks-and-transfer",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：改动一步会连锁影响哪些环节",
+        "markdown": "把句号切分换成 `sent_tokenize` 后，问句和感叹句不再被丢掉，段落仍要满足「至少两句话」的筛选条件。但句子变长，句对的长度校验 `len(tokens_a) + len(tokens_b) + 3 <= max_len` 会更早触发，被跳过的句对随之增多，最终样本数可能不升反降。\n\n取消 `min_freq = 5` 则相反：大量只出现一两次的词元获得独立编号，词表显著变大，低频词不再被合并为未登录词。这条连锁关系正是教材第二个练习要问的「词量会有多大」，也说明了教材为什么为演示设置词频阈值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-exercises",
+            "tb-dataset-assembly"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "masking-decision-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-mlm-why",
+        "moduleId": "mlm-samples",
+        "depth": "core",
+        "title": "掩码决策自测",
+        "outcomeRefs": [
+          "o-build-mlm"
+        ],
+        "learningPurpose": "检查学习者能否分清 15% 的选位比例与 80/10/10 的替换分支，并知道标签取原始词元。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-mlm-construction"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "selectionRatio": 0.15
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "取一条含 20 个非特殊词元的序列：应选出多少个预测位置？对其中任一位置，分别写出 80/10/10 三种分支下的输入词元和标签词元。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000241"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集"
+      ],
+      "lineStart": 12924,
+      "lineEnd": 12981,
+      "assetRefs": [],
+      "excerptSha256": "90dc24491b6a4193fffcea0879cbcd84a7cd4535d68a23a3b51bb0c21aa82d21"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000242"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集",
+        "为预训练任务定义辅助函数"
+      ],
+      "lineStart": 12982,
+      "lineEnd": 12985,
+      "assetRefs": [],
+      "excerptSha256": "f4b0a9a31f45c57cb246df9b7b1b574c8eee9eb466af00db46d4c0096ffb433b"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000243"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集",
+        "为预训练任务定义辅助函数",
+        "生成下一句预测任务的数据"
+      ],
+      "lineStart": 12986,
+      "lineEnd": 13020,
+      "assetRefs": [],
+      "excerptSha256": "c2b3e9d4c9412890b24903dae3a0b43fbf25632aa55d5cfce406fcb632219ebb"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000244"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集",
+        "为预训练任务定义辅助函数",
+        "生成遮蔽语言模型任务的数据"
+      ],
+      "lineStart": 13021,
+      "lineEnd": 13079,
+      "assetRefs": [],
+      "excerptSha256": "8a807aab9167164d69546e34eee6691260247626f4de0844dd9f76164ae03b3b"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000245"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集",
+        "将文本转换为预训练数据集"
+      ],
+      "lineStart": 13080,
+      "lineEnd": 13353,
+      "assetRefs": [],
+      "excerptSha256": "631db4d820d514e1f89daf2a896cbc4c55e3d277c64c4822c807d493e02b11b1"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000246"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集",
+        "小结"
+      ],
+      "lineStart": 13354,
+      "lineEnd": 13358,
+      "assetRefs": [],
+      "excerptSha256": "e20241c480740dc8acef82494c5f42e89e38b026361f3457fdf72cc607356ec4"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000247"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练BERT的数据集",
+        "练习"
+      ],
+      "lineStart": 13359,
+      "lineEnd": 13375,
+      "assetRefs": [],
+      "excerptSha256": "d1c03cf61db7457228efb937d95867adbd8963b4001e1a58ac5236001f0b7a2f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1722,
+    1760
+  ],
+  "scale": 0.96
+}

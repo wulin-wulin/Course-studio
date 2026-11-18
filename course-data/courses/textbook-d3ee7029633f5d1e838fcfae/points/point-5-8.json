@@ -1,0 +1,638 @@
+{
+  "id": "point-5-8",
+  "title": "区域卷积神经网络（R-CNN）系列",
+  "shortSummary": "梳理从 R-CNN 到 Fast R-CNN 再到 Faster R-CNN 的区域提议与检测流程演进。",
+  "keyTerms": [
+    "R-CNN",
+    "Fast R-CNN",
+    "Faster R-CNN",
+    "区域提议"
+  ],
+  "animationType": "rcnnProposalFlow",
+  "animationSuggestion": "并排展示两种流程：左侧每个提议区域都触发一次整块卷积，计数器随区域数快速上升；右侧整图卷积只点亮一次，区域在特征图上取特征后进入统一的预测头，两侧同时显示前向次数对比，并允许逐步播放与重播。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-5-3",
+    "point-5-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的演进顺序与四步流程，用统一维度对照表压缩重复叙述，并把每次提速解释为特征计算是否共享这一具体机制。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-two-stage",
+          "text": "解释两阶段检测的基本流程，说明 R-CNN 四个步骤各自的职责。"
+        },
+        {
+          "id": "explain-shared-compute",
+          "text": "解释 Fast R-CNN 如何通过整图卷积与兴趣区域汇聚共享计算。"
+        },
+        {
+          "id": "explain-rpn",
+          "text": "说明区域提议网络如何生成候选区域并与检测网络联合训练。"
+        },
+        {
+          "id": "compare-family",
+          "text": "按统一维度比较四个模型，并针对给定情境判断应选用哪一代方法。"
+        }
+      ],
+      "misconceptions": [
+        "把 Fast R-CNN 的加速归因于更换了更强的骨干网络，而不是整图卷积带来的计算共享。",
+        "认为 Faster R-CNN 改动了检测头，实际上它只把生成提议区域的选择性搜索换成了区域提议网络。",
+        "认为兴趣区域汇聚只是普通汇聚层的一种参数设置，忽略它可以为每个区域直接指定输出形状。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-lineage",
+          "title": "问题与演进脉络",
+          "role": "overview",
+          "description": "先交代两阶段检测的共同结构和系列成员，再与单阶段方法分工。",
+          "outcomeRefs": [
+            "explain-two-stage",
+            "compare-family"
+          ],
+          "order": 0
+        },
+        {
+          "id": "rcnn-pipeline",
+          "title": "R-CNN 的四步流程与瓶颈",
+          "role": "worked-example",
+          "description": "按步骤读 R-CNN 的流程，定位重复计算这一性能瓶颈。",
+          "outcomeRefs": [
+            "explain-two-stage"
+          ],
+          "order": 1
+        },
+        {
+          "id": "shared-conv-roi",
+          "title": "共享卷积与兴趣区域汇聚",
+          "role": "mechanism",
+          "description": "用张量形状与一个手算例子解释 Fast R-CNN 的计算路径。",
+          "outcomeRefs": [
+            "explain-shared-compute",
+            "compare-family"
+          ],
+          "order": 2
+        },
+        {
+          "id": "rpn-proposal",
+          "title": "区域提议网络",
+          "role": "mechanism",
+          "description": "拆解 RPN 的卷积头、锚框预测与非极大值抑制，并与选择性搜索对照。",
+          "outcomeRefs": [
+            "explain-rpn",
+            "compare-family"
+          ],
+          "order": 3
+        },
+        {
+          "id": "mask-head",
+          "title": "从区域对齐到像素级输出",
+          "role": "extension",
+          "description": "解释 Mask R-CNN 的 RoI Align 与全卷积掩码分支为何服务于像素级任务。",
+          "outcomeRefs": [
+            "compare-family"
+          ],
+          "order": 4
+        },
+        {
+          "id": "comparison-and-check",
+          "title": "统一维度对照与自测",
+          "role": "assessment",
+          "description": "用统一维度汇总四个模型，完成练习并把结论迁移到新情境。",
+          "outcomeRefs": [
+            "explain-two-stage",
+            "explain-shared-compute",
+            "explain-rpn",
+            "compare-family"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-two-stage",
+          "explain-shared-compute",
+          "explain-rpn",
+          "compare-family"
+        ],
+        "method": "完成对照表填空与三道自测题，并说明每处提速对应的机制改动。",
+        "successCriteria": [
+          "能按顺序说出 R-CNN 四个步骤并指出瓶颈所在",
+          "能解释整图卷积与 RoI 汇聚如何让 $n$ 个区域共享一次特征计算",
+          "能对照表格为一个给定情境选择模型并给出依据"
+        ],
+        "exerciseBlockId": "self-check",
+        "summaryBlockId": "family-summary",
+        "nextPointId": "point-5-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "family-overview",
+        "moduleId": "problem-and-lineage",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "两阶段检测家族的整体脉络",
+        "markdown": "区域卷积神经网络（region-based CNN 或 regions with CNN features，R-CNN）是把深度模型用于目标检测的开创性工作之一。它的共同思路是：先从图像中选出若干**提议区域**，再用卷积网络为这些区域提取特征，最后由特征预测类别与边界框。\n\n围绕这一思路，教材按改进顺序介绍了四个模型：R-CNN、Fast R-CNN、Faster R-CNN 与 Mask R-CNN。四者都保留“先找区域、再识别区域”的两阶段结构，差别集中在三处：特征计算是否共享、提议区域由谁生成、输出是否包含像素级掩码。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000283"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列"
+              ],
+              "lineStart": 10861,
+              "lineEnd": 10871,
+              "assetRefs": [],
+              "excerptSha256": "c3dc4aeb6cd324f5c9f35fa5c7e2f7ed131366203653a7e72b34c4bed16c1bcd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "stage-comparison",
+        "moduleId": "problem-and-lineage",
+        "depth": "support",
+        "kind": "note",
+        "title": "与单阶段方法的分工",
+        "markdown": "把这条演进线放到检测方法的大图里看会更清楚：单发多框检测（SSD）在单次前向中直接输出密集预测，属于**单阶段**方法；R-CNN 系列先产生候选区域，再逐区域判定，属于**两阶段**方法。两阶段的代价是流程更长，收益是候选区域数量更少、每个区域的判别更精细。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "family-overview"
+          ]
+        }
+      },
+      {
+        "id": "rcnn-steps",
+        "moduleId": "rcnn-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "R-CNN 的四个步骤",
+        "markdown": "1. 对输入图像使用**选择性搜索**选取多个高质量的提议区域。这些区域通常在多个尺度下选取，形状和大小各异，并为每个区域标注类别与真实边界框。\n2. 选择一个预训练的卷积神经网络，在输出层之前截断。把每个提议区域变形为网络需要的输入尺寸，逐区域做前向传播，得到该区域的特征。\n3. 以每个提议区域的特征连同其类别标注作为一个样本，训练多个支持向量机完成分类，每个支持向量机判断样本是否属于某一个类别。\n4. 以每个提议区域的特征连同其边界框标注作为一个样本，训练线性回归模型预测真实边界框。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000284"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列",
+                "R-CNN"
+              ],
+              "lineStart": 10872,
+              "lineEnd": 10890,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/r-cnn.svg"
+              ],
+              "excerptSha256": "e40efe305fb0982b5cbf148db90f955ebc67e58be2a3b9a4fe76158bd39b12c2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bottleneck",
+        "moduleId": "rcnn-pipeline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "瓶颈在哪里：上千次独立前向",
+        "markdown": "R-CNN 的瓶颈不在分类器，而在特征提取的次数。一张图像可能选出上千个提议区域，每个区域都要单独做一次卷积网络前向传播；而相邻提议区域往往大面积重叠，同一块像素被重复卷积了很多次。于是检测耗时随提议区域数量增长，这正是它在真实场景中难以广泛应用的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rcnn-steps"
+          ]
+        }
+      },
+      {
+        "id": "speedup-misconception",
+        "moduleId": "rcnn-pipeline",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误解：以为提速靠换骨干网络",
+        "markdown": "一种常见误解是：Fast R-CNN 变快是因为用了更深更强的卷积网络。教材给出的原因并非如此，而是**计算共享**——R-CNN 对每个提议区域独立前向，Fast R-CNN 对整个图像只做一次前向，再在特征图上按区域取特征。换骨干网络当然会同时改变精度与速度，但那不是这条演进线要解决的重复计算问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rcnn-steps"
+          ]
+        }
+      },
+      {
+        "id": "fast-rcnn-roi",
+        "moduleId": "shared-conv-roi",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Fast R-CNN：整图卷积加兴趣区域汇聚",
+        "markdown": "Fast R-CNN 的主要改进是只在整张图像上执行一次卷积网络前向传播，并且让这个网络参与训练。设卷积网络输出的形状为 $1 \\times c \\times h_1 \\times w_1$。\n\n选择性搜索生成 $n$ 个提议区域后，这些形状各异的区域直接在特征图上标出各自的兴趣区域，再由**兴趣区域汇聚层**（RoI pooling）抽取统一形状的特征，输出形状为 $n \\times c \\times h_2 \\times w_2$。随后全连接层把形状变换为 $n \\times d$，并分别映射到形状 $n \\times q$ 的类别输出（$q$ 为类别数量，预测时使用 softmax 回归）和形状 $n \\times 4$ 的边界框输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000285"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列",
+                "Fast R-CNN"
+              ],
+              "lineStart": 10891,
+              "lineEnd": 10988,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/fast-rcnn.svg",
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/roi.svg"
+              ],
+              "excerptSha256": "5ac52dd1736a4510c1c7d3e9969d6ec071355e980da996156c7323e67b9ec22e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "roi-worked-example",
+        "moduleId": "shared-conv-roi",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算一遍：$4 \\times 4$ 特征图上的 RoI 汇聚",
+        "markdown": "兴趣区域汇聚与普通汇聚层的关键区别是：输出形状由每个区域直接指定，而不是靠汇聚窗口、填充和步幅间接控制。\n\n设特征图的高和宽都是 4，取左上角 $3 \\times 3$ 的兴趣区域，要求输出 $2 \\times 2$。该窗口被划分为 $2 \\times 2$ 个子窗口网格，每个子窗口大小约为 $(3/2) \\times (3/2)$，边界向上取整，子窗口内取最大元素作为输出。教材示例中，四个子窗口分别含元素 0、1、4、5（最大为 5），2、6（最大为 6），8、9（最大为 9），以及 10，取最大值后得到 $2 \\times 2$ 的输出。无论兴趣区域原本是 $3 \\times 3$ 还是其他尺寸，输出都被统一成 $2 \\times 2$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fast-rcnn-roi"
+          ]
+        }
+      },
+      {
+        "id": "why-uniform-shape",
+        "moduleId": "shared-conv-roi",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么必须统一形状",
+        "markdown": "后续的全连接层要求固定长度的输入，而提议区域的形状本来就千差万别。RoI 汇聚的作用正是把每个区域的特征压成相同的 $h_2 \\times w_2$ 网格，使 $n$ 个区域能拼成一个 $n \\times c \\times h_2 \\times w_2$ 的张量，一次性送入后续全连接层和两个输出头。这样既保住了整图卷积的共享计算，又让不同区域可以批量处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fast-rcnn-roi"
+          ]
+        }
+      },
+      {
+        "id": "rpn-procedure",
+        "moduleId": "rpn-proposal",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "Faster R-CNN：用区域提议网络替代选择性搜索",
+        "markdown": "为了较精确地检测，Fast R-CNN 通常仍需由选择性搜索生成大量提议区域。Faster R-CNN 把选择性搜索替换为**区域提议网络**（region proposal network，RPN），在减少提议区域数量的同时保证精度，模型其余部分保持不变。RPN 的计算步骤如下：\n\n1. 用填充为 1 的 $3 \\times 3$ 卷积层变换卷积网络的输出，输出通道数记为 $c$，使特征图每个单元得到长度为 $c$ 的新特征。\n2. 以特征图的每个像素为中心，生成多个不同大小和宽高比的锚框并加以标注。\n3. 用锚框中心单元长度为 $c$ 的特征，分别预测该锚框的二元类别（含目标还是背景）和边界框。\n4. 使用非极大值抑制，从预测为目标的边界框中移除相似结果；最终留下的预测边界框就是兴趣区域汇聚层所需的提议区域。\n\nRPN 与整个模型一起训练：目标函数既包括目标检测的类别与边界框预测，也包括锚框的二元类别与边界框预测。端到端训练让 RPN 学会生成高质量的提议区域。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000286"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列",
+                "Faster R-CNN"
+              ],
+              "lineStart": 10989,
+              "lineEnd": 11008,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/faster-rcnn.svg"
+              ],
+              "excerptSha256": "c47e9ec31835b1d6d34a5dad5d6ff41bc7083835871e840e54521174e1b3656b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "proposal-comparison",
+        "moduleId": "rpn-proposal",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "选择性搜索与 RPN 的取舍",
+        "markdown": "两者都是产生提议区域的手段，但性质不同。选择性搜索是独立于检测网络的分割式算法，按颜色、纹理等底层线索合并区域，不随检测任务学习，需要大量候选才能保证召回。RPN 是网络内部的一个卷积头，用锚框的二元分类与回归直接产出候选，与检测损失联合训练，候选数量更少而质量更高。代价是 RPN 的训练与调参更复杂，其召回还受锚框尺度与长宽比设计的影响。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rpn-procedure"
+          ]
+        }
+      },
+      {
+        "id": "mask-head",
+        "moduleId": "mask-head",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "Mask R-CNN：面向像素级输出",
+        "markdown": "如果训练集还标注了每个目标在图像上的像素级位置，Mask R-CNN 就能利用这些详尽的标注进一步提升检测精度。它基于 Faster R-CNN 修改而来：把兴趣区域汇聚层替换为**兴趣区域对齐**层（RoI Align），用双线性插值保留特征图上的空间信息，从而更适合像素级预测。该层的输出是与兴趣区域形状相同的特征图，既用于预测类别和边界框，又通过额外的全卷积网络预测目标的像素级位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000287"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列",
+                "Mask R-CNN"
+              ],
+              "lineStart": 11009,
+              "lineEnd": 11022,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/mask-rcnn.svg"
+              ],
+              "excerptSha256": "8b4f15dc736ebdbc7613f1d506d2af9debebf4f676a91896131ea77525ccdc22"
+            }
+          ]
+        }
+      },
+      {
+        "id": "align-vs-pooling",
+        "moduleId": "mask-head",
+        "depth": "support",
+        "kind": "note",
+        "title": "从区域对齐到像素级任务",
+        "markdown": "RoI 汇聚在划分子窗口后直接取最大值，坐标取整会损失一部分空间对齐关系；当输出不再是分类标量而是逐像素掩码时，这种偏移会明显影响边界。RoI Align 改为在浮点坐标处用双线性插值采样，避免量化误差。额外的全卷积网络分支也说明了任务分工：检测头回答“是什么、在哪里”，掩码头回答“哪些像素属于它”，后者正是下一个知识点语义分割要处理的形态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "mask-head"
+          ]
+        }
+      },
+      {
+        "id": "family-summary",
+        "moduleId": "comparison-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "四个模型的一句话总结",
+        "markdown": "- R-CNN 对图像选取若干提议区域，对每个区域单独执行卷积网络前向传播抽取特征，再用特征预测类别与边界框。\n- Fast R-CNN 只对整个图像做一次卷积网络前向传播，并引入兴趣区域汇聚层，为形状不同的兴趣区域抽取相同形状的特征。\n- Faster R-CNN 把选择性搜索替换为参与训练的区域提议网络，在减少提议区域数量的同时保证检测精度。\n- Mask R-CNN 在 Faster R-CNN 基础上引入全卷积网络，借助像素级位置标注进一步提升检测精度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000288"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列",
+                "小结"
+              ],
+              "lineStart": 11023,
+              "lineEnd": 11029,
+              "assetRefs": [],
+              "excerptSha256": "0e4a933935f51463e7cb9e230894c8ad044eb972d471fc7e385e1b13d294d441"
+            }
+          ]
+        }
+      },
+      {
+        "id": "family-comparison",
+        "moduleId": "comparison-and-check",
+        "depth": "core",
+        "kind": "table",
+        "title": "统一维度对照",
+        "markdown": "| 维度 | R-CNN | Fast R-CNN | Faster R-CNN | Mask R-CNN |\n|---|---|---|---|---|\n| 卷积前向次数 | 每个提议区域一次 | 整图一次 | 整图一次 | 整图一次 |\n| 提议区域来源 | 选择性搜索 | 选择性搜索 | 区域提议网络 | 区域提议网络 |\n| 区域特征对齐 | 变形到网络输入尺寸后重算 | 兴趣区域汇聚 | 兴趣区域汇聚 | 兴趣区域对齐 |\n| 输出头 | 多个支持向量机 + 线性回归 | softmax + 边界框回归 | softmax + 边界框回归 | 类别、边界框、像素级掩码 |\n| 训练方式 | 分阶段 | 端到端（提议生成除外） | 端到端，含 RPN | 端到端，含 RPN 与掩码分支 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "rcnn-steps",
+            "fast-rcnn-roi",
+            "rpn-procedure",
+            "mask-head",
+            "family-summary"
+          ]
+        }
+      },
+      {
+        "id": "self-check",
+        "moduleId": "comparison-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自测：哪一处改动解决了哪个问题",
+        "markdown": "1. 一张图像上有 1000 个彼此大量重叠的提议区域。把 R-CNN 换成 Fast R-CNN 后，卷积前向传播的次数大约从多少次降到多少次？省下来的计算来自哪里？\n2. 某系统检测速度尚可，但候选区域漏掉小目标较多，且检测头保持不变。应优先改动哪个环节？请对照上表说出依据。\n3. 如果任务只需要边界框、不需要像素级掩码，是否一定要用 Mask R-CNN？说明取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "family-comparison"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "comparison-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 能否把目标检测整体视为回归问题，直接预测边界框与类别概率？可参考 YOLO 模型的设计思路。\n2. 把单发多框检测与本节介绍的方法进行比较，二者的主要区别是什么？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000289"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "区域卷积神经网络（R-CNN）系列",
+                "练习"
+              ],
+              "lineStart": 11030,
+              "lineEnd": 11046,
+              "assetRefs": [],
+              "excerptSha256": "ca1931fd687c60d505e2682827644b1b6e0dd110c88e45197d893cfb9aab4369"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "family-selection-check",
+        "type": "formative-check",
+        "anchorBlockId": "family-comparison",
+        "moduleId": "comparison-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-family"
+        ],
+        "learningPurpose": "检查学习者能否依据统一维度表为新情境选择检测模型并说明理由。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "family-summary",
+            "family-comparison"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定一个只需边界框、候选区域数量很大的检测任务，请在 R-CNN、Fast R-CNN、Faster R-CNN 中选出合适方法，并写出表格中对应的两个维度作为依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-5-7",
+    "point-5-9"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000283"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列"
+      ],
+      "lineStart": 10861,
+      "lineEnd": 10871,
+      "assetRefs": [],
+      "excerptSha256": "c3dc4aeb6cd324f5c9f35fa5c7e2f7ed131366203653a7e72b34c4bed16c1bcd"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000284"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列",
+        "R-CNN"
+      ],
+      "lineStart": 10872,
+      "lineEnd": 10890,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/r-cnn.svg"
+      ],
+      "excerptSha256": "e40efe305fb0982b5cbf148db90f955ebc67e58be2a3b9a4fe76158bd39b12c2"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000285"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列",
+        "Fast R-CNN"
+      ],
+      "lineStart": 10891,
+      "lineEnd": 10988,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/fast-rcnn.svg",
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/roi.svg"
+      ],
+      "excerptSha256": "5ac52dd1736a4510c1c7d3e9969d6ec071355e980da996156c7323e67b9ec22e"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000286"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列",
+        "Faster R-CNN"
+      ],
+      "lineStart": 10989,
+      "lineEnd": 11008,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/faster-rcnn.svg"
+      ],
+      "excerptSha256": "c47e9ec31835b1d6d34a5dad5d6ff41bc7083835871e840e54521174e1b3656b"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000287"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列",
+        "Mask R-CNN"
+      ],
+      "lineStart": 11009,
+      "lineEnd": 11022,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/mask-rcnn.svg"
+      ],
+      "excerptSha256": "8b4f15dc736ebdbc7613f1d506d2af9debebf4f676a91896131ea77525ccdc22"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000288"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列",
+        "小结"
+      ],
+      "lineStart": 11023,
+      "lineEnd": 11029,
+      "assetRefs": [],
+      "excerptSha256": "0e4a933935f51463e7cb9e230894c8ad044eb972d471fc7e385e1b13d294d441"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000289"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "区域卷积神经网络（R-CNN）系列",
+        "练习"
+      ],
+      "lineStart": 11030,
+      "lineEnd": 11046,
+      "assetRefs": [],
+      "excerptSha256": "ca1931fd687c60d505e2682827644b1b6e0dd110c88e45197d893cfb9aab4369"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2163,
+    855
+  ],
+  "scale": 0.66
+}

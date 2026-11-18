@@ -1,0 +1,519 @@
+{
+  "schema_version": "course-animation-runtime/1.0",
+  "source_schema_version": "course-content-animations/1.0",
+  "format": "sandboxed-iframe",
+  "animations": [
+    {
+      "type": "autoregressiveForecast",
+      "component": "AutoregressiveForecast",
+      "title": "多步预测与误差累积",
+      "mechanism": {
+        "inputs": "初始的真实观测窗口（前 τ 个观测值）和一个已训练好的单步预测模型",
+        "changingState": "逐时间步生成的预测值序列，以及随预测步数增大的预测误差",
+        "transitionRule": "每一步用当前窗口做单步预测，再把该预测值插入窗口、替换最旧的输入，用于下一步预测",
+        "terminalState": "达到预设的最大预测步数（例如 64 步），或预测曲线衰减到近似常数",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-1",
+          "suggestion": "从左到右逐步展示窗口中真实值被预测值替换的过程，并同步画出真实曲线、单步预测曲线与逐渐偏离的多步预测曲线，标出误差开始明显放大的位置。"
+        }
+      ]
+    },
+    {
+      "type": "textPreprocessPipeline",
+      "component": "TextPreprocessPipeline",
+      "title": "文本预处理流水线",
+      "mechanism": {
+        "inputs": "一行原始文本及其中的词元，以及预先统计好的词频语料",
+        "changingState": "文本在每个阶段的表示：原始字符串、清洗后的文本行、词元列表、词表条目、最终索引序列",
+        "transitionRule": "依次执行正则清洗并转小写；按 word 或 char 拆分词元；统计词频并按频率分配索引，低于 min_freq 的词元归入 <unk>；逐词查表得到索引",
+        "terminalState": "得到与词元一一对应的索引序列，未登录词和低频词显示为索引 0",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-2",
+          "suggestion": "用同一行文本逐步演示四个阶段，高亮当前词元及其在词表中的索引，并标记被 min_freq 过滤、落到 <unk> 的词元，支持重播。"
+        }
+      ]
+    },
+    {
+      "type": "sequenceBatchingPartition",
+      "component": "SequenceBatchingPartition",
+      "title": "序列采样与批划分",
+      "mechanism": {
+        "inputs": "一条长词元序列、子序列时间步数 num_steps、批量大小 batch_size，以及一个固定的随机 seed",
+        "changingState": "当前子序列的起始位置、批次的分组方式，以及每个小批量对应的特征窗口与右移一位的标签窗口",
+        "transitionRule": "随机采样先取随机偏移并按 num_steps 切块，再打乱起始索引组成批次；顺序分区按 offset 重塑后沿列方向每 num_steps 列切一批，相邻批次在原文中首尾相接",
+        "terminalState": "所有子序列被取完，一个 epoch 结束；随机采样用同一 seed 重播得到相同批次，只有重新生成才改变样本",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-3",
+          "suggestion": "并排展示两种策略：在长序列上用色块标出每批的特征窗口与右移一位的标签窗口，随机采样时窗口跳跃并打乱顺序，顺序分区时窗口逐段右移，让学习者直接看到相邻性与覆盖范围的差别。"
+        }
+      ]
+    },
+    {
+      "type": "recurrentStateFlow",
+      "component": "RecurrentStateFlow",
+      "title": "循环状态沿时间步传递",
+      "mechanism": {
+        "inputs": "初始隐状态 H_0、输入序列 X_1..X_T，以及共享参数；预测阶段还需一个起始前缀",
+        "changingState": "每个时间步的输入表示、隐状态 H_t 与输出 O_t；预测阶段还包括逐步生成的前缀序列",
+        "transitionRule": "按 H_t = phi(X_t W_xh + H_{t-1} W_hh + b_h) 更新隐状态，再按 O_t = H_t W_hq + b_q 得到输出；预测阶段取 argmax 后把新词元作为下一步输入",
+        "terminalState": "处理完最后一个时间步，或生成完设定的预测词元数；重播回到相同初始状态与相同前缀",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-4",
+          "suggestion": "把时间步排成水平序列，每步画出输入、隐状态与输出三个节点。逐步高亮：先显示 H_{t-1} 与 X_t 汇入当前隐状态，标出权重矩阵标签，再显示 H_t 分流到输出与下一步；右侧固定显示参数面板，说明所有时间步共用同一组权重。走到最后一步后停在终态，并提供重播按钮。"
+        },
+        {
+          "pointId": "point-1-5",
+          "suggestion": "按时间步展开循环网络，同步显示输入独热向量、隐状态更新与输出形状，用不同颜色区分预热期和预测期，允许单步前进和重播。"
+        }
+      ]
+    },
+    {
+      "type": "bpttGradientFlow",
+      "component": "BpttGradientFlow",
+      "title": "沿时间反向传播",
+      "mechanism": {
+        "inputs": "展开为 T 步的计算图、各时间步的输出与损失，以及参数 W_hx、W_hh、W_qh",
+        "changingState": "当前反向传播所在的时间步 t、累积的 ∂L/∂h_t，以及各参数的梯度缓存",
+        "transitionRule": "从 t=T 向前推进一个时间步，按链式法则计算 ∂L/∂h_t = W_hh^T ∂L/∂h_{t+1} + W_qh^T ∂L/∂o_t，并把当前时间步的贡献累加到参数梯度上",
+        "terminalState": "反向传播到达 t=1，或按截断设置停在 t=τ 处，此时得到全部参数梯度并停止",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-7",
+          "suggestion": "逐步高亮反向经过的时间步，用箭头宽度表示当前梯度大小，并允许切换 W_hh 特征值的量级，观察梯度在长路径上衰减到接近零或迅速放大。"
+        }
+      ]
+    },
+    {
+      "type": "gruGateUpdate",
+      "component": "GruGateUpdate",
+      "title": "GRU 门控状态更新",
+      "mechanism": {
+        "inputs": "输入序列的各个时间步 X_t、初始隐状态 H_0，以及已学习的门与候选状态参数",
+        "changingState": "每个时间步的重置门 R_t、更新门 Z_t、候选隐状态与最终隐状态 H_t",
+        "transitionRule": "先由 sigmoid 计算 R_t 与 Z_t，再按 tanh 计算候选状态，最后由更新门在旧状态与候选状态之间做逐元素凸组合得到 H_t",
+        "terminalState": "处理完设定的时间步数 T 后停止，保留最终隐状态 H_T 与各步输出",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-1",
+          "suggestion": "按时间步逐步展示门值生成、候选状态计算和凸组合三段过程；允许把 Z 或 R 固定到接近 0 或 1，直观看到跳过时间步与重置旧状态两种极端行为。"
+        }
+      ]
+    },
+    {
+      "type": "lstmCellUpdate",
+      "component": "LstmCellUpdate",
+      "title": "LSTM 记忆元与门控更新",
+      "mechanism": {
+        "inputs": "设定的输入序列、上一时间步的隐状态 H_{t-1} 与记忆元 C_{t-1}，以及一组固定的权重和偏置",
+        "changingState": "每个时间步的输入门、遗忘门、输出门取值，候选记忆元，记忆元 C_t 与隐状态 H_t 随时间步推进而变化",
+        "transitionRule": "按教材公式依次计算三个门的 sigmoid 值与候选记忆元的 tanh 值，再用 C_t = F_t ⊙ C_{t-1} + I_t ⊙ C̃_t 更新记忆元，用 H_t = O_t ⊙ tanh(C_t) 得到隐状态",
+        "terminalState": "处理完预设长度的输入序列后停在最终的 C 与 H，并保留每个时间步的轨迹；重播回到同一初始状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-2",
+          "suggestion": "逐步展示一个时间步内门值与候选记忆元的计算，再用两条并列的条带显示记忆元如何被遗忘门保留、被输入门写入，最后显示输出门如何从记忆元读出隐状态；允许回看任一时间步的数值并重播。"
+        }
+      ]
+    },
+    {
+      "type": "deepRecurrentGrid",
+      "component": "DeepRecurrentGrid",
+      "title": "多层循环状态网格",
+      "mechanism": {
+        "inputs": "输入序列 X_t、隐藏层数 L、隐藏单元数 h，以及各层权重和激活函数",
+        "changingState": "每一层、每个时间步的隐状态 H_t^(l)，以及最终输出 O_t",
+        "transitionRule": "按 H_t^(l)=phi_l(H_t^(l-1)W_xh^(l)+H_{t-1}^(l)W_hh^(l)+b_h^(l)) 依次更新，且 H_t^(0)=X_t",
+        "terminalState": "完成全部时间步与全部 L 层后，由最后一层隐状态得到输出 O_t",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-3",
+          "suggestion": "用 L 层 × T 步的网格展示隐状态，逐格推进并按公式标出两个来源箭头（上一层当前步与同层上一步），最后汇聚到输出层；提供重播回到相同初始输入。"
+        }
+      ]
+    },
+    {
+      "type": "bidirectionalScan",
+      "component": "BidirectionalScan",
+      "title": "双向扫描与表示拼接",
+      "mechanism": {
+        "inputs": "输入序列及各时间步的词元表示、两个方向独立的参数与初始隐状态；若用于分类还带一个线性分类头",
+        "changingState": "各时间步的前向隐状态、后向隐状态、拼接后的双向表示，以及可取出的首末时间步状态与分类得分",
+        "transitionRule": "前向状态从左向右按 H_t = f(X_t, H_{t-1}) 更新，后向状态从右向左按 H_t = g(X_t, H_{t+1}) 更新；同一位置两个状态就绪后拼接，分类任务再取首末时间步状态拼接并经全连接层输出得分",
+        "terminalState": "两条扫描都到达序列另一端，得到每个时间步的双向表示；分类任务停在类别得分与预测标签",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-4",
+          "suggestion": "让两条扫描线分别从序列左右两端推进，每一步高亮当前隐状态并标出它依赖的输入和上一步状态；两个方向在同一位置汇合时把结果拼成一个更长的向量。"
+        },
+        {
+          "pointId": "point-5-2",
+          "suggestion": "逐步展示词元嵌入、前向与后向隐状态沿时间轴推进，在首末时间步高亮取出的隐状态并演示拼接、全连接和类别输出，支持重播。"
+        }
+      ]
+    },
+    {
+      "type": "seq2seqGeneration",
+      "component": "Seq2seqGeneration",
+      "title": "编码器-解码器生成",
+      "mechanism": {
+        "inputs": "长度可变的源序列词元、编码器与解码器参数、解码起始词元，以及训练时的真实目标词元或推理时的上一步预测",
+        "changingState": "编码器逐词累积的编码状态与上下文变量、解码器隐状态，以及已生成的输出词元序列",
+        "transitionRule": "编码器按 h_t = f(x_t, h_{t-1}) 逐时间步更新并汇总出上下文 c；解码器按 s_t' = g(y_{t'-1}, c, s_{t'-1}) 更新隐状态并经 softmax 选词，训练时输入真实词元，推理时输入上一步预测",
+        "terminalState": "编码器读完源序列；解码器生成结束词元或达到最大解码步数时停止",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-6",
+          "suggestion": "左侧逐词元扫过源句并点亮编码状态，随后把状态移动到解码器一侧；右侧按步高亮「上一步输出 → 当前状态 → 当前词元」，并保留已生成词元的轨迹，让学习者看出编码只发生一次、解码是串行的。"
+        },
+        {
+          "pointId": "point-2-7",
+          "suggestion": "逐步展示编码器读完源序列得到上下文变量，再交给解码器逐词生成；提供训练（输入真实词元）与推理（输入上一步预测）两种输入来源的切换，并在遇到 <eos> 时停止。"
+        }
+      ]
+    },
+    {
+      "type": "beamSearchDecoding",
+      "component": "BeamSearchDecoding",
+      "title": "束搜索解码",
+      "mechanism": {
+        "inputs": "上下文变量 c、输出词表 Y、束宽 k、最大长度 T' 以及各时间步的条件概率",
+        "changingState": "每个时间步保留下来的候选序列集合及其累计对数概率得分",
+        "transitionRule": "对上一时刻的每条候选接上词表中的每个词元，计算累计条件概率，从 k|Y| 个扩展中保留得分最高的 k 条；遇到 <eos> 的候选终止扩展",
+        "terminalState": "达到最大长度 T' 或所有候选都遇到 <eos>；在保留过的候选上按长度归一化得分选出最终序列",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-8",
+          "suggestion": "用候选树或候选列表逐步展示束宽为 2 的扩展与剪枝，标出每步得分和保留下来的序列，最后高亮按长度归一化得分选出的输出。"
+        }
+      ]
+    },
+    {
+      "type": "kernelAttentionRegression",
+      "component": "KernelAttentionRegression",
+      "title": "核回归注意力汇聚",
+      "mechanism": {
+        "inputs": "训练键值对 (x_i,y_i)、固定的高斯核或可学习参数 w，以及沿定义域移动的查询 x",
+        "changingState": "查询位置 x、每个键的注意力权重 α(x,x_i) 和加权预测 f(x)",
+        "transitionRule": "对当前查询计算每个键的 -(1/2)((x-x_i)w)^2，经 softmax 归一化得到权重，再对值 y_i 加权求和得到预测",
+        "terminalState": "查询扫过整个定义域并绘制完预测曲线后回到起点，形成可见的循环边界",
+        "replayMode": "loop"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-2",
+          "suggestion": "让查询点在训练样本上方滑动，同步显示各键的权重条形和加权预测点；允许切换 $w$，观察权重变尖锐或变平滑时预测曲线的变化。"
+        }
+      ]
+    },
+    {
+      "type": "maskedAttentionPooling",
+      "component": "MaskedAttentionPooling",
+      "title": "掩蔽 softmax 注意力汇聚",
+      "mechanism": {
+        "inputs": "一组查询—键分数（含填充位置）、有效长度 valid_lens，以及对应的值向量",
+        "changingState": "掩蔽后的分数、softmax 注意力权重，以及最终的加权平均输出向量",
+        "transitionRule": "把超出有效长度的位置替换成很大的负数，做 softmax 归一化，再用权重对值向量加权求和",
+        "terminalState": "填充位置权重为 0、有效位置权重之和为 1 的稳定分布，以及对应的汇聚输出",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-3",
+          "suggestion": "对同一组小批量样本（例如 2×4 分数、有效长度 [2, 3]）分四步显示：标出填充位置，显示被替换成负值后的分数，用条形图展示只有有效位置获得概率的权重，最后用这些权重合成输出向量；每一步都标出实际数值，重播回到同一组初始分数。"
+        }
+      ]
+    },
+    {
+      "type": "additiveAttentionAlignment",
+      "component": "AdditiveAttentionAlignment",
+      "title": "加性注意力对齐",
+      "mechanism": {
+        "inputs": "编码器在各输入时间步的隐状态 h_1…h_T、编码器有效长度，以及当前解码步的查询状态 s_{t'-1}",
+        "changingState": "当前解码步对每个源位置的注意力打分、softmax 后的权重分布、加权得到的上下文变量 c_{t'}，以及解码器的推进位置",
+        "transitionRule": "以 s_{t'-1} 为查询、各 h_t 为键做加性打分，softmax 归一化得到权重，再对各 h_t 加权求和得到 c_{t'}，与当前词元嵌入拼接后送入解码器循环层，产生新的隐状态作为下一解码步的查询",
+        "terminalState": "解码出序列结束词元或达到预设的最大解码步数；重播回到第一个解码步的初始隐藏状态",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-4",
+          "suggestion": "逐步展示每个解码步：高亮当前查询，依次显示各源位置的打分与归一化权重条，再按权重汇聚出上下文变量并推进到下一解码步，同时留下已解码步的权重轨迹，让学习者看出源端焦点位置如何随目标词元移动。"
+        }
+      ]
+    },
+    {
+      "type": "positionalEncodingRotation",
+      "component": "PositionalEncodingRotation",
+      "title": "位置编码相位旋转",
+      "mechanism": {
+        "inputs": "序列中的位置索引、编码维度 d，以及各维度按 1 除以 10000 的幂次得到的角频率",
+        "changingState": "位置索引逐步增大时，各维度在单位圆上的相位角，以及由正弦、余弦值组成的当前位置编码向量",
+        "transitionRule": "每前进一个位置，第 j 维的相位增加该维度的角频率；维度越高角频率越小，因此旋转越慢",
+        "terminalState": "位置递增到预设长度，得到完整的位置编码矩阵，并高亮同一位置偏移在不同起点下对应相同旋转矩阵",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-6",
+          "suggestion": "用多组不同颜色和半径的单位圆表示不同维度，位置索引前进时各点按各自角频率旋转，右侧同步累积出当前编码向量与热图，并提供重播按钮回到初始位置。"
+        }
+      ]
+    },
+    {
+      "type": "transformerDecoderGeneration",
+      "component": "TransformerDecoderGeneration",
+      "title": "Transformer 解码器自回归生成",
+      "mechanism": {
+        "inputs": "源序列的嵌入表示加位置编码，以及从序列开始词元起的目标前缀",
+        "changingState": "解码器逐时间步的隐藏表示、已生成的目标词元序列和两类注意力权重",
+        "transitionRule": "每步先用掩蔽自注意力在已生成前缀内计算注意力，再经编码器－解码器注意力读取编码器输出，最后经前馈网络与全连接层预测下一个词元并追加到前缀",
+        "terminalState": "生成结束词元或达到最大生成长度",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-7",
+          "suggestion": "逐步显示目标前缀的增长：高亮当前查询可见的键位置、被掩蔽的未来位置，以及编码器－解码器注意力聚焦到的源词元，并在结束词元处停止。"
+        }
+      ]
+    },
+    {
+      "type": "word2vecWindowPairs",
+      "component": "Word2vecWindowPairs",
+      "title": "词向量上下文窗口配对",
+      "mechanism": {
+        "inputs": "一条文本序列、上下文窗口大小 m 和当前中心词位置 t",
+        "changingState": "窗口覆盖的词，以及窗口内产生的中心词—上下文词预测对（跳元方向与连续词袋方向）",
+        "transitionRule": "窗口从序列开头出发，每步向右移动一个位置；跳元模型以当前中心词分别预测窗口内每个上下文词，连续词袋模型以窗口内全部上下文词共同预测中心词",
+        "terminalState": "窗口走完整条序列或到达预设的子序列末尾，此时停在最后一个位置并可重播",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-1",
+          "suggestion": "逐步滑动上下文窗口，同一画面分两栏显示跳元模型的中心词指向各上下文词、连续词袋的多条上下文词汇聚到中心词，并用计数标出每个位置产生的预测对数量。"
+        }
+      ]
+    },
+    {
+      "type": "approximateSoftmaxCost",
+      "component": "ApproximateSoftmaxCost",
+      "title": "近似训练的计算成本",
+      "mechanism": {
+        "inputs": "一个中心词与目标上下文词、词表 V 的规模、负采样噪声词数 K，以及层序 softmax 使用的二叉树结构",
+        "changingState": "当前训练步已参与计算的词集合、负采样抽到的噪声词，以及树路径上当前访问的节点与已累乘的概率",
+        "transitionRule": "精确 softmax 遍历词表中全部词求和；负采样在正例之外按分布 P(w) 抽 K 个噪声词并累加 sigmoid 损失；层序 softmax 按左右子节点指示逐层乘以 sigmoid 打分，直到叶节点",
+        "terminalState": "同一训练步的损失与梯度计算完成，三种方式分别涉及词表大小、1+K 与路径长度 L(w)-1 个计算项",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-2",
+          "suggestion": "在同一训练步并排演示三种计算：精确 softmax 逐词点亮整个词表，负采样只点亮 1 个正例与 K 个噪声词，层序 softmax 从根沿路径走到叶；用计数器显示每步参与运算的词数，并支持重播同一组样本或重新采样。"
+        }
+      ]
+    },
+    {
+      "type": "frequentTokenSubsampling",
+      "component": "FrequentTokenSubsampling",
+      "title": "高频词下采样",
+      "mechanism": {
+        "inputs": "一句话的词元序列、各词元在语料中的相对频率 f(w)、超参数 t=1e-4 以及固定随机种子",
+        "changingState": "句中每个词元的保留或丢弃标记，以及处理到当前位置时句子的长度和高频词计数",
+        "transitionRule": "对每个词元独立生成 [0,1) 区间随机数，若小于 max(1-√(t/f(w)),0) 则丢弃，否则保留",
+        "terminalState": "整句处理完毕，得到下采样后的词元序列，并给出下采样前后句子长度与高频词、低频词出现次数的对比",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-3",
+          "suggestion": "逐词显示保留或丢弃的判定过程，同时对比下采样前后句子长度，以及高频词 the 与低频词 join 的出现次数变化。"
+        }
+      ]
+    },
+    {
+      "type": "skipGramTrainingLoop",
+      "component": "SkipGramTrainingLoop",
+      "title": "跳元模型训练迭代",
+      "mechanism": {
+        "inputs": "数据迭代器给出的批量（中心词索引、上下文与噪声词索引、掩码、标签）、两张嵌入矩阵的初始权重、学习率 0.002 与训练轮数 5",
+        "changingState": "两张嵌入矩阵的权重、每个批量的掩码二元交叉熵损失，以及训练过程中的平均损失曲线",
+        "transitionRule": "每个批量先用 net[0] 与 net[1] 查表得到中心词和上下文/噪声词向量，经批量矩阵乘法得到点积预测；预测与标签计算带掩码的二元交叉熵，按有效位置数归一化后反向传播；Adam 按学习率更新两张嵌入矩阵",
+        "terminalState": "完成 5 个训练轮次后停止，展示最终平均损失和若干查询词的语义近邻；若平均损失提前趋于平稳则标记为收敛",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-4",
+          "suggestion": "逐步播放一个批量：高亮当前取出的中心词行与上下文/噪声词行，显示点积预测、掩码后的损失和反向传播更新了哪些权重行；跨轮次播放时同步显示平均损失曲线下降，并在结束时展示 chip 等查询词的余弦近邻。"
+        }
+      ]
+    },
+    {
+      "type": "subwordBpeMerge",
+      "component": "SubwordBpeMerge",
+      "title": "BPE 子词合并",
+      "mechanism": {
+        "inputs": "小语料的词频表（例如 fast_:4、faster_:3、tall_:5、taller_:4）、初始符号词表（26 个小写字母、词尾符号 _、[UNK]）和合并次数预算",
+        "changingState": "每个词的符号切分序列、词内相邻符号对的加权频次统计，以及不断增长的新符号词表",
+        "transitionRule": "统计每个词内相邻符号对按词频加权的出现次数，选出频次最高的一对合并为新符号并追加到符号词表，再在所有词中把该符号对替换为新符号",
+        "terminalState": "达到设定的合并次数（例如 10 次），得到固定大小的子词符号词表以及每个词最终的子词切分",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-6",
+          "suggestion": "按合并轮次逐步高亮被选中的符号对，同时显示它的加权频次计算和合并后每个词的新切分，并在侧栏同步更新符号词表；提供重播以复现同一语料的完整合并轨迹。"
+        }
+      ]
+    },
+    {
+      "type": "knnRetrievalScan",
+      "component": "KnnRetrievalScan",
+      "title": "词向量近邻检索扫描",
+      "mechanism": {
+        "inputs": "一个查询词向量 x 和包含 V 行的预训练词表矩阵 W",
+        "changingState": "已扫描的词表行号、当前 k 个候选词及其余弦分数",
+        "transitionRule": "按词表顺序逐行计算该行与 x 的余弦相似度，若分数高于候选列表的最小值则替换掉最小项并保持列表按分数降序",
+        "terminalState": "扫描完整个词表后停止，输出按余弦相似度排序的前 k 个近邻词",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-7",
+          "suggestion": "按词表顺序逐行计算并显示当前行的余弦分数，侧栏同步维护按分数排序的 top-k 候选列表，扫描结束时高亮最终的前 k 个近邻，并允许更换查询词重播同一检索流程。"
+        }
+      ]
+    },
+    {
+      "type": "maskedLanguageModelSampling",
+      "component": "MaskedLanguageModelSampling",
+      "title": "掩码语言建模样本构造",
+      "mechanism": {
+        "inputs": "一条词元序列、约 15% 的选择比例、80/10/10 的替换比例、最大长度 max_len 与随机种子",
+        "changingState": "被选中位置集合、每个选中位置的替换形态（<mask>、随机词元或原词不变）、填充后的输入序列，以及预测位置、标签与损失权重",
+        "transitionRule": "按约 15% 随机选出待预测位置；每个位置以 0.8 概率换成 <mask>、0.1 换成随机词元、0.1 保持原词；按 max_len 补齐并对填充位置记 0 权重",
+        "terminalState": "完成一次掩码构造与预测，得到该样本的掩码交叉熵损失；重播复现同一采样，重新生成才更换随机种子",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-8",
+          "suggestion": "逐步高亮被选中的词元并显示它的替换结果，同时用左右两个方向的箭头表示每个位置同时利用两侧上下文，最后在选中位置展开预测概率条并与原词比较。"
+        },
+        {
+          "pointId": "point-4-9",
+          "suggestion": "以一条句子序列为初始状态，逐步显示位置被选中的过程，再在每个选中位置展示 80/10/10 分支的替换结果并标注原始标签，最后补上填充位和 0 权重，支持用同一种子重播并能重新生成样本。"
+        }
+      ]
+    },
+    {
+      "type": "bertPretrainingSteps",
+      "component": "BertPretrainingSteps",
+      "title": "BERT 预训练损失下降",
+      "mechanism": {
+        "inputs": "预训练批次（词元、片段标记、遮蔽位置、掩码权重、MLM 与 NSP 标签）、初始化的 BERT 参数、学习率 0.01",
+        "changingState": "每一步的 MLM 损失、NSP 损失、总损失、模型参数以及随步数变化的损失曲线",
+        "transitionRule": "前向计算两项损失并相加得到总损失，对总损失反向传播求梯度，Adam 按学习率更新参数，再取下一批次",
+        "terminalState": "达到设定的迭代步数 num_steps 后停止，两条损失曲线趋于平缓",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-4-10",
+          "suggestion": "逐步展示一个批次进入模型后分别在遮蔽位置和句对位置产生两项损失，相加后更新参数，并同时绘制 MLM 与 NSP 损失随训练步数下降的曲线。"
+        }
+      ]
+    },
+    {
+      "type": "textCnnWindowPooling",
+      "component": "TextCnnWindowPooling",
+      "title": "一维卷积窗口与时间汇聚",
+      "mechanism": {
+        "inputs": "一条词元序列（或多通道词向量矩阵）以及一个或多个固定宽度的卷积核",
+        "changingState": "卷积窗口在序列上的起始位置、每个位置算出的输出标量，以及各通道汇聚后的最大值",
+        "transitionRule": "窗口每次右移一个位置，对窗口内输入与核按元素相乘后求和得到一个输出；所有位置计算完后，每个通道在时间维取最大值",
+        "terminalState": "窗口移动到序列末尾，每个通道得到唯一汇聚值，所有通道的值连结成分类向量",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-5-3",
+          "suggestion": "逐步显示窗口滑动与每个位置的卷积结果，再高亮各通道的最大值并汇总为分类向量，允许切换核宽观察感受野变化。"
+        }
+      ]
+    },
+    {
+      "type": "decomposableAttentionAlignment",
+      "component": "DecomposableAttentionAlignment",
+      "title": "可分解注意力对齐",
+      "mechanism": {
+        "inputs": "前提词元序列、假设词元序列及其词向量，以及函数 f、g、h 的参数",
+        "changingState": "注意力打分矩阵 e、按行与按列 softmax 后的权重、软对齐向量 beta 与 alpha、比较向量 V_A 与 V_B，以及最终三类得分",
+        "transitionRule": "先用 f 分别编码两序列词元并做点积得到 e，再对 e 的两个方向做 softmax 并加权求和得到 beta 与 alpha；把原词向量与对齐向量拼接后经 g 得到比较向量，求和后经 h 输出三类得分",
+        "terminalState": "得到蕴含、矛盾、中立的三类得分并显示预测类别",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-5-5",
+          "suggestion": "逐词显示前提与假设，先生成对齐得分矩阵并归一化为注意力权重，高亮权重加权的 beta 与 alpha，再展示比较向量形成与求和聚合，最后给出三类得分和预测标签；支持重播回到同一初始句对。"
+        }
+      ]
+    },
+    {
+      "type": "pairTruncation",
+      "component": "PairTruncation",
+      "title": "句对截断与补齐",
+      "mechanism": {
+        "inputs": "一对已分词的前提词元序列与假设词元序列，以及 BERT 输入序列最大长度 max_len",
+        "changingState": "两个序列的长度、被删除尾词元的位置，以及当前总长与 max_len-3 的差距",
+        "transitionRule": "当两段词元总数大于 max_len-3 时，反复删除较长序列的最后一个词元（长度相等时删除假设一侧）",
+        "terminalState": "总长不超过 max_len-3，为 <cls> 与两个 <sep> 保留 3 个位置，随后用 <pad> 补齐到 max_len",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-5-7",
+          "suggestion": "并排显示前提与假设的词元条，实时标注各自长度和总长上限；每一步高亮被删除的较长一侧尾词元，直到总长降到 max_len-3，最后展示三个特殊词元占位与补齐结果。"
+        }
+      ]
+    }
+  ],
+  "assets": {
+    "runtime.js": {
+      "bytes": 528594,
+      "sha256": "e630dce7899ea51c848bf2311aee8245740fd9e51607d1c54a42e8d580c2ff1e"
+    },
+    "runtime.css": {
+      "bytes": 126634,
+      "sha256": "2eb7846c80e3b10df6b23a914235aaccf57429cc85e5b64bec307ce0c6778508"
+    }
+  }
+}

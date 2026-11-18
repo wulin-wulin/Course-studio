@@ -1,0 +1,717 @@
+{
+  "id": "point-3-7",
+  "title": "Transformer",
+  "shortSummary": "由多头自注意力、前馈网络、残差连接和层归一化堆叠而成，说明编码器-解码器结构与训练要点。",
+  "keyTerms": [
+    "Transformer",
+    "前馈网络",
+    "残差连接",
+    "层归一化"
+  ],
+  "animationType": "transformerDecoderGeneration",
+  "animationSuggestion": "逐步显示目标前缀的增长：高亮当前查询可见的键位置、被掩蔽的未来位置，以及编码器－解码器注意力聚焦到的源词元，并在结束词元处停止。",
+  "difficulty": "进阶",
+  "importance": 0.95,
+  "prerequisites": [
+    "point-3-5",
+    "point-3-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "architecture-mechanism-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的架构术语与编码器、解码器顺序，围绕数据流、掩蔽与形状约束补充直觉、算例和检查表。",
+      "estimatedMinutes": 28,
+      "outcomes": [
+        {
+          "id": "explain-why-attention",
+          "text": "解释 Transformer 为何完全基于注意力，以及自注意力在并行性和路径长度上的优势。"
+        },
+        {
+          "id": "describe-architecture",
+          "text": "描述编码器－解码器的整体结构、子层组成与残差加层规范化的位置。"
+        },
+        {
+          "id": "apply-components",
+          "text": "说明逐位置前馈网络、残差连接和层规范化各自的作用与形状约束。"
+        },
+        {
+          "id": "analyze-masking",
+          "text": "解释解码器掩蔽自注意力如何保留自回归属性，并区分两种解码器注意力。"
+        },
+        {
+          "id": "evaluate-training",
+          "text": "说明训练配置、BLEU 评估与注意力权重可视化各自检查什么。"
+        },
+        {
+          "id": "transfer-boundary",
+          "text": "判断单独使用编码器或解码器的场景，并说明长序列带来的计算边界。"
+        }
+      ],
+      "misconceptions": [
+        "误以为 Transformer 必须同时使用编码器和解码器；实际上二者可以单独用于不同任务。",
+        "误以为层规范化与批量规范化等价；层规范化按特征维度统计，更适合变长序列。",
+        "误以为训练时解码器可以看到完整的已知目标序列；掩蔽仍然限制每个查询只能看到当前位置及之前。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-and-overview",
+          "title": "动机与整体架构",
+          "role": "orientation",
+          "description": "从自注意力的优势进入编码器－解码器的整体结构。",
+          "outcomeRefs": [
+            "explain-why-attention",
+            "describe-architecture"
+          ],
+          "order": 0
+        },
+        {
+          "id": "building-blocks",
+          "title": "基础组件：前馈网络与加规范化",
+          "role": "mechanism",
+          "description": "拆解逐位置前馈网络、残差连接和层规范化的计算与作用。",
+          "outcomeRefs": [
+            "apply-components"
+          ],
+          "order": 1
+        },
+        {
+          "id": "encoder-stack",
+          "title": "编码器堆叠与数据流",
+          "role": "procedure",
+          "description": "跟踪编码器单层的前向步骤与形状保持。",
+          "outcomeRefs": [
+            "describe-architecture",
+            "apply-components"
+          ],
+          "order": 2
+        },
+        {
+          "id": "decoder-and-masking",
+          "title": "解码器与掩蔽自回归",
+          "role": "worked-example",
+          "description": "用具体序列理解掩蔽矩阵与两种解码器注意力。",
+          "outcomeRefs": [
+            "analyze-masking"
+          ],
+          "order": 3
+        },
+        {
+          "id": "training-and-inspection",
+          "title": "训练与注意力检查",
+          "role": "diagnostics",
+          "description": "把训练配置、BLEU 与注意力热图变成可执行的检查项。",
+          "outcomeRefs": [
+            "evaluate-training"
+          ],
+          "order": 4
+        },
+        {
+          "id": "boundaries-and-transfer",
+          "title": "边界与迁移",
+          "role": "synthesis",
+          "description": "由小结与练习归纳计算成本、结构拆分和跨模态迁移。",
+          "outcomeRefs": [
+            "transfer-boundary"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why-attention",
+          "describe-architecture",
+          "apply-components",
+          "analyze-masking",
+          "evaluate-training",
+          "transfer-boundary"
+        ],
+        "method": "完成掩蔽可见范围的推导与一次注意力热图检查，并说明结论依据。",
+        "successCriteria": [
+          "能画出编码器与解码器各自的子层顺序并标出残差加法与层规范化位置",
+          "能说明掩蔽自注意力在训练与预测两种模式下的可见范围",
+          "能指出长序列下自注意力的主要计算代价"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "summaryBlockId": "tb-summary"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-attention-motivation",
+        "moduleId": "motivation-and-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：完全基于注意力",
+        "markdown": "Transformer 完全基于注意力机制构建，不含卷积层或循环神经网络层（Vaswani 等，2017）。它最初用于文本上的序列到序列学习，之后被推广到语言、视觉、语音和强化学习等领域。\n\n选择自注意力的关键理由有两点：其一，序列各位置可以并行计算；其二，任意两个位置之间的最大路径长度最短。这两点使基于自注意力的深层架构比依赖循环结构的模型更易扩展。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000168"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer"
+              ],
+              "lineStart": 9576,
+              "lineEnd": 9583,
+              "assetRefs": [],
+              "excerptSha256": "aa4784e22b3a0be961bcf9939bee01459be9bc27a143553865ea9832e1abf273"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parallel-intuition",
+        "moduleId": "motivation-and-overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：信息交换表",
+        "markdown": "把序列看成一张完全连接的信息交换表：循环网络让信息沿时间步逐跳传递，$n$ 个位置间最远需要约 $n$ 跳；自注意力让每个位置在同一层内直接与所有位置计算相关性，路径长度为常数。\n\n代价是注意力要对所有位置两两配对，计算与内存随序列长度按 $O(n^2)$ 增长。这份收益与代价正是后面设计掩码、有效长度和效率优化的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-attention-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-architecture-overview",
+        "moduleId": "motivation-and-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：编码器－解码器总体结构",
+        "markdown": "Transformer 是编码器－解码器架构的一个实例。编码器和解码器都由多个相同的层叠加而成；源序列与目标序列的嵌入表示先加上位置编码，再分别送入编码器和解码器。\n\n编码器每层包含两个子层：多头自注意力汇聚与基于位置的前馈网络。每个子层都带残差连接，并在加法之后紧跟层规范化。为保证残差可加，任何子层都必须满足 $\\mathrm{sublayer}(\\mathbf{x}) \\in \\mathbb{R}^d$，于是 $\\mathbf{x} + \\mathrm{sublayer}(\\mathbf{x}) \\in \\mathbb{R}^d$，每个位置最终输出一个 $d$ 维表示。解码器同样由残差连接和层规范化包裹的子层组成，但多出第三个子层——编码器－解码器注意力：其查询来自前一个解码器层的输出，键和值来自整个编码器的输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000169"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "模型"
+              ],
+              "lineStart": 9584,
+              "lineEnd": 9634,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/transformer.svg"
+              ],
+              "excerptSha256": "88e8743fcd204bdf86607f9f4aae174b98faedc2410160bf03db34bbb61b7e03"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dimension-bookkeeping",
+        "moduleId": "motivation-and-overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把维度一致当作设计约束",
+        "markdown": "把维度一致当成贯穿全章的设计约束：编码器与解码器的特征维度都取 $d$，残差加法才不会触发形状错误，编码器－解码器注意力的缩放点积也不必额外投影维度。\n\n读实现时可以按“形状是否保持”快速判断是否正确：编码器每个块输入输出都是（批量大小，时间步数，$d$）；解码器每个块同样保持这个形状，最后由一个全连接层把 $d$ 映射到词表大小。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-architecture-overview",
+            "tb-attention-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-positionwise-ffn",
+        "moduleId": "building-blocks",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：基于位置的前馈网络",
+        "markdown": "基于位置的前馈网络对序列中所有位置的表示使用同一个多层感知机（MLP），因此称为“基于位置的”。实现上它是一个两层感知机：输入形状为（批量大小，时间步数，输入维度），先经隐藏层与 ReLU，再输出（批量大小，时间步数，ffn_num_outputs）。\n\n由于所有位置共享同一组参数，当不同位置的输入相同时，它们的输出也相同；改变张量最里层维度（特征维度）的尺寸，就会改变该网络的输出尺寸。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000170"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "[**基于位置的前馈网络**]"
+              ],
+              "lineStart": 9635,
+              "lineEnd": 9727,
+              "assetRefs": [],
+              "excerptSha256": "b39040eebc2736bbd678b3dbcbb83b054bcb96927d102448c8c14b00d4f09ee9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ffn-role",
+        "moduleId": "building-blocks",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：自注意力与前馈网络的分工",
+        "markdown": "自注意力和前馈网络分工不同：自注意力沿“序列位置”方向混合信息，回答“这个位置该看哪些位置”；前馈网络只在每个位置内部沿特征通道做非线性变换，回答“这个位置的表示该怎样重新组合”。\n\n两层结构中的隐藏维通常大于模型维，先升维再降维，为每个位置提供额外的非线性容量。因为各位置共享同一 MLP，前馈网络不会引入跨位置的时序依赖，这正是它与自注意力互补的地方。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-positionwise-ffn"
+          ]
+        }
+      },
+      {
+        "id": "tb-addnorm",
+        "moduleId": "building-blocks",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：残差连接和层规范化",
+        "markdown": "残差连接与层规范化合称“加法和规范化”（add&norm）组件，二者都被视为构建有效深度架构的关键。`AddNorm` 先对子层输出做暂退法（dropout），再与子层输入相加，最后做层规范化，即 $\\mathrm{LN}(\\mathrm{dropout}(Y) + X)$。\n\n残差连接要求两个输入形状相同，加法后输出形状保持不变。层规范化与批量规范化的目标相同，都是重新中心化和重新缩放，但层规范化按特征维度归一化。自然语言处理中输入通常是变长序列，批量规范化效果通常不如层规范化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000171"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "残差连接和层规范化"
+              ],
+              "lineStart": 9728,
+              "lineEnd": 9850,
+              "assetRefs": [],
+              "excerptSha256": "74f0e87a173ecd8285cad7027e3b31db87b9a4d3978c404e696808ec38fba264"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layernorm-contrast",
+        "moduleId": "building-blocks",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：层规范化与批量规范化的差别",
+        "markdown": "用一句话区分两种归一化：批量规范化在一个小批量的样本之间统计均值和方差，层规范化则在单个样本的特征维度上统计。\n\n这带来两个实际差别：其一，层规范化的结果不依赖同批其他样本，批量大小变化或序列长度不一时更稳定；其二，推理时层规范化不需要维护跨批的滑动统计量。因此在 Transformer 中，每个子层后面接的是层规范化而不是批量规范化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-addnorm"
+          ]
+        }
+      },
+      {
+        "id": "tb-encoder-block",
+        "moduleId": "encoder-stack",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：编码器块与堆叠",
+        "markdown": "`EncoderBlock` 实现编码器中的一个层，含两个子层：多头自注意力和基于位置的前馈网络，两者都使用残差连接和紧随的层规范化。前向计算为 $Y = \\mathrm{AddNorm}(X, \\mathrm{Attention}(X,X,X))$，再返回 $\\mathrm{AddNorm}(Y, \\mathrm{FFN}(Y))$。\n\nTransformer 编码器中的任何层都不改变输入形状。`TransformerEncoder` 堆叠 `num_layers` 个这样的块；由于使用取值在 $-1$ 到 $1$ 之间的固定位置编码，学习到的嵌入表示要先乘以嵌入维度的平方根 $\\sqrt{d}$ 重新缩放，再与位置编码相加。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000172"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "编码器"
+              ],
+              "lineStart": 9851,
+              "lineEnd": 10120,
+              "assetRefs": [],
+              "excerptSha256": "f6c4f19981392337f667bde5475feed45b0fbd4f924b8d2bd1335b88e58ec62e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-encoder-flow",
+        "moduleId": "encoder-stack",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：编码器单层的前向检查步骤",
+        "markdown": "把编码器单层的前向过程整理成可复查的步骤：\n\n1. 输入词元索引经嵌入层得到（批量大小，时间步数，$d$），乘以 $\\sqrt{d}$；\n2. 加上位置编码，得到带顺序信息的输入表示；\n3. 多头自注意力的查询、键、值都取自该表示，并用有效长度屏蔽填充位置；\n4. 自注意力输出与原输入做残差加法并层规范化；\n5. 结果送入逐位置前馈网络；\n6. 再做一次残差加法与层规范化，输出保持（批量大小，时间步数，$d$）。\n\n`valid_lens` 保证查询只与真实词元位置计算注意力，不会把填充词元当成有效上下文。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-encoder-block",
+            "tb-positionwise-ffn"
+          ]
+        }
+      },
+      {
+        "id": "tb-decoder-block",
+        "moduleId": "decoder-and-masking",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：解码器块与掩蔽自注意力",
+        "markdown": "解码器每个层包含三个子层：掩蔽的多头自注意力、编码器－解码器注意力、基于位置的前馈网络，三者都被残差连接和紧随的层规范化包裹。\n\n掩蔽自注意力中，查询、键和值都来自上一个解码器层的输出；但每个位置只能考虑该位置之前的所有位置。训练阶段输出序列的所有位置词元都已知，可同一时间处理；预测阶段词元逐个生成，因此掩蔽自注意力用 `dec_valid_lens` 约束任何查询只与已经生成的位置计算注意力，从而保留自回归属性。编码器－解码器注意力中，查询来自前一个解码器层的输出，键和值来自整个编码器的输出。`TransformerDecoder` 堆叠 `num_layers` 个块，最后用全连接层输出词表上的预测值，并保存自注意力与编码器－解码器注意力权重供可视化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000173"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "解码器"
+              ],
+              "lineStart": 10121,
+              "lineEnd": 10496,
+              "assetRefs": [],
+              "excerptSha256": "65823bed0400fe204a3825b87b2416df528267f1fd62d005ee2e3ad1a5356ac9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-masking-example",
+        "moduleId": "decoder-and-masking",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充算例：长度为 4 的掩蔽矩阵",
+        "markdown": "设目标序列长度为 4，词元依次为 $y_1,y_2,y_3,y_4$。掩蔽矩阵允许的查询—键对为：$y_1$ 只看 $y_1$；$y_2$ 看 $y_1,y_2$；$y_3$ 看 $y_1,y_2,y_3$；$y_4$ 看全部四个位置，未来位置一律屏蔽。\n\n训练时这四个查询可以在同一次矩阵运算中并行算出，因为掩蔽保证了每个查询的可见范围；预测时没有未来词元，只能按 $y_1 \\to y_2 \\to y_3 \\to y_4$ 逐步生成，并把新词元追加到键值中。两种模式共享同一套参数，区别只在于可见范围与并行程度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-decoder-block"
+          ]
+        }
+      },
+      {
+        "id": "model-attention-roles",
+        "moduleId": "decoder-and-masking",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：解码器两种注意力的区别",
+        "markdown": "解码器里的两种注意力常被混淆，可以按来源和作用区分：\n\n- 解码器自注意力：查询、键、值都来自解码器自身的前缀表示，负责在已生成的目标词之间建立依赖，必须掩蔽未来位置；\n- 编码器－解码器注意力：查询来自解码器，键和值来自编码器输出，负责从源序列中读取与当前解码位置相关的信息，不需要因果掩蔽，但要屏蔽源序列的填充位置。\n\n前者保证自回归，后者完成源—目标对齐；两者都不能省略。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-decoder-block",
+            "tb-architecture-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-setup",
+        "moduleId": "training-and-inspection",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：训练配置与注意力可视化",
+        "markdown": "训练时把编码器与解码器实例化为一个序列到序列模型，示例配置为编码器、解码器各 2 层、4 头注意力，在“英语－法语”机器翻译数据集上训练，并用 BLEU 评估翻译质量。\n\n编码器自注意力权重的形状为（编码器层数，注意力头数，查询数，键－值对数）。因为填充词元不携带信息，可指定输入序列的有效长度，避免查询与填充位置计算注意力；不同注意力头在不同表示子空间上给出不同的注意力分布。解码器自注意力因自回归属性不会对当前位置之后的键值对计算注意力，编码器－解码器注意力则通过有效长度屏蔽源端的填充位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000174"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "[**训练**]"
+              ],
+              "lineStart": 10497,
+              "lineEnd": 10712,
+              "assetRefs": [],
+              "excerptSha256": "133cb4c3f37c13e5478df8d3012bc052508ca04732f6e291874fb01382f20445"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-checklist",
+        "moduleId": "training-and-inspection",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：训练与热图检查表",
+        "markdown": "训练与排查可以按检查表推进：\n\n1. 确认 `valid_lens` 与批次中真实长度一致，编码器端屏蔽填充；\n2. 确认解码器 `dec_valid_lens` 形成严格的下三角可见范围，防止未来信息泄漏；\n3. 确认损失只在目标词元上计算，忽略填充标签；\n4. 训练后用 BLEU 评估翻译质量，并抽查译文；\n5. 可视化编码器自注意力与解码器两种注意力热图：解码器自注意力应呈下三角可见模式，编码器－解码器注意力应聚焦到源端真实词元。\n\n若热图在训练阶段出现“看到未来”的权重，说明掩蔽或有效长度实现有误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training-setup",
+            "tb-decoder-block"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "boundaries-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：小结",
+        "markdown": "本节小结给出四条要点：Transformer 是编码器－解码器架构的一个实践，实际中编码器或解码器可以单独使用；多头自注意力用于表示输入序列和输出序列，但解码器必须通过掩蔽机制保留自回归属性；残差连接和层规范化是训练非常深的模型的重要工具；基于位置的前馈网络对所有序列位置使用同一个多层感知机进行表示变换。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000175"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "小结"
+              ],
+              "lineStart": 10713,
+              "lineEnd": 10719,
+              "assetRefs": [],
+              "excerptSha256": "3430fe394cea5eca405a00eac652bfd9acbf8ae56db08762e877185c8059d095"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "boundaries-and-transfer",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材：练习中的边界问题",
+        "markdown": "教材练习把注意力引向架构的边界与迁移：训练更深的 Transformer 会怎样影响训练速度与翻译效果；用加性注意力替代缩放点积注意力是否合适；语言模型应使用编码器、解码器还是两者；输入序列很长时 Transformer 面临什么挑战；如何提升计算速度与内存效率；以及不使用卷积时如何用 Transformer 做图像分类（Vision Transformer）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000176"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "Transformer",
+                "练习"
+              ],
+              "lineStart": 10720,
+              "lineEnd": 10740,
+              "assetRefs": [],
+              "excerptSha256": "7e4d132f06edab09f92657e9b86933c7d236c67eeaadb45c3f121fad1219bdf0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-boundaries",
+        "moduleId": "boundaries-and-transfer",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：三条边界与迁移方向",
+        "markdown": "由练习可以归纳出三条边界。第一，计算成本：自注意力对所有位置两两配对，序列很长时计算与内存按 $O(n^2)$ 增长，这是长文档建模的主要瓶颈，也是各类高效注意力与近似方法的动机。第二，深度与训练：残差连接和层规范化让深层堆叠可行，但层数增加仍会抬高训练成本，需要权衡效果与速度。第三，结构可拆分：编码器适合需要双向上下文的表示任务，解码器适合自回归生成，两者也可以组合使用；把同样的注意力骨架迁移到图像等非文本模态时，需要重新设计如何把输入切成词元。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises",
+            "tb-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "masking-visibility-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-masking-example",
+        "moduleId": "decoder-and-masking",
+        "depth": "core",
+        "title": "检查掩蔽可见范围",
+        "outcomeRefs": [
+          "analyze-masking"
+        ],
+        "learningPurpose": "检查学习者能否为新查询构造正确的可见前缀，并解释训练与预测的差异。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-decoder-block",
+            "model-masking-example"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "给定目标前缀长度 3，写出第 4 个查询可以注意的位置，并说明训练与预测时的差异。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出长度为 4 的序列中每个查询可见的位置集合，并说明训练阶段为何仍需要掩蔽。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000168"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer"
+      ],
+      "lineStart": 9576,
+      "lineEnd": 9583,
+      "assetRefs": [],
+      "excerptSha256": "aa4784e22b3a0be961bcf9939bee01459be9bc27a143553865ea9832e1abf273"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000169"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "模型"
+      ],
+      "lineStart": 9584,
+      "lineEnd": 9634,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/transformer.svg"
+      ],
+      "excerptSha256": "88e8743fcd204bdf86607f9f4aae174b98faedc2410160bf03db34bbb61b7e03"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000170"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "[**基于位置的前馈网络**]"
+      ],
+      "lineStart": 9635,
+      "lineEnd": 9727,
+      "assetRefs": [],
+      "excerptSha256": "b39040eebc2736bbd678b3dbcbb83b054bcb96927d102448c8c14b00d4f09ee9"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000171"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "残差连接和层规范化"
+      ],
+      "lineStart": 9728,
+      "lineEnd": 9850,
+      "assetRefs": [],
+      "excerptSha256": "74f0e87a173ecd8285cad7027e3b31db87b9a4d3978c404e696808ec38fba264"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000172"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "编码器"
+      ],
+      "lineStart": 9851,
+      "lineEnd": 10120,
+      "assetRefs": [],
+      "excerptSha256": "f6c4f19981392337f667bde5475feed45b0fbd4f924b8d2bd1335b88e58ec62e"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000173"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "解码器"
+      ],
+      "lineStart": 10121,
+      "lineEnd": 10496,
+      "assetRefs": [],
+      "excerptSha256": "65823bed0400fe204a3825b87b2416df528267f1fd62d005ee2e3ad1a5356ac9"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000174"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "[**训练**]"
+      ],
+      "lineStart": 10497,
+      "lineEnd": 10712,
+      "assetRefs": [],
+      "excerptSha256": "133cb4c3f37c13e5478df8d3012bc052508ca04732f6e291874fb01382f20445"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000175"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "小结"
+      ],
+      "lineStart": 10713,
+      "lineEnd": 10719,
+      "assetRefs": [],
+      "excerptSha256": "3430fe394cea5eca405a00eac652bfd9acbf8ae56db08762e877185c8059d095"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000176"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "Transformer",
+        "练习"
+      ],
+      "lineStart": 10720,
+      "lineEnd": 10740,
+      "assetRefs": [],
+      "excerptSha256": "7e4d132f06edab09f92657e9b86933c7d236c67eeaadb45c3f121fad1219bdf0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2265,
+    1611
+  ],
+  "scale": 1.24
+}

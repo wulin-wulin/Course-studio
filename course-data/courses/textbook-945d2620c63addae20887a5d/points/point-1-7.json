@@ -1,0 +1,834 @@
+{
+  "id": "point-1-7",
+  "title": "通过时间反向传播",
+  "shortSummary": "沿时间展开计算图推导梯度，说明梯度爆炸与梯度消失的成因以及数值稳定性处理。",
+  "keyTerms": [
+    "通过时间反向传播",
+    "计算图",
+    "梯度爆炸",
+    "梯度消失"
+  ],
+  "animationType": "bpttGradientFlow",
+  "animationSuggestion": "逐步高亮反向经过的时间步，用箭头宽度表示当前梯度大小，并允许切换 W_hh 特征值的量级，观察梯度在长路径上衰减到接近零或迅速放大。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-1-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "derivation-then-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的推导顺序与符号体系，围绕梯度稳定性目标补充直觉、成本量级与策略取舍，不改变教材公式、结论和适用边界。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-bptt",
+          "text": "解释通过时间反向传播为什么需要沿时间展开计算图，并说明它仍是链式法则的普通应用。"
+        },
+        {
+          "id": "derive-rnn-gradient",
+          "text": "写出循环神经网络隐状态梯度与参数梯度的递归式，并说明展开式中连乘项来自哪条时间路径。"
+        },
+        {
+          "id": "diagnose-instability",
+          "text": "依据 $\\mathbf{W}_{hh}$ 的高次幂和特征值判断梯度消失或梯度爆炸的成因。"
+        },
+        {
+          "id": "choose-truncation",
+          "text": "在完全计算、规则截断和随机截断之间，按计算成本、偏差、方差与正则化效果做出取舍。"
+        }
+      ],
+      "misconceptions": [
+        "把通过时间反向传播当成一种与普通反向传播并列的新算法；它只是把链式法则应用在按时间展开的计算图上。",
+        "认为截断时间步会让梯度完全错误；规则截断得到的是真实梯度的近似，而且实践中通常比完全计算更稳定。",
+        "认为随机截断因为无偏就必然更好；它增加的方差在实践中抵消了精度收益，通常并不优于规则截断。"
+      ],
+      "modules": [
+        {
+          "id": "why-unfold",
+          "title": "问题导入：为什么要在时间上展开",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-bptt"
+          ],
+          "order": 0
+        },
+        {
+          "id": "gradient-recursion",
+          "title": "梯度分析：链式法则的递归结构",
+          "role": "derivation",
+          "outcomeRefs": [
+            "derive-rnn-gradient"
+          ],
+          "order": 1
+        },
+        {
+          "id": "full-computation-limits",
+          "title": "完全计算的代价与数值风险",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "diagnose-instability"
+          ],
+          "order": 2
+        },
+        {
+          "id": "truncation-strategies",
+          "title": "截断策略：规则截断、随机截断与比较",
+          "role": "comparison",
+          "outcomeRefs": [
+            "choose-truncation",
+            "diagnose-instability"
+          ],
+          "order": 3
+        },
+        {
+          "id": "detailed-derivation",
+          "title": "细节推导：三时间步计算图与参数梯度",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "derive-rnn-gradient",
+            "explain-bptt",
+            "diagnose-instability"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "outcomeRefs": [
+            "explain-bptt",
+            "derive-rnn-gradient",
+            "diagnose-instability",
+            "choose-truncation"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-bptt",
+          "derive-rnn-gradient",
+          "diagnose-instability",
+          "choose-truncation"
+        ],
+        "method": "完成显存受限场景下的截断策略取舍题，并写出隐状态梯度递归式的依据。",
+        "successCriteria": [
+          "能写出 $\\partial L/\\partial \\mathbf{h}_t$ 的递归式并指出两项乘积各自的来源",
+          "能说明展开式中矩阵幂次与梯度消失、梯度爆炸的对应关系",
+          "能为给定序列长度和资源预算选出截断策略，并用成本、偏差与方差说明理由"
+        ],
+        "exerciseBlockId": "model-exercise-check",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-2-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-bptt-definition",
+        "moduleId": "why-unfold",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材要点：通过时间反向传播的定义与动机",
+        "markdown": "教材从前面反复出现的“梯度爆炸”“梯度消失”和“分离梯度”三个说法切入，指出此前只是为了快速搭建模型而没有充分解释。循环神经网络的前向传播相对简单，而**通过时间反向传播**（backpropagation through time，BPTT）实际上是反向传播技术在循环神经网络上的一个特定应用：它要求把循环神经网络的计算图**一次展开一个时间步**，以获得模型变量和参数之间的依赖关系，然后基于链式法则应用反向传播来计算和存储梯度。\n\n教材强调这里没有新概念，使用的仍然是链式法则。真正的困难来自序列可能相当长：一个 1000 个字符的序列中，第一个词元可能对最后位置的词元产生重大影响。这在计算上不可行，因为需要的时间和内存都太多，还需要超过 1000 个矩阵的乘积才能得到非常难以捉摸的梯度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000048"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播"
+              ],
+              "lineStart": 3032,
+              "lineEnd": 3068,
+              "assetRefs": [],
+              "excerptSha256": "6520c4376479d6962d44662ee1707c72158d78b34cbcf66ed3f70ba8e3c63192"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-unfold",
+        "moduleId": "why-unfold",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：展开后就是共享权重的深层前馈网络",
+        "markdown": "把循环网络沿时间轴展开后，每个时间步复用同一组参数，整条链等价于一个很深、且各层共享权重的前馈网络。因此反向传播本身没有新规则，所谓“通过时间”只是强调展开的维度是时间。前面章节在序列上调用 `detach`，做的正是在展开链的某个位置切断梯度：被切断之前的隐状态被当作常数，不再继续反向传播。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bptt-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-gradient-setup",
+        "moduleId": "gradient-recursion",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材要点：简化模型的梯度递归与闭式展开",
+        "markdown": "教材先用一个忽略隐状态细节及其更新方式的简化模型展开分析。设时间步 $t$ 的隐状态为 $h_t$、输入为 $x_t$、输出为 $o_t$，隐藏层与输出层权重分别为 $w_h$ 和 $w_o$，则\n\n$$h_t = f(x_t, h_{t-1}, w_h), \\qquad o_t = g(h_t, w_o).$$\n\n前向传播逐个时间步遍历三元组 $(x_t, h_t, o_t)$，并用平均损失评估全部 $T$ 个时间步：\n\n$$L(x_1, \\ldots, x_T, y_1, \\ldots, y_T, w_h, w_o) = \\frac{1}{T}\\sum_{t=1}^T l(y_t, o_t).$$\n\n对 $w_h$ 求梯度时，链式法则给出\n\n$$\\frac{\\partial L}{\\partial w_h} = \\frac{1}{T}\\sum_{t=1}^T \\frac{\\partial l(y_t, o_t)}{\\partial o_t}\\frac{\\partial g(h_t, w_o)}{\\partial h_t}\\frac{\\partial h_t}{\\partial w_h}.$$\n\n前两项容易计算，困难在于 $\\partial h_t/\\partial w_h$：$h_t$ 既直接依赖 $w_h$，又通过 $h_{t-1}$ 间接依赖 $w_h$，于是\n\n$$\\frac{\\partial h_t}{\\partial w_h} = \\frac{\\partial f(x_t, h_{t-1}, w_h)}{\\partial w_h} + \\frac{\\partial f(x_t, h_{t-1}, w_h)}{\\partial h_{t-1}}\\frac{\\partial h_{t-1}}{\\partial w_h}.$$\n\n教材引入序列引理消去递归：若 $a_0 = 0$ 且 $a_t = b_t + c_t a_{t-1}$，则对 $t \\ge 1$ 有\n\n$$a_t = b_t + \\sum_{i=1}^{t-1}\\left(\\prod_{j=i+1}^{t} c_j\\right) b_i.$$\n\n代入 $a_t = \\partial h_t/\\partial w_h$、$b_t = \\partial f(x_t, h_{t-1}, w_h)/\\partial w_h$、$c_t = \\partial f(x_t, h_{t-1}, w_h)/\\partial h_{t-1}$，得到显式展开：\n\n$$\\frac{\\partial h_t}{\\partial w_h} = \\frac{\\partial f(x_t, h_{t-1}, w_h)}{\\partial w_h} + \\sum_{i=1}^{t-1}\\left(\\prod_{j=i+1}^{t}\\frac{\\partial f(x_j, h_{j-1}, w_h)}{\\partial h_{j-1}}\\right)\\frac{\\partial f(x_i, h_{i-1}, w_h)}{\\partial w_h}.$$\n\n$t$ 越大，求和里的连乘就越长，这正是后文讨论数值不稳定与截断的出发点。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000049"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "循环神经网络的梯度分析"
+              ],
+              "lineStart": 3069,
+              "lineEnd": 3140,
+              "assetRefs": [],
+              "excerptSha256": "4f863baa050406a95282fa2c79e87dc0fca2d409a2afbfe8bc7ccbb6894de4be"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-chain-rule-reading",
+        "moduleId": "gradient-recursion",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：把三项乘积和每一步路径读清楚",
+        "markdown": "三项乘积各有分工：$\\partial l(y_t, o_t)/\\partial o_t$ 衡量当前输出的误差；$\\partial g(h_t, w_o)/\\partial h_t$ 把输出误差转成隐状态误差；$\\partial h_t/\\partial w_h$ 才是不易计算的部分。递归式中，$b_t$ 是本时间步参数对隐状态的直接影响，$c_t$ 则是隐状态把更早的影响带过来的通道。\n\n展开后的每一项都对应一条路径：从某个时间步 $i$ 的参数 $w_h$ 出发，穿过 $i+1$ 到 $t$ 的所有隐状态，最终抵达 $h_t$；路径上的连乘正是链式法则逐段相乘的结果。路径越长，参与相乘的雅可比项越多，后文提到的指数式衰减或放大也就越明显。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-gradient-setup"
+          ]
+        }
+      },
+      {
+        "id": "tb-full-computation",
+        "moduleId": "full-computation-limits",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材要点：完全计算的代价",
+        "markdown": "完全计算就是老老实实算出展开式中的全部总和。教材指出这样做非常缓慢，并且可能发生梯度爆炸，因为初始条件的微小变化就可能对结果产生巨大影响。也就是说，可以观察到类似蝴蝶效应的现象：初始条件的很小变化会导致结果发生不成比例的变化。\n\n这对想要估计的模型非常不可取，因为寻找的是能够很好泛化的高稳定性模型的估计器。因此在实践中，这种方法几乎从未使用过。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000050"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "循环神经网络的梯度分析",
+                "完全计算"
+              ],
+              "lineStart": 3141,
+              "lineEnd": 3151,
+              "assetRefs": [],
+              "excerptSha256": "6a91bb3c9e30aeb80fc4050606d91b6b5fdd8cbfebcfa0bdfe4bbf574556f6cf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-of-full",
+        "moduleId": "full-computation-limits",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：成本与不稳定的量级感",
+        "markdown": "完全计算等于把每条时间路径都保留下来：反向传播要走满 $T$ 步，求和项数随 $T$ 增长，序列长达上千个词元时，时间与内存代价都难以承受。更麻烦的是数值表现：路径上的连乘会把初值的小扰动放大或压低好几个数量级，于是估计出的梯度既可能超出可表示范围，也可能小到无法驱动训练。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-full-computation"
+          ]
+        }
+      },
+      {
+        "id": "tb-truncated-bptt",
+        "moduleId": "truncation-strategies",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材要点：截断时间步",
+        "markdown": "规则截断是在 $\\tau$ 步之后截断展开式中的求和，把求和终止在 $\\partial h_{t-\\tau}/\\partial w_h$。这带来真实梯度的*近似*，但教材指出这种方式在实践中工作得很好，通常被称为截断的通过时间反向传播。\n\n截断会让模型主要侧重于短期影响而不是长期影响。教材认为这在现实中是可取的，因为它会把估计值偏向更简单和更稳定的模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000051"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "循环神经网络的梯度分析",
+                "截断时间步"
+              ],
+              "lineStart": 3152,
+              "lineEnd": 3164,
+              "assetRefs": [],
+              "excerptSha256": "a6ba6a2f26a99c93db86d901eb1ac76b4c5f5e6de7bbdb69859cf859145e1dd2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-detach-implementation",
+        "moduleId": "truncation-strategies",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "模型补充：截断在代码中的形态",
+        "markdown": "规则截断在实现上就是每隔 $\\tau$ 步对隐状态调用一次 `detach`：反向传播最多回看 $\\tau$ 步，更早的隐状态被当成常数，不参与梯度计算。$\\tau$ 越大，梯度越接近真实值但越不稳定；$\\tau$ 越小，训练越稳定但越只关注短期影响。\n\n教材前面提到梯度截断对确保收敛至关重要，那是在梯度范数上做限制；这里的截断则是在时间维度上切断计算图，两者稳定训练的层面不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-truncated-bptt"
+          ]
+        }
+      },
+      {
+        "id": "tb-random-truncation",
+        "moduleId": "truncation-strategies",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "教材要点：随机截断",
+        "markdown": "随机截断用一个在期望上正确的随机变量替换 $\\partial h_t/\\partial w_h$，但会截断序列。做法是使用序列 $\\xi_t$：预先给定 $0 \\le \\pi_t \\le 1$，满足 $P(\\xi_t = 0) = 1-\\pi_t$ 且 $P(\\xi_t = \\pi_t^{-1}) = \\pi_t$，因此 $E[\\xi_t] = 1$。用它改写递归得到\n\n$$z_t = \\frac{\\partial f(x_t, h_{t-1}, w_h)}{\\partial w_h} + \\xi_t \\frac{\\partial f(x_t, h_{t-1}, w_h)}{\\partial h_{t-1}}\\frac{\\partial h_{t-1}}{\\partial w_h}.$$\n\n由 $\\xi_t$ 的定义可推出 $E[z_t] = \\partial h_t/\\partial w_h$。每当 $\\xi_t = 0$，递归计算就在该时间步终止，这导致不同长度序列的加权和：长序列出现得少，所以权重被适当加大。教材注明这一想法由塔莱克和奥利维尔提出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "循环神经网络的梯度分析",
+                "随机截断"
+              ],
+              "lineStart": 3165,
+              "lineEnd": 3183,
+              "assetRefs": [],
+              "excerptSha256": "7b5d70d660f5050bc6a734bbe5aa007483b34ea75ea23ef72e9f015b6d2fe62a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-random-variance",
+        "moduleId": "truncation-strategies",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "模型补充：无偏为什么不等于更好用",
+        "markdown": "$\\xi_t$ 以概率 $1-\\pi_t$ 取 0，相当于在该时间步直接掐断递归；以概率 $\\pi_t$ 取 $\\pi_t^{-1}$，则把留下的那条路径放大 $1/\\pi_t$ 倍。平均下来梯度仍然正确，但单次采样的波动很大：少数被保留的长路径权重被显著放大，方差随路径长度增长。\n\n这解释了教材后面的判断——理论上漂亮的估计器在固定计算预算下未必胜过规则截断，因为多出来的方差会抵消“看得更远”带来的精度收益。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-random-truncation"
+          ]
+        }
+      },
+      {
+        "id": "tb-strategy-comparison",
+        "moduleId": "truncation-strategies",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材要点：三种策略的比较",
+        "markdown": "教材用一张比较图展示在循环神经网络上使用通过时间反向传播分析《时间机器》前几个字符的三种策略：第一行是随机截断，把文本划分为不同长度的片断；第二行是常规截断，把文本分解为相同长度的子序列，这也是前面循环神经网络实验中一直采用的做法；第三行是通过时间的完全反向传播，结果是产生了计算上不可行的表达式。\n\n教材同时说明，随机截断虽然理论上具有吸引力，但由于多种因素，实践中很可能并不比常规截断更好。第一，对过去若干个时间步做反向传播后，观测结果已足以捕获实际的依赖关系；第二，增加的方差抵消了时间步数越多梯度越精确这一事实；第三，真正想要的是只有短范围交互的模型。因此模型需要的正是规则截断所具备的轻度正则化效果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "循环神经网络的梯度分析",
+                "比较策略"
+              ],
+              "lineStart": 3184,
+              "lineEnd": 3205,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/truncated-bptt.svg"
+              ],
+              "excerptSha256": "4672a377b6e0d4ac0ecb0748361b4d58de9a89b6cb67fe8889e7d11ac3a6494b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decision-table",
+        "moduleId": "truncation-strategies",
+        "depth": "core",
+        "kind": "table",
+        "title": "模型补充：按统一维度的取舍表",
+        "markdown": "模型补充，依据教材对三种策略的讨论整理。表中的强弱是定性判断，用于比较而非精确测量：\n\n| 策略 | 计算与内存成本 | 偏差 | 方差 | 正则化效果 | 实现复杂度 |\n|---|---|---|---|---|---|\n| 完全计算 | 随 $T$ 增长，长序列不可行 | 无 | 极高，易梯度爆炸或消失 | 无 | 低 |\n| 规则截断 | 固定在 $\\tau$ 步 | 有，偏向短期依赖 | 中 | 有，轻度正则化 | 低 |\n| 随机截断 | 期望上受控，单次波动大 | 无偏 | 高 | 取决于 $\\pi_t$ 的设计 | 中 |\n\n取舍规则：默认使用规则截断；只有在确实需要无偏估计、能接受较大方差并且有调参预算时才考虑随机截断；完全计算只用于离线调试或极短序列。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-strategy-comparison"
+          ]
+        }
+      },
+      {
+        "id": "tb-detail-model",
+        "moduleId": "detailed-derivation",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材要点：线性循环网络与三时间步计算图",
+        "markdown": "为了展示如何计算目标函数相对于所有分解模型参数的梯度，教材考虑一个没有偏置参数、隐藏层激活函数为恒等映射 $\\phi(x) = x$ 的循环神经网络。单个样本的输入与标签为 $\\mathbf{x}_t \\in \\mathbb{R}^d$ 和 $y_t$，隐状态与输出为\n\n$$\\mathbf{h}_t = \\mathbf{W}_{hx}\\mathbf{x}_t + \\mathbf{W}_{hh}\\mathbf{h}_{t-1}, \\qquad \\mathbf{o}_t = \\mathbf{W}_{qh}\\mathbf{h}_t,$$\n\n其中 $\\mathbf{W}_{hx} \\in \\mathbb{R}^{h \\times d}$、$\\mathbf{W}_{hh} \\in \\mathbb{R}^{h \\times h}$、$\\mathbf{W}_{qh} \\in \\mathbb{R}^{q \\times h}$，总体损失为\n\n$$L = \\frac{1}{T}\\sum_{t=1}^T l(\\mathbf{o}_t, y_t).$$\n\n教材用一张三时间步的计算图呈现变量与参数的依赖关系：未着色的方框表示变量，着色的方框表示参数，圆表示运算符。例如时间步 3 的隐状态 $\\mathbf{h}_3$ 取决于参数 $\\mathbf{W}_{hx}$、$\\mathbf{W}_{hh}$，以及上一时间步的隐状态 $\\mathbf{h}_2$ 和当前输入 $\\mathbf{x}_3$。反向传播沿箭头相反方向遍历这张图，依次计算并存储梯度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000054"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "通过时间反向传播的细节"
+              ],
+              "lineStart": 3206,
+              "lineEnd": 3341,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/rnn-bptt.svg"
+              ],
+              "excerptSha256": "59682b633caf80a493b0000e098c8a37b319b2963d2a2536349f326daaad02a4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-detail-h-gradient",
+        "moduleId": "detailed-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材要点：隐状态梯度的递归与展开",
+        "markdown": "在任意时间步 $t$，目标函数对模型输出的微分相当简单：\n\n$$\\frac{\\partial L}{\\partial \\mathbf{o}_t} = \\frac{\\partial l(\\mathbf{o}_t, y_t)}{T \\cdot \\partial \\mathbf{o}_t} \\in \\mathbb{R}^q.$$\n\n由于 $L$ 通过 $\\mathbf{o}_1, \\ldots, \\mathbf{o}_T$ 依赖 $\\mathbf{W}_{qh}$，链式法则给出\n\n$$\\frac{\\partial L}{\\partial \\mathbf{W}_{qh}} = \\sum_{t=1}^T \\frac{\\partial L}{\\partial \\mathbf{o}_t}\\mathbf{h}_t^\\top.$$\n\n在最后的时间步 $T$，$L$ 仅通过 $\\mathbf{o}_T$ 依赖 $\\mathbf{h}_T$：\n\n$$\\frac{\\partial L}{\\partial \\mathbf{h}_T} = \\mathbf{W}_{qh}^\\top \\frac{\\partial L}{\\partial \\mathbf{o}_T}.$$\n\n对任意 $t < T$，$L$ 同时通过 $\\mathbf{h}_{t+1}$ 和 $\\mathbf{o}_t$ 依赖 $\\mathbf{h}_t$，因此隐状态梯度可以递归计算：\n\n$$\\frac{\\partial L}{\\partial \\mathbf{h}_t} = \\mathbf{W}_{hh}^\\top \\frac{\\partial L}{\\partial \\mathbf{h}_{t+1}} + \\mathbf{W}_{qh}^\\top \\frac{\\partial L}{\\partial \\mathbf{o}_t}.$$\n\n展开递归得到\n\n$$\\frac{\\partial L}{\\partial \\mathbf{h}_t} = \\sum_{i=t}^T \\left(\\mathbf{W}_{hh}^\\top\\right)^{T-i}\\mathbf{W}_{qh}^\\top \\frac{\\partial L}{\\partial \\mathbf{o}_{T+t-i}}.$$\n\n教材指出，这个简单的线性例子已经暴露了长序列模型的关键问题：梯度中出现了 $\\mathbf{W}_{hh}^\\top$ 的潜在非常大的幂，小于 1 的特征值将会消失，大于 1 的特征值将会发散，在数值上表现为梯度消失或梯度爆炸。一种解决办法是按需截断时间步长，也就是在给定数量的时间步之后分离梯度；更复杂的序列模型（如长短期记忆模型）会进一步缓解这一问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000054"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "通过时间反向传播的细节"
+              ],
+              "lineStart": 3206,
+              "lineEnd": 3341,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/rnn-bptt.svg"
+              ],
+              "excerptSha256": "59682b633caf80a493b0000e098c8a37b319b2963d2a2536349f326daaad02a4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-eigen-intuition",
+        "moduleId": "detailed-derivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：把矩阵幂次读成收缩或放大",
+        "markdown": "展开式中的 $(\\mathbf{W}_{hh}^\\top)^{T-i}$ 表示同一个矩阵被连续相乘 $T-i$ 次。若它的某个特征值绝对值小于 1，反复相乘会让该方向上的分量指数式衰减，梯度消失；若大于 1，则指数式增长，梯度爆炸。路径越长，$T-i$ 越大，这种效应越明显。\n\n教材特意选用恒等激活的线性例子，正是为了说明：即使没有非线性激活的压缩，时间维度上的重复相乘本身就足以造成数值不稳定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-detail-h-gradient"
+          ]
+        }
+      },
+      {
+        "id": "tb-detail-param-gradient",
+        "moduleId": "detailed-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材要点：隐藏层参数梯度与中间值缓存",
+        "markdown": "最后，$L$ 通过隐状态 $\\mathbf{h}_1, \\ldots, \\mathbf{h}_T$ 依赖隐藏层参数 $\\mathbf{W}_{hx}$ 和 $\\mathbf{W}_{hh}$，应用链式法则得到\n\n$$\\frac{\\partial L}{\\partial \\mathbf{W}_{hx}} = \\sum_{t=1}^T \\frac{\\partial L}{\\partial \\mathbf{h}_t}\\mathbf{x}_t^\\top, \\qquad \\frac{\\partial L}{\\partial \\mathbf{W}_{hh}} = \\sum_{t=1}^T \\frac{\\partial L}{\\partial \\mathbf{h}_t}\\mathbf{h}_{t-1}^\\top,$$\n\n其中 $\\partial L/\\partial \\mathbf{h}_t$ 由前面的递归式计算，是影响数值稳定性的关键量。\n\n训练循环神经网络时交替使用前向传播和通过时间反向传播；后者依次计算并存储上述梯度。具体而言，存储的中间值会被重复使用以避免重复计算，例如存储 $\\partial L/\\partial \\mathbf{h}_t$，以便在计算 $\\partial L/\\partial \\mathbf{W}_{hx}$ 和 $\\partial L/\\partial \\mathbf{W}_{hh}$ 时使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000054"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "通过时间反向传播的细节"
+              ],
+              "lineStart": 3206,
+              "lineEnd": 3341,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/rnn-bptt.svg"
+              ],
+              "excerptSha256": "59682b633caf80a493b0000e098c8a37b319b2963d2a2536349f326daaad02a4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-param-gradient-reading",
+        "moduleId": "detailed-derivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：计算图上的梯度复用",
+        "markdown": "两个隐藏层参数梯度都带求和号，原因是同一个事实：每个时间步的 $\\mathbf{h}_t$ 都依赖 $\\mathbf{W}_{hx}$ 和 $\\mathbf{W}_{hh}$，所以全部时间步的贡献必须累加。\n\n在三时间步的计算图上，这相当于三条“输出损失 → 隐状态 → 参数”的路径汇总到同一组参数上。最自然的实现是倒序先算出每个 $\\partial L/\\partial \\mathbf{h}_t$ 并缓存，再在每一步同时累加两个参数梯度；这样同一条隐状态梯度只计算一次，供多个下游使用，这正是教材强调缓存中间值的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-detail-param-gradient"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材要点：小结",
+        "markdown": "教材小结四点：第一，“通过时间反向传播”仅仅适用于反向传播在具有隐状态的序列模型；第二，截断是计算方便性和数值稳定性的需要，截断包括规则截断和随机截断；第三，矩阵的高次幂可能导致神经网络特征值的发散或消失，将以梯度爆炸或梯度消失的形式表现；第四，为了计算的效率，“通过时间反向传播”在计算期间会缓存中间值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000055"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "小结"
+              ],
+              "lineStart": 3342,
+              "lineEnd": 3348,
+              "assetRefs": [],
+              "excerptSha256": "73b3a7ab537085f7ab721ff872dd9b6770b6ed209f90e824d78f6c0e7100e9c6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：合上教材后的自检清单",
+        "markdown": "尝试不看公式回答四个问题：（1）为什么 $w_h$ 的梯度需要递归计算，而 $w_o$ 的不需要？（2）展开式中每一项的连乘对应哪一条时间路径？（3）特征值略小于 1 和略大于 1 分别会导致什么现象？（4）规则截断得到的是有偏还是无偏估计，为什么实践中仍然首选它？能回答这四问，说明已经掌握本节主干。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：下一点桥接",
+        "markdown": "截断是在训练层面“少看几步”，属于权宜之计；教材在细节推导末尾提示，更复杂的序列模型（如长短期记忆模型）会进一步缓解长程依赖问题。下一知识点门控循环单元（GRU）就从结构入手，用门控决定保留多少历史信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "check-and-bridge",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "教材要点：练习",
+        "markdown": "教材给出两部分练习。第一部分：设对称矩阵 $\\mathbf{M} \\in \\mathbb{R}^{n \\times n}$ 的特征值为 $\\lambda_i$、对应特征向量为 $\\mathbf{v}_i$（$i = 1, \\ldots, n$），且 $|\\lambda_i| \\ge |\\lambda_{i+1}|$。要求证明 $\\mathbf{M}^k$ 拥有特征值 $\\lambda_i^k$；证明对随机向量 $\\mathbf{x} \\in \\mathbb{R}^n$，$\\mathbf{M}^k\\mathbf{x}$ 将有较高概率与 $\\mathbf{M}$ 的特征向量 $\\mathbf{v}_1$ 在一条直线上，并形式化这个证明过程；最后说明上述结果对于循环神经网络中的梯度意味着什么。第二部分：除了梯度截断，还有其他方法应对循环神经网络中的梯度爆炸吗？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "通过时间反向传播",
+                "练习"
+              ],
+              "lineStart": 3349,
+              "lineEnd": 3358,
+              "assetRefs": [],
+              "excerptSha256": "18b6314089f09f321d21ab599fa6ba3de1ae0a9f40a0f1a8fe787654c052b2f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：显存受限时的策略取舍题",
+        "markdown": "情境：某语言模型的训练序列长度 $T = 800$，显存只允许保留约 50 个时间步的计算图。请回答：\n\n1. 应选择哪种通过时间反向传播策略？给出两个理由。\n2. 若把截断步数从 50 提高到 200，梯度估计与显存占用各会怎样变化？\n3. 若改用随机截断，需要额外设计什么，可能付出什么代价？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-instability",
+        "type": "formative-check",
+        "anchorBlockId": "model-eigen-intuition",
+        "moduleId": "detailed-derivation",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-instability"
+        ],
+        "learningPurpose": "检查学习者能否把矩阵幂次与梯度消失、梯度爆炸对应起来。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-detail-h-gradient",
+            "model-eigen-intuition"
+          ]
+        },
+        "config": {
+          "question": "若 W_hh 的某个特征值绝对值为 0.5，经过 100 步连乘后，该方向上的梯度分量大致会怎样？",
+          "options": [
+            "基本不变",
+            "指数式衰减到接近 0",
+            "指数式增长",
+            "随机振荡"
+          ],
+          "answerIndex": 1,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请用 $(\\mathbf{W}_{hh}^\\top)^{T-i}$ 的幂次解释：特征值绝对值小于 1 时，长路径上的梯度分量会发生什么？"
+        }
+      },
+      {
+        "id": "choose-truncation-scenario",
+        "type": "scenario-decision",
+        "anchorBlockId": "model-decision-table",
+        "moduleId": "truncation-strategies",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-truncation"
+        ],
+        "learningPurpose": "在显存受限的长序列场景中做出截断策略取舍并说明依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-strategy-comparison",
+            "tb-truncated-bptt",
+            "model-decision-table"
+          ]
+        },
+        "config": {
+          "scenario": "T=800，显存只允许保留约 50 个时间步",
+          "expectedChoice": "regular-truncation"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定长序列与有限显存，请选择一种通过时间反向传播策略，并用计算成本、偏差与方差三个维度说明理由。"
+        }
+      }
+    ]
+  },
+  "subtitle": "循环神经网络",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000048"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播"
+      ],
+      "lineStart": 3032,
+      "lineEnd": 3068,
+      "assetRefs": [],
+      "excerptSha256": "6520c4376479d6962d44662ee1707c72158d78b34cbcf66ed3f70ba8e3c63192"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000049"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "循环神经网络的梯度分析"
+      ],
+      "lineStart": 3069,
+      "lineEnd": 3140,
+      "assetRefs": [],
+      "excerptSha256": "4f863baa050406a95282fa2c79e87dc0fca2d409a2afbfe8bc7ccbb6894de4be"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000050"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "循环神经网络的梯度分析",
+        "完全计算"
+      ],
+      "lineStart": 3141,
+      "lineEnd": 3151,
+      "assetRefs": [],
+      "excerptSha256": "6a91bb3c9e30aeb80fc4050606d91b6b5fdd8cbfebcfa0bdfe4bbf574556f6cf"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000051"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "循环神经网络的梯度分析",
+        "截断时间步"
+      ],
+      "lineStart": 3152,
+      "lineEnd": 3164,
+      "assetRefs": [],
+      "excerptSha256": "a6ba6a2f26a99c93db86d901eb1ac76b4c5f5e6de7bbdb69859cf859145e1dd2"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000052"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "循环神经网络的梯度分析",
+        "随机截断"
+      ],
+      "lineStart": 3165,
+      "lineEnd": 3183,
+      "assetRefs": [],
+      "excerptSha256": "7b5d70d660f5050bc6a734bbe5aa007483b34ea75ea23ef72e9f015b6d2fe62a"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000053"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "循环神经网络的梯度分析",
+        "比较策略"
+      ],
+      "lineStart": 3184,
+      "lineEnd": 3205,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/truncated-bptt.svg"
+      ],
+      "excerptSha256": "4672a377b6e0d4ac0ecb0748361b4d58de9a89b6cb67fe8889e7d11ac3a6494b"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000054"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "通过时间反向传播的细节"
+      ],
+      "lineStart": 3206,
+      "lineEnd": 3341,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/rnn-bptt.svg"
+      ],
+      "excerptSha256": "59682b633caf80a493b0000e098c8a37b319b2963d2a2536349f326daaad02a4"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000055"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "小结"
+      ],
+      "lineStart": 3342,
+      "lineEnd": 3348,
+      "assetRefs": [],
+      "excerptSha256": "73b3a7ab537085f7ab721ff872dd9b6770b6ed209f90e824d78f6c0e7100e9c6"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000056"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "通过时间反向传播",
+        "练习"
+      ],
+      "lineStart": 3349,
+      "lineEnd": 3358,
+      "assetRefs": [],
+      "excerptSha256": "18b6314089f09f321d21ab599fa6ba3de1ae0a9f40a0f1a8fe787654c052b2f6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1247,
+    2184
+  ],
+  "scale": 0.95
+}

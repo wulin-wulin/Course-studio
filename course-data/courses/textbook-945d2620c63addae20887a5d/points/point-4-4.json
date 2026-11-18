@@ -1,0 +1,811 @@
+{
+  "id": "point-4-4",
+  "title": "预训练word2vec",
+  "shortSummary": "用 PyTorch 实现跳元模型训练，包含嵌入层初始化、负采样损失和词向量相似度评估。",
+  "keyTerms": [
+    "跳元模型",
+    "嵌入层",
+    "负采样损失",
+    "词向量评估"
+  ],
+  "animationType": "skipGramTrainingLoop",
+  "animationSuggestion": "逐步播放一个批量：高亮当前取出的中心词行与上下文/噪声词行，显示点积预测、掩码后的损失和反向传播更新了哪些权重行；跨轮次播放时同步显示平均损失曲线下降，并在结束时展示 chip 等查询词的余弦近邻。",
+  "difficulty": "进阶",
+  "importance": 0.84,
+  "prerequisites": [
+    "point-4-1",
+    "point-4-2",
+    "point-4-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "implementation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 PyTorch 实现顺序、超参数与代码语义，补充张量形状、掩码归一化和训练自检等教学解释，不改变事实与结论。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-pipeline",
+          "text": "说明从数据迭代器、嵌入层到训练循环的跳元模型实现步骤及各步目的。"
+        },
+        {
+          "id": "compute-forward-shapes",
+          "text": "推导嵌入层与批量矩阵乘法在前向传播中产生的张量形状。"
+        },
+        {
+          "id": "apply-masked-bce",
+          "text": "在含填充的批量上应用带掩码的二元交叉熵损失并解释归一化方式。"
+        },
+        {
+          "id": "configure-training",
+          "text": "配置嵌入维度、参数初始化与优化器，运行训练并监控损失。"
+        },
+        {
+          "id": "inspect-similarity",
+          "text": "用余弦相似度检索语义相近词，并根据结果判断词向量质量。"
+        }
+      ],
+      "misconceptions": [
+        "把嵌入层当成固定的查表操作，忽略它的权重就是需要训练的词向量。",
+        "以为填充位置也应当计入损失平均，导致有效位置的损失被稀释。",
+        "以为中心词和上下文词必须共用同一张嵌入矩阵；教材的实现使用两组独立权重。"
+      ],
+      "modules": [
+        {
+          "id": "preflight-data",
+          "title": "前置条件：数据迭代器与词表",
+          "role": "procedure-step",
+          "outcomeRefs": [
+            "explain-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "embedding-forward",
+          "title": "嵌入层与前向传播",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "explain-pipeline",
+            "compute-forward-shapes"
+          ],
+          "order": 1
+        },
+        {
+          "id": "masked-loss",
+          "title": "二元交叉熵损失与掩码",
+          "role": "derivation",
+          "outcomeRefs": [
+            "apply-masked-bce"
+          ],
+          "order": 2
+        },
+        {
+          "id": "init-train",
+          "title": "参数初始化与训练循环",
+          "role": "implementation",
+          "outcomeRefs": [
+            "configure-training",
+            "apply-masked-bce"
+          ],
+          "order": 3
+        },
+        {
+          "id": "similarity-eval",
+          "title": "用余弦相似度评估词向量",
+          "role": "application",
+          "outcomeRefs": [
+            "inspect-similarity"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-practice",
+          "title": "检查表、小结与练习",
+          "role": "consolidation",
+          "outcomeRefs": [
+            "explain-pipeline",
+            "inspect-similarity"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pipeline",
+          "compute-forward-shapes",
+          "apply-masked-bce",
+          "configure-training",
+          "inspect-similarity"
+        ],
+        "method": "完成前向形状推导与掩码损失检查，运行训练并解释相似词检索结果。",
+        "successCriteria": [
+          "能写出前向传播各步的张量形状",
+          "能说明掩码如何影响损失平均",
+          "能指出训练代码中更新参数的顺序",
+          "能用余弦相似度结果判断词向量是否学到了语义关系"
+        ],
+        "exerciseBlockId": "tb-exercises",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-4-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-data-iterators",
+        "moduleId": "preflight-data",
+        "depth": "core",
+        "kind": "code",
+        "title": "先拿到数据迭代器与词表",
+        "markdown": "本节接续上一节定义的**跳元语法模型**：在 PTB 数据集上用负采样预训练 word2vec。动手写模型前，先调用 `d2l.load_data_ptb` 获得数据迭代器和词表；该函数在前一节已经实现，本点不再重复。\n\n```python\nfrom d2l import torch as d2l\nimport math\nimport torch\nfrom torch import nn\n\nbatch_size, max_window_size, num_noise_words = 512, 5, 5\ndata_iter, vocab = d2l.load_data_ptb(batch_size, max_window_size,\n                                     num_noise_words)\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000201"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 11409,
+              "lineEnd": 11454,
+              "assetRefs": [],
+              "excerptSha256": "99462d18d3c1a5e90ecd645e7e412119c3671d49313ce965ced8b52921d22f3d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hyperparameter-reading",
+        "moduleId": "preflight-data",
+        "depth": "support",
+        "kind": "note",
+        "title": "三个超参数分别控制什么",
+        "markdown": "三个超参数决定了每个批量的内容：`batch_size=512` 控制一次前向传播同时处理多少组中心词；`max_window_size=5` 限定上下文词最多取自中心词左右各 5 个位置；`num_noise_words=5` 决定每个中心词配多少个噪声词。它们共同决定了后面前向传播中 `max_len` 的大小，而 `max_len` 又决定预测张量的最后一维。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-data-iterators"
+          ]
+        }
+      },
+      {
+        "id": "tb-skip-gram-overview",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "跳元模型由嵌入层和批量矩阵乘法组成",
+        "markdown": "跳元模型用**嵌入层 + 批量矩阵乘法**实现。实现前先回顾嵌入层的工作方式：它把词元索引映射成特征向量，训练完成后这层权重就是所需的词向量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000202"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "跳元模型"
+              ],
+              "lineStart": 11455,
+              "lineEnd": 11458,
+              "assetRefs": [],
+              "excerptSha256": "5f80e87dd790b68e06cf49aec277993aeddcd52e29147e4975fd5587bea342a9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-embedding-layer",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "嵌入层：按索引取行",
+        "markdown": "嵌入层（`nn.Embedding`）的权重矩阵行数等于字典大小 `num_embeddings`，列数等于每个词元的向量维数 `embedding_dim`；训练结束后这层权重就是词嵌入。\n\n```python\nembed = nn.Embedding(num_embeddings=20, embedding_dim=4)\nprint(f'Parameter embedding_weight ({embed.weight.shape}, '\n      f'dtype={embed.weight.dtype})')\n```\n\n嵌入层的输入是词元索引。对索引 $i$，其向量表示就是权重矩阵的第 $i$ 行。当小批量索引形状为 (2, 3)、`embedding_dim=4` 时，输出形状为 (2, 3, 4)：每个标量索引都被替换成一个 4 维向量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000203"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "跳元模型",
+                "嵌入层"
+              ],
+              "lineStart": 11459,
+              "lineEnd": 11490,
+              "assetRefs": [],
+              "excerptSha256": "b68231a1acc276ed26da230f24a9c1ad0ddcf88b349d76c2ae999e67bd46841a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-embedding-lookup",
+        "moduleId": "embedding-forward",
+        "depth": "support",
+        "kind": "note",
+        "title": "把嵌入层看成可训练的查找表",
+        "markdown": "嵌入层可以理解成一张**可训练的查找表**：前向时按索引取行，反向时只有被取到的行收到梯度并更新。同一个词在不同批量中反复作为中心词或上下文词出现，它的向量就会被多次修正，这正是词向量能学到语义关系的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-skip-gram-overview",
+            "tb-embedding-layer"
+          ]
+        }
+      },
+      {
+        "id": "tb-forward-pass",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "kind": "code",
+        "title": "前向传播：两次查表加批量矩阵乘法",
+        "markdown": "前向传播接收两个输入：形状为 (批量大小, 1) 的中心词索引 `center`，以及形状为 (批量大小, `max_len`) 的上下文与噪声词索引 `contexts_and_negatives`。两者先分别过嵌入层变成向量，再作批量矩阵乘法，返回形状为 (批量大小, 1, `max_len`) 的输出；其中每个元素是中心词向量与某个上下文词或噪声词向量的点积。\n\n```python\ndef skip_gram(center, contexts_and_negatives, embed_v, embed_u):\n    v = embed_v(center)\n    u = embed_u(contexts_and_negatives)\n    pred = torch.bmm(v, u.permute(0, 2, 1))\n    return pred\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000204"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "跳元模型",
+                "定义前向传播"
+              ],
+              "lineStart": 11491,
+              "lineEnd": 11538,
+              "assetRefs": [],
+              "excerptSha256": "fed44fcff975c9580ae9723e7bbd4a4b1c9dd1a0b01d8382b7a9d80a883bb182"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-walkthrough",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "形状推导实例",
+        "markdown": "以 `skip_gram(torch.ones((2, 1)), torch.ones((2, 4)), embed, embed)` 为例：`v` 的形状是 (2, 1, `embedding_dim`)，`u` 是 (2, 4, `embedding_dim`)；`u.permute(0, 2, 1)` 把它变成 (2, `embedding_dim`, 4)，`torch.bmm` 再作批量矩阵乘法，输出 (2, 1, 4)。点积逐个元素计算，向量维度只参与求和，不进入输出形状。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-forward-pass"
+          ]
+        }
+      },
+      {
+        "id": "tb-loss-prelude",
+        "moduleId": "masked-loss",
+        "depth": "support",
+        "kind": "note",
+        "title": "训练前先定义损失",
+        "markdown": "训练带负采样的跳元模型之前，先定义它的损失函数：按负采样损失的定义，目标是把「真实上下文词 / 噪声词」的预测当作二元分类来处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000205"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "训练"
+              ],
+              "lineStart": 11539,
+              "lineEnd": 11542,
+              "assetRefs": [],
+              "excerptSha256": "4f6dd21465b34478e118b2c01c64d35823c1bf0b3694b5d57181389d40c49007"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-masked-bce-loss",
+        "moduleId": "masked-loss",
+        "depth": "core",
+        "kind": "code",
+        "title": "带掩码的二元交叉熵损失",
+        "markdown": "教材使用**带掩码的二元交叉熵损失**。`SigmoidBCELoss` 对每个预测计算 `binary_cross_entropy_with_logits`，用 `reduction=\"none\"` 保留逐元素损失，再用 `mean(dim=1)` 在 `max_len` 维上取平均；`mask` 把填充位置的权重置 0：\n\n```python\nclass SigmoidBCELoss(nn.Module):\n    # 带掩码的二元交叉熵损失\n    def __init__(self):\n        super().__init__()\n\n    def forward(self, inputs, target, mask=None):\n        out = nn.functional.binary_cross_entropy_with_logits(\n            inputs, target, weight=mask, reduction=\"none\")\n        return out.mean(dim=1)\n\nloss = SigmoidBCELoss()\n```\n\n训练循环中再把每个样本的损失按 `mask.sum(axis=1)` 归一化、乘回 `mask.shape[1]`，从而只在非掩码预测上取平均。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000206"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "训练",
+                "二元交叉熵损失"
+              ],
+              "lineStart": 11543,
+              "lineEnd": 11609,
+              "assetRefs": [],
+              "excerptSha256": "3e0fd00dd4f6913fb295e4d58c0242d9b5a622a3369c6e3a2b81fe2cbdbbe487"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mask-normalization",
+        "moduleId": "masked-loss",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "掩码与归一化的作用",
+        "markdown": "掩码只回答「这个位置算不算数」。设 `mask.shape[1] = L`、有效位置数为 `m = mask.sum(axis=1)`，把按 `L` 个位置平均后的损失乘以 $L / m$，就等价于只在 `m` 个有效位置上求平均；若不做这一步，填充位会把损失稀释。\n\n教材给出的手工核对也说明了这一点：`pred = [1.1, -2.2, 3.3, -4.4]`。第一行标签 `[1, 0, 0, 0]` 全部有效，四项损失取平均；第二行掩码 `[1, 1, 0, 0]`，只保留前两项损失再除以 2。其中 $\\operatorname{sigmd}(x) = \\log(1 + e^{-x})$ 对应标签为 1 时的交叉熵，标签为 0 时则取 $\\operatorname{sigmd}(-x)$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loss-prelude",
+            "tb-masked-bce-loss"
+          ]
+        }
+      },
+      {
+        "id": "tb-init-embeddings",
+        "moduleId": "init-train",
+        "depth": "core",
+        "kind": "code",
+        "title": "初始化两张嵌入矩阵",
+        "markdown": "接着初始化模型参数：定义**两个嵌入层**，分别把词表中的所有词当作中心词和上下文词使用；词向量维度 `embed_size` 设为 100。\n\n```python\nembed_size = 100\nnet = nn.Sequential(nn.Embedding(num_embeddings=len(vocab),\n                                 embedding_dim=embed_size),\n                    nn.Embedding(num_embeddings=len(vocab),\n                                 embedding_dim=embed_size))\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000207"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "训练",
+                "初始化模型参数"
+              ],
+              "lineStart": 11610,
+              "lineEnd": 11629,
+              "assetRefs": [],
+              "excerptSha256": "0994ab667d3d51675de9a97aa78d8599f10dd8e16164227d15fcbc910a3abe24"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-independent-embeddings",
+        "moduleId": "init-train",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "两张嵌入矩阵不是同一个",
+        "markdown": "常见误解是「中心词和上下文词必须共用同一张嵌入矩阵」。教材的实现使用两个独立的 `nn.Embedding`：`net[0]` 处理中心词，`net[1]` 处理上下文与噪声词，两组权重各自更新。训练后常用 `net[0]` 查词向量，这只是使用习惯；改成共享权重属于另一种设计选择，不是这个实现的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-init-embeddings"
+          ]
+        }
+      },
+      {
+        "id": "tb-train-function",
+        "moduleId": "init-train",
+        "depth": "core",
+        "kind": "code",
+        "title": "训练阶段代码",
+        "markdown": "由于填充的存在，训练时的损失计算与之前的训练函数略有不同。`train` 先对嵌入层作 Xavier 均匀初始化，再用 Adam 优化器按学习率更新参数；每个批量依次计算前向输出、带掩码的损失并反传：\n\n```python\ndef train(net, data_iter, lr, num_epochs, device=d2l.try_gpu()):\n    def init_weights(m):\n        if type(m) == nn.Embedding:\n            nn.init.xavier_uniform_(m.weight)\n    net.apply(init_weights)\n    net = net.to(device)\n    optimizer = torch.optim.Adam(net.parameters(), lr=lr)\n    animator = d2l.Animator(xlabel='epoch', ylabel='loss',\n                            xlim=[1, num_epochs])\n    # 规范化的损失之和，规范化的损失数\n    metric = d2l.Accumulator(2)\n    for epoch in range(num_epochs):\n        timer, num_batches = d2l.Timer(), len(data_iter)\n        for i, batch in enumerate(data_iter):\n            optimizer.zero_grad()\n            center, context_negative, mask, label = [\n                data.to(device) for data in batch]\n\n            pred = skip_gram(center, context_negative, net[0], net[1])\n            l = (loss(pred.reshape(label.shape).float(), label.float(), mask)\n                     / mask.sum(axis=1) * mask.shape[1])\n            l.sum().backward()\n            optimizer.step()\n            metric.add(l.sum(), l.numel())\n            if (i + 1) % (num_batches // 5) == 0 or i == num_batches - 1:\n                animator.add(epoch + (i + 1) / num_batches,\n                             (metric[0] / metric[1],))\n    print(f'loss {metric[0] / metric[1]:.3f}, '\n          f'{metric[1] / timer.stop():.1f} tokens/sec on {str(device)}')\n```\n\n随后用 `lr, num_epochs = 0.002, 5` 调用 `train(net, data_iter, lr, num_epochs)` 完成预训练。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000208"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "训练",
+                "定义训练阶段代码"
+              ],
+              "lineStart": 11630,
+              "lineEnd": 11735,
+              "assetRefs": [],
+              "excerptSha256": "d7f055938ffd66dd60fb078e5b64ffd2f0ca2d1c226a9eb784ebaeeab81c62ee"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-checklist",
+        "moduleId": "init-train",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练代码自检顺序",
+        "markdown": "按固定顺序检查训练代码，能更快定位实现错误：\n\n1. 每个批量先 `optimizer.zero_grad()`，清掉上一批的梯度；\n2. `skip_gram` 用 `net[0]` 处理中心词、`net[1]` 处理上下文与噪声词；\n3. 预测先 `reshape` 到标签形状，再送入带掩码的损失；\n4. 损失按有效位置数归一化后 `sum().backward()`；\n5. `optimizer.step()` 更新参数，并记录规范化后的平均损失。\n\n若损失不下降，先核对第 2 步两个嵌入层是否用反，再检查第 3 步预测与标签是否对齐。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-train-function"
+          ]
+        }
+      },
+      {
+        "id": "tb-apply-embeddings",
+        "moduleId": "similarity-eval",
+        "depth": "core",
+        "kind": "code",
+        "title": "应用词嵌入：查找相似词",
+        "markdown": "训练完 word2vec 模型后，可以用词向量的**余弦相似度**从词表中找出与输入词语义最相似的词。`get_similar_tokens` 取嵌入矩阵 `W` 与查询词向量 `x`，计算每个词的余弦相似度后取前 $k+1$ 个；第一个是查询词本身，输出时跳过：\n\n```python\ndef get_similar_tokens(query_token, k, embed):\n    W = embed.weight.data\n    x = W[vocab[query_token]]\n    # 计算余弦相似性。增加1e-9以获得数值稳定性\n    cos = torch.mv(W, x) / torch.sqrt(torch.sum(W * W, dim=1) *\n                                      torch.sum(x * x) + 1e-9)\n    topk = torch.topk(cos, k=k+1)[1].cpu().numpy().astype('int32')\n    for i in topk[1:]:  # 删除输入词\n        print(f'cosine sim={float(cos[i]):.3f}: {vocab.to_tokens(i)}')\n\nget_similar_tokens('chip', 3, net[0])\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000209"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "应用词嵌入"
+              ],
+              "lineStart": 11736,
+              "lineEnd": 11784,
+              "assetRefs": [],
+              "excerptSha256": "8bec0c66f96691e47ed91e877f61e5576b90faa30ea0cdc44872660a275ffef7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cosine-similarity",
+        "moduleId": "similarity-eval",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "余弦相似度衡量方向而非长度",
+        "markdown": "余弦相似度比较的是两个向量的方向，而不是它们的长度：\n\n$$\\cos(\\mathbf{x}, \\mathbf{w}_i) = \\frac{\\mathbf{w}_i^{\\top}\\mathbf{x}}{\\sqrt{(\\mathbf{w}_i^{\\top}\\mathbf{w}_i)(\\mathbf{x}^{\\top}\\mathbf{x})}}$$\n\n代码里 `torch.mv(W, x)` 一次算出所有行的点积，`torch.sqrt(torch.sum(W * W, dim=1) * torch.sum(x * x) + 1e-9)` 给出分母；加 `1e-9` 只是为了避免零向量导致除零。相似度越接近 1，两个词在训练语料中的使用方式越接近。示例中查询 `chip` 得到的近邻是否合理，取决于语料规模、窗口大小和训练轮数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-apply-embeddings"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-and-practice",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "* 可以使用嵌入层和二元交叉熵损失来训练带负采样的跳元模型；\n* 词嵌入的应用包括基于词向量的余弦相似度为给定词找到语义相似的词。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000210"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "小结"
+              ],
+              "lineStart": 11785,
+              "lineEnd": 11789,
+              "assetRefs": [],
+              "excerptSha256": "d4ed4577145a5ee623b7c639079e7656d094971a2835e91bf285467e1d32ec33"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-debug-checklist",
+        "moduleId": "check-and-practice",
+        "depth": "support",
+        "kind": "note",
+        "title": "端到端的两个检查点",
+        "markdown": "把小结的两点连起来，可以作为端到端自检：训练侧看平均损失是否随轮次下降、是否出现 `NaN`；应用侧看已知语义相近的词（如示例中的 `chip`）是否出现在近邻列表前几位。若训练损失正常而近邻明显无关，优先怀疑语料太小、窗口设置不当或训练轮数不足，而不是相似度公式写错。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-train-function",
+            "tb-apply-embeddings"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "check-and-practice",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "练习",
+        "markdown": "1. 使用训练好的模型，找出其他输入词在语义上相似的词。能通过调优超参数改进结果吗？\n2. 当训练语料库很大时，更新参数时经常对当前小批量的**中心词**重新采样上下文词和噪声词。换言之，同一中心词在不同训练轮次可以有不同的上下文词或噪声词。这种方法的好处是什么？尝试实现它。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000211"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec",
+                "练习"
+              ],
+              "lineStart": 11790,
+              "lineEnd": 11806,
+              "assetRefs": [],
+              "excerptSha256": "468c63f1f13e375e8596761a69beca98d9ed9fcd508ce99b0f76eb0d9e473a8d"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "shape-trace-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-shape-walkthrough",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-forward-shapes"
+        ],
+        "learningPurpose": "检查学习者能否脱离代码独立推导前向传播各步的张量形状。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-forward-pass",
+            "model-shape-walkthrough"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "设 `embedding_dim=100`、批量大小为 2、`max_len=4`，分别写出 `v`、`u`、`u.permute(0, 2, 1)` 和最终输出 `pred` 的形状，并说明哪些维度参与了点积求和。"
+        }
+      },
+      {
+        "id": "similarity-result-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-cosine-similarity",
+        "moduleId": "similarity-eval",
+        "depth": "core",
+        "outcomeRefs": [
+          "inspect-similarity"
+        ],
+        "learningPurpose": "检查学习者能否用余弦相似度的含义解释检索结果，并区分公式问题与训练不足。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-apply-embeddings",
+            "model-cosine-similarity"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "查询词 `chip` 返回的三近邻相似度分别为 0.62、0.41、0.40，其中只有一个是语义相关词。请说明相似度数值的含义，并列出两个可能导致近邻质量差的原因。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000201"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec"
+      ],
+      "lineStart": 11409,
+      "lineEnd": 11454,
+      "assetRefs": [],
+      "excerptSha256": "99462d18d3c1a5e90ecd645e7e412119c3671d49313ce965ced8b52921d22f3d"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000202"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "跳元模型"
+      ],
+      "lineStart": 11455,
+      "lineEnd": 11458,
+      "assetRefs": [],
+      "excerptSha256": "5f80e87dd790b68e06cf49aec277993aeddcd52e29147e4975fd5587bea342a9"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000203"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "跳元模型",
+        "嵌入层"
+      ],
+      "lineStart": 11459,
+      "lineEnd": 11490,
+      "assetRefs": [],
+      "excerptSha256": "b68231a1acc276ed26da230f24a9c1ad0ddcf88b349d76c2ae999e67bd46841a"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000204"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "跳元模型",
+        "定义前向传播"
+      ],
+      "lineStart": 11491,
+      "lineEnd": 11538,
+      "assetRefs": [],
+      "excerptSha256": "fed44fcff975c9580ae9723e7bbd4a4b1c9dd1a0b01d8382b7a9d80a883bb182"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000205"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "训练"
+      ],
+      "lineStart": 11539,
+      "lineEnd": 11542,
+      "assetRefs": [],
+      "excerptSha256": "4f6dd21465b34478e118b2c01c64d35823c1bf0b3694b5d57181389d40c49007"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000206"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "训练",
+        "二元交叉熵损失"
+      ],
+      "lineStart": 11543,
+      "lineEnd": 11609,
+      "assetRefs": [],
+      "excerptSha256": "3e0fd00dd4f6913fb295e4d58c0242d9b5a622a3369c6e3a2b81fe2cbdbbe487"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000207"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "训练",
+        "初始化模型参数"
+      ],
+      "lineStart": 11610,
+      "lineEnd": 11629,
+      "assetRefs": [],
+      "excerptSha256": "0994ab667d3d51675de9a97aa78d8599f10dd8e16164227d15fcbc910a3abe24"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000208"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "训练",
+        "定义训练阶段代码"
+      ],
+      "lineStart": 11630,
+      "lineEnd": 11735,
+      "assetRefs": [],
+      "excerptSha256": "d7f055938ffd66dd60fb078e5b64ffd2f0ca2d1c226a9eb784ebaeeab81c62ee"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000209"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "应用词嵌入"
+      ],
+      "lineStart": 11736,
+      "lineEnd": 11784,
+      "assetRefs": [],
+      "excerptSha256": "8bec0c66f96691e47ed91e877f61e5576b90faa30ea0cdc44872660a275ffef7"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000210"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "小结"
+      ],
+      "lineStart": 11785,
+      "lineEnd": 11789,
+      "assetRefs": [],
+      "excerptSha256": "d4ed4577145a5ee623b7c639079e7656d094971a2835e91bf285467e1d32ec33"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000211"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec",
+        "练习"
+      ],
+      "lineStart": 11790,
+      "lineEnd": 11806,
+      "assetRefs": [],
+      "excerptSha256": "468c63f1f13e375e8596761a69beca98d9ed9fcd508ce99b0f76eb0d9e473a8d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1701,
+    1443
+  ],
+  "scale": 0.97
+}

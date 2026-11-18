@@ -1,0 +1,542 @@
+{
+  "id": "point-4-10",
+  "title": "预训练BERT",
+  "shortSummary": "实现掩码语言建模与下一句预测的训练流程，讨论损失构成、掩码比例和训练开销。",
+  "keyTerms": [
+    "掩码语言建模",
+    "下一句预测",
+    "预训练损失",
+    "训练开销"
+  ],
+  "animationType": "bertPretrainingSteps",
+  "animationSuggestion": "逐步展示一个批次进入模型后分别在遮蔽位置和句对位置产生两项损失，相加后更新参数，并同时绘制 MLM 与 NSP 损失随训练步数下降的曲线。",
+  "difficulty": "进阶",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-4-8",
+    "point-4-9"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的模型规模、损失定义和训练步骤，按“数据与配置—损失构成—训练流程—表示使用—开销检查”重排讲解，并补充公式解读、易错点与练习思路。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-two-objectives",
+          "text": "说明 BERT 预训练如何用掩码语言建模和下一句预测从无标注语料中构造监督信号。"
+        },
+        {
+          "id": "describe-configuration",
+          "text": "说出演示模型与 BERT-base、BERT-large 在层数、隐藏单元、注意力头和参数量上的差别。"
+        },
+        {
+          "id": "compute-total-loss",
+          "text": "写出掩码语言建模损失、下一句预测损失和总损失的计算式，并说明各自的归一化方式。"
+        },
+        {
+          "id": "trace-training-step",
+          "text": "按顺序描述一个训练步从取批次、前向、计算两项损失、反向传播到参数更新的流程。"
+        },
+        {
+          "id": "use-contextual-representation",
+          "text": "用教材的 crane 例子说明预训练后的 BERT 表示是上下文敏感的，并说明取句子表示的常用位置。"
+        },
+        {
+          "id": "analyze-cost",
+          "text": "解释模型规模、序列长度和批量大小如何共同决定预训练的显存占用与训练时间。"
+        }
+      ],
+      "misconceptions": [
+        "认为 BERT 预训练只有掩码语言建模一项损失，忽略下一句预测也参与总损失。",
+        "把预训练后的词元表示当成固定的静态词向量，认为同一个词在任何句子中向量不变。",
+        "认为把最大序列长度从 64 调到 512 只是训练变慢一点，不需要额外的显存预算。"
+      ],
+      "modules": [
+        {
+          "id": "pretraining-configuration",
+          "title": "数据准备与模型配置",
+          "role": "orientation",
+          "description": "用 WikiText-2 小批量样本和缩小版模型跑通预训练，先看清输入与规模。",
+          "outcomeRefs": [
+            "describe-configuration"
+          ],
+          "order": 0
+        },
+        {
+          "id": "loss-composition",
+          "title": "两项损失与总损失",
+          "role": "mechanism",
+          "description": "拆开 MLM 与 NSP 的监督信号、归一化方式和相加关系。",
+          "outcomeRefs": [
+            "explain-two-objectives",
+            "compute-total-loss"
+          ],
+          "order": 1
+        },
+        {
+          "id": "training-procedure",
+          "title": "训练循环与优化",
+          "role": "procedure",
+          "description": "按顺序走完一个训练步，并指出容易出错的细节。",
+          "outcomeRefs": [
+            "trace-training-step"
+          ],
+          "order": 2
+        },
+        {
+          "id": "representation-and-use",
+          "title": "用预训练模型表示文本",
+          "role": "application",
+          "description": "把编码结果用到单句与句对上，验证表示的上下文敏感性。",
+          "outcomeRefs": [
+            "use-contextual-representation"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-and-check",
+          "title": "训练开销与达成检查",
+          "role": "check",
+          "description": "把参数量与序列长度换算成资源需求，并用教材练习检验理解。",
+          "outcomeRefs": [
+            "analyze-cost"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-two-objectives",
+          "describe-configuration",
+          "compute-total-loss",
+          "trace-training-step",
+          "use-contextual-representation",
+          "analyze-cost"
+        ],
+        "method": "独立写出两项损失的计算式与总损失，按顺序说明一次参数更新，用 crane 例子说明表示的上下文敏感性，并完成两道教材练习。",
+        "successCriteria": [
+          "能说明两项任务的标签如何由数据构造产生，并说出演示模型与 BERT-base、BERT-large 的规模差别",
+          "总损失写成 MLM 与 NSP 之和，并说明 MLM 按掩码权重归一化、NSP 按句对求平均",
+          "训练步顺序正确，且能指出 num_steps 指迭代步数而非训练轮数",
+          "能用 crane 例子解释同一词元的表示为何随上下文变化",
+          "能结合词表规模与显存约束解释练习中的两个现象"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-5-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-setup",
+        "moduleId": "pretraining-configuration",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "在 WikiText-2 上开始预训练",
+        "markdown": "本节把前面搭好的 BERT 模型放到 WikiText-2 语料上做真正的预训练，模型沿用已有的 BERT 实现，样本沿用已生成的预训练数据。演示代码取批量大小 512、输入序列最大长度 64；教材特别提醒，原始 BERT 的最大长度是 512。\n\n训练代码按批次读取样本，每个样本同时携带词元、片段标记、有效长度、遮蔽位置、掩码权重、遮蔽位置的标签以及下一句标签，因此一个批次就能同时驱动两个预训练任务。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000248"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT"
+              ],
+              "lineStart": 13376,
+              "lineEnd": 13431,
+              "assetRefs": [],
+              "excerptSha256": "39c0aa4a3a5715250295455451fa65a3df7cd82e7048d02e03d61751a3e4fc3a"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-model-scale",
+        "moduleId": "pretraining-configuration",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型规模与演示配置",
+        "markdown": "原始 BERT 提供两个尺寸。基本模型 $\\text{BERT}_{\\text{BASE}}$ 使用 12 层 Transformer 编码器块、768 个隐藏单元和 12 个自注意力头，约有 1.1 亿个参数；大模型 $\\text{BERT}_{\\text{LARGE}}$ 使用 24 层、1024 个隐藏单元和 16 个自注意力头，约有 3.4 亿个参数。\n\n为了便于演示，教材另外定义了一个缩小版模型：2 层、128 个隐藏单元、256 维前馈隐藏层、2 个自注意力头，丢弃率为 0.2，两项任务共用交叉熵损失。缩小规模不改变训练机制，只降低单步计算量和显存占用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000249"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT",
+                "预训练BERT"
+              ],
+              "lineStart": 13432,
+              "lineEnd": 13663,
+              "assetRefs": [],
+              "excerptSha256": "2d96e5b267ab47ac84ed002d15dd71185acce497778bacacaab04f172ccde2a5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-loss-composition",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "formula",
+        "title": "两项损失与总损失",
+        "markdown": "损失计算集中在 `_get_batch_loss_bert`：一次前向同时得到遮蔽位置上的词元预测 $\\hat{y}$ 和句对预测 $\\hat{z}$，再分别计算两项损失。\n\n掩码语言建模损失对每个被遮蔽位置取交叉熵，再按掩码权重 $w_i$ 求和并除以权重总和：\n\n$$L_{\\text{MLM}} = \\frac{\\sum_i w_i \\, \\ell(\\hat{y}_i, y_i)}{\\sum_i w_i + 10^{-8}}$$\n\n下一句预测损失对每个句对取交叉熵后求平均：\n\n$$L_{\\text{NSP}} = \\frac{1}{N} \\sum_{j=1}^{N} \\ell(\\hat{z}_j, z_j)$$\n\n一个批次的最终损失是两者之和。教材明确指出，BERT 预训练的最终损失是遮蔽语言模型损失与下一句预测损失的和。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000249"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT",
+                "预训练BERT"
+              ],
+              "lineStart": 13432,
+              "lineEnd": 13663,
+              "assetRefs": [],
+              "excerptSha256": "2d96e5b267ab47ac84ed002d15dd71185acce497778bacacaab04f172ccde2a5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-weighting",
+        "moduleId": "loss-composition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "两个分母在做什么",
+        "markdown": "两个分母值得多看一眼。MLM 的损失先乘掩码权重再除以权重总和，等价于只在被选中的位置上取平均，没有被遮到的位置不会把损失稀释；分母上的 $10^{-8}$ 只是防止整批都没有遮蔽位置时除零。NSP 已经对句对求了平均，量纲同样是“每个预测的平均交叉熵”，所以两项可以直接相加，不必再引入额外系数。\n\n如果实际训练中给某一项乘上系数，就等于改变了该任务在梯度中的比重，这属于调参选择，而不是教材给出的默认做法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-loss-composition"
+          ]
+        }
+      },
+      {
+        "id": "model-two-signals",
+        "moduleId": "loss-composition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "监督信号从哪里来",
+        "markdown": "批次里的 `mlm_weights`、`mlm_Y` 和 `nsp_y` 说明了监督信号的来源：标签不是人工标注，而是构造样本时挖空词元、拼接句对产生的。挖掉哪个词元、原词是什么由数据集阶段记录，句对是否相邻由采样方式决定，训练时只需按这些标签计算交叉熵。\n\n这就是 BERT 能在无标注文本上预训练的原因——监督信息由数据构造规则自带，模型学的是如何还原被挖掉的内容以及判断句子关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-loss-composition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-training-loop",
+        "moduleId": "training-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练循环",
+        "markdown": "`train_bert` 使用 Adam 优化器、学习率 0.01 进行训练。参数 `num_steps` 指定迭代步数而不是训练轮数，因为 BERT 预训练通常只跑固定步数。\n\n每个训练步依次执行：取一个批次并把张量搬到设备、清零梯度、前向计算两项损失与总损失、对总损失反向传播、更新参数；随后累计 MLM 与 NSP 的损失均值并记录到曲线。循环在达到 `num_steps` 时停止，最后打印平均 MLM 损失、平均 NSP 损失以及每秒处理的句对数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000249"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT",
+                "预训练BERT"
+              ],
+              "lineStart": 13432,
+              "lineEnd": 13663,
+              "assetRefs": [],
+              "excerptSha256": "2d96e5b267ab47ac84ed002d15dd71185acce497778bacacaab04f172ccde2a5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loop-notes",
+        "moduleId": "training-procedure",
+        "depth": "support",
+        "kind": "warning",
+        "title": "训练循环的三个易错点",
+        "markdown": "第一，清零梯度必须放在前向之前，否则上一步的梯度会叠加到本步。第二，反向传播只对总损失调用一次，两项损失各自的梯度会一起进入同一组参数；分开反传会让参数更新两次。第三，记录时分开累计 `mlm` 与 `nsp`，是为了看清两项任务是否都在下降；只看总和时，某一项变差可能被另一项的改善掩盖。\n\n另外，`num_steps` 按步计数意味着训练时长由步数和每步耗时共同决定。换了数据集或批量大小后，不能照搬同一个步数，否则可能训练不足或白跑很多步。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-training-loop"
+          ]
+        }
+      },
+      {
+        "id": "textbook-representation",
+        "moduleId": "representation-and-use",
+        "depth": "core",
+        "kind": "example",
+        "title": "用预训练 BERT 表示文本",
+        "markdown": "预训练完成后可以直接把 BERT 当作编码器使用。`get_bert_encoding` 把一段文本或一对文本转成词元与片段标记，补上 `<cls>` 和 `<sep>`，前向得到每个位置的表示。\n\n以 “a crane is flying” 为例，加入特殊词元后序列长度为 6，`encoded_text[:, 0, :]` 是 `<cls>` 位置的向量，通常当作整句表示；`encoded_text[:, 2, :]` 是 “crane” 的表示。改看句对 “a crane driver came” 与 “he just left”，`encoded_pair[:, 0, :]` 是整对句子的表示，而 “crane” 的表示前三个元素与上一句不同。教材据此说明，BERT 表示是上下文敏感的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000250"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT",
+                "用BERT表示文本"
+              ],
+              "lineStart": 13664,
+              "lineEnd": 13728,
+              "assetRefs": [],
+              "excerptSha256": "1e2bec25d69f4f5aa6fa9840effd3b138b5f6b00004c1dc6e605f208e27ffc30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-context-sensitivity",
+        "moduleId": "representation-and-use",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么同一词元会变",
+        "markdown": "这个对比说明预训练得到的不是一张固定的词向量表。同一个 “crane” 在 “is flying” 与 “driver came” 中周围的上下文不同，经过多层自注意力后它的向量吸收了附近词的信息，数值因此改变。所以用 BERT 表示文本时，必须把整句或整个句对一起送进模型，再取对应位置的输出；单独查某个词元拿不到这种表示。\n\n`<cls>` 位置可以充当句子级向量，但它的含义同样来自与整句的注意力交互，而不是一个与上下文无关的常量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-representation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "cost-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材小结给出三点：原始 BERT 的基本模型有 1.1 亿个参数，大模型有 3.4 亿个参数；预训练之后可以用它表示单个文本、文本对或其中的任何词元；实验中同一个词元在不同上下文中得到不同表示，这支持 BERT 表示是上下文敏感的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000251"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT",
+                "小结"
+              ],
+              "lineStart": 13729,
+              "lineEnd": 13734,
+              "assetRefs": [],
+              "excerptSha256": "17a0839b208e247e4ba2a77aa6c28689d54dbf2a38c83b58bf04411703e83ede"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-analysis",
+        "moduleId": "cost-and-check",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "开销由哪些因素放大",
+        "markdown": "把规模数字和序列长度放在一起，就能看出开销从哪里来。参数从演示模型的百万级升到 1.1 亿或 3.4 亿，单步前向与反向的计算量同比例上升，Adam 还要为每个参数保存优化器状态。序列长度从 64 增到 512 时，自注意力的计算量随长度平方增长，激活值占用的显存也随长度和批量大小一起增加；批量 512 配 512 长度，很容易超出单张显卡的容量。\n\n这正是教材把演示设置为 2 层、128 个隐藏单元和长度 64 的原因：训练机制完全一样，只是把资源需求压到普通设备能跑完的范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-model-scale",
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "cost-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "教材给出两道练习：\n\n1. 实验中可以看到遮蔽语言模型损失明显高于下一句预测损失，为什么？\n2. 把 BERT 输入序列的最大长度设为 512（与原始 BERT 相同），并使用 $\\text{BERT}_{\\text{LARGE}}$ 的配置运行本节代码，是否会遇到错误？为什么？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000252"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练BERT",
+                "练习"
+              ],
+              "lineStart": 13735,
+              "lineEnd": 13751,
+              "assetRefs": [],
+              "excerptSha256": "b90d4fda2cff3fe553417f8cb8b163d5ef3034475a87598d754e699401ccc794"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-guidance",
+        "moduleId": "cost-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "练习思路",
+        "markdown": "第一题可以从两点想：MLM 要在整个词表上做多分类，候选类别远多于 NSP 的二分类；而且被遮位置能依赖的上下文有限，预测难度更高，所以平均交叉熵通常更大。\n\n第二题要把模型换成 $\\text{BERT}_{\\text{LARGE}}$ 并把最大长度设为 512：参数量和注意力计算同时大幅增加，批量 512 时显存需求和单步时间都远超演示设置，常见结果是显存不足，或者训练慢到不可行。教材把这类现象归因于模型规模与序列长度共同放大的计算开销。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "model-cost-analysis"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "total-loss-check",
+        "type": "formative-check",
+        "title": "写出总损失",
+        "anchorBlockId": "model-loss-weighting",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-total-loss"
+        ],
+        "learningPurpose": "检查学习者能否把两项损失的计算式组合成总损失，并解释为何可以直接相加。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-loss-composition"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "某批次掩码语言建模损失为 2.4，下一句预测损失为 0.7。写出该批次的预训练总损失，并说明两项为何可以直接相加。",
+          "referenceAnswer": "总损失为 3.1；两项都是每个预测的平均交叉熵，量纲一致，按教材定义直接相加。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "已知某批次的掩码语言建模损失为 2.4、下一句预测损失为 0.7，写出预训练总损失，并说明两项损失为何可以直接相加。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000248"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练BERT"
+      ],
+      "lineStart": 13376,
+      "lineEnd": 13431,
+      "assetRefs": [],
+      "excerptSha256": "39c0aa4a3a5715250295455451fa65a3df7cd82e7048d02e03d61751a3e4fc3a"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000249"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练BERT",
+        "预训练BERT"
+      ],
+      "lineStart": 13432,
+      "lineEnd": 13663,
+      "assetRefs": [],
+      "excerptSha256": "2d96e5b267ab47ac84ed002d15dd71185acce497778bacacaab04f172ccde2a5"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000250"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练BERT",
+        "用BERT表示文本"
+      ],
+      "lineStart": 13664,
+      "lineEnd": 13728,
+      "assetRefs": [],
+      "excerptSha256": "1e2bec25d69f4f5aa6fa9840effd3b138b5f6b00004c1dc6e605f208e27ffc30"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000251"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练BERT",
+        "小结"
+      ],
+      "lineStart": 13729,
+      "lineEnd": 13734,
+      "assetRefs": [],
+      "excerptSha256": "17a0839b208e247e4ba2a77aa6c28689d54dbf2a38c83b58bf04411703e83ede"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000252"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练BERT",
+        "练习"
+      ],
+      "lineStart": 13735,
+      "lineEnd": 13751,
+      "assetRefs": [],
+      "excerptSha256": "b90d4fda2cff3fe553417f8cb8b163d5ef3034475a87598d754e699401ccc794"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1590,
+    1728
+  ],
+  "scale": 0.97
+}

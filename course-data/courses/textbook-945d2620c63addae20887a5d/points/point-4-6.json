@@ -1,0 +1,572 @@
+{
+  "id": "point-4-6",
+  "title": "子词嵌入",
+  "shortSummary": "用子词单元和 fastText 式表示处理未登录词与形态变化，改善词形层面的泛化能力。",
+  "keyTerms": [
+    "子词嵌入",
+    "fastText",
+    "字节对编码",
+    "未登录词"
+  ],
+  "animationType": "subwordBpeMerge",
+  "animationSuggestion": "按合并轮次逐步高亮被选中的符号对，同时显示它的加权频次计算和合并后每个词的新切分，并在侧栏同步更新符号词表；提供重播以复现同一语料的完整合并轨迹。",
+  "difficulty": "中等",
+  "importance": 0.83,
+  "prerequisites": [
+    "point-4-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的形态学动机、fastText 求和公式与 BPE 流程，按动机—机制—流程—切分—检查重组讲解，并补充计数演示、取舍判断与练习自检。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-morphology-gap",
+          "text": "说明词级词向量为什么难以处理形态变化和未登录词。"
+        },
+        {
+          "id": "represent-with-subwords",
+          "text": "用字符 n-gram 子词向量之和表示一个词，并解释参数共享带来的泛化。"
+        },
+        {
+          "id": "trace-bpe-training",
+          "text": "按词频统计与贪心合并在小语料上推进字节对编码的合并轮次。"
+        },
+        {
+          "id": "segment-and-judge",
+          "text": "用学到的符号切分新词，并判断子词长度与词表规模的取舍。"
+        }
+      ],
+      "misconceptions": [
+        "把子词嵌入当成只对未登录词生效的特殊处理，忽略所有词的表示都由子词向量求和构成。",
+        "认为字节对编码的符号对可以跨越单词边界合并。",
+        "认为子词词表越大越好，忽略组合爆炸带来的参数与计算代价。"
+      ],
+      "modules": [
+        {
+          "id": "morphology-gap",
+          "title": "形态变化与词级词表的缺口",
+          "role": "motivation",
+          "description": "从形态学和未登录词出发，说明为什么需要拆到词形内部。",
+          "outcomeRefs": [
+            "explain-morphology-gap"
+          ],
+          "order": 0
+        },
+        {
+          "id": "fasttext-subword",
+          "title": "fastText 的子词表示",
+          "role": "core-mechanism",
+          "description": "用字符 n-gram 子词向量的和表示中心词，并核对收益与代价。",
+          "outcomeRefs": [
+            "represent-with-subwords"
+          ],
+          "order": 1
+        },
+        {
+          "id": "bpe-procedure",
+          "title": "字节对编码的训练流程",
+          "role": "procedure",
+          "description": "在固定词表约束下，用频率统计与贪心合并构建子词符号表。",
+          "outcomeRefs": [
+            "trace-bpe-training"
+          ],
+          "order": 2
+        },
+        {
+          "id": "segmentation-and-boundaries",
+          "title": "切分新词与规模取舍",
+          "role": "application",
+          "description": "把学到的符号迁移到新词，并判断子词长度与词表大小的边界。",
+          "outcomeRefs": [
+            "segment-and-judge"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "小结、练习与下一步",
+          "role": "assessment",
+          "description": "用教材练习检查四个学习成果，并桥接到词向量评测。",
+          "outcomeRefs": [
+            "explain-morphology-gap",
+            "represent-with-subwords",
+            "trace-bpe-training",
+            "segment-and-judge"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-morphology-gap",
+          "represent-with-subwords",
+          "trace-bpe-training",
+          "segment-and-judge"
+        ],
+        "method": "手推一次 BPE 合并轮次，完成教材四道练习的思路说明，并判断给定子词方案的规模代价。",
+        "successCriteria": [
+          "能指出词级词表在词形共享上的缺口",
+          "能写出中心词由子词向量求和的表示并说明共享来源",
+          "能按加权词频选出下一轮合并的符号对",
+          "能说清切分的覆盖边界与词表大小的取舍"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-4-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "morphology-and-word-forms",
+        "moduleId": "morphology-gap",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "形态变化：同一词的不同词形",
+        "markdown": "英语里 helps、helped、helping 都是同一个词 help 的变形形式；dog 与 dogs 之间的关系与 cat 与 cats 之间的关系相同，boy 与 boyfriend 之间的关系与 girl 与 girlfriend 之间的关系相同。这不只是英语现象：法语和西班牙语中许多动词有 40 多种变形形式，芬兰语的名词最多可能有 15 种变形。在语言学中，研究单词形成和词汇关系的学科叫形态学。\n\n然而，word2vec 和 GloVe 都没有对词的内部结构进行探讨。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000218"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 11908,
+              "lineEnd": 11915,
+              "assetRefs": [],
+              "excerptSha256": "68f88d2b887ff754953eb2a75049068751b470e19c9ac905342245d87d646b3e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "word-level-lookup-limit",
+        "moduleId": "morphology-gap",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充解释：一词形一 ID 的极限",
+        "markdown": "把词级词表推到极限，就是给每个词形分配一个独立 ID 和独立向量：`help`、`helps`、`helped`、`helping` 互不相干，参数完全不共享。高频词形还能靠足够的语料估计出可用的向量，低频词形和训练中没出现过的词却只能在几乎没被更新过的向量上打转，或者一起落到同一个未知词向量上。\n\n所以缺口不在语义，而在词形：模型无法从见过的词形推断没见过的词形，哪怕它们的拼写关系一目了然。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "morphology-and-word-forms"
+          ]
+        }
+      },
+      {
+        "id": "fasttext-subword-sum",
+        "moduleId": "fasttext-subword",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "fastText：子词级跳元模型",
+        "markdown": "fastText 模型提出了一种子词嵌入方法，其中子词是一个字符 $n$-gram。它把跳元模型搬到了子词级：不是学习词级向量，而是把每个中心词表示成其子词级向量之和。\n\n以单词 where 为例。先在词的开头和末尾添加特殊字符 `<` 和 `>`，把前缀和后缀与其他子词区分开；再从词中提取字符 $n$-gram。取 $n=3$ 时得到长度为 3 的全部子词：`<wh`、`whe`、`her`、`ere`、`re>`，以及特殊子词 `<where>`。\n\n对任意词 $w$，用 $\\mathcal{G}_w$ 表示其长度在 3 与 6 之间的所有子词与其特殊子词的并集；整个词表是所有词的子词的集合。设 $\\mathbf{z}_g$ 是子词 $g$ 的向量，则跳元模型中作为中心词的词 $w$ 的向量 $\\mathbf{v}_w$ 是其子词向量之和：\n\n$$\\mathbf{v}_w = \\sum_{g \\in \\mathcal{G}_w} \\mathbf{z}_g$$\n\nfastText 的其余部分与跳元模型相同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000219"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "fastText模型"
+              ],
+              "lineStart": 11916,
+              "lineEnd": 11930,
+              "assetRefs": [],
+              "excerptSha256": "cf6d34a18f9f801e220a8feee01143a4e37526943760a73f6793f9cc1f92ce00"
+            }
+          ]
+        }
+      },
+      {
+        "id": "shared-subword-generalization",
+        "moduleId": "fasttext-subword",
+        "depth": "support",
+        "kind": "example",
+        "title": "参数共享如何换来泛化",
+        "markdown": "子词分解让拼写相近的词自动共享参数：`help`、`helped`、`helping` 共享 `<he`、`hel`、`elp` 一类的片段，`cat` 与 `cats` 共享 `cat`，`boy` 与 `boyfriend` 共享 `boy`。于是语料里罕见甚至从未出现的词形，只要由常见子词组成，它的向量就是由训练得比较充分的子词向量求和而来，而不是从一个几乎没更新过的词级向量出发。\n\n这也是为什么说子词嵌入改善的是词形层面的泛化：它把「整词是一个原子」换成了「整词由可复用的片段拼成」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fasttext-subword-sum"
+          ]
+        }
+      },
+      {
+        "id": "fasttext-costs",
+        "moduleId": "fasttext-subword",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "与跳元模型相比的三点变化",
+        "markdown": "引入子词后，fastText 与纯跳元模型有三处直接差别：\n\n- **词表与参数变多**：词表不再是词，而是所有词的子词并集。\n- **计算变贵**：要得到一个词的表示，必须把它所有子词向量求和，复杂度随之上升。\n- **泛化变好**：结构相似的词之间共享来自子词的参数，罕见词甚至词表外的词都可能获得更好的向量表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000219"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "fastText模型"
+              ],
+              "lineStart": 11916,
+              "lineEnd": 11930,
+              "assetRefs": [],
+              "excerptSha256": "cf6d34a18f9f801e220a8feee01143a4e37526943760a73f6793f9cc1f92ce00"
+            }
+          ]
+        }
+      },
+      {
+        "id": "fixed-vocab-motivation",
+        "moduleId": "bpe-procedure",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "从定长子词到固定大小的词表",
+        "markdown": "fastText 中所有提取的子词都必须是指定长度（例如 3 到 6），因此词表大小无法预先确定。为了在固定大小的词表中允许可变长度的子词，可以应用一种称为字节对编码（Byte Pair Encoding，BPE）的压缩算法来提取子词。\n\nBPE 对训练数据集执行统计分析，以发现词内的公共符号，也就是任意长度的连续字符：从长度为 1 的符号开始，迭代地合并最频繁的连续符号对，产生新的更长的符号。为提高效率，不考虑跨越单词边界的符号对。最后用这些符号像子词一样切分单词。BPE 及其变体已经用于 GPT-2、RoBERTa 等自然语言处理预训练模型的输入表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "字节对编码（Byte Pair Encoding）"
+              ],
+              "lineStart": 11931,
+              "lineEnd": 12054,
+              "assetRefs": [],
+              "excerptSha256": "10d3099a04943c133c41db561991f5b5e12dd328b1e112ff2229395620eaa3f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bpe-training-steps",
+        "moduleId": "bpe-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "字节对编码的训练流程",
+        "markdown": "教材用一个四词的玩具语料演示整条流程：`fast_` 出现 4 次、`faster_` 3 次、`tall_` 5 次、`taller_` 4 次。\n\n1. **初始化符号词表**：所有英文小写字母，加上特殊的词尾符号 `_` 和特殊的未知符号 `[UNK]`。\n2. **标注词尾**：把 `_` 附加到每个词的尾部，以便从输出符号序列还原单词边界。\n3. **切成单字符**：在每个词内部的每对连续字符之间插入空格，空格只是符号之间的分隔符。因为不考虑跨词边界的符号对，只需要一个把词映射到出现次数的字典。\n4. **统计词内相邻对**：遍历每个词，把相邻符号对的计数按该词的词频累加。\n5. **贪心合并**：取频次最高的符号对，合并成新符号追加到符号词表，并在所有词中把该符号对替换成新符号。\n6. **迭代**：重复第 4–5 步，直到达到设定的合并次数。\n\n在示例的第一次迭代中，最频繁的连续符号对是 `t` 与 `a`，合并得到 `ta`；第二次迭代继续合并 `ta` 与 `l`，得到 `tal`。执行 10 次迭代后，符号表里新增了 10 个由其他符号迭代合并而来的符号。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "字节对编码（Byte Pair Encoding）"
+              ],
+              "lineStart": 11931,
+              "lineEnd": 12054,
+              "assetRefs": [],
+              "excerptSha256": "10d3099a04943c133c41db561991f5b5e12dd328b1e112ff2229395620eaa3f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bpe-first-two-merges",
+        "moduleId": "bpe-procedure",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "手算前两轮合并",
+        "markdown": "把玩具语料摊开：`fast_` 4 次、`faster_` 3 次、`tall_` 5 次、`taller_` 4 次。\n\n**第 1 轮**：词内相邻对 `t`+`a` 只出现在 `tall_` 和 `taller_` 中，加权频次为 $5+4=9$，高于其他候选对；合并成 `ta` 后，两词的切分变成 `ta l l _` 和 `ta l l e r _`。\n\n**第 2 轮**：新的相邻对 `ta`+`l` 同样只出现在这两个词里，加权频次仍是 $5+4=9$；合并成 `tal` 后切分变成 `tal l _` 和 `tal l e r _`。\n\n这里有两点容易看漏：频次是按词频加权统计的，不是数一数有几个词出现过；合并只在词内进行，所以 `fast_` 的 `s`+`t` 不会和 `tall_` 的字符连在一起。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bpe-training-steps"
+          ]
+        }
+      },
+      {
+        "id": "subword-segmentation",
+        "moduleId": "segmentation-and-boundaries",
+        "depth": "core",
+        "kind": "application",
+        "title": "用学到的符号切分新词",
+        "markdown": "字节对编码的结果取决于所用的数据集，但学到的符号可以拿去切分另一个数据集的单词。教材采用的是一种贪心方法：对每个词从当前位置开始，尝试匹配符号表中最长的片段；命中就把该片段输出并前移，未命中就缩短候选片段再试。走完整词后如果还有字符没被覆盖，就把它们记为 `[UNK]`。\n\n在示例语料上完成训练后，数据集中的词由 `fast_`、`fast`、`er_`、`tall_`、`tall` 这些子词切分。教材随后用 `tallest_`、`fatter_` 检验切分函数，展示从训练集学到的符号如何迁移到训练集之外的词。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000220"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "字节对编码（Byte Pair Encoding）"
+              ],
+              "lineStart": 11931,
+              "lineEnd": 12054,
+              "assetRefs": [],
+              "excerptSha256": "10d3099a04943c133c41db561991f5b5e12dd328b1e112ff2229395620eaa3f5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "subword-budget-tradeoff",
+        "moduleId": "segmentation-and-boundaries",
+        "depth": "support",
+        "kind": "warning",
+        "title": "取舍：子词长度、词表规模与代价",
+        "markdown": "子词并非越多越好。英语中长度 6 的组合大约有 $3\\times 10^{8}$ 种，若把全部 6-元组都收进词表，词表、参数和归一化计算都会被拖垮。可行做法是限定 $n$ 的范围（fastText 取 3 到 6，并且只保留出现足够频繁的子词），或者改用 BPE 这种由数据驱动、用合并次数直接控制词表大小的方式。\n\n另一条边界是覆盖率：切分只能使用训练时学到的符号，遇到没见过的字符组合就落到 `[UNK]`。因此合并次数既是词表大小，也是模型容量与计算成本之间那只旋钮。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fixed-vocab-motivation",
+            "subword-segmentation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "- fastText 模型提出了一种子词嵌入方法：基于 word2vec 中的跳元模型，它将中心词表示为其子词向量之和。\n- 字节对编码执行训练数据集的统计分析，以发现词内的公共符号；作为一种贪心方法，字节对编码迭代地合并最频繁的连续符号对。\n- 子词嵌入可以提高稀有词和词典外词的表示质量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000221"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "小结"
+              ],
+              "lineStart": 12055,
+              "lineEnd": 12060,
+              "assetRefs": [],
+              "excerptSha256": "d246d1d28f7e34426c217ae1b0e7dc38f7651144687d3cadbf412b8ca72267b9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材练习",
+        "markdown": "1. 英语中大约有 $3\\times 10^{8}$ 种可能的 6-元组。子词太多会有什么问题呢？如何解决这个问题？\n2. 如何在连续词袋模型的基础上设计一个子词嵌入模型？\n3. 要获得大小为 $m$ 的词表，当初始符号词表大小为 $n$ 时，需要多少合并操作？\n4. 如何扩展字节对编码的思想来提取短语？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-945d2620c63addae20887a5d",
+              "blockIds": [
+                "block-000222"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入",
+                "练习"
+              ],
+              "lineStart": 12061,
+              "lineEnd": 12079,
+              "assetRefs": [],
+              "excerptSha256": "752ce279cde283f94234d8f99290a408daf7f6bd666efc0337758cb4fb141119"
+            }
+          ]
+        }
+      },
+      {
+        "id": "exercise-reasoning-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习思路与自检",
+        "markdown": "以下是要点提示，不是唯一答案。\n\n1. **子词太多**：词表与参数规模膨胀，求和与归一化的计算量随子词数量上升，低频子词的统计也很不稳定。对策是限定 $n$ 的范围、按频次截断子词，或用 BPE 的合并式学习把词表固定下来。\n2. **连续词袋上的子词版**：把上下文词也表示为子词向量之和，用这些上下文表示预测中心词；中心词一侧同样可以拆成子词求和，与 fastText 共用一个思路。\n3. **合并次数**：每次合并只新增一个符号，初始有 $n$ 个符号，词表大小要达到 $m$ 就需要 $m-n$ 次合并。\n4. **扩展到短语**：不再把合并限制在词内，允许高频相邻词或词边界符号作为可合并的符号对，从而把常见词组压成一个符号。\n\n如果第 2、4 题只能背出结论，却说不清「哪些状态被合并、合并后词表如何变化」，说明还需要回到训练流程再走一遍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-exercises"
+          ]
+        }
+      },
+      {
+        "id": "bridge-to-evaluation",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "下一步：如何评价词向量",
+        "markdown": "子词嵌入改善了词形层面的覆盖与泛化，但一个词向量究竟有没有学到好的语义，还需要单独的评测手段。下一个知识点转向词的相似性与类比任务，用余弦相似度和向量类比来检验词向量质量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "exercise-reasoning-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "bpe-merge-pick-check",
+        "type": "formative-check",
+        "anchorBlockId": "bpe-first-two-merges",
+        "moduleId": "bpe-procedure",
+        "depth": "core",
+        "title": "选出下一轮合并",
+        "outcomeRefs": [
+          "trace-bpe-training",
+          "segment-and-judge"
+        ],
+        "learningPurpose": "检查学习者能否按加权词频选出下一轮要合并的符号对，并说明合并后词切分如何变化。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "bpe-training-steps",
+            "bpe-first-two-merges"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "corpus": {
+            "fast_": 4,
+            "faster_": 3,
+            "tall_": 5,
+            "taller_": 4
+          },
+          "prompt": "完成前两轮合并后，第三轮候选符号对中哪一对的加权频次最高？合并后哪些词的切分会改变？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "对照「手算前两轮合并」一节，把每轮合并后的词切分写成 `符号 + 空格 + 符号` 的序列，再统计相邻对并按词频加权求和；写下频次最高的一对，以及合并它会改变哪些词的切分。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [
+    "point-4-5",
+    "point-4-7"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000218"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "子词嵌入"
+      ],
+      "lineStart": 11908,
+      "lineEnd": 11915,
+      "assetRefs": [],
+      "excerptSha256": "68f88d2b887ff754953eb2a75049068751b470e19c9ac905342245d87d646b3e"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000219"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "子词嵌入",
+        "fastText模型"
+      ],
+      "lineStart": 11916,
+      "lineEnd": 11930,
+      "assetRefs": [],
+      "excerptSha256": "cf6d34a18f9f801e220a8feee01143a4e37526943760a73f6793f9cc1f92ce00"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000220"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "子词嵌入",
+        "字节对编码（Byte Pair Encoding）"
+      ],
+      "lineStart": 11931,
+      "lineEnd": 12054,
+      "assetRefs": [],
+      "excerptSha256": "10d3099a04943c133c41db561991f5b5e12dd328b1e112ff2229395620eaa3f5"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000221"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "子词嵌入",
+        "小结"
+      ],
+      "lineStart": 12055,
+      "lineEnd": 12060,
+      "assetRefs": [],
+      "excerptSha256": "d246d1d28f7e34426c217ae1b0e7dc38f7651144687d3cadbf412b8ca72267b9"
+    },
+    {
+      "materialId": "doc-945d2620c63addae20887a5d",
+      "blockIds": [
+        "block-000222"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "子词嵌入",
+        "练习"
+      ],
+      "lineStart": 12061,
+      "lineEnd": 12079,
+      "assetRefs": [],
+      "excerptSha256": "752ce279cde283f94234d8f99290a408daf7f6bd666efc0337758cb4fb141119"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1891,
+    1430
+  ],
+  "scale": 0.9
+}

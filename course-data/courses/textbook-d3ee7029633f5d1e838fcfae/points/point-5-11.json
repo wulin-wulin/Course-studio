@@ -1,0 +1,665 @@
+{
+  "id": "point-5-11",
+  "title": "全卷积网络",
+  "shortSummary": "介绍全卷积网络用卷积替代全连接，实现任意尺寸输入的像素级预测。",
+  "keyTerms": [
+    "全卷积网络",
+    "像素级预测",
+    "上采样",
+    "跳跃连接"
+  ],
+  "animationType": "fcnUpsample",
+  "animationSuggestion": "按前向顺序逐步显示特征图从 320×480 缩到 10×15、通道变为 21、再放大回 320×480 的过程，并在终态把通道得分折叠成彩色类别图，允许重播。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-5-9",
+    "point-5-10"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-practice",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三段式结构与尺寸推导，围绕像素级预测这一目标补足动机、算例、训练与预测细节和自检清单。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-fcn-goal",
+          "text": "解释 FCN 如何把图像分类网络改造成逐像素预测，并说明输出与输入像素一一对应的含义。"
+        },
+        {
+          "id": "rebuild-resolution",
+          "text": "根据主干的下采样倍数，确定转置卷积的步幅、卷积核和填充，使输出高宽恢复为输入尺寸。"
+        },
+        {
+          "id": "init-upsampling",
+          "text": "说明双线性插值上采样的步骤，以及用它初始化转置卷积层的目的。"
+        },
+        {
+          "id": "train-and-predict",
+          "text": "描述训练时按像素计算交叉熵与准确率的做法，以及预测时切块并重叠平均的流程。"
+        },
+        {
+          "id": "judge-boundaries",
+          "text": "判断 FCN 在任意尺寸输入下的实际限制，并纠正常见误解。"
+        }
+      ],
+      "misconceptions": [
+        "认为 FCN 只要换掉分类头，输出尺寸就会自动等于输入尺寸。",
+        "认为转置卷积本质上只是插值，没有可学习参数。",
+        "认为把整张任意尺寸的图像直接送入网络即可，不需要切块或尺寸对齐。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-motivation",
+          "title": "从语义分割任务到全卷积网络",
+          "role": "concept-introduction",
+          "description": "明确像素级分类任务，并说明分类网络为何不能直接胜任。",
+          "outcomeRefs": [
+            "explain-fcn-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "architecture",
+          "title": "三段式结构与尺寸推导",
+          "role": "mechanism-explanation",
+          "description": "拆解特征提取、1×1 卷积和转置卷积三段，并用算例核对尺寸变化。",
+          "outcomeRefs": [
+            "explain-fcn-goal",
+            "rebuild-resolution"
+          ],
+          "order": 1
+        },
+        {
+          "id": "upsampling-initialization",
+          "title": "双线性上采样与转置卷积初始化",
+          "role": "worked-example",
+          "description": "按三步完成双线性插值，并把双线性核写入转置卷积权重作为初始化。",
+          "outcomeRefs": [
+            "init-upsampling",
+            "rebuild-resolution"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-and-inference",
+          "title": "训练与整图预测",
+          "role": "procedure",
+          "description": "梳理数据读取、按像素计算损失与准确率，以及切块加重叠平均的预测流程。",
+          "outcomeRefs": [
+            "train-and-predict"
+          ],
+          "order": 3
+        },
+        {
+          "id": "limits-and-check",
+          "title": "边界、误区与自检",
+          "role": "summary",
+          "description": "归纳教材要点，澄清常见误解并给出可操作的检查问题。",
+          "outcomeRefs": [
+            "judge-boundaries",
+            "explain-fcn-goal"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-fcn-goal",
+          "rebuild-resolution",
+          "init-upsampling",
+          "train-and-predict",
+          "judge-boundaries"
+        ],
+        "method": "完成一次从输入尺寸到输出尺寸的推导，并说明当图像尺寸不能被下采样倍数整除时的处理办法。",
+        "successCriteria": [
+          "能写出三段式结构中每一段对张量形状的作用",
+          "能给出与下采样倍数匹配的转置卷积步幅、卷积核和填充",
+          "能说明重叠区域为什么在 softmax 输入上取平均"
+        ],
+        "exerciseBlockId": "textbook-exercises",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-5-12"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-fcn-task",
+        "moduleId": "task-and-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：像素级分类任务与 FCN 的定位",
+        "markdown": "语义分割要求对图像中的每个像素分类。**全卷积网络**（fully convolutional network，FCN）用卷积神经网络直接完成从图像像素到像素类别的变换。与图像分类或目标检测中常见的卷积网络不同，FCN 会把中间层特征图的高和宽变换回输入图像的尺寸，这一步借助转置卷积实现。因此输出在像素级别与输入一一对应：通道维上的第 $c$ 个值就是该位置像素属于第 $c$ 类的预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000305"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 11904,
+              "lineEnd": 11945,
+              "assetRefs": [],
+              "excerptSha256": "783484fc306e94ecd61f7d992fc093a4d40e25c31b6c9327b34b3b88f4e8bbad"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-not-classifier",
+        "moduleId": "task-and-motivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么分类网络不能直接输出像素标签",
+        "markdown": "图像分类网络的末端通常是全局平均汇聚或全连接层，它们把 $H\\times W$ 的空间维压成一个向量，输出只剩“整张图属于哪一类”，位置信息随之丢失；同时全连接层要求固定长度的输入，换一个输入尺寸就要改结构。FCN 保留卷积特征图的空间维，把类别预测留在每个位置上，因此可以接受不同尺寸的输入并输出同尺寸的类别图。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-fcn-task"
+          ]
+        }
+      },
+      {
+        "id": "textbook-architecture",
+        "moduleId": "architecture",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：三段式结构",
+        "markdown": "全卷积网络最基本的设计分三段：先用卷积神经网络抽取图像特征；再通过 $1\\times1$ 卷积层把通道数变换为类别个数；最后通过转置卷积层把特征图的高和宽变换为输入图像的尺寸。这样模型输出的高和宽与输入图像相同，最终输出通道包含该空间位置像素的类别预测。教材以 ImageNet 上预训练的 ResNet-18 作为特征提取主干，去掉最后的全局平均汇聚层和全连接层，再接上 $1\\times1$ 卷积与转置卷积。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000306"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "构造模型"
+              ],
+              "lineStart": 11946,
+              "lineEnd": 12036,
+              "assetRefs": [
+                "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/fcn.svg"
+              ],
+              "excerptSha256": "483bbd892f8cf20c1124c95520b89136196650b89d0125bc8931fe07dde4885e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-example",
+        "moduleId": "architecture",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：把 320×480 还原回 320×480",
+        "markdown": "以高 $320$、宽 $480$ 的输入为例，主干把高宽缩小到原来的 $1/32$，得到 $10\\times15$ 的特征图。用卷积输出公式核对：$(320-64+16\\times2+32)/32=10$，$(480-64+16\\times2+32)/32=15$。接上把通道数变为 Pascal VOC2012 的 $21$ 类之后的 $1\\times1$ 卷积，张量形状为 $21\\times10\\times15$；最后用步幅 $32$、卷积核 $64$、填充 $16$ 的转置卷积把高宽放大 $32$ 倍，回到 $320\\times480$。一般规律是：步幅为 $s$、填充为 $s/2$、卷积核为 $2s$ 的转置卷积会把高和宽分别放大 $s$ 倍（要求 $s/2$ 为整数）。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture"
+          ]
+        }
+      },
+      {
+        "id": "model-one-by-one",
+        "moduleId": "architecture",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充：1×1 卷积与全连接层的差别",
+        "markdown": "全连接层对每个空间位置使用独立权重，参数量随输入尺寸增长，并且要求固定输入；$1\\times1$ 卷积在整张特征图上共享同一组权重，只改变通道数、不改变高宽，因而保留位置索引，也能直接处理不同尺寸的输入。FCN 用 $1\\times1$ 卷积替代分类头，正是为了在保留空间结构的前提下把通道数换成类别数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bilinear",
+        "moduleId": "upsampling-initialization",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：双线性插值上采样的三个步骤",
+        "markdown": "图像放大又称上采样，双线性插值是常用方法之一。计算输出图像上每个像素分三步：1. 按输入与输出的尺寸之比，把输出坐标 $(x,y)$ 映射到输入坐标 $(x',y')$，映射结果是实数；2. 在输入图像上找到离 $(x',y')$ 最近的 4 个像素；3. 用这 4 个像素的值及其与 $(x',y')$ 的相对距离加权，得到输出像素值。双线性插值的上采样可以通过转置卷积层实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000307"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "[**初始化转置卷积层**]"
+              ],
+              "lineStart": 12037,
+              "lineEnd": 12201,
+              "assetRefs": [],
+              "excerptSha256": "ca0de38b81c52019ef5c4170bda59d80d71b69432fb139da4e6934fd37078c39"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bilinear-kernel",
+        "moduleId": "upsampling-initialization",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：双线性核与可学习的转置卷积",
+        "markdown": "把 `bilinear_kernel` 构造的核写入转置卷积的权重，等价于让这一层执行固定的双线性插值上采样：步幅 $2$、卷积核 $4$、填充 $1$ 时，高宽正好放大 $2$ 倍。权重在训练中仍然可学习，双线性初始化只是给网络一个合理起点，避免从随机权重开始学习上采样。教材练习要求比较改用 Xavier 随机初始化后的结果，正是在检验这一初始化的作用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture",
+            "textbook-bilinear"
+          ]
+        }
+      },
+      {
+        "id": "textbook-init",
+        "moduleId": "upsampling-initialization",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：用双线性核初始化转置卷积层",
+        "markdown": "教材用 `bilinear_kernel(num_classes, num_classes, 64)` 构造的双线性核初始化输出 $21$ 类所对应的转置卷积层，$1\\times1$ 卷积层使用 Xavier 初始化。验证上采样的小实验使用卷积核 $4$、填充 $1$、步幅 $2$ 的转置卷积，并把 `bilinear_kernel(3, 3, 4)` 写入其权重；实验中图像的高和宽分别放大 $2$ 倍，除坐标刻度外与原图看起来没有区别。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000307"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "[**初始化转置卷积层**]"
+              ],
+              "lineStart": 12037,
+              "lineEnd": 12201,
+              "assetRefs": [],
+              "excerptSha256": "ca0de38b81c52019ef5c4170bda59d80d71b69432fb139da4e6934fd37078c39"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-dataset",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：读取 Pascal VOC2012 数据集",
+        "markdown": "训练使用语义分割一节介绍的 Pascal VOC2012 读取流程，随机裁剪的输出图像形状指定为 $320\\times480$，高和宽都能被 $32$ 整除，批大小为 $32$。选择能被下采样倍数整除的裁剪尺寸，可以让后续转置卷积的输出恰好等于输入尺寸。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000308"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "[**读取数据集**]"
+              ],
+              "lineStart": 12202,
+              "lineEnd": 12232,
+              "assetRefs": [],
+              "excerptSha256": "46238ae125f364a6d3f3f0f58251663636133b71beb59445092510d857277645"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-training",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：训练设置与评价方式",
+        "markdown": "训练沿用图像分类的框架：损失函数在通道维上做 softmax 交叉熵，因为类别预测放在通道维；准确率按每个像素的预测类别是否正确统计。教材示例训练 5 个 epoch，使用随机梯度下降并设权重衰减，具体学习率与权重衰减随框架实现不同（PyTorch 分支为 $0.001$ 和 $1\\times10^{-3}$）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000309"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "[**训练**]"
+              ],
+              "lineStart": 12233,
+              "lineEnd": 12267,
+              "assetRefs": [],
+              "excerptSha256": "6af7b55a3060ca92fe732e14f644119607fdf653d54ca6e5ce56e1db6a7afaf3"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-dims",
+        "moduleId": "training-and-inference",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：损失为什么在通道维计算",
+        "markdown": "图像分类的交叉熵通常对每张图的一个类别向量计算；FCN 的每个空间位置都有一个类别向量。`cross_entropy` 内部先在通道维做 softmax 与负对数似然，得到每个像素的损失，再用两次 `mean(1)` 把高、宽两个空间维归约掉，得到每张图的标量损失。准确率同样按像素统计：预测类别与标注一致的像素占比。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-training"
+          ]
+        }
+      },
+      {
+        "id": "textbook-prediction",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：整图预测、切块与重叠平均",
+        "markdown": "预测时先把输入图像在通道维标准化，整理成四维张量；前向传播后沿通道维取 `argmax`，再还原成高乘宽的类别图，最后按数据集的标注颜色着色。测试图像尺寸各异：当高或宽不能被 $32$ 整除时，步幅为 $32$ 的转置卷积输出会与输入尺寸有偏差。解决办法是截取若干高宽为 $32$ 整数倍的矩形区域分别前向，区域的并集完整覆盖输入图像；同一像素被多个区域覆盖时，把各区域转置卷积输出的平均值作为 softmax 运算的输入，再预测类别。教材为简单起见，只从图像左上角截取 $320\\times480$ 的区域演示预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000310"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "[**预测**]"
+              ],
+              "lineStart": 12268,
+              "lineEnd": 12371,
+              "assetRefs": [],
+              "excerptSha256": "9e62514abdd9ca50c1f07f5b9e10ea9763609d1364ef863d6780ab9feb21ee14"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-overlap-average",
+        "moduleId": "training-and-inference",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "补充：为什么在 softmax 输入上取平均",
+        "markdown": "把重叠区域在各次前向中的转置卷积输出先取平均、再送入 softmax，等于对多个预测的 logits 取平均，保留了每个类别的置信度；如果先取 `argmax` 再对离散类别投票，就会丢掉置信度，平票时也难以处理。另一个容易忽略的点是覆盖面：教材只从左上角裁一块 $320\\times480$，右侧和底部超出的像素实际上没有参与预测，正式使用时应让切块并集覆盖整幅图。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-prediction"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：小结",
+        "markdown": "* 全卷积网络先使用卷积神经网络抽取图像特征，然后通过 $1\\times1$ 卷积层把通道数变换为类别个数，最后通过转置卷积层把特征图的高和宽变换为输入图像的尺寸。\n* 在全卷积网络中，可以把转置卷积层初始化为双线性插值的上采样。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000311"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "小结"
+              ],
+              "lineStart": 12372,
+              "lineEnd": 12376,
+              "assetRefs": [],
+              "excerptSha256": "116206a787c7df3137a74eaff9f14f075630965ab7a2de635b127b8c7624a581"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "limits-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材：练习",
+        "markdown": "1. 如果把转置卷积层改用 Xavier 随机初始化，结果会有什么变化？\n2. 调节超参数能否进一步提升模型精度？\n3. 预测测试图像中所有像素的类别，而不只预测一块裁剪区域。\n4. 最初的全卷积网络论文还使用了某些卷积神经网络中间层的输出，试着实现这个想法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-d3ee7029633f5d1e838fcfae",
+              "blockIds": [
+                "block-000312"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络",
+                "练习"
+              ],
+              "lineStart": 12377,
+              "lineEnd": 12395,
+              "assetRefs": [],
+              "excerptSha256": "239b9d5c2805546ba0acd02fd675316643f6fc85894ba2061ec92b0934c9a655"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "补充：常见误区与自检清单",
+        "markdown": "常见误区有三类。其一，认为 FCN 的输出一定自动等于输入尺寸：只有转置卷积的步幅与主干的下采样倍数匹配、且高宽能被该倍数整除时，尺寸才会严格还原，否则需要切块。其二，认为转置卷积只是插值、没有参数：它的权重可学习，双线性核只是一次初始化。其三，把整张图一次性送入网络当作唯一做法：在显存和尺寸约束下，切块加重叠平均是常规策略。自检时先问三个问题：主干把分辨率缩小了多少倍？转置卷积用什么步幅、卷积核和填充把它放大回来？图像尺寸不能被整除时怎样让切块覆盖全图？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fcn-shape-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "limits-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "rebuild-resolution"
+        ],
+        "learningPurpose": "检查学习者能否根据主干的下采样倍数反推转置卷积的步幅。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-architecture",
+            "model-shape-example"
+          ]
+        },
+        "config": {
+          "prompt": "主干把输入高宽缩小到 1/32，若要用一个转置卷积把特征图恢复为输入尺寸，步幅应取多少？",
+          "options": [
+            "8",
+            "16",
+            "32",
+            "64"
+          ],
+          "correctIndex": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "主干缩小 $32$ 倍，转置卷积步幅就要取 $32$，并把卷积核设为 $64$、填充设为 $16$，才能把高宽放大 $32$ 倍。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "leaf",
+  "related": [
+    "point-5-7"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000305"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络"
+      ],
+      "lineStart": 11904,
+      "lineEnd": 11945,
+      "assetRefs": [],
+      "excerptSha256": "783484fc306e94ecd61f7d992fc093a4d40e25c31b6c9327b34b3b88f4e8bbad"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000306"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "构造模型"
+      ],
+      "lineStart": 11946,
+      "lineEnd": 12036,
+      "assetRefs": [
+        "https://raw.githubusercontent.com/d2l-ai/d2l-zh/e6b18ccea71451a55fcd861d7b96fddf2587b09a/img/fcn.svg"
+      ],
+      "excerptSha256": "483bbd892f8cf20c1124c95520b89136196650b89d0125bc8931fe07dde4885e"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000307"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "[**初始化转置卷积层**]"
+      ],
+      "lineStart": 12037,
+      "lineEnd": 12201,
+      "assetRefs": [],
+      "excerptSha256": "ca0de38b81c52019ef5c4170bda59d80d71b69432fb139da4e6934fd37078c39"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000308"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "[**读取数据集**]"
+      ],
+      "lineStart": 12202,
+      "lineEnd": 12232,
+      "assetRefs": [],
+      "excerptSha256": "46238ae125f364a6d3f3f0f58251663636133b71beb59445092510d857277645"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000309"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "[**训练**]"
+      ],
+      "lineStart": 12233,
+      "lineEnd": 12267,
+      "assetRefs": [],
+      "excerptSha256": "6af7b55a3060ca92fe732e14f644119607fdf653d54ca6e5ce56e1db6a7afaf3"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000310"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "[**预测**]"
+      ],
+      "lineStart": 12268,
+      "lineEnd": 12371,
+      "assetRefs": [],
+      "excerptSha256": "9e62514abdd9ca50c1f07f5b9e10ea9763609d1364ef863d6780ab9feb21ee14"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000311"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "小结"
+      ],
+      "lineStart": 12372,
+      "lineEnd": 12376,
+      "assetRefs": [],
+      "excerptSha256": "116206a787c7df3137a74eaff9f14f075630965ab7a2de635b127b8c7624a581"
+    },
+    {
+      "materialId": "doc-d3ee7029633f5d1e838fcfae",
+      "blockIds": [
+        "block-000312"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络",
+        "练习"
+      ],
+      "lineStart": 12377,
+      "lineEnd": 12395,
+      "assetRefs": [],
+      "excerptSha256": "239b9d5c2805546ba0acd02fd675316643f6fc85894ba2061ec92b0934c9a655"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2154,
+    575
+  ],
+  "scale": 0.68
+}
