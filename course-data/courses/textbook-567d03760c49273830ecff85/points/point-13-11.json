@@ -1,0 +1,644 @@
+{
+  "id": "point-13-11",
+  "title": "全卷积网络",
+  "shortSummary": "介绍用全卷积结构替代全连接层，实现任意尺寸输入的端到端语义分割。",
+  "keyTerms": [
+    "全卷积网络",
+    "语义分割",
+    "上采样",
+    "跳跃连接"
+  ],
+  "animationType": "segmentationShapeFlow",
+  "animationSuggestion": "用一排张量块表示各阶段特征图，块的长宽比例随真实高宽缩放，旁边实时标注形状（如 1×3×320×480 → 1×512×10×15 → 1×21×10×15 → 1×21×320×480）；放大阶段把它与输入图像的网格对齐高亮，说明每个输出像素对应哪一个位置。",
+  "difficulty": "进阶",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-13-9",
+    "point-13-10"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-workflow",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的三段式结构与全部尺寸、超参数、初始化方式和实验结果，围绕“输入尺寸如何回到原图”重排讲解顺序，并补足直觉、推导和检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-fcn",
+          "text": "说明全卷积网络如何把卷积分类网络改造成像素级预测模型，以及为什么它能接受任意尺寸的输入。"
+        },
+        {
+          "id": "analyze-shape",
+          "text": "根据步幅、卷积核与填充推算转置卷积的上采样倍数，并核对输出尺寸是否与输入一致。"
+        },
+        {
+          "id": "explain-bilinear-init",
+          "text": "解释双线性插值上采样的计算步骤，以及用它初始化转置卷积层的作用。"
+        },
+        {
+          "id": "apply-predict",
+          "text": "说明逐像素交叉熵训练与多块裁剪加重叠平均的预测流程，并解释其代价。"
+        }
+      ],
+      "misconceptions": [
+        "以为去掉全连接层就自动得到精确的像素级预测，忽略固定步幅导致非整除尺寸出现偏差，需要多块裁剪与重叠平均来弥补。",
+        "把上采样倍数当成可任意设定的超参数，实际上它必须与骨干网络的下采样倍数匹配，卷积核和填充也要随之确定。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-motivation",
+          "title": "从图像分类到像素级预测",
+          "role": "problem-introduction",
+          "outcomeRefs": [
+            "explain-fcn"
+          ],
+          "order": 0
+        },
+        {
+          "id": "architecture",
+          "title": "全卷积网络的三段式结构",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-fcn",
+            "analyze-shape"
+          ],
+          "order": 1
+        },
+        {
+          "id": "bilinear-init",
+          "title": "用双线性插值初始化转置卷积",
+          "role": "worked-example",
+          "outcomeRefs": [
+            "explain-bilinear-init"
+          ],
+          "order": 2
+        },
+        {
+          "id": "train-and-predict",
+          "title": "训练与任意尺寸预测",
+          "role": "procedure",
+          "outcomeRefs": [
+            "apply-predict",
+            "analyze-shape"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "尺寸检查与下一点桥接",
+          "role": "formative-check",
+          "outcomeRefs": [
+            "explain-fcn",
+            "analyze-shape",
+            "explain-bilinear-init",
+            "apply-predict"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-fcn",
+          "analyze-shape",
+          "explain-bilinear-init",
+          "apply-predict"
+        ],
+        "method": "完成尺寸推算检查题，并用一句话说明全卷积网络为什么能做像素级预测。",
+        "successCriteria": [
+          "能写出从输入尺寸到特征图尺寸再回到输出尺寸的计算过程",
+          "能说明 1×1 卷积与转置卷积各自负责什么",
+          "能解释非整除尺寸下多块裁剪与重叠平均的必要性"
+        ],
+        "exerciseBlockId": "model-shape-check",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-13-12"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-fcn-definition",
+        "moduleId": "task-and-motivation",
+        "depth": "core",
+        "kind": "definition",
+        "title": "全卷积网络要解决什么",
+        "markdown": "语义分割是对图像中的每个像素分类。全卷积网络（fully convolutional network，FCN）用卷积神经网络实现从图像像素到像素类别的变换：与图像分类或目标检测中介绍的卷积神经网络不同，它把中间层特征图的高和宽变换回输入图像的尺寸，这一步由转置卷积完成。因此输出的类别预测与输入图像在像素级别上一一对应，通道维在该位置的取值就是对应像素的类别预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-classifier-fails",
+        "moduleId": "task-and-motivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：分类网络为什么不能直接做分割",
+        "markdown": "图像分类网络末端通常是全局平均汇聚层加全连接层，它们把二维特征图压成一个向量，空间位置信息随之丢失，只能给出整张图的单一类别。语义分割要求每个位置都有类别判断，所以改造的关键不是换损失函数，而是让网络从输入到输出始终保留空间结构：卷积层保留下采样后的空间维度，$1\\times 1$ 卷积只改通道数，最后用上采样把被缩小的分辨率补回来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-fcn-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-architecture",
+        "moduleId": "architecture",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "三段式结构",
+        "markdown": "全卷积网络最基本的设计分三步：先使用卷积神经网络抽取图像特征；再通过 $1\\times 1$ 卷积层把通道数变换为类别个数；最后通过转置卷积层把特征图的高和宽变换为输入图像的尺寸。于是模型输出的高和宽与输入图像相同，而最终输出通道包含了该空间位置像素的类别预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-recipe",
+        "moduleId": "architecture",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：把尺寸链条算一遍",
+        "markdown": "以 $320\\times 480$ 的输入为例：骨干网络把高和宽缩小到原来的 $1/32$，得到 $10\\times 15$ 的特征图；$1\\times 1$ 卷积把 512 个通道改成 21 个类别通道；步幅为 32、卷积核高宽为 64、填充为 16 的转置卷积再把分辨率放大 32 倍。把卷积输出形状公式反过来用即可核对：$(320-64+16\\times 2+32)/32=10$，$(480-64+16\\times 2+32)/32=15$，所以放大后正好回到 $320\\times 480$。一般地，若步幅为 $s$、填充为 $s/2$（$s/2$ 为整数）、卷积核高宽为 $2s$，转置卷积就把高和宽各放大 $s$ 倍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-architecture"
+          ]
+        }
+      },
+      {
+        "id": "tb-resnet-backbone",
+        "moduleId": "architecture",
+        "depth": "support",
+        "kind": "example",
+        "title": "教材实例：用 ResNet-18 抽取特征",
+        "markdown": "教材用在 ImageNet 数据集上预训练的 ResNet-18 模型提取图像特征，并把该网络记为 pretrained_net。ResNet-18 的最后几层包括全局平均汇聚层和全连接层，而全卷积网络中不需要它们，因此复制除这两层以外的预训练层得到 net。给定高度为 320、宽度为 480 的输入，net 的前向传播将输入的高和宽减小至原来的 $1/32$，输出形状为 torch.Size([1, 512, 10, 15])。接下来加入 final_conv，用 $1\\times 1$ 卷积把通道数转换为 Pascal VOC2012 的 21 类；再加入 transpose_conv，用步幅 32、卷积核高宽 64、填充 16 的转置卷积把高和宽增加 32 倍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-stride-choice",
+        "moduleId": "architecture",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：上采样倍数由骨干网络决定",
+        "markdown": "上采样倍数不是可以随意挑选的超参数：骨干网络把分辨率缩小多少倍，转置卷积就要放大多少倍，否则输出尺寸对不上输入。ResNet-18 的特征图恰好是输入的 $1/32$，因此放大倍数取 32；配合 $s=32$ 取卷积核 $2s=64$、填充 $s/2=16$，输出尺寸才精确复原。换成其他下采样倍数的骨干网络时，这三个数要一起重算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-resnet-backbone",
+            "tb-architecture"
+          ]
+        }
+      },
+      {
+        "id": "tb-bilinear-init",
+        "moduleId": "bilinear-init",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "双线性插值上采样",
+        "markdown": "图像处理中有时需要把图像放大，即上采样，双线性插值是常用方法之一，也经常用于初始化转置卷积层。计算上采样输出图像上的每个像素分三步：先把输出坐标 $(x,y)$ 按输入与输出的尺寸之比映射到输入坐标 $(x',y')$，映射后的 $x'$ 和 $y'$ 是实数；再在输入图像上找到离 $(x',y')$ 最近的 4 个像素；最后依据这 4 个像素及其与 $(x',y')$ 的相对距离计算输出像素值。教材用 bilinear_kernel 函数构造对应的卷积核，并以卷积核高宽 4、填充 1、步幅 2 的转置卷积把图像高宽各放大 2 倍作为验证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bilinear-intuition",
+        "moduleId": "bilinear-init",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：四个邻点之间的两次内插",
+        "markdown": "可以把双线性插值想成在四个相邻像素之间做两次线性内插：先沿一个方向按距离比例插出两条边上的值，再沿另一个方向把这两个值插成一个结果。距离越近权重越大，权重随距离线性下降，所以放大后的图像不会有块状跳变，而是平滑过渡。转置卷积的权重本来要靠训练学习，直接把它设成双线性核，相当于给上采样一个平滑的起点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bilinear-init"
+          ]
+        }
+      },
+      {
+        "id": "model-bilinear-why",
+        "moduleId": "bilinear-init",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：为什么要这样初始化",
+        "markdown": "教材用双线性插值的上采样初始化转置卷积层，$1\\times 1$ 卷积层则使用 Xavier 初始化。这样初始状态下的上采样已经接近平滑插值，网络主要学习如何把通道映射成有判别力的类别得分；若改用 Xavier 随机初始化，上采样核需要从数据中从头学出放大方式，教材的练习正是让读者对比两种初始化下结果的变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bilinear-init"
+          ]
+        }
+      },
+      {
+        "id": "tb-training",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练：逐像素的交叉熵",
+        "markdown": "训练使用语义分割数据集，随机裁剪出的图像形状指定为 $320\\times 480$，高和宽都能被 32 整除。这里的损失函数和准确率计算与图像分类没有本质不同，但由于使用转置卷积层的通道预测像素类别，需要在损失计算中指定通道维：F.cross_entropy 取 reduction='none' 后沿通道维求两次平均。模型基于每个像素的预测类别是否正确来计算准确率。教材用 5 个 epoch、学习率 0.001、权重衰减 $1\\times 10^{-3}$ 的 SGD 训练，得到 loss 0.443、train acc 0.863、test acc 0.848。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-dims",
+        "moduleId": "train-and-predict",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：损失张量的维度怎么读",
+        "markdown": "交叉熵默认把类别维当作第 1 维，而这里的类别维正是转置卷积输出的通道维，因此 reduction='none' 得到的是逐像素损失，形状为（批量，高，宽）。随后的两次 mean(1) 先对高、再对宽求平均，把损失压成每个样本一个标量。准确率同理按像素统计，这也正是语义分割与图像分类在指标上的差别：分类是一张图一个标签，分割是每个像素一个标签。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training"
+          ]
+        }
+      },
+      {
+        "id": "tb-predict",
+        "moduleId": "train-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "预测：任意尺寸图像的处理",
+        "markdown": "预测时先把输入图像在各个通道做标准化，并转成卷积神经网络所需要的四维输入格式，再用 argmax(dim=1) 在通道维取每个像素得分最高的类别，并 reshape 回图像的二维形状；label2image 借助数据集的调色板把预测类别映射回标注颜色。测试数据集中的图像大小和形状各异，而模型使用了步幅为 32 的转置卷积层，当输入图像的高或宽无法被 32 整除时，转置卷积层输出的高或宽会与输入图像的尺寸有偏差。解决办法是在图像中截取多块高和宽为 32 整数倍的矩形区域分别做前向传播，这些区域的并集需要完整覆盖输入图像；当一个像素被多个区域覆盖时，把它在不同区域转置卷积输出上的平均值作为 softmax 运算的输入，再预测类别。教材为简单起见只从图像左上角截取 $320\\times 480$ 的区域用于预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-arbitrary-size",
+        "moduleId": "train-and-predict",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "模型补充：任意尺寸并非零成本",
+        "markdown": "全卷积网络没有全连接层，因此对输入尺寸没有硬性约束，但“任意尺寸”并不等于零成本：固定步幅的上采样只在分辨率能被步幅整除时精确复原，其他尺寸会出现偏差。多块裁剪加重叠平均正是用同一套权重处理任意尺寸图像的工程折中，代价是同一像素可能被重复计算，推理开销随重叠比例上升。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-predict",
+            "tb-architecture"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "全卷积网络先使用卷积神经网络抽取图像特征，然后通过 $1\\times 1$ 卷积层将通道数变换为类别个数，最后通过转置卷积层将特征图的高和宽变换为输入图像的尺寸。在全卷积网络中，我们可以将转置卷积层初始化为双线性插值的上采样。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000114"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "全卷积网络"
+              ],
+              "lineStart": 25724,
+              "lineEnd": 26050,
+              "assetRefs": [
+                "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+                "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+                "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+                "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+                "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+                "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+                "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+                "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+                "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+                "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+                "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+                "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+                "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+                "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+                "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+              ],
+              "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：把尺寸链条推到底",
+        "markdown": "若输入为 $224\\times 224$，骨干网络下采样 32 倍后得到 $7\\times 7$ 的特征图。请推算用步幅 32、卷积核高宽 64、填充 16 的转置卷积放大后的输出尺寸，并判断它与输入是否一致。再想一步：如果换成下采样 16 倍的骨干网络，转置卷积的步幅、卷积核高宽和填充应各取多少才能复原尺寸？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-architecture",
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-next-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：通向风格迁移",
+        "markdown": "全卷积网络解决的是“每个像素属于哪一类”的判别问题；下一节的风格迁移要生成新图像，它同样复用预训练卷积网络的特征，但优化目标变成内容损失与风格损失的组合。对比两者可以看清：同一套特征提取器接上不同的输出头与损失，就服务于完全不同的视觉任务。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "fcn-shape-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-shape-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "analyze-shape",
+          "apply-predict"
+        ],
+        "learningPurpose": "检查学习者能否独立把下采样、通道变换与上采样三步的尺寸关系串起来，并解释非整除尺寸为何需要多块裁剪。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-shape-check",
+            "tb-architecture"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompts": [
+            "输入 224×224、下采样 32 倍、转置卷积步幅 32、卷积核 64、填充 16 时，输出尺寸是多少？",
+            "若骨干网络改为下采样 16 倍，转置卷积的步幅、卷积核与填充应取多少？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请手写尺寸计算：$(224-64+16\\times 2+32)/32=7$，再由 $(7-1)\\times 32-16\\times 2+64=224$ 得到与输入一致的输出；下采样 16 倍时取步幅 16、卷积核 32、填充 8。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000114"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "全卷积网络"
+      ],
+      "lineStart": 25724,
+      "lineEnd": 26050,
+      "assetRefs": [
+        "parts/part-0007/images/880132217e83405ec4a30c58c39fc8b85015db6f9b22d97087ff09f33df47c36.jpg",
+        "parts/part-0007/images/06d000f0e1998c23293801b9abcdb0ac22db84a1547a89f51cc3cf1dd114a3c1.jpg",
+        "parts/part-0007/images/bb65a6baeef57edce5b452baa1ab7ce8c9a91c81cb3acd2596f930d08a35ad89.jpg",
+        "parts/part-0007/images/0099dff2a2f5056bf40137c0ed93cd41bee9e0e7c8e32462a53f91059590ba2d.jpg",
+        "parts/part-0007/images/4972953863ea71e29bf7f8612944022a3b91c8f1f86e5ac4435d6690fc1154a2.jpg",
+        "parts/part-0007/images/be7a9108afd040cb2eab086e405e78c519f85441e94394bc5211cc3e292d3d57.jpg",
+        "parts/part-0007/images/febee76469289a1841e74b85d781745a834cd4faea9929ce160007dd1ce1b2b8.jpg",
+        "parts/part-0007/images/22c9ab24fbb12f109542bf50f9a32c04c8ed1c2a75603d8c9c5c29f61890cf54.jpg",
+        "parts/part-0007/images/7d5db3798561bc1a82d7e2656a286f5cb783e9261749952484cd0b88d07917ee.jpg",
+        "parts/part-0007/images/5c283cbd5649964e84a7ea2b05ed49b6c78777b49e3f4e79b973a9afb42c4e8b.jpg",
+        "parts/part-0007/images/a88bd127652a6e91a6008bcc4f698f1b83a513dd85fd83beb90264c2c7cd612c.jpg",
+        "parts/part-0007/images/c3898dd88c2ec79824d9c40ebc391e18eb9a6d30723abebb3f632f64cc1e5baf.jpg",
+        "parts/part-0007/images/e00253f54832149b65121b6e4c40212efe76151fb9166714cd3239ec02350311.jpg",
+        "parts/part-0007/images/705037c59b9d724b0ee0cac91a3640026931e5c4ebbd08d58d24ef678837fa52.jpg",
+        "parts/part-0007/images/049719c856241b7aa60253f85a3bbad39ffde2c8203d88e39204d665b9485a84.jpg",
+        "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg"
+      ],
+      "excerptSha256": "6bb6ad91ea864ed831d0808a3b34f040f3223d7b4dd1e4be04a6af04965efbae"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3670,
+    157
+  ],
+  "scale": 0.94
+}

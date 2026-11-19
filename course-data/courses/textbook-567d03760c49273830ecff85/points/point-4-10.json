@@ -1,0 +1,628 @@
+{
+  "id": "point-4-10",
+  "title": "实战Kaggle比赛：预测房价",
+  "shortSummary": "以房价预测比赛为例，串联数据预处理、特征工程、模型训练、验证与提交的完整流程。",
+  "keyTerms": [
+    "Kaggle",
+    "特征工程",
+    "交叉验证",
+    "房价预测"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.68,
+  "prerequisites": [
+    "point-2-2",
+    "point-3-1",
+    "point-4-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis-workflow",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "以教材的实战小节顺序为事实骨架，围绕“读数据→预处理→基线→交叉验证→提交”的学习任务重排讲解，补充指标读法、调参顺序与提交检查表，但不改动教材的数据规模、公式、超参数和数值结果。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-housing-data",
+          "text": "说明房价预测任务的输入特征、标签以及训练集与测试集的分工。"
+        },
+        {
+          "id": "preprocess-features",
+          "text": "按教材流程完成缺失值填补、标准化与独热编码，并把表格转成张量。"
+        },
+        {
+          "id": "evaluate-log-rmse",
+          "text": "解释为什么用对数均方根误差衡量房价预测，并能按教材实现该指标。"
+        },
+        {
+          "id": "validate-and-submit",
+          "text": "用 K 折交叉验证选择超参数，在全部训练数据上重训并生成合规的提交文件。"
+        }
+      ],
+      "misconceptions": [
+        "只要训练误差足够低就说明模型更好，忽略 K 折验证误差与过拟合。",
+        "房价预测直接最小化绝对误差就够了，用不用对数指标差别不大。",
+        "所有缺失值统一填成均值总是最佳选择，忽略缺失本身可能携带信息。"
+      ],
+      "modules": [
+        {
+          "id": "competition-context",
+          "title": "赛题、数据与全流程地图",
+          "role": "problem-introduction",
+          "description": "先看清数据集构成、平台提交方式和整条流水线，再进入细节。",
+          "outcomeRefs": [
+            "explain-housing-data"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-preprocessing",
+          "title": "数值与类别特征预处理",
+          "role": "operational-procedure",
+          "description": "按顺序执行填补、标准化、独热编码与张量化，并理解每步的动机。",
+          "outcomeRefs": [
+            "preprocess-features"
+          ],
+          "order": 1
+        },
+        {
+          "id": "baseline-and-metric",
+          "title": "线性基线、相对误差与对数 RMSE",
+          "role": "modeling-decision",
+          "description": "用线性模型检查数据，并确定与比赛一致的评估指标。",
+          "outcomeRefs": [
+            "evaluate-log-rmse"
+          ],
+          "order": 2
+        },
+        {
+          "id": "cross-validation",
+          "title": "K 折交叉验证与模型选择",
+          "role": "evidence-and-selection",
+          "description": "用折间结果判断超参数优劣，并识别过拟合信号。",
+          "outcomeRefs": [
+            "validate-and-submit"
+          ],
+          "order": 3
+        },
+        {
+          "id": "submission-and-reflection",
+          "title": "全量重训、提交与反思",
+          "role": "application-and-transfer",
+          "description": "用全部训练数据重训、导出提交文件，并规划下一步改进。",
+          "outcomeRefs": [
+            "validate-and-submit"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-housing-data",
+          "preprocess-features",
+          "evaluate-log-rmse",
+          "validate-and-submit"
+        ],
+        "method": "按检查表自查一次完整提交：能解释每步预处理的作用、说出验证指标的含义，并指出提交文件与验证结果不一致时应先排查哪里。",
+        "successCriteria": [
+          "能按教材顺序复述从读数据到提交的六个步骤及其输入输出",
+          "能说明对数 RMSE 比绝对误差更适合房价预测的理由",
+          "能根据折间训练与验证误差判断是否存在过拟合",
+          "提交文件的行数、列名与 Id 对齐，且预测值均为合理正数"
+        ],
+        "exerciseBlockId": "model-submission-checklist",
+        "nextPointId": "point-5-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-task-and-data",
+        "moduleId": "competition-context",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材中的赛题与数据",
+        "markdown": "本节用 Kaggle 房价预测比赛把前面学过的训练工具落到一个真实的表格回归任务上。数据由 Bart de Cock 于 2011 年收集，覆盖 2006–2010 年亚利桑那州埃姆斯市的房价，比波士顿房价数据集更大、特征也更多。\n\n训练集有 1460 个样本、每个样本 80 个特征和 1 个标签 SalePrice；测试集有 1459 个样本、每个样本 80 个特征，但不含价格。特征混合了整数（建造年份）、离散类别（街道类型、屋顶类型、地下室状况）和浮点数，还夹杂着被简单标记为“NA”的缺失值。数据集相当通用，不需要复杂模型架构就能跑通全流程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-housing-first",
+        "moduleId": "competition-context",
+        "depth": "support",
+        "kind": "note",
+        "title": "为什么把它当作第一个端到端实战",
+        "markdown": "这个任务一次暴露了真实数据的三类麻烦：类型混杂、缺失值，以及测试集标签不可见。它不需要复杂架构，学习者可以把注意力放在“数据怎么进模型、结果怎么被验证”这条主线上。\n\n先跑通一条简单但完整的流程，再替换更强的模型，才有可比较的基准；否则模型变强了，也无法判断提升来自模型还是来自修好了某个数据处理错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-task-and-data"
+          ]
+        }
+      },
+      {
+        "id": "textbook-kaggle-platform",
+        "moduleId": "competition-context",
+        "depth": "support",
+        "kind": "application",
+        "title": "Kaggle 平台与提交入口",
+        "markdown": "Kaggle 是以数据集为中心的机器学习比赛平台，很多比赛有赞助方提供奖金，论坛和共享代码让参赛者可以互相比较方法。教材强调它的价值在于竞争方法之间的直接定量比较和代码共享，而不仅是排行榜名次。\n\n参赛流程是：注册账户，在比赛页面的“Data”选项卡下载训练与测试数据，训练后在 Submit Predictions 或 Late Submission 处上传预测文件，再查看测试集上的排名。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-workflow-overview",
+        "moduleId": "competition-context",
+        "depth": "core",
+        "kind": "summary",
+        "title": "六个步骤的全流程地图",
+        "markdown": "把后面各小节压成一条可执行主线：\n\n1. 读取并缓存训练、测试 CSV，删除只作标识的 Id 列；\n2. 数值特征用均值填补缺失并标准化，类别特征做独热编码，再转成张量；\n3. 先训练线性回归基线，确认数据中确实存在可学习信号；\n4. 用 K 折交叉验证比较超参数，同时观察训练误差与验证误差的差距；\n5. 用选定超参数在全部训练数据上重新训练；\n6. 对测试集预测，导出 submission.csv 并提交。\n\n阅读后续模块时应能回答三段问题：这一步输入什么、输出什么、结果异常时先怀疑哪里。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-task-and-data",
+            "textbook-kaggle-platform"
+          ]
+        }
+      },
+      {
+        "id": "textbook-numeric-preprocess",
+        "moduleId": "data-preprocessing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "数值特征的填补与标准化",
+        "markdown": "教材的数值预处理顺序是：先把训练集与测试集的特征拼接起来，同时记住训练样本数 n_train 以便之后切回，并删除 Id 列；再对每个数值特征计算均值 $\\mu$ 与标准差 $\\sigma$，做标准化\n\n$$x \\leftarrow \\frac{x - \\mu}{\\sigma}$$\n\n使特征零均值、单位方差；标准化后均值已变为 0，因此可以直接把缺失值填为 0。教材给出两个理由：一是方便优化；二是我们不知道哪些特征真正相关，不希望惩罚项不公平地偏向某些特征的系数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-standardization-intuition",
+        "moduleId": "data-preprocessing",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "标准化的直觉与统计量来源",
+        "markdown": "标准化的直觉是让每个特征“用同一把尺子说话”：面积、建造年份和地下室面积的数量级可能相差几个数量级，直接进入线性层时，学习率只能迁就最大的那一维，梯度下降就很难同时照顾好所有参数。零均值还让偏置项不必同时承担平移任务。\n\n工程上要留意统计量的来源：教材是在拼接后的特征上一次计算均值与标准差。如果严格要求避免信息泄漏，应只用训练集估计统计量，再作用到测试集；无论用哪种做法，都必须保证训练与推理使用同一套变换。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-numeric-preprocess"
+          ]
+        }
+      },
+      {
+        "id": "textbook-categorical-onehot",
+        "moduleId": "data-preprocessing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "类别特征的独热编码与张量化",
+        "markdown": "离散特征用独热编码处理。以 MSZoning 为例，原始取值“RL”“RM”会展开成 MSZoning_RL 与 MSZoning_RM 两个 0/1 指示特征：原值为 RL 时前者为 1、后者为 0。pandas 的 `pd.get_dummies(all_features, dummy_na=True)` 自动完成这一步，并把“NA”也当成一个有效取值单独建列。\n\n这一步把特征总数从 79 个增加到 331 个，数据共 2919 行，正好是 1460 个训练样本加 1459 个测试样本。最后用 values 取出 NumPy 数组、转成 `torch.float32` 张量，按 n_train 切回训练与测试特征，标签取 SalePrice 并 reshape 成 $(-1, 1)$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-missing-value-choice",
+        "moduleId": "data-preprocessing",
+        "depth": "advanced",
+        "kind": "misconception",
+        "title": "常见误解：缺失值一律填均值",
+        "markdown": "一个常见误解是“缺失值统一填均值就万事大吉”。教材的练习恰好反问：用平均值替换缺失值总是好主意吗？\n\n更稳妥的判断要看缺失机制。若缺失与目标无关，均值或中位数填补只引入少量偏差；若缺失本身携带信息，例如地下室面积缺失往往意味着根本没有地下室，那么把“缺失”作为独立类别或额外指示列，会比填均值更贴近事实。独热编码里 `dummy_na=True` 保留 NA 指示列，就是把缺失当作信息处理；对连续特征则要权衡是否再加一列缺失指示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-numeric-preprocess",
+            "textbook-categorical-onehot"
+          ]
+        }
+      },
+      {
+        "id": "textbook-linear-baseline",
+        "moduleId": "baseline-and-metric",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "平方损失线性模型作为健全性检查",
+        "markdown": "教材先训练一个带平方损失的单层线性模型：损失用 `nn.MSELoss()`，网络是 `nn.Sequential(nn.Linear(in_features, 1))`。这样的模型几乎不可能赢下比赛，但它能充当健全性检查：如果连它都不比随机猜测好，大概率是数据处理写错了，而不是模型不够强。\n\n若一切正常，它就成为 baseline，让后续更复杂的模型有一个可比较的参照，也能直观看出最好的模型比简单模型高出多少。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-log-rmse",
+        "moduleId": "baseline-and-metric",
+        "depth": "core",
+        "kind": "formula",
+        "title": "相对误差与对数均方根误差",
+        "markdown": "房价预测关心相对数量而非绝对数量。教材的例子是：在典型房价 12.5 万美元的俄亥俄农村偏差 10 万美元很糟糕，而在中位数超过 400 万美元的加州豪宅区，同样的偏差可能还算不错。因此官方指标用价格对数上的均方根误差：\n\n$$\\sqrt{\\frac{1}{n}\\sum_{i=1}^{n}\\left(\\log y_i - \\log \\hat{y}_i\\right)^2}$$\n\n实现时先把预测截断到不小于 1，`torch.clamp(net(features), 1, float('inf'))`，再对预测与标签取对数、算 MSE 后开方。训练借助 Adam 优化器，教材指出它的主要吸引力在于对初始学习率不那么敏感。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-logrmse-meaning",
+        "moduleId": "baseline-and-metric",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "对数 RMSE 该怎么读",
+        "markdown": "对数 RMSE 可以读成“典型相对偏差的量级”：例如 0.17 大致对应预测值平均偏离真实值约 18%（$e^{0.17}-1 \\approx 0.185$，误差较小时近似等于对数差）。这让不同价位的房子被放在同一把相对尺子上，也解释了为什么要把预测截断到 1——价格接近 0 时对数会发散。\n\n它不是简单的百分比误差：先平方再平均再开方，会对较大的相对误差施加更重的惩罚。报告结果时最好同时给出训练与验证两个值，避免只盯着一个数字做判断。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-log-rmse"
+          ]
+        }
+      },
+      {
+        "id": "model-mse-vs-logrmse",
+        "moduleId": "baseline-and-metric",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "MSE 与对数 RMSE 的分工",
+        "markdown": "| 维度 | 平方损失 MSE | 对数 RMSE |\n|---|---|---|\n| 误差尺度 | 绝对价格 | 相对比例 |\n| 大额样本影响 | 豪宅误差主导 | 各价位相对可比 |\n| 与比赛指标 | 不一定一致 | 与官方指标一致 |\n| 典型用途 | 内部调试、基线 | 模型比较与提交 |\n\n两者并不冲突：训练损失可以用 MSE，也可以用对数空间的 MSE，但对外比较与提交评分必须看对数 RMSE，否则容易选出“在便宜房子上很准、在贵房子上离谱”的模型。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-linear-baseline",
+            "textbook-log-rmse"
+          ]
+        }
+      },
+      {
+        "id": "textbook-kfold-procedure",
+        "moduleId": "cross-validation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "K 折交叉验证的实现与一次结果",
+        "markdown": "K 折交叉验证用于模型选择和超参数调整。教材的实现分两层：`get_k_fold_data(k, i, X, y)` 把数据按行切成 k 份，第 i 份作验证集，其余拼接成训练集；`k_fold` 对 i 依次训练新模型，累计最后一轮 epoch 的训练与验证 log RMSE，返回两者的平均值。\n\n示例超参数是 k=5、num_epochs=100、lr=5、weight_decay=0、batch_size=64。运行结果是平均训练 log RMSE 0.165458、平均验证 log RMSE 0.170293。教材强调这组超参数并未调优，留给读者改进。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cv-reading",
+        "moduleId": "cross-validation",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "如何解读五折的验证结果",
+        "markdown": "读这组结果要看的不是单个数字，而是分布：5 折验证误差从 0.154694 到 0.188812，最好与最差相差约 0.034，说明在这个规模的数据集上折间波动不可忽略；平均验证误差 0.170293 略高于平均训练误差 0.165458，差距不大，说明当前模型只有轻微过拟合。\n\n因此比较两组超参数时，应比较平均验证 log RMSE 及其波动，而不是挑某一折的最低值。挑最低折等于在验证集上做选择，会系统性高估效果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-kfold-procedure",
+            "textbook-log-rmse"
+          ]
+        }
+      },
+      {
+        "id": "textbook-overfit-diagnosis",
+        "moduleId": "cross-validation",
+        "depth": "support",
+        "kind": "warning",
+        "title": "训练误差与验证误差的过拟合信号",
+        "markdown": "教材提醒：有时一组超参数的训练误差非常低，但 K 折交叉验证误差高得多，这说明模型过拟合了。训练全程应同时监控训练误差和验证误差。\n\n过拟合较小，说明现有数据可以支撑一个更强大的模型；过拟合较大，则可能通过权重衰减、暂退法等正则化技术获益。教材还指出，如果尝试了不合理的超参数，验证效果可能不再代表真正的误差。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-hparam-search",
+        "moduleId": "cross-validation",
+        "depth": "advanced",
+        "kind": "procedure",
+        "title": "把交叉验证用于调参的顺序",
+        "markdown": "把交叉验证用于调参时，可以按这个顺序推进：\n\n1. 固定 k=5 与数据划分，先只调学习率，观察是否发散或收敛过慢；\n2. 再调权重衰减与模型容量（增加层、dropout），每次只改一组变量；\n3. 以平均验证 log RMSE 为主指标，同时记录折间波动；\n4. 若验证分数随试错次数持续变好而训练分数几乎不动，要怀疑是在对验证集过拟合。\n\n这正是教材提醒的含义：反复在同一验证集上试很多组超参数，验证分数会逐渐失去代表性，最终仍要看官方测试集的成绩。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-kfold-procedure",
+            "textbook-overfit-diagnosis"
+          ]
+        }
+      },
+      {
+        "id": "textbook-final-training",
+        "moduleId": "submission-and-reflection",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "全量重训与导出 submission.csv",
+        "markdown": "确定超参数后，用全部训练数据重训模型，而不是只用交叉验证中的 $1-1/K$ 数据，然后把模型应用到测试集。教材的 `train_and_pred` 先训练并画出训练 log RMSE 曲线，再执行 `preds = net(test_features).detach().numpy()`，把预测写回 `test_data['SalePrice']`，用 `pd.concat` 保留 Id 与 SalePrice 两列，最后 `submission.to_csv('submission.csv', index=False)` 生成提交文件。示例输出训练 log RMSE 为 0.162354。\n\n提交步骤：登录 Kaggle 进入比赛页面，点击 Submit Predictions 或 Late Submission，在上传框选择 submission.csv，再点 Make Submission 查看测试集上的成绩。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000035"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "实战Kaggle比赛：预测房价"
+              ],
+              "lineStart": 7058,
+              "lineEnd": 7522,
+              "assetRefs": [
+                "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+                "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+                "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+                "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+                "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+              ],
+              "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-submission-checklist",
+        "moduleId": "submission-and-reflection",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "提交前检查表与下一步改进",
+        "markdown": "提交前按检查表过一遍：\n\n- 行数是否等于测试集样本数 1459，Id 是否与官方测试文件一一对应且没有被排序打乱；\n- 列名是否为 Id 与 SalePrice，是否多出了索引列；\n- 预测值是否全为正、量级是否与训练标签一致，有没有被截断到 1 的异常样本；\n- 测试集预测分布是否与 K 折验证时的预测分布接近——教材把这一点作为“可以提交了”的信号。\n\n若成绩明显差于验证分数，优先回查预处理在训练与测试之间是否不一致；若只是略差，可以再尝试直接对价格的对数建模、加入正则化或加深网络。做完后请用一句话说明：这次提升来自数据处理、模型还是超参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-training",
+            "textbook-kfold-procedure"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "submission-checklist-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-submission-checklist",
+        "moduleId": "submission-and-reflection",
+        "depth": "core",
+        "outcomeRefs": [
+          "validate-and-submit"
+        ],
+        "learningPurpose": "检查学习者能否在提交前发现格式错误与训练/测试预处理不一致。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-final-training",
+            "textbook-kfold-procedure"
+          ]
+        },
+        "config": {
+          "items": [
+            "提交文件有 1459 行但 Id 被升序重排",
+            "测试集用了自己的均值与标准差做标准化",
+            "预测值中出现若干等于 1 的截断值"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "逐条判断三种情况是否会影响成绩，并写出对应的排查顺序：Id 顺序被打乱、测试集单独重新标准化、预测值被截断到 1。"
+        }
+      }
+    ]
+  },
+  "subtitle": "多层感知机",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000035"
+      ],
+      "headingPath": [
+        "多层感知机",
+        "实战Kaggle比赛：预测房价"
+      ],
+      "lineStart": 7058,
+      "lineEnd": 7522,
+      "assetRefs": [
+        "parts/part-0002/images/16ac355f802e8376f6e0b6d8bb925f7cc27037cc20138502965c8f92275267a8.jpg",
+        "parts/part-0002/images/27560b38177107172dd05c7f587fbb69dd81d47b961fe9f410083a7bcd99d4fd.jpg",
+        "parts/part-0003/images/ef5db858725dd23a18460a58127be72622f071b0ee00d55be7fad8b652aeac1f.jpg",
+        "parts/part-0003/images/b551dfc10525360853e70d3b398b56e8e2835455750212fa857798a228fb5407.jpg",
+        "parts/part-0003/images/cb0294535cbef9414dcbbcd80e0f002884214bcc59e8ead365559b9a0d3bff05.jpg"
+      ],
+      "excerptSha256": "b6fc76e89e5b7c1ae0fc0c21a9779794d9c1ec90aafda2fd346a48e9be7435ba"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3024,
+    2803
+  ],
+  "scale": 0.86
+}

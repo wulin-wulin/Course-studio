@@ -1,0 +1,488 @@
+{
+  "id": "point-7-7",
+  "title": "稠密连接网络（DenseNet）",
+  "shortSummary": "说明稠密块如何让每一层复用前面所有层的特征，并分析其参数效率与内存开销。",
+  "keyTerms": [
+    "DenseNet",
+    "稠密块",
+    "特征复用",
+    "内存开销"
+  ],
+  "animationType": "denseBlockConcat",
+  "animationSuggestion": "逐层展示新卷积输出被追加到已有特征堆栈之上，标注当前通道数随层数线性增长；最后一步高亮过渡层的通道减半，并允许重播对比增长与压缩两个阶段。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-7-5",
+    "point-7-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于相连与相加、稠密块、增长率与过渡层的定义和数值，按「从哪里来—块内机制—通道推导—整体装配—开销权衡」重排讲解，并补充可核查的通道算例与练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-densenet-connection",
+          "text": "解释 DenseNet 用通道维连结替代相加的跨层连接方式，并说明它与 ResNet 的关系。"
+        },
+        {
+          "id": "analyze-dense-block",
+          "text": "说明稠密块中卷积块的组成、特征复用方式与增长率的作用。"
+        },
+        {
+          "id": "compute-channel-flow",
+          "text": "按稠密块层数、增长率与过渡层规则推算各阶段的通道数和空间尺寸。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "结合参数规模与显存占用评估 DenseNet 的适用取舍。"
+        }
+      ],
+      "misconceptions": [
+        "把稠密连接误认为全连接层。",
+        "以为稠密块每经过一个卷积块只增加一个增长率的通道。",
+        "认为参数更少就一定更省显存和运行开销。"
+      ],
+      "modules": [
+        {
+          "id": "from-resnet-to-densenet",
+          "title": "从相加到连结：DenseNet 的出发点",
+          "role": "motivation",
+          "description": "用 ResNet 的分解式与泰勒展开类比引出稠密连接。",
+          "outcomeRefs": [
+            "explain-densenet-connection"
+          ],
+          "order": 0
+        },
+        {
+          "id": "dense-block-mechanism",
+          "title": "稠密块的组成与增长率",
+          "role": "concept",
+          "description": "说明卷积块结构、前向连结规则和通道数增长公式。",
+          "outcomeRefs": [
+            "explain-densenet-connection",
+            "analyze-dense-block"
+          ],
+          "order": 1
+        },
+        {
+          "id": "channel-growth-and-transition",
+          "title": "过渡层如何压缩模型",
+          "role": "derivation",
+          "description": "推导过渡层对通道数与高宽的压缩作用。",
+          "outcomeRefs": [
+            "compute-channel-flow"
+          ],
+          "order": 2
+        },
+        {
+          "id": "densenet-assembly",
+          "title": "把模块装配成 DenseNet",
+          "role": "worked-example",
+          "description": "按教材代码逐段推出通道与空间尺寸流水线。",
+          "outcomeRefs": [
+            "analyze-dense-block",
+            "compute-channel-flow"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-and-tradeoff",
+          "title": "参数效率与显存代价",
+          "role": "discussion",
+          "description": "对照教材的训练设置与练习，分析 DenseNet 的取舍。",
+          "outcomeRefs": [
+            "evaluate-tradeoffs"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-densenet-connection",
+          "analyze-dense-block",
+          "compute-channel-flow",
+          "evaluate-tradeoffs"
+        ],
+        "method": "完成通道推算练习并说明 DenseNet 相对 ResNet 的连接差异与资源取舍。",
+        "successCriteria": [
+          "能写出稠密块输出通道 $c_0 + n \\cdot k$ 并代入数值",
+          "能说明过渡层同时减半通道与高宽",
+          "能同时列出参数效率与显存开销两方面的结论"
+        ],
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-8-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-definition",
+        "moduleId": "from-resnet-to-densenet",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：DenseNet 用连结代替相加",
+        "markdown": "稠密连接网络（DenseNet）在某种程度上是 ResNet 的逻辑扩展：它沿用跨层连接的思想，但把跨层连接的方式从**相加**改成**连结**。\n\nResNet 把函数分解为两部分，一个简单的线性项和一个复杂的非线性项，即 $f(\\mathbf{x}) = \\mathbf{x} + g(\\mathbf{x})$。DenseNet 想保留超过两部分的信息，于是执行从 $\\mathbf{x}$ 到其展开式的映射：$\\mathbf{x} \\rightarrow [\\mathbf{x}, f_1(\\mathbf{x}), f_2([\\mathbf{x}, f_1(\\mathbf{x})]), f_3([\\mathbf{x}, f_1(\\mathbf{x}), f_2([\\mathbf{x}, f_1(\\mathbf{x})])]), \\dots]$，方括号表示在通道维上的连结。\n\n教材图 7.7.1 对比了两者的跨层连接：ResNet 把输入与输出相加，DenseNet 则用连结。这样最后一层与之前的所有层紧密相连，「稠密连接」这个名字就来自变量之间的这种连接关系。\n\nDenseNet 主要由两部分构成：**稠密块（dense block）**定义如何连接输入和输出，**过渡层（transition layer）**控制通道数量，使其不会太复杂。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "稠密连接网络（DenseNet）"
+              ],
+              "lineStart": 11721,
+              "lineEnd": 11964,
+              "assetRefs": [
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+                "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+                "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+              ],
+              "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-taylor-analogy",
+        "moduleId": "from-resnet-to-densenet",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：泰勒展开类比能说明什么、不能说明什么",
+        "markdown": "教材用泰勒展开作为引子：在 $x$ 接近 0 时，$f(x) = f(0) + f'(0)x + \\frac{f''(0)}{2!}x^2 + \\frac{f'''(0)}{3!}x^3 + \\dots$，每多保留一阶就多保留一项信息。教材借此说明 ResNet 只把函数拆成「线性项 + 非线性项」两部分，而 DenseNet 让每个新函数都额外看到此前所有结果。\n\n这个类比有帮助的地方在于它解释了为什么要「追加」而不是「替换」：$f_2$ 的输入同时包含原始输入 $\\mathbf{x}$ 和 $f_1$ 的输出，$f_3$ 的输入再追加 $f_2$ 的输出，信息只增不减。\n\n需要提醒的是，类比只解释结构，不解释数值：泰勒展开是对光滑函数的解析近似，而 DenseNet 中的 $f_i$ 是带参数、可学习的卷积块，二者之间没有等式关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-definition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-dense-block",
+        "moduleId": "dense-block-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：稠密块的组成与前向连结",
+        "markdown": "DenseNet 使用 ResNet 改良版的「批量规范化、激活和卷积」架构。每个卷积块的组成是 `BatchNorm2d → ReLU → Conv2d`，卷积核为 $3 \\times 3$、padding 为 1，因此卷积本身不改变高和宽。\n\n一个稠密块由多个这样的卷积块组成，每个卷积块使用相同数量的输出通道。关键在前向传播：对每个卷积块先算出输出，再把该卷积块的输入和输出在通道维上连结，作为下一个卷积块的输入，对应教材代码中的 `X = torch.cat((X, Y), dim=1)`。\n\n因此稠密块内部高宽保持不变，只有通道数在增长；每个卷积块都同时看到原始输入和此前所有卷积块的输出，这正是特征复用的具体含义。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "稠密连接网络（DenseNet）"
+              ],
+              "lineStart": 11721,
+              "lineEnd": 11964,
+              "assetRefs": [
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+                "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+                "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+              ],
+              "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-growth-rate",
+        "moduleId": "dense-block-mechanism",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：增长率与通道数",
+        "markdown": "教材的例子定义了一个有 2 个卷积块、每个卷积块输出通道数为 10 的稠密块。输入通道数为 3 时，输出通道数为 $3 + 2 \\times 10 = 23$；输入张量从 $4 \\times 3 \\times 8 \\times 8$ 变为 $4 \\times 23 \\times 8 \\times 8$。\n\n卷积块的输出通道数控制输出通道数相对于输入通道数的增长幅度，因此被称为**增长率（growth rate）**。设输入通道数为 $c_0$、稠密块内有 $n$ 个卷积块、增长率为 $k$，则第 $i$ 个卷积块（从 0 开始计数）的输入通道数是 $c_0 + i \\cdot k$，整个稠密块的输出通道数是 $c_0 + n \\cdot k$。\n\n由于每一层的输入都包含此前所有层的输出，越靠后的卷积块要处理的通道堆栈越厚，它的卷积核需要在这一整叠特征上做卷积。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "稠密连接网络（DenseNet）"
+              ],
+              "lineStart": 11721,
+              "lineEnd": 11964,
+              "assetRefs": [
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+                "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+                "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+              ],
+              "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-growth-derivation",
+        "moduleId": "dense-block-mechanism",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：把通道增长写成可复用的算法",
+        "markdown": "把教材的递推写成步骤：给定 $c_0$ 与增长率 $k$，第 $i$ 个卷积块（从 1 开始计数）的输入是 $c_0 + (i-1)k$ 个通道，它输出 $k$ 个新通道，连结后总通道数变成 $c_0 + ik$。\n\n以教材 DenseNet 的设置为例：stem 输出 $c_0 = 64$ 个通道，每个稠密块含 4 个卷积块，增长率 $k = 32$。于是第一个稠密块的输出为 $64 + 4 \\times 32 = 192$ 个通道，即每个稠密块净增 128 个通道。\n\n两个容易出错的地方：其一，增长量是 $n \\times k$ 而不是 $k$，因为连结会累积每一个卷积块的输出；其二，必须在每个卷积块之后立即连结，先把所有卷积块都算完再统一连结会破坏「后层看到前层输出」的依赖关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-dense-block",
+            "textbook-growth-rate"
+          ]
+        }
+      },
+      {
+        "id": "textbook-transition",
+        "moduleId": "channel-growth-and-transition",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：过渡层压缩通道与空间尺寸",
+        "markdown": "每个稠密块都会带来通道数的增加，使用过多会过于复杂化模型，过渡层就是用来控制模型复杂度的。\n\n过渡层依次执行 `BatchNorm2d → ReLU → Conv2d(kernel_size=1) → AvgPool2d(kernel_size=2, stride=2)`。其中 $1 \\times 1$ 卷积层负责减小通道数，步幅为 2 的平均汇聚层把高和宽减半，从而进一步降低模型复杂度。\n\n教材示例：对前面 23 通道、$8 \\times 8$ 的稠密块输出使用输出通道数为 10 的过渡层，得到形状 $4 \\times 10 \\times 4 \\times 4$，即通道数减为 10、高和宽均减半。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "稠密连接网络（DenseNet）"
+              ],
+              "lineStart": 11721,
+              "lineEnd": 11964,
+              "assetRefs": [
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+                "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+                "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+              ],
+              "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-transition-why-avg",
+        "moduleId": "channel-growth-and-transition",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：过渡层为什么用平均汇聚",
+        "markdown": "教材把「过渡层为什么用平均汇聚而不是最大汇聚」留作练习，下面是一个解释性回答，用于对照理解，不是教材原文。\n\n过渡层的任务是压缩：在不引入额外卷积参数的前提下降低分辨率，同时保留该区域的整体响应强度。平均汇聚对窗口内所有位置取均值，输出反映区域的平均激活水平；最大汇聚只保留最强响应，会丢弃窗口内其余位置的信息。\n\n这与过渡层所处的位置有关：稠密块已经通过连结保留了细粒度的逐层特征，紧随其后的过渡层需要的是平滑汇总并降采样，而不是再次挑出单个最强响应。若后续任务更关心稀疏的强响应，改用最大汇聚是可以讨论的设计选择，但这会改变特征统计性质，需要实验验证。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-transition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-densenet-architecture",
+        "moduleId": "densenet-assembly",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：DenseNet 的整体装配",
+        "markdown": "DenseNet 首先使用与 ResNet 一样的单卷积层和最大汇聚层：$7 \\times 7$ 卷积（步幅 2、padding 3）把 1 个通道变成 64 个通道，接批量规范化、ReLU 和 $3 \\times 3$ 最大汇聚（步幅 2、padding 1）。\n\n主体部分与 ResNet 的 4 个残差块相对应，DenseNet 使用 4 个稠密块，每个稠密块设 4 个卷积层（与 ResNet-18 保持一致）；稠密块内卷积层的通道数即增长率设为 32，所以每个稠密块增加 128 个通道。\n\n在每个模块之间，ResNet 通过步幅为 2 的残差块减小高和宽，DenseNet 则使用过渡层减半高和宽并减半通道数；最后一个稠密块之后不再接过渡层。最后接批量规范化、ReLU、全局汇聚层、展平和一个输出 10 类的全连接层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "稠密连接网络（DenseNet）"
+              ],
+              "lineStart": 11721,
+              "lineEnd": 11964,
+              "assetRefs": [
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+                "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+                "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+              ],
+              "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-channel-flow-table",
+        "moduleId": "densenet-assembly",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：通道与空间尺寸流水线",
+        "markdown": "按教材代码的设置（stem 输出 64 通道、4 个稠密块各 4 个卷积块、增长率 32、输入 $96 \\times 96$），把每个阶段的通道数与高宽列成下表，其中过渡层同时减半通道与高宽：\n\n| 阶段 | 操作 | 输出通道 | 输出高宽 |\n|---|---|---|---|\n| stem | $7\\times7$ 卷积 + 最大汇聚 | 64 | $24\\times24$ |\n| 稠密块 1 | 4 个卷积块，每块 +32 | 192 | $24\\times24$ |\n| 过渡层 1 | $1\\times1$ 卷积 + 平均汇聚 | 96 | $12\\times12$ |\n| 稠密块 2 | 4 个卷积块，每块 +32 | 224 | $12\\times12$ |\n| 过渡层 2 | $1\\times1$ 卷积 + 平均汇聚 | 112 | $6\\times6$ |\n| 稠密块 3 | 4 个卷积块，每块 +32 | 240 | $6\\times6$ |\n| 过渡层 3 | $1\\times1$ 卷积 + 平均汇聚 | 120 | $3\\times3$ |\n| 稠密块 4 | 4 个卷积块，每块 +32 | 248 | $3\\times3$ |\n| 分类头 | 全局平均汇聚 + 全连接 | 10 | $1\\times1$ |\n\n读表时检查两点：稠密块内部高宽不变，只有过渡层改变高宽；全连接层的输入维度是最后一个稠密块输出的 248，而不是 stem 的 64。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-growth-rate",
+            "textbook-transition",
+            "textbook-densenet-architecture"
+          ]
+        }
+      },
+      {
+        "id": "textbook-training",
+        "moduleId": "cost-and-tradeoff",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：训练设置与结果",
+        "markdown": "由于使用了比较深的网络，教材把输入的高和宽从 224 降到 96 来简化计算，学习率取 0.1、批大小取 256、训练 10 个 epoch，在 GPU 上训练 Fashion-MNIST 得到 loss 0.140、训练准确率 0.948、测试准确率 0.885。\n\n这是一次具体实验的结果记录，用于说明该配置下网络可以完成训练，不应把它当作 DenseNet 在其它数据集或输入尺寸上的性能保证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000057"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "稠密连接网络（DenseNet）"
+              ],
+              "lineStart": 11721,
+              "lineEnd": 11964,
+              "assetRefs": [
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+                "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+                "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+              ],
+              "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parameter-memory-tradeoff",
+        "moduleId": "cost-and-tradeoff",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：参数账与显存账要分开算",
+        "markdown": "DenseNet 的取舍需要同时看两本账。\n\n**参数账**：教材练习指出 DenseNet 的优点之一是模型参数比 ResNet 小。可以从结构上理解这一点：每个卷积块只输出 $k = 32$ 个新通道，稠密块之间又用 $1\\times1$ 卷积把通道数减半，卷积核不必在极厚的特征堆栈上展开。\n\n**显存账**：教材同样提到 DenseNet 一个诟病的问题是内存或显存消耗过多。稠密连结必须保留每个卷积块的输出供后续层读取，反向传播也需要这些中间特征，激活占用随层数和空间分辨率快速增长；教材因此建议把输入换成 $224 \\times 224$ 观察实际显存消耗，并思考减少消耗的办法。\n\n因此结论要说得更准确：稠密连接用「更少的参数 + 更多的特征复用」换取表达效率，代价是显存与访存压力，参数量小不等于运行更省资源。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-dense-block",
+            "textbook-transition",
+            "textbook-densenet-architecture",
+            "textbook-training"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "cost-and-tradeoff",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：三个常见误解",
+        "markdown": "**误解一：稠密连接就是全连接层。** 稠密连接指同一稠密块内特征图在通道维上的连结，卷积核仍是局部的 $3 \\times 3$ 卷积；它和把每个输入单元连到每个输出单元的全连接层不是一回事。\n\n**误解二：稠密块每经过一个卷积块只增加一个增长率的通道。** 连结会累积所有前层输出，经过 $n$ 个卷积块净增 $n \\cdot k$ 个通道；输入 3 通道、2 个 10 通道卷积块得到 23 通道就是这一累积规则的直接结果。\n\n**误解三：稠密连结不需要过渡层。** 没有过渡层，通道数会随稠密块数量不断累加，模型复杂度与显存占用都难以控制，这正是过渡层存在的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-definition",
+            "textbook-growth-rate",
+            "model-parameter-memory-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "cost-and-tradeoff",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结：DenseNet 的三条主线",
+        "markdown": "1. 跨层连接从 ResNet 的**相加**改为 DenseNet 的**通道维连结**，每一层都能直接读到此前所有层的输出。\n2. **稠密块**负责连接，通道数按 $c_0 + n \\cdot k$ 增长；**过渡层**用 $1 \\times 1$ 卷积加步幅 2 的平均汇聚，把通道与高宽各减半。\n3. 收益是参数更省、特征复用更充分；代价是中间激活占用显存，实践中要结合输入尺寸与显存预算权衡。\n\n下一节转向序列数据，那里需要的不是空间上的局部连接，而是能保存历史信息的状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-definition",
+            "textbook-densenet-architecture",
+            "model-parameter-memory-tradeoff"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "densenet-channel-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-channel-flow-table",
+        "moduleId": "densenet-assembly",
+        "depth": "core",
+        "title": "通道推算自测",
+        "outcomeRefs": [
+          "compute-channel-flow"
+        ],
+        "learningPurpose": "检查学习者能否用增长率与卷积块数量推算稠密块输出通道，并正确应用过渡层的通道减半规则。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-growth-rate",
+            "textbook-transition",
+            "model-channel-flow-table"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "输入通道为 48，稠密块含 3 个卷积块、增长率为 16，稠密块输出通道是多少？再经过把通道减半的过渡层后是多少？",
+          "expected": "稠密块输出 96 个通道；过渡层后为 48 个通道。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "输入 48 通道、3 个卷积块、增长率 16 时，稠密块输出 $48 + 3 \\times 16 = 96$ 个通道；过渡层把通道减半，得到 48 个通道。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代卷积神经网络",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000057"
+      ],
+      "headingPath": [
+        "现代卷积神经网络",
+        "稠密连接网络（DenseNet）"
+      ],
+      "lineStart": 11721,
+      "lineEnd": 11964,
+      "assetRefs": [
+        "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg",
+        "parts/part-0004/images/81f7a09774a858ff3e6acf22c4249630c13489a03a589127c508cc9a7f519fbe.jpg",
+        "parts/part-0004/images/2d4540b3475b4788c54235eafc18ebf61cc29074a962ea1a51db05ee572906bc.jpg"
+      ],
+      "excerptSha256": "48500bd715040cab4b8d1e52a5e6ae8d14b9ef2ffbdada36e73d30fad1b1eb61"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1572,
+    2199
+  ],
+  "scale": 0.87
+}

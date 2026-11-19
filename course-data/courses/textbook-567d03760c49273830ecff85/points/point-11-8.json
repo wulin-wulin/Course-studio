@@ -1,0 +1,496 @@
+{
+  "id": "point-11-8",
+  "title": "RMSProp算法",
+  "shortSummary": "介绍 RMSProp 用指数加权移动平均估计梯度二阶矩，缓解 AdaGrad 的过度衰减。",
+  "keyTerms": [
+    "RMSProp",
+    "指数加权移动平均",
+    "二阶矩",
+    "自适应学习率"
+  ],
+  "animationType": "rmspropLeakyAverage",
+  "animationSuggestion": "在同一二次函数曲面上并排演示 Adagrad 与 RMSProp 的轨迹：显示两个坐标的 s 与缩放因子逐轮变化，允许切换 gamma 观察 RMSProp 后期步长是否塌缩。",
+  "difficulty": "进阶",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-11-6",
+    "point-11-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的公式、取值和实验结论，围绕“为什么要换掉累加”重排为问题、机制、推导、算例和边界检查，并只补充解释性的计算与对照。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-adaptive-fix",
+          "text": "解释 AdaGrad 的平方累加为何在非凸训练中失效，以及泄漏平均如何修复它。"
+        },
+        {
+          "id": "compute-rmsprop-update",
+          "text": "按 RMSProp 更新式完成一次逐坐标计算，并说明每个量的作用。"
+        },
+        {
+          "id": "choose-rmsprop-hyperparams",
+          "text": "为给定情境选择加权系数与学习率，并说明其失效边界。"
+        }
+      ],
+      "misconceptions": [
+        "把 RMSProp 当成会自动衰减学习率的优化器，忽略学习率仍需由使用者调度。",
+        "把加权系数 $\\gamma$ 当作学习率，或用 $\\gamma = 1$ 仍期望得到有效的二阶矩估计。"
+      ],
+      "modules": [
+        {
+          "id": "problem-motivation",
+          "title": "问题：累加为什么不合适",
+          "role": "motivation",
+          "description": "从 AdaGrad 的时间表和平方累加出发，指出非凸训练中的失效方式。",
+          "outcomeRefs": [
+            "explain-adaptive-fix"
+          ],
+          "order": 0
+        },
+        {
+          "id": "leaky-average-mechanism",
+          "title": "核心机制：泄漏平均",
+          "role": "concept",
+          "description": "把平方累加换成指数加权移动平均，说明窗口长度由 $\\gamma$ 决定。",
+          "outcomeRefs": [
+            "explain-adaptive-fix"
+          ],
+          "order": 1
+        },
+        {
+          "id": "update-rule-derivation",
+          "title": "更新式与展开",
+          "role": "derivation",
+          "description": "写出 RMSProp 的两条更新式，并由展开式读出逐坐标缩放的来源。",
+          "outcomeRefs": [
+            "explain-adaptive-fix",
+            "compute-rmsprop-update"
+          ],
+          "order": 2
+        },
+        {
+          "id": "worked-example-2d",
+          "title": "算例：二次函数上的一步更新",
+          "role": "worked-example",
+          "description": "在教材的二维二次函数上手工完成一步 RMSProp 更新，并与 Adagrad 首步对照。",
+          "outcomeRefs": [
+            "compute-rmsprop-update"
+          ],
+          "order": 3
+        },
+        {
+          "id": "practice-and-boundary",
+          "title": "边界检查与常见误解",
+          "role": "practice",
+          "description": "用教材练习检验 $\\gamma$ 的取值边界，并澄清学习率与加权系数的分工。",
+          "outcomeRefs": [
+            "choose-rmsprop-hyperparams"
+          ],
+          "order": 4
+        },
+        {
+          "id": "bridge-to-adadelta",
+          "title": "桥接：把泄漏平均用到更新量上",
+          "role": "bridge",
+          "description": "指出同一泄漏平均思想被下一个知识点继承的位置。",
+          "outcomeRefs": [
+            "choose-rmsprop-hyperparams"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-adaptive-fix",
+          "compute-rmsprop-update",
+          "choose-rmsprop-hyperparams"
+        ],
+        "method": "完成一次一步更新计算，并对教材的 $\\gamma = 1$ 练习给出结论与理由。",
+        "successCriteria": [
+          "更新量与逐坐标缩放因子的计算正确",
+          "$\\gamma$ 与学习率的作用被区分清楚",
+          "失效边界的结论能引用教材中的更新式或小结"
+        ],
+        "exerciseBlockId": "model-gamma-exercise",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-11-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-problem",
+        "moduleId": "problem-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：AdaGrad 的学习率衰减与平方累加",
+        "markdown": "Adagrad 的关键问题之一是学习率按预定时间表 $\\mathcal{O}(t^{-\\frac{1}{2}})$ 显著降低。这通常适用于凸问题，但深度学习中遇到的非凸问题可能并不理想。尽管有此缺陷，Adagrad 作为预处理器，按坐标顺序的自适应性仍然非常可取。\n\n问题出在状态的定义：Adagrad 把梯度平方累加为 $\\mathbf{s}_t = \\mathbf{s}_{t-1} + \\mathbf{g}_t^2$。由于缺乏规范化、没有约束力，$\\mathbf{s}_t$ 会持续增长，几乎在算法收敛时呈线性递增。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "优化算法",
+                "RMSProp算法"
+              ],
+              "lineStart": 20276,
+              "lineEnd": 20479,
+              "assetRefs": [
+                "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+                "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+                "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+                "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+              ],
+              "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-decay-hurts",
+        "moduleId": "problem-motivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：单调变大的分母会锁死后期步长",
+        "markdown": "把 $\\mathbf{s}_t$ 看成步长的分母：训练推进时 $\\mathbf{s}_t$ 单调变大，因子 $\\eta/\\sqrt{\\mathbf{s}_t+\\epsilon}$ 就单调变小。即使参数走到了仍需要较大步长的区域，也无法再把步长调回来，因为分母只记得“过去梯度一直很大”。\n\n凸问题上这种衰减有助于收敛；非凸的深度网络上它让参数在后期几乎停住。RMSProp 想保留的只是逐坐标缩放这一优点，并不需要时间表式的全局衰减。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-problem"
+          ]
+        }
+      },
+      {
+        "id": "textbook-leaky-average",
+        "moduleId": "leaky-average-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用泄漏平均替代累加",
+        "markdown": "教材给出两种修复思路。其一是使用 $\\mathbf{s}_t/t$：对 $\\mathbf{g}_t$ 的合理分布它会收敛，但限制行为生效可能需要很长时间，因为该流程记住了值的完整轨迹。其二是按动量法中的方式使用泄漏平均值：\n\n$$\\mathbf{s}_t \\leftarrow \\gamma \\mathbf{s}_{t-1} + (1-\\gamma)\\mathbf{g}_t^2,$$\n\n其中参数 $\\gamma > 0$。保持所有其他部分不变，就产生了 RMSProp 算法（Tieleman and Hinton, 2012）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "优化算法",
+                "RMSProp算法"
+              ],
+              "lineStart": 20276,
+              "lineEnd": 20479,
+              "assetRefs": [
+                "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+                "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+                "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+                "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+              ],
+              "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-leaky-average-window",
+        "moduleId": "leaky-average-mechanism",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：窗口长度由 $\\gamma$ 决定",
+        "markdown": "把定义反复代入可得\n\n$$\\mathbf{s}_t = (1-\\gamma)\\left(\\mathbf{g}_t^2 + \\gamma\\mathbf{g}_{t-1}^2 + \\gamma^2\\mathbf{g}_{t-2}^2 + \\cdots\\right).$$\n\n由于 $\\sum_{k\\ge 0}\\gamma^k = \\frac{1}{1-\\gamma}$，这些权重之和被标准化为 $1$，旧观测的权重按 $\\gamma$ 的幂次几何衰减。教材据此把 $1/(1-\\gamma)$ 作为累积的观测次数：$\\gamma = 0.9$ 大致相当于以最近约 $10$ 步的平方梯度为主的平均。\n\n这里的 $1/(1-\\gamma)$ 只是有效记忆长度的近似，不是硬截断窗口：权重 $\\gamma^k$ 随时间指数衰减却始终非零，$\\gamma = 0.9$ 时仍大致以最近约 $10$ 步的平方梯度为主。严格说，无限几何级数归一后的权重之和为 $1$；若取初值 $\\mathbf{s}_0 = 0$，到第 $t$ 步实际权重之和只有 $1-\\gamma^t$，因此上面的归一化应理解为 $t$ 较大时的长期近似，讲有限步时需按 $1-\\gamma^t$ 重新归一。\n\n需要强调的是，指数加权移动平均、平方累加 $\\mathbf{s}_t = \\sum_{i \\le t}\\mathbf{g}_i^2$ 与累计均值 $\\mathbf{s}_t/t$ 的差别不在需要保存多少历史，而在权重如何分配：EMA 给近期梯度更高权重、旧项按指数衰减；累加与累计均值则持续计入全部历史，均值只是再除以步数。三者都只需常数个状态向量（及计数器）在线维护——EMA 维护 $\\mathbf{s}_t$，累加维护 $\\mathbf{s}_t$，累计均值维护 $\\mathbf{s}_t$ 和计数器 $t$——均不需要保存完整轨迹，真正的差别只在于旧信息以多大权重保留多久。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-leaky-average"
+          ]
+        }
+      },
+      {
+        "id": "textbook-update-rule",
+        "moduleId": "update-rule-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：RMSProp 的更新式",
+        "markdown": "$$\\begin{aligned} \\mathbf{s}_t &\\leftarrow \\gamma\\mathbf{s}_{t-1} + (1-\\gamma)\\mathbf{g}_t^2, \\\\ \\mathbf{x}_t &\\leftarrow \\mathbf{x}_{t-1} - \\frac{\\eta}{\\sqrt{\\mathbf{s}_t+\\epsilon}} \\odot \\mathbf{g}_t. \\end{aligned}$$\n\n常数 $\\epsilon > 0$ 通常设置为 $10^{-6}$，以确保不会因除以零或步长过大而受影响。有了这个扩展，就可以自由控制学习率 $\\eta$，而不必考虑按坐标应用的缩放。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "优化算法",
+                "RMSProp算法"
+              ],
+              "lineStart": 20276,
+              "lineEnd": 20479,
+              "assetRefs": [
+                "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+                "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+                "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+                "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+              ],
+              "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-expanded-update",
+        "moduleId": "update-rule-derivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：逐坐标缩放从何而来",
+        "markdown": "展开式说明 $\\mathbf{s}_t$ 是历史平方梯度的加权和：越近的梯度权重越大，越远的按 $\\gamma^k$ 衰减。因此梯度尺度突然改变时，$\\mathbf{s}_t$ 会在约 $1/(1-\\gamma)$ 步内跟上新尺度；Adagrad 的累加量则只会继续变大。\n\n乘号 $\\odot$ 与开方都是逐元素运算，缩放因子 $\\eta/\\sqrt{\\mathbf{s}_t+\\epsilon}$ 因此也是逐坐标的：梯度长期很大的坐标得到较小步长，梯度很小的坐标保留较大步长。学习率 $\\eta$ 在这一步只充当全局尺度，与坐标缩放解耦。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-update-rule",
+            "textbook-leaky-average"
+          ]
+        }
+      },
+      {
+        "id": "textbook-2d-experiment",
+        "moduleId": "worked-example-2d",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材：二次函数轨迹与两个实现",
+        "markdown": "教材在 $f(\\mathbf{x}) = 0.1x_1^2 + 2x_2^2$ 上观察轨迹，取 $\\eta = 0.4$、$\\gamma = 0.9$。回顾 AdaGrad 取学习率 $0.4$ 时，变量在算法的后期阶段移动非常缓慢，因为学习率衰减太快；在 RMSProp 中不会发生这种情况，因为 $\\eta$ 是单独控制的。\n\n从零实现中，每步先算 $g_1 = 0.2x_1$、$g_2 = 4x_2$，用同一个 $\\gamma$ 更新两个坐标的 $s$，再各自减去 $\\eta/\\sqrt{s+\\epsilon}$ 乘上梯度。深度网络实现把初始学习率设为 $0.01$、加权项 $\\gamma$ 设为 $0.9$，即 $\\mathbf{s}$ 累积了过去 $1/(1-\\gamma) = 10$ 次平方梯度观测值的平均值，训练结果为 loss $0.247$。简洁实现直接调用 `torch.optim.RMSprop`，取 `lr=0.01`、`alpha=0.9`，得到 loss $0.244$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "优化算法",
+                "RMSProp算法"
+              ],
+              "lineStart": 20276,
+              "lineEnd": 20479,
+              "assetRefs": [
+                "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+                "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+                "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+                "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+              ],
+              "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-first-step",
+        "moduleId": "worked-example-2d",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：在 $(1,1)$ 处手算第一步",
+        "markdown": "取 $\\mathbf{x} = (1, 1)$、$\\mathbf{s}$ 的初值为 $(0, 0)$、$\\gamma = 0.9$、$\\eta = 0.4$。该点的梯度为 $\\mathbf{g} = (0.2, 4)$。\n\n第一步状态：$\\mathbf{s} = 0.1 \\cdot (0.04, 16) = (0.004, 1.6)$。\n\n更新量：\n\n$$\\frac{\\eta}{\\sqrt{\\mathbf{s}+\\epsilon}} \\odot \\mathbf{g} \\approx \\left(\\frac{0.4}{0.0632}\\cdot 0.2,\\ \\frac{0.4}{1.2649}\\cdot 4\\right) \\approx (1.265,\\ 1.265).$$\n\n两个坐标的原始梯度相差 $20$ 倍，更新量却几乎相同，这就是逐坐标缩放的效果。换作 Adagrad，首步 $\\mathbf{s} = \\mathbf{g}^2$ 会给出 $\\eta\\cdot\\mathrm{sign}(\\mathbf{g}) = 0.4$ 的步长；RMSProp 首步的尺度是 $\\eta/\\sqrt{1-\\gamma} \\approx 1.265$，因为此时 $\\mathbf{s}$ 只含有一部分历史。从第二步起 $\\mathbf{s}$ 继续累积，步长收缩到合适量级。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-2d-experiment",
+            "textbook-update-rule"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "practice-and-boundary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：小结与练习",
+        "markdown": "- RMSProp 算法与 Adagrad 算法非常相似，因为两者都使用梯度的平方来缩放系数。\n- RMSProp 算法与动量法都使用泄漏平均值，但 RMSProp 用该技术调整按系数顺序的预处理器。\n- 在实验中，学习率需要由实验者调度。\n- 系数 $\\gamma$ 决定在调整每坐标比例时历史记录的时长。\n\n教材练习包括：设 $\\gamma = 1$ 实验会发生什么、为什么；把目标旋转为 $f(\\mathbf{x}) = 0.1(x_1+x_2)^2 + 2(x_1-x_2)^2$ 后收敛如何变化；在 Fashion-MNIST 等真实问题上调整学习率；以及优化过程中是否需要调整 $\\gamma$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "优化算法",
+                "RMSProp算法"
+              ],
+              "lineStart": 20276,
+              "lineEnd": 20479,
+              "assetRefs": [
+                "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+                "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+                "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+                "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+              ],
+              "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gamma-exercise",
+        "moduleId": "practice-and-boundary",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：$\\gamma = 1$ 会发生什么",
+        "markdown": "取 $\\gamma = 1$ 时 $\\mathbf{s}_t = \\mathbf{s}_{t-1}$，状态永远停在初值 $0$。分母变成 $\\sqrt{\\epsilon} = 10^{-3}$，更新量被放大约 $1000$ 倍，方向仍沿负梯度但步长直接爆炸，训练发散。\n\n结论：$\\gamma$ 必须严格小于 $1$。泄漏平均只有在每一步都引入新观测时才有意义；$\\gamma$ 越接近 $1$，窗口越长、对新尺度的反应越慢。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-eta-misconception",
+        "moduleId": "practice-and-boundary",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清：RMSProp 不会替你衰减学习率",
+        "markdown": "常见误读是“RMSProp 会自动让学习率衰减”。它其实只把全局学习率 $\\eta$ 与逐坐标缩放分开，$\\eta$ 本身不随时间自动变小，教材小结也指出学习率需要由实验者调度。若与学习率调度器配合，衰减来自调度器而非 RMSProp。\n\n另一个相关混淆是把 $\\gamma$ 当成学习率：$\\gamma$ 只决定历史窗口长度，与步长大小无关；步长的大小仍由 $\\eta$ 决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-update-rule"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bridge-adadelta",
+        "moduleId": "bridge-to-adadelta",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：节末转入 Adadelta",
+        "markdown": "教材在本节之后转入 Adadelta，指出它是 AdaGrad 的另一种变体，主要区别在于减少了学习率适应坐标的数量。Adadelta 使用两个状态变量：$\\mathbf{s}_t$ 保存梯度二阶导数的泄漏平均值，$\\Delta\\mathbf{x}_t$ 保存参数变化二阶导数的泄漏平均值，其泄漏更新写成与本节一致的形式 $\\mathbf{s}_t = \\rho\\mathbf{s}_{t-1} + (1-\\rho)\\mathbf{g}_t^2$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000091"
+              ],
+              "headingPath": [
+                "优化算法",
+                "RMSProp算法"
+              ],
+              "lineStart": 20276,
+              "lineEnd": 20479,
+              "assetRefs": [
+                "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+                "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+                "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+                "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+              ],
+              "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-adadelta",
+        "moduleId": "bridge-to-adadelta",
+        "depth": "support",
+        "kind": "summary",
+        "title": "补充：同一思想的下一个落点",
+        "markdown": "本节只对梯度平方做泄漏平均。若同时维护参数更新量平方的泄漏平均，再用两者开方后的比值缩放梯度，就走到了下一个知识点 Adadelta：它因此不再需要显式学习率。学习 Adadelta 时可以回到本节的 $\\mathbf{s}_t$ 更新式，只是多出一个对称的状态变量和一个比值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bridge-adadelta",
+            "textbook-update-rule"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "rmsprop-settings-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-gamma-exercise",
+        "moduleId": "practice-and-boundary",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-rmsprop-hyperparams"
+        ],
+        "learningPurpose": "检查学习者能否把 $\\gamma$ 的窗口含义与学习率的作用区分开，并判断极端取值的后果。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-update-rule"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "stem": "某训练在后期步长过小。给出两种改动：把 $\\gamma$ 从 $0.9$ 调到 $0.99$，或把 $\\eta$ 调大。哪一种更可能恢复后期步长？",
+          "options": [
+            "调大 $\\eta$，因为后期步长被全局学习率直接控制",
+            "把 $\\gamma$ 调到 $0.99$，因为窗口更长会放大步长",
+            "两者等价，因为 $\\gamma$ 与 $\\eta$ 都只影响步长大小"
+          ],
+          "answerIndex": 0
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 RMSProp 更新中 $\\eta$ 与 $\\gamma$ 各自负责的量，并解释为什么调节 $\\gamma$ 不会直接放大后期步长。"
+        }
+      }
+    ]
+  },
+  "subtitle": "优化算法",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000091"
+      ],
+      "headingPath": [
+        "优化算法",
+        "RMSProp算法"
+      ],
+      "lineStart": 20276,
+      "lineEnd": 20479,
+      "assetRefs": [
+        "parts/part-0006/images/032631680d279e01ab80adb35c069dcfe78dc68e81ed56d0787e035204d23e95.jpg",
+        "parts/part-0006/images/9477680b3579e0f708af6b0cc79581d37626c59b8804635918e13e0715e554cd.jpg",
+        "parts/part-0006/images/98d804aad00d0c21e490fd40033487221ceaf189dd67e1ff7de9520557e1f4df.jpg",
+        "parts/part-0006/images/88b1f7b70bb0cd1b304fc7668941994d1a0b21c5e729c9cd5ddce8f45191cb2b.jpg"
+      ],
+      "excerptSha256": "38498dd3a55cb6743075551d3522de1db247644070d26f8cbad426162a5e9636"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2641,
+    1121
+  ],
+  "scale": 0.93
+}

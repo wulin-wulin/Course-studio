@@ -1,0 +1,533 @@
+{
+  "id": "point-13-9",
+  "title": "语义分割和数据集",
+  "shortSummary": "定义像素级分类的语义分割任务，说明标注形式、评价指标与数据读取方式。",
+  "keyTerms": [
+    "语义分割",
+    "像素级分类",
+    "标注",
+    "评价指标"
+  ],
+  "animationType": "pairedCropLabelIndex",
+  "animationSuggestion": "让裁剪框在成对的输入图像与标签图上同步移动并高亮同一区域，裁剪后逐像素把颜色替换为类别索引颜色；提供切换按钮展示图像与标签独立裁剪时的错位结果。",
+  "difficulty": "进阶",
+  "importance": 0.74,
+  "prerequisites": [
+    "point-13-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-contrast-and-data-pipeline",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对语义分割、图像分割与实例分割的区分以及 VOC 数据读取流程，补充任务边界问答、实现理由与迁移练习。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-semantic-segmentation",
+          "text": "解释语义分割的像素级分类定义，并说明它与边界框目标检测的差别。"
+        },
+        {
+          "id": "distinguish-segmentation-tasks",
+          "text": "区分图像分割、语义分割与实例分割的任务边界。"
+        },
+        {
+          "id": "prepare-voc-pipeline",
+          "text": "说明 Pascal VOC2012 分割标注的读取、颜色到类别索引的映射以及随机裁剪的数据流水线。"
+        }
+      ],
+      "misconceptions": [
+        "把语义分割当成更精细的目标检测，以为只要把框换成轮廓、不需要逐像素类别。",
+        "认为语义分割的预处理仍应缩放图像，忽略缩放后把预测映射回原尺寸会带来边界误差。",
+        "把 SegmentationClass 里的彩色图直接当作类别索引图使用，跳过颜色到索引的映射。",
+        "把随机裁剪理解为对图像和标签分别裁剪。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-contrast",
+          "title": "任务定义与检测对比",
+          "role": "concept-framing",
+          "description": "从边界框标注过渡到逐像素标注，明确语义分割的输出形态。",
+          "outcomeRefs": [
+            "explain-semantic-segmentation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "variants-boundary",
+          "title": "三个相近任务的边界",
+          "role": "concept-contrast",
+          "description": "用两个判断问题区分图像分割、语义分割和实例分割。",
+          "outcomeRefs": [
+            "explain-semantic-segmentation",
+            "distinguish-segmentation-tasks"
+          ],
+          "order": 1
+        },
+        {
+          "id": "voc-annotation",
+          "title": "VOC2012 标注与颜色映射",
+          "role": "worked-example",
+          "description": "说明数据集目录、彩色标签图与颜色到类别索引的转换机制。",
+          "outcomeRefs": [
+            "prepare-voc-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "joint-preprocessing",
+          "title": "成对随机裁剪",
+          "role": "procedure",
+          "description": "解释为什么用随机裁剪替代缩放，以及配对裁剪的一致性要求。",
+          "outcomeRefs": [
+            "prepare-voc-pipeline"
+          ],
+          "order": 3
+        },
+        {
+          "id": "dataset-pipeline",
+          "title": "数据集类与批量形状",
+          "role": "procedure",
+          "description": "串联过滤、标准化、取样本与 DataLoader，读懂批量的输入与标签形状。",
+          "outcomeRefs": [
+            "prepare-voc-pipeline"
+          ],
+          "order": 4
+        },
+        {
+          "id": "wrap-up-check",
+          "title": "小结、衔接与达成检查",
+          "role": "assessment",
+          "description": "用小结梳理要点，衔接转置卷积，并用练习检查三类任务与预处理规则。",
+          "outcomeRefs": [
+            "explain-semantic-segmentation",
+            "distinguish-segmentation-tasks",
+            "prepare-voc-pipeline"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-semantic-segmentation",
+          "distinguish-segmentation-tasks",
+          "prepare-voc-pipeline"
+        ],
+        "method": "完成三道检查题并给出依据：三类任务的判断、独立裁剪的错误后果、缩放替代裁剪的精度风险。",
+        "successCriteria": [
+          "能指出语义分割标签是逐像素类别而不是边界框",
+          "能说明实例分割额外区分同类实例",
+          "能说明随机裁剪必须对图像与标签共用同一矩形"
+        ],
+        "exerciseBlockId": "practice-check",
+        "summaryBlockId": "section-summary",
+        "nextPointId": "point-13-10"
+      }
+    },
+    "blocks": [
+      {
+        "id": "segmentation-task",
+        "moduleId": "task-and-contrast",
+        "depth": "core",
+        "kind": "definition",
+        "title": "从边界框到逐像素类别",
+        "markdown": "语义分割（semantic segmentation）关注把图像划分成属于不同语义类别的区域：它为图像中的每个像素预测一个类别，因此标注和预测都是像素级的。教材用图13.9.1 中狗、猫和背景的标签说明这一点：一张输入图像对应一张同尺寸的标签图，标签图在每个像素位置记录该像素所属的类别。\n\n与 13.3–13.8 节一直使用的方形边界框相比，语义分割不再用一个框概括目标位置，而是给出覆盖目标轮廓的逐像素类别。标注更精细，代价是模型必须输出与输入图像空间对齐的稠密预测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bbox-vs-pixel-label",
+        "moduleId": "task-and-contrast",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：两种监督信号的差别",
+        "markdown": "把两种标注放在一起看，差别更清楚：\n\n- 目标检测：每个目标给出一个边界框和类别，框内的背景像素不参与类别标注。\n- 语义分割：图像中每个像素都必须落到某个类别，包括背景类。\n\n这带来两个直接后果。第一，标签必须与输入图像同尺寸并逐像素对齐；第二，模型不能再只输出一个类别向量，而要输出一张与原图同高宽的类别图。后文的转置卷积与全卷积网络，正是为解决“如何把被下采样的特征图恢复到输入分辨率”这一问题而引入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "segmentation-task"
+          ]
+        }
+      },
+      {
+        "id": "segmentation-variants",
+        "moduleId": "variants-boundary",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "图像分割、语义分割与实例分割",
+        "markdown": "教材把语义分割与另外两个相近任务做了区分：\n\n- 图像分割（image segmentation）只把图像划分为若干组成区域，方法通常利用像素之间的相关性；训练时不需要像素标签，预测时也不保证区域具有我们想要的语义。以图13.9.1 为例，它可能把狗分成两个区域：一个覆盖以黑色为主的嘴和眼睛，另一个覆盖以黄色为主的其余身体。\n- 实例分割（instance segmentation）也叫同时检测并分割，要求识别各个目标实例的像素级区域。它不仅区分语义，还要区分不同的目标实例：图像中有两条狗时，要判断每个像素属于哪一条狗。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "three-task-decision",
+        "moduleId": "variants-boundary",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：两个判断问题",
+        "markdown": "判断三者时可以先问两个问题：输出是否带语义标签？是否需要区分同类实例？\n\n- 只要区域、不要语义：图像分割；\n- 要语义、但同类实例合并为一类：语义分割；\n- 要语义且逐实例区分：实例分割。\n\n关键在于“语义”指类别而非个体。两只狗在语义分割标签里共享同一个“狗”类别值，而在实例分割里必须得到不同的实例标识，这正是两者最容易混淆的地方。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "segmentation-variants"
+          ]
+        }
+      },
+      {
+        "id": "voc-dataset-structure",
+        "moduleId": "voc-annotation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "Pascal VOC2012 的组成",
+        "markdown": "最重要的语义分割数据集之一是 Pascal VOC2012。压缩包约 2GB，解压后的数据集位于 `../data/VOCdevkit/VOC2012`。进入该目录可以看到三类组件：\n\n- `ImageSets/Segmentation`：存放 `train.txt` 与 `val.txt`，列出用于训练和测试的样本名；\n- `JPEGImages`：存放每个样本的输入图像；\n- `SegmentationClass`：存放标签，标签同样是图像格式，尺寸与它所标注的输入图像相同，颜色相同的像素属于同一语义类别。\n\n教材的 `read_voc_images` 按样本名分别读取这两类文件：输入图像以 RGB 模式读入，返回特征列表和标签列表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "color-label-rationale",
+        "moduleId": "voc-annotation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么标签是彩色图",
+        "markdown": "用 RGB 三通道存类别，可以直接编码足够多的类别，也便于人眼查看标注质量。代价是标签里存的是颜色而不是类别编号，训练前必须翻译成索引。\n\n教材给出两个平行常量：`VOC_COLORMAP` 列出 21 种颜色（含黑色背景），`VOC_CLASSES` 按同样顺序列出 21 个类名，包括 `background`、`aeroplane`、`bicycle` 一直到 `tv/monitor`。两个列表的下标一一对应，这种对齐关系是整个颜色映射能够成立的前提。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "voc-dataset-structure"
+          ]
+        }
+      },
+      {
+        "id": "colormap-to-index",
+        "moduleId": "voc-annotation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "颜色到类别索引的查表",
+        "markdown": "`voc_colormap2label` 与 `voc_label_indices` 完成颜色到类别索引的转换。前者建立一个长度为 $256^3$ 的查找表：把颜色 $(r, g, b)$ 编码为整数 $(r \\times 256 + g) \\times 256 + b$，再在表中对应位置写入该颜色的类别索引。后者对标签图的每个像素做同样的编码，然后用查找表一次性取出整张类别索引图。\n\n教材示例中，第一张样本图像飞机头部区域的类别索引为 1，背景索引为 0，这正对应 `VOC_CLASSES` 中 `background` 在下标 0、`aeroplane` 在下标 1 的顺序。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "lookup-table-cost",
+        "moduleId": "voc-annotation",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "模型补充：查找表的空间换时间",
+        "markdown": "查找表一共 $256^3 = 16{,}777{,}216$ 项，每项存一个类别索引，换来对任意像素的常数时间查询。若改用逐类别比较颜色的写法，每个像素都要对每个类别做一次判断；查表把这一步压缩为一次数组索引，代价是需要一块固定大小的内存，并且要求标签颜色严格落在调色板定义之内。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "colormap-to-index"
+          ]
+        }
+      },
+      {
+        "id": "random-crop-procedure",
+        "moduleId": "joint-preprocessing",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "用随机裁剪代替再缩放",
+        "markdown": "语义分割的预处理与图像分类不同。在之前的图像分类实验中，我们通过再缩放把图像变成模型输入形状；但在语义分割里，缩放后的预测需要重新映射回原始尺寸，而这种映射可能不够精确，尤其在语义边界附近。\n\n教材因此选择随机裁剪：`voc_rand_crop` 先由 `RandomCrop.get_params` 生成一个裁剪矩形，再用 `functional.crop` 把这个矩形同时应用到输入图像和标签图上，得到如 200×300 的成对结果。由于两者裁剪区域完全相同，像素与标签的对应关系被完整保留，不需要任何逆映射。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "crop-consistency-warning",
+        "moduleId": "joint-preprocessing",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：配对裁剪不能拆开",
+        "markdown": "随机裁剪有一致性要求：输入图像和标签必须使用同一个 `rect`。如果两者各自独立随机裁剪，特征与标签就会错位，模型学到的是错误的像素—类别对应关系；训练损失可能仍然下降，但预测会明显变差。\n\n另一个约束来自样本尺寸：若某张图像本身小于裁剪尺寸，就无法裁出目标形状，因此 `VOCSegDataset.filter` 会移除这些样本。在 320×480 的裁剪尺寸下，教材读到 1114 个训练样本和 1078 个测试样本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "random-crop-procedure"
+          ]
+        }
+      },
+      {
+        "id": "dataset-class-pipeline",
+        "moduleId": "dataset-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "VOCSegDataset 与批量读取",
+        "markdown": "`VOCSegDataset` 继承 `torch.utils.data.Dataset`，把上述步骤串成一条数据流水线：\n\n1. 读取全部输入图像与标签，按裁剪尺寸过滤掉过小的样本；\n2. 对输入图像做标准化，使用均值 `[0.485, 0.456, 0.406]` 和标准差 `[0.229, 0.224, 0.225]`；\n3. `__getitem__` 对第 `idx` 个样本做随机裁剪，并用 `voc_label_indices` 把标签转换成类别索引；\n4. `__len__` 返回保留下来的样本数。\n\n`load_data_voc` 用这个类分别构造训练集与测试集的 `DataLoader`。设批量大小为 64、裁剪尺寸为 320×480，第一个小批量的输入形状为 `[64, 3, 320, 480]`，标签形状为 `[64, 320, 480]`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "label-shape-meaning",
+        "moduleId": "dataset-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：标签为什么少一个通道维",
+        "markdown": "标签比输入少一个通道维，这正是像素级分类的直接体现：输入每个像素有 RGB 三个值，标签每个像素只有一个类别索引。除去批量维后的 `320 × 480` 与输入的空间尺寸一致，说明标签与预测图必须逐像素对齐，也解释了为什么语义分割模型输出的是二维类别图，而不是一个长度为类别数的向量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "dataset-class-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "section-summary",
+        "moduleId": "wrap-up-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本节小结",
+        "markdown": "教材小结给出三条要点：语义分割通过把图像划分为属于不同语义类别的区域，来识别并理解图像中像素级别的内容；Pascal VOC2012 是语义分割的一个重要数据集；由于输入图像和标签在像素上一一对应，输入图像会被随机裁剪为固定尺寸而不是缩放。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000112"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "语义分割和数据集"
+              ],
+              "lineStart": 25155,
+              "lineEnd": 25483,
+              "assetRefs": [
+                "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+                "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+                "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+              ],
+              "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bridge-transposed-conv",
+        "moduleId": "wrap-up-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：为什么下一节是转置卷积",
+        "markdown": "这套输入—标签约定也决定了后续的建模方向。卷积层与汇聚层会不断缩小特征图的空间尺寸，而语义分割要求输出与输入同高宽，并且输出像素所在通道维要保存该位置的分类结果。13.10 节的转置卷积正是用来放大中间特征图的空间维度，把低分辨率特征恢复到像素级预测所需的分辨率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "section-summary",
+            "dataset-class-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "practice-check",
+        "moduleId": "wrap-up-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. 一张图里有两只狗和一只猫。分别写出语义分割与实例分割的标签差异，并说明为什么图像分割的结果可能把一只狗拆成嘴和眼睛、身体等多个区域。\n2. 若把 `voc_rand_crop` 改成对特征和标签各自独立随机裁剪，会出现什么问题？请从训练信号的角度解释。\n3. 有人建议在语义分割中用再缩放代替随机裁剪。请说明这一改动带来的精度风险，以及标签需要额外做什么处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "segmentation-variants",
+            "three-task-decision",
+            "crop-consistency-warning",
+            "section-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "crop-and-label-check",
+        "type": "formative-check",
+        "anchorBlockId": "practice-check",
+        "moduleId": "wrap-up-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "distinguish-segmentation-tasks",
+          "prepare-voc-pipeline"
+        ],
+        "learningPurpose": "检查学习者能否把三类任务的边界和配对裁剪的一致性要求迁移到新情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "three-task-decision",
+            "crop-consistency-warning"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出语义分割与实例分割对两只狗的处理差异，并说明随机裁剪为什么必须让图像和标签共用同一个矩形。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000112"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "语义分割和数据集"
+      ],
+      "lineStart": 25155,
+      "lineEnd": 25483,
+      "assetRefs": [
+        "parts/part-0007/images/408f2ee7fab6362863b36b72a31ce01aec43c3b33f41205459dbc75cfc8766f7.jpg",
+        "parts/part-0007/images/c6e401a09030795369eadd63e128949b308f5ab8df0b2bc9f395e4d35b74a696.jpg",
+        "parts/part-0007/images/a02ebc3d150d3ab939b3ec0c0624414201c5581a73596dcde8ce33cb2e18679f.jpg"
+      ],
+      "excerptSha256": "4f32011c3a52803455f43ed5e15a0283afb5bd5c7bcf960ef1c37a7a34a06d1d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3785,
+    364
+  ],
+  "scale": 0.94
+}

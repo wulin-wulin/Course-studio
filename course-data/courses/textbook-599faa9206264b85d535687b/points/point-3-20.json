@@ -1,0 +1,416 @@
+{
+  "id": "point-3-20",
+  "title": "四、编写钉钉机器人 post程序",
+  "shortSummary": "讲解编写钉钉机器人 post 程序的要点，说明如何接收消息、调用问答服务并返回结果。",
+  "keyTerms": [
+    "Webhook",
+    "POST 请求",
+    "消息处理",
+    "接口调用"
+  ],
+  "animationType": "dingtalkPostHandler",
+  "animationSuggestion": "逐步推进一条群消息在各阶段的位置，并在接收与返回两步标出监听端口和日志中记录的源端 IP，让学习者看清端口配置与日志取 IP 分别作用于链路的哪一段。",
+  "difficulty": "中等",
+  "importance": 0.72,
+  "prerequisites": [
+    "point-3-18",
+    "point-3-19"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-checklist",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材给出的依赖安装、端口取值、运行命令与日志取源 IP 的操作顺序，围绕部署任务补充职责说明、结构归纳与自检清单。",
+      "estimatedMinutes": 12,
+      "outcomes": [
+        {
+          "id": "explain-service-role",
+          "text": "说明钉钉机器人 post 程序在问答链路中的位置和承担的工作。"
+        },
+        {
+          "id": "deploy-and-configure",
+          "text": "完成依赖安装、服务端口配置与安全组放通，使服务能被钉钉机器人调用。"
+        },
+        {
+          "id": "run-and-verify",
+          "text": "运行服务并通过日志中的源端 IP 与群内提问验证链路可用。"
+        }
+      ],
+      "misconceptions": [
+        "把服务端口当成可以随意填写的一项，忽略它要与机器人申请时配置的消息接收端口一致。",
+        "调试期临时放通 0.0.0.0/0 后忘记收敛来源，让服务长期暴露在公网。",
+        "以为脚本跑起来就代表链路通了，不检查日志中的源端 IP 和实际返回结果。"
+      ],
+      "modules": [
+        {
+          "id": "service-role",
+          "title": "程序在链路中的角色",
+          "role": "orientation",
+          "outcomeRefs": [
+            "explain-service-role"
+          ],
+          "order": 0
+        },
+        {
+          "id": "environment-setup",
+          "title": "依赖安装与脚本准备",
+          "role": "prerequisite-setup",
+          "outcomeRefs": [
+            "deploy-and-configure"
+          ],
+          "order": 1
+        },
+        {
+          "id": "script-and-query",
+          "title": "脚本如何取回答案",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "explain-service-role",
+            "deploy-and-configure"
+          ],
+          "order": 2
+        },
+        {
+          "id": "configure-and-expose",
+          "title": "端口与安全组配置",
+          "role": "configuration",
+          "outcomeRefs": [
+            "deploy-and-configure"
+          ],
+          "order": 3
+        },
+        {
+          "id": "run-verify",
+          "title": "运行、读日志与验收",
+          "role": "run-and-check",
+          "outcomeRefs": [
+            "run-and-verify",
+            "deploy-and-configure"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-service-role",
+          "deploy-and-configure",
+          "run-and-verify"
+        ],
+        "method": "按检查表完成一次部署自检，并在群里向机器人发问确认回答返回。",
+        "successCriteria": [
+          "能说出程序在接收消息、取回答案、返回结果三个环节各做什么",
+          "服务端口与机器人配置的消息接收端口一致，安全组来源已从 0.0.0.0/0 收敛",
+          "能从日志读出源端 IP 并据此填写安全组网段"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-checklist",
+        "nextPointId": "point-3-21"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-service-role",
+        "moduleId": "service-role",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "服务端程序的角色",
+        "markdown": "该程序运行在 ECS 上，用于响应钉钉机器人从钉钉上获取的信息，进行应答。它站在问答链路的服务端：群里的消息由钉钉机器人转发到这台机器，再由这里的服务处理后把结果送回群里。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000040"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "四、编写钉钉机器人 post程序"
+              ],
+              "lineStart": 1003,
+              "lineEnd": 1015,
+              "assetRefs": [],
+              "excerptSha256": "c418b107aa3e9f689dfe332222bda8d7f4539f741c74007569330e8634b9249f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-call-chain",
+        "moduleId": "service-role",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "模型补充：一次请求的四个阶段",
+        "markdown": "服务端每次处理一条消息会经历四个阶段：接收钉钉机器人转发过来的 POST 请求；从请求中取出用户问题；向知识库与 LLM 取回问答结果；把结果整理成机器人能发送的格式并返回响应。这是模型对教材描述的结构化归纳，用于定位部署时每一步在链路中的位置。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-service-role"
+          ]
+        }
+      },
+      {
+        "id": "textbook-install-deps",
+        "moduleId": "environment-setup",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "安装依赖并准备脚本",
+        "markdown": "在 ECS 上安装 dingtalkchatbot、fastapi、uvicorn，教材给出的命令是 `pip install dingtalkchatbot fastapi uvicorn`。随后编写服务端 Python 脚本，正文提供了参考代码的位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000040"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "四、编写钉钉机器人 post程序"
+              ],
+              "lineStart": 1003,
+              "lineEnd": 1015,
+              "assetRefs": [],
+              "excerptSha256": "c418b107aa3e9f689dfe332222bda8d7f4539f741c74007569330e8634b9249f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-deps-notes",
+        "moduleId": "environment-setup",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：三个依赖各管什么",
+        "markdown": "`fastapi` 定义接收消息的 HTTP 接口，`uvicorn` 把接口跑成服务并监听端口，`dingtalkchatbot` 负责机器人侧的消息格式与发送。端口不通时先查 uvicorn 是否在监听，返回格式不对时先查机器人相关依赖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-install-deps"
+          ]
+        }
+      },
+      {
+        "id": "textbook-script-sql",
+        "moduleId": "script-and-query",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "用 SQL 取回问答结果",
+        "markdown": "代码详解：Lindorm 提供了类 JDBC 的连接和使用方式。对于知识库和 LLM 的调用，直接使用 SQL 查询方式即可返回 LLM 的问答结果，再将返回内容格式化整理后交给机器人。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000040"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "四、编写钉钉机器人 post程序"
+              ],
+              "lineStart": 1003,
+              "lineEnd": 1015,
+              "assetRefs": [],
+              "excerptSha256": "c418b107aa3e9f689dfe332222bda8d7f4539f741c74007569330e8634b9249f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-script-structure",
+        "moduleId": "script-and-query",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "模型补充：脚本要覆盖的四件事",
+        "markdown": "脚本至少覆盖四件事：读取请求体中的用户问题；通过 Lindorm 连接执行 SQL 取回问答结果；把结果整理成机器人可发送的消息格式；返回 HTTP 响应。教材只说明大意并给出参考代码位置，因此这里是职责清单，具体字段名与调用方式以实际代码为准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-script-sql"
+          ]
+        }
+      },
+      {
+        "id": "textbook-port-security",
+        "moduleId": "configure-and-expose",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "配置端口与安全组",
+        "markdown": "配置服务端口（本文设置为 5000），并配置安全组放通入方向 IP。初始调试时可配置为 `0.0.0.0/0`，以免因网络配置导致程序不通；调测成功后再修改为钉钉机器人服务器对应的 IP。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000040"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "四、编写钉钉机器人 post程序"
+              ],
+              "lineStart": 1003,
+              "lineEnd": 1015,
+              "assetRefs": [],
+              "excerptSha256": "c418b107aa3e9f689dfe332222bda8d7f4539f741c74007569330e8634b9249f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-port-matching",
+        "moduleId": "configure-and-expose",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：端口要对称，安全组要收敛",
+        "markdown": "服务监听端口要与机器人申请时填写的消息接收端口一致（本文为 5000），否则钉钉的请求会打到没有服务的端口上。同时 `0.0.0.0/0` 只适合短期调试，调通后应把入方向来源换成钉钉机器人服务器的 IP 网段，避免服务长期暴露在公网。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-port-security"
+          ]
+        }
+      },
+      {
+        "id": "textbook-run-log",
+        "moduleId": "run-verify",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "后台运行并从日志取源端 IP",
+        "markdown": "运行脚本：`nohup python3 dingtalkpost.py &`。以 nohup 方式运行后，脚本所在目录会生成 `nohup.out` 日志文件，记录调用钉钉机器人的源端 IP，例如 `INFO: 59.82.84.108:15922 - \"POST /generate HTTP/1.1\" 200 OK`。持续使用一段时间后分析日志中的源端 IP，即可得到调用来源并据此配置安全组，如上例可配置 `59.82.0.0/16`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000040"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "四、编写钉钉机器人 post程序"
+              ],
+              "lineStart": 1003,
+              "lineEnd": 1015,
+              "assetRefs": [],
+              "excerptSha256": "c418b107aa3e9f689dfe332222bda8d7f4539f741c74007569330e8634b9249f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-log-ip-reading",
+        "moduleId": "run-verify",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：读懂一行日志",
+        "markdown": "示例日志中，`59.82.84.108` 是调用方源端地址，`15922` 是源端口，`/generate` 是被调用路径，`200 OK` 表示服务正常返回。只放通单个 IP 时，调用方地址一变服务就会再次不通，因此教材建议先积累日志再按网段收敛来源。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-run-log"
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "run-verify",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：部署自检清单",
+        "markdown": "部署完成后依次自查：三个依赖已安装且脚本已放到 ECS；服务端口已配置并与消息接收端口一致；安全组已放通且调试用的 `0.0.0.0/0` 已收敛；脚本已用 nohup 启动且日志中有 `200 OK`；已从日志读出源端 IP 并按网段更新安全组。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-port-security",
+            "textbook-run-log"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "run-verify",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "模型补充：三个排错练习",
+        "markdown": "1. 服务已在 5000 端口启动但群里提问没有反应，你先检查哪两项配置？\n2. 日志中的源端 IP 每天变化，把安全组写死为单个 IP 会有什么后果？\n3. 日志里有请求但返回的不是 `200 OK`，问题更可能在端口配置还是脚本内部？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-port-security",
+            "textbook-run-log"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "deploy-self-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-checklist",
+        "moduleId": "run-verify",
+        "depth": "core",
+        "outcomeRefs": [
+          "run-and-verify"
+        ],
+        "learningPurpose": "检查学习者能否按顺序完成端口、安全组、运行与日志四个环节的自检，而不是只把脚本跑起来。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-port-security",
+            "textbook-run-log"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            "服务端口与机器人消息接收端口是否一致",
+            "调试用的 0.0.0.0/0 是否已收敛为钉钉来源网段",
+            "日志中是否有带 200 OK 的请求记录"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "逐条核对服务端口、安全组来源和 nohup.out 日志记录，确认三项都符合后再在群里验证回答。"
+        }
+      }
+    ]
+  },
+  "subtitle": "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "leaf",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-599faa9206264b85d535687b",
+      "blockIds": [
+        "block-000040"
+      ],
+      "headingPath": [
+        "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+        "四、编写钉钉机器人 post程序"
+      ],
+      "lineStart": 1003,
+      "lineEnd": 1015,
+      "assetRefs": [],
+      "excerptSha256": "c418b107aa3e9f689dfe332222bda8d7f4539f741c74007569330e8634b9249f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2322,
+    1134
+  ],
+  "scale": 0.65
+}

@@ -1,0 +1,500 @@
+{
+  "id": "point-4-5",
+  "title": "权重衰减",
+  "shortSummary": "介绍 L2 正则化如何约束参数规模，并说明它在损失函数与参数更新中的具体作用。",
+  "keyTerms": [
+    "权重衰减",
+    "L2正则化",
+    "正则项",
+    "参数规模"
+  ],
+  "animationType": "weightDecayUpdate",
+  "animationSuggestion": "并排显示 λ=0 与 λ>0 两条轨迹：逐步画出权重先被收缩、再沿负梯度移动的过程，同时用曲线显示权重范数与训练、测试损失，结束时标出两者权重范数的差异。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-3-1",
+    "point-4-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的定义、公式、实验设置与数值，围绕“为何需要—目标函数怎么写—更新为何叫衰减—实验怎么读”重排讲解，并补充推导、误区与检查题。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-motivation",
+          "text": "说明为什么在限制特征数量之外还需要可连续调节复杂度的正则化工具。"
+        },
+        {
+          "id": "formulate-objective",
+          "text": "写出带 L2 惩罚项的目标函数，并解释 λ、1/2 因子与平方范数各自的作用。"
+        },
+        {
+          "id": "derive-update",
+          "text": "从小批量梯度下降推导出收缩因子 (1-ηλ)，说明权重衰减名称的由来。"
+        },
+        {
+          "id": "apply-weight-decay",
+          "text": "在框架优化器中配置权重衰减，并解读权重范数与训练、测试损失的变化。"
+        }
+      ],
+      "misconceptions": [
+        "以为权重衰减会像特征选择一样把部分权重直接置零。",
+        "以为正则化系数 λ 越大越好。",
+        "以为偏置参数也应当与其他权重一样被衰减。",
+        "把训练误差上升直接当成训练失败。"
+      ],
+      "modules": [
+        {
+          "id": "why-regularize",
+          "title": "从过拟合到细粒度容量控制",
+          "role": "motivation",
+          "description": "用高维单项式爆炸说明限制特征数过于生硬。",
+          "outcomeRefs": [
+            "explain-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "l2-objective",
+          "title": "L2 惩罚与目标函数",
+          "role": "concept-and-formula",
+          "description": "给出权重衰减的定义、目标函数与设计细节。",
+          "outcomeRefs": [
+            "formulate-objective"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decay-update",
+          "title": "更新式中的收缩因子",
+          "role": "derivation",
+          "description": "推导 (1-ηλ) 收缩项并澄清常见误解。",
+          "outcomeRefs": [
+            "derive-update"
+          ],
+          "order": 2
+        },
+        {
+          "id": "experiment-evidence",
+          "title": "高维线性回归实验",
+          "role": "worked-example",
+          "description": "读教材的从零实现与简洁实现两组结果。",
+          "outcomeRefs": [
+            "apply-weight-decay"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-connect",
+          "title": "达成检查与下一点桥接",
+          "role": "formative-check",
+          "description": "用手算更新题检查理解，并引向 Dropout。",
+          "outcomeRefs": [
+            "apply-weight-decay"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-motivation",
+          "formulate-objective",
+          "derive-update",
+          "apply-weight-decay"
+        ],
+        "method": "先手算一步带惩罚的权重更新，再解释实验中权重范数与测试误差的变化。",
+        "successCriteria": [
+          "能写出带 λ/2 惩罚项的目标函数并说明 λ 的作用",
+          "能推出收缩因子 (1-ηλ) 并正确代入数值",
+          "能说明训练误差上升而测试误差下降的含义"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-4-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "why-regularize",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为什么需要更细粒度的工具",
+        "markdown": "上一节把过拟合归因于模型容量过大。收集更多训练数据可以缓解过拟合，但成本高、耗时多，短期内往往不可行，因此本节转向正则化技术。\n\n在多项式回归中，一个直接的做法是限制多项式的阶数，也就是限制特征的数量。但简单丢弃特征过于生硬：多变量情形下特征扩展为单项式（变量幂的乘积，阶数为幂之和），给定 $k$ 个变量时阶数为 $d$ 的项数为\n\n$$\\binom{k-1+d}{k-1}=\\frac{(k-1+d)!}{d!\\,(k-1)!}$$\n\n阶数从 2 增到 3 就会显著增加模型复杂度。只在“过简单”和“过复杂”之间跳跃还不够，我们需要一个更细粒度的工具，把函数复杂度连续调到合适的平衡位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "权重衰减"
+              ],
+              "lineStart": 5777,
+              "lineEnd": 6058,
+              "assetRefs": [
+                "parts/part-0002/images/ecd2e5d14be2ea30952a1cf9352204bee58d49c56c091732a7be693e1bc8f5eb.jpg",
+                "parts/part-0002/images/9c186f30c7e66ee03244d98520a26e4cb3e841c1c29aa3e2c1f481fdb8e02d6d.jpg",
+                "parts/part-0002/images/660cafb17d977dd508bc5045900474cc2bc245f17095b71c2ce79cc8d425ac88.jpg",
+                "parts/part-0002/images/a8377e8b186b41222ecb0a8aad04ebdc130e36052e37226908fec83c20f466ce.jpg"
+              ],
+              "excerptSha256": "dac68d2ec4b7889d07283ca6589ac4eef0ce9d6a85104e955e9de6007045e575"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-motivation-gap",
+        "moduleId": "why-regularize",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充直觉：总预算而不是删课",
+        "markdown": "可以把特征选择想成只允许选修少数几门课，而权重衰减是给所有课程的总学分设一个预算：不必直接删掉某个特征，只要整体权重规模超支，训练就会自动把权重往小里拉。这个类比只解释“连续调节”的直觉，真正的约束来自下一节目标函数中的惩罚项。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-l2-definition",
+        "moduleId": "l2-objective",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：权重衰减即 L2 正则化",
+        "markdown": "训练参数化模型时，权重衰减（weight decay）是最广泛使用的正则化技术之一，通常也称为 $L_2$ 正则化。\n\n它的思路是用函数与零函数的距离来衡量复杂度：在所有函数中，恒等于零的函数 $f=0$ 在某种意义上最简单。对线性函数 $f(\\mathbf{x}) = \\mathbf{w}^\\top \\mathbf{x}$，可以用权重向量的范数（例如 $\\|\\mathbf{w}\\|^2$）度量其复杂度。要让权重向量保持较小，最常用的方法就是把它的范数作为惩罚项加入原本的最小化损失问题中。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "权重衰减"
+              ],
+              "lineStart": 5777,
+              "lineEnd": 6058,
+              "assetRefs": [
+                "parts/part-0002/images/ecd2e5d14be2ea30952a1cf9352204bee58d49c56c091732a7be693e1bc8f5eb.jpg",
+                "parts/part-0002/images/9c186f30c7e66ee03244d98520a26e4cb3e841c1c29aa3e2c1f481fdb8e02d6d.jpg",
+                "parts/part-0002/images/660cafb17d977dd508bc5045900474cc2bc245f17095b71c2ce79cc8d425ac88.jpg",
+                "parts/part-0002/images/a8377e8b186b41222ecb0a8aad04ebdc130e36052e37226908fec83c20f466ce.jpg"
+              ],
+              "excerptSha256": "dac68d2ec4b7889d07283ca6589ac4eef0ce9d6a85104e955e9de6007045e575"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-objective",
+        "moduleId": "l2-objective",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：目标函数与两个设计细节",
+        "markdown": "以线性回归为例，原来的平方损失为\n\n$$L(\\mathbf{w}, b) = \\frac{1}{n}\\sum_{i=1}^{n}\\frac{1}{2}\\left(\\mathbf{w}^\\top\\mathbf{x}^{(i)} + b - y^{(i)}\\right)^2$$\n\n为了惩罚权重的大小，在损失中加入 $\\|\\mathbf{w}\\|^2$，并用非负超参数 $\\lambda$ 描述数据项与惩罚项之间的权衡：\n\n$$L(\\mathbf{w}, b) + \\frac{\\lambda}{2}\\|\\mathbf{w}\\|^2$$\n\n$\\lambda = 0$ 时恢复原来的损失函数；$\\lambda > 0$ 时限制 $\\|\\mathbf{w}\\|$ 的大小。$\\lambda$ 用验证数据拟合。\n\n两个设计细节：除以 2 是为了求导时与二次项的系数相消，使更新式更简洁；使用平方范数而不是欧氏范数是为了去掉平方根，让惩罚的导数易于计算。\n\n选择 $L_2$ 而非 $L_1$ 也有统计上的理由。$L_2$ 正则化线性模型就是岭回归（ridge regression），$L_1$ 正则化线性回归对应套索回归（lasso regression）。$L_2$ 对权重的大分量施加很大惩罚，倾向于把权重均匀分散到大量特征上，对单个变量上的观测误差更稳定；$L_1$ 则把权重集中到少数特征并把其余权重清除为零，即特征选择。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "权重衰减"
+              ],
+              "lineStart": 5777,
+              "lineEnd": 6058,
+              "assetRefs": [
+                "parts/part-0002/images/ecd2e5d14be2ea30952a1cf9352204bee58d49c56c091732a7be693e1bc8f5eb.jpg",
+                "parts/part-0002/images/9c186f30c7e66ee03244d98520a26e4cb3e841c1c29aa3e2c1f481fdb8e02d6d.jpg",
+                "parts/part-0002/images/660cafb17d977dd508bc5045900474cc2bc245f17095b71c2ce79cc8d425ac88.jpg",
+                "parts/part-0002/images/a8377e8b186b41222ecb0a8aad04ebdc130e36052e37226908fec83c20f466ce.jpg"
+              ],
+              "excerptSha256": "dac68d2ec4b7889d07283ca6589ac4eef0ce9d6a85104e955e9de6007045e575"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-objective-balance",
+        "moduleId": "l2-objective",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把目标函数看成两股力量的拉锯",
+        "markdown": "数据项希望权重足够大，以拟合训练标签；惩罚项希望权重接近零。对 $\\mathbf{w}$ 求梯度时，数据项梯度与 $\\lambda\\mathbf{w}$ 相加，因此 $\\lambda$ 直接决定“拟合训练数据”与“保持参数小”的相对权重。\n\n实践含义是：$\\lambda$ 不是从训练集自动学出来的，而要用验证集选择——这正是上一节模型选择流程的直接应用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-l2-definition",
+            "tb-objective"
+          ]
+        }
+      },
+      {
+        "id": "tb-update-rule",
+        "moduleId": "decay-update",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：小批量随机梯度下降的更新式",
+        "markdown": "把惩罚项加入小批量随机梯度下降，得到 $L_2$ 正则化回归的更新式：\n\n$$\\mathbf{w} \\leftarrow (1 - \\eta\\lambda)\\mathbf{w} - \\frac{\\eta}{|\\mathcal{B}|}\\sum_{i \\in \\mathcal{B}}\\mathbf{x}^{(i)}\\left(\\mathbf{w}^\\top\\mathbf{x}^{(i)} + b - y^{(i)}\\right)$$\n\n与普通更新相比，多出的因子 $(1-\\eta\\lambda)$ 在每一步把权重向零收缩，这就是“权重衰减”这一名称的来源。$\\lambda$ 越小，对 $\\mathbf{w}$ 的约束越少；$\\lambda$ 越大，约束越强，因此它提供了一种连续调节函数复杂度的机制。\n\n是否惩罚偏置 $b$ 因具体实践和网络层而异，通常网络输出层的偏置项不会被正则化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "权重衰减"
+              ],
+              "lineStart": 5777,
+              "lineEnd": 6058,
+              "assetRefs": [
+                "parts/part-0002/images/ecd2e5d14be2ea30952a1cf9352204bee58d49c56c091732a7be693e1bc8f5eb.jpg",
+                "parts/part-0002/images/9c186f30c7e66ee03244d98520a26e4cb3e841c1c29aa3e2c1f481fdb8e02d6d.jpg",
+                "parts/part-0002/images/660cafb17d977dd508bc5045900474cc2bc245f17095b71c2ce79cc8d425ac88.jpg",
+                "parts/part-0002/images/a8377e8b186b41222ecb0a8aad04ebdc130e36052e37226908fec83c20f466ce.jpg"
+              ],
+              "excerptSha256": "dac68d2ec4b7889d07283ca6589ac4eef0ce9d6a85104e955e9de6007045e575"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-update-derivation",
+        "moduleId": "decay-update",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充推导：收缩因子从哪里来",
+        "markdown": "单独对惩罚项求导：\n\n$$\\nabla_{\\mathbf{w}}\\left(\\frac{\\lambda}{2}\\|\\mathbf{w}\\|^2\\right) = \\lambda\\mathbf{w}$$\n\n于是加入惩罚后的一步梯度下降为\n\n$$\\mathbf{w} \\leftarrow \\mathbf{w} - \\eta\\left(\\frac{1}{|\\mathcal{B}|}\\sum_{i\\in\\mathcal{B}}\\mathbf{x}^{(i)}\\cdot + \\lambda\\mathbf{w}\\right) = (1-\\eta\\lambda)\\mathbf{w} - \\frac{\\eta}{|\\mathcal{B}|}\\sum_{i\\in\\mathcal{B}}\\mathbf{x}^{(i)}\\cdot$$\n\n其中 $\\cdot$ 表示残差 $\\mathbf{w}^\\top\\mathbf{x}^{(i)} + b - y^{(i)}$。\n\n推导说明两点。第一，收缩因子 $(1-\\eta\\lambda)$ 只来自惩罚项，与平方损失的具体形式无关。第二，只有当 $0 < \\eta\\lambda < 1$ 时每一步才是真正的收缩；若 $\\eta\\lambda$ 过大，权重会被一步更新过度缩小甚至反向，训练反而发散。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-objective",
+            "tb-update-rule"
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "decay-update",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：三个常见误解",
+        "markdown": "误解一：以为权重衰减会像特征选择那样把某些权重直接置零。$L_2$ 惩罚只是让权重整体向零收缩，通常不会精确等于零；把权重压到零是 $L_1$ 惩罚的特征选择效果。\n\n误解二：以为 $\\lambda$ 越大越好。教材实验中 $\\lambda = 3$ 让测试误差下降，但训练误差明显上升；$\\lambda$ 过大会造成欠拟合，取值需要用验证集权衡。\n\n误解三：以为所有权重和偏置都应衰减。是否惩罚偏置取决于实践和网络层，教材通常不对输出层偏置做正则化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-l2-definition",
+            "tb-objective",
+            "tb-update-rule"
+          ]
+        }
+      },
+      {
+        "id": "tb-high-dim-experiment",
+        "moduleId": "experiment-evidence",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：高维线性回归中的两组结果",
+        "markdown": "教材用高维线性回归演示权重衰减。标签按\n\n$$y = 0.05 + \\sum_{i=1}^{d} 0.01x_i + \\epsilon, \\quad \\epsilon \\sim \\mathcal{N}(0, 0.01^2)$$\n\n生成，并取 $d = 200$、训练集 20 个样本、测试集 100 个样本、批量大小 5、学习率 0.003、训练 100 个轮次，以放大过拟合。从零实现时只需在损失后加上 $\\frac{\\lambda}{2}\\|\\mathbf{w}\\|^2$ 再反向传播。\n\n- $\\lambda = 0$（关闭权重衰减）：训练误差持续减少，测试误差没有减少，出现严重过拟合，训练结束时 $\\|\\mathbf{w}\\| \\approx 12.96$。\n- $\\lambda = 3$：训练误差增大，但测试误差减小，$\\|\\mathbf{w}\\| \\approx 0.36$。\n\n简洁实现把权重衰减交给优化器：实例化 `torch.optim.SGD` 时为权重参数指定 `weight_decay`，偏置参数单独成组且不衰减。两个版本的曲线相同，简洁版运行更快也更容易实现；对应设置下 $\\|\\mathbf{w}\\|$ 由约 13.73 降到约 0.39。框架集成还有计算上的好处：权重衰减部分只依赖每个参数的当前值，不需要额外的计算开销。\n\n对非线性函数而言“简单”更难定义，例如再生核希尔伯特空间（RKHS）可把为线性函数引入的工具推广到非线性环境，但基于它的算法往往难以应用到大型高维数据。本书默认采用简单的启发式方法：在深层网络的所有层上应用权重衰减。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "权重衰减"
+              ],
+              "lineStart": 5777,
+              "lineEnd": 6058,
+              "assetRefs": [
+                "parts/part-0002/images/ecd2e5d14be2ea30952a1cf9352204bee58d49c56c091732a7be693e1bc8f5eb.jpg",
+                "parts/part-0002/images/9c186f30c7e66ee03244d98520a26e4cb3e841c1c29aa3e2c1f481fdb8e02d6d.jpg",
+                "parts/part-0002/images/660cafb17d977dd508bc5045900474cc2bc245f17095b71c2ce79cc8d425ac88.jpg",
+                "parts/part-0002/images/a8377e8b186b41222ecb0a8aad04ebdc130e36052e37226908fec83c20f466ce.jpg"
+              ],
+              "excerptSha256": "dac68d2ec4b7889d07283ca6589ac4eef0ce9d6a85104e955e9de6007045e575"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-experiment-reading",
+        "moduleId": "experiment-evidence",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：如何解读这组实验",
+        "markdown": "读这两组结果要抓住三点。第一，权重范数是可观察的复杂度指标：$\\lambda = 0$ 时 $\\|\\mathbf{w}\\| \\approx 12.96$，$\\lambda = 3$ 时约 0.36，说明正则化确实压缩了参数规模。第二，训练误差上升不代表训练变差，而是用更大的偏差换取更小的方差，测试误差下降才是目标。第三，$\\lambda$ 是超参数：教材练习建议绘制训练与测试误差随 $\\lambda$ 变化的曲线，并用验证集挑选取值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-high-dim-experiment"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-connect",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：手算一步权重衰减",
+        "markdown": "设当前某个权重 $w = 2$，学习率 $\\eta = 0.1$，衰减系数 $\\lambda = 0.5$，小批量数据项给出的梯度为 $0.2$。\n\n1. 写出这一步的更新式并算出新的 $w$。\n2. 如果只看惩罚项，这一步把 $w$ 收缩了多少？\n\n参考：$w \\leftarrow (1 - 0.1\\times 0.5)\\times 2 - 0.1\\times 0.2 = 1.9 - 0.02 = 1.88$；只看惩罚项时为 $(1-0.05)\\times 2 = 1.9$，收缩量为 0.1，恰好等于 $\\eta\\lambda w$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-objective",
+            "tb-update-rule",
+            "tb-high-dim-experiment"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-connect",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "过拟合需要容量控制；限制特征数过于生硬，权重衰减提供了连续可调的替代方案。它在损失中加入 $\\frac{\\lambda}{2}\\|\\mathbf{w}\\|^2$，等价于每一步以 $(1-\\eta\\lambda)$ 收缩权重；$\\lambda$ 通过验证集选择，偏置通常不正则化，训练误差上升而测试误差下降是它起作用的典型信号。\n\n接下来换一个角度：不改目标函数，而是直接改网络结构来抑制过拟合。下一知识点“暂退法（Dropout）”在训练时随机丢弃神经元，减少模型对少数特征的依赖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-objective",
+            "tb-update-rule",
+            "tb-high-dim-experiment"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "weight-decay-check",
+        "type": "formative-check",
+        "title": "手算一步权重衰减",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-connect",
+        "depth": "core",
+        "outcomeRefs": [
+          "derive-update",
+          "apply-weight-decay"
+        ],
+        "learningPurpose": "检查学习者能否把收缩因子代入具体数值，并区分惩罚项与数据项各自的贡献。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-objective",
+            "tb-update-rule"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "answers": [
+            "1.88",
+            "收缩量 0.1，等于 ηλw"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定 $w=2$、$\\eta=0.1$、$\\lambda=0.5$、数据项梯度 $0.2$：先计算收缩项 $(1-0.1\\times 0.5)\\times 2 = 1.9$，再减去 $0.1\\times 0.2 = 0.02$，得到 $w = 1.88$。"
+        }
+      },
+      {
+        "id": "lambda-sweep-experiment",
+        "type": "parameter-experiment",
+        "title": "扫描 λ 观察偏差与方差",
+        "anchorBlockId": "tb-high-dim-experiment",
+        "moduleId": "experiment-evidence",
+        "depth": "support",
+        "outcomeRefs": [
+          "formulate-objective",
+          "apply-weight-decay"
+        ],
+        "learningPurpose": "让学习者亲手改变 λ，观察权重范数与训练、测试误差的此消彼长，理解 λ 需要验证集选择。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-objective",
+            "tb-high-dim-experiment"
+          ]
+        },
+        "config": {
+          "lambdaValues": [
+            0,
+            0.1,
+            1,
+            3
+          ],
+          "metrics": [
+            "权重 L2 范数",
+            "训练误差",
+            "测试误差"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "依次取 $\\lambda = 0, 0.1, 1, 3$ 训练同一高维线性回归，记录每轮的权重 $L_2$ 范数、训练误差与测试误差，比较 $\\lambda=0$ 与 $\\lambda=3$ 的差别，并说明哪一组更可能过拟合。"
+        }
+      }
+    ]
+  },
+  "subtitle": "多层感知机",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [
+    "point-4-6"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000030"
+      ],
+      "headingPath": [
+        "多层感知机",
+        "权重衰减"
+      ],
+      "lineStart": 5777,
+      "lineEnd": 6058,
+      "assetRefs": [
+        "parts/part-0002/images/ecd2e5d14be2ea30952a1cf9352204bee58d49c56c091732a7be693e1bc8f5eb.jpg",
+        "parts/part-0002/images/9c186f30c7e66ee03244d98520a26e4cb3e841c1c29aa3e2c1f481fdb8e02d6d.jpg",
+        "parts/part-0002/images/660cafb17d977dd508bc5045900474cc2bc245f17095b71c2ce79cc8d425ac88.jpg",
+        "parts/part-0002/images/a8377e8b186b41222ecb0a8aad04ebdc130e36052e37226908fec83c20f466ce.jpg"
+      ],
+      "excerptSha256": "dac68d2ec4b7889d07283ca6589ac4eef0ce9d6a85104e955e9de6007045e575"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3451,
+    3037
+  ],
+  "scale": 0.93
+}

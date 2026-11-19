@@ -1,0 +1,544 @@
+{
+  "id": "point-14-6",
+  "title": "子词嵌入",
+  "shortSummary": "说明 fastText 等子词方法如何用字符 n 元组表示未登录词并捕获词形信息。",
+  "keyTerms": [
+    "子词嵌入",
+    "fastText",
+    "字符n元组",
+    "未登录词"
+  ],
+  "animationType": "bpeMerge",
+  "animationSuggestion": "逐轮展示相邻符号对的频次表、本轮被选中的符号对和所有词更新后的切分，标注并列最高的候选与实现选择，最后用学得的符号表切分 `tallest_` 与 `fatter_` 并标出 `[UNK]` 的退化片段。",
+  "difficulty": "进阶",
+  "importance": 0.68,
+  "prerequisites": [
+    "point-14-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-with-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材 fastText 与字节对编码两段主线及其数值算例，围绕词形共享与未登录词补足直觉、频次核对和检查题；教材的定义、公式、合并序列与切分结果不作改动。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-morphology-need",
+          "text": "解释词形变化为什么让词级嵌入难以共享参数，并说明子词嵌入要解决什么问题。"
+        },
+        {
+          "id": "compose-fasttext-vector",
+          "text": "给定一个词，按规则列出其字符 n 元组子词，并说明词向量如何由子词向量求和得到。"
+        },
+        {
+          "id": "trace-bpe-merges",
+          "text": "按字节对编码规则追踪若干轮贪心合并，说明符号词表与切分结果如何逐轮变化。"
+        },
+        {
+          "id": "segment-unseen-words",
+          "text": "用学得的符号词表切分新词，并判断何时会退化为未登录符号。"
+        }
+      ],
+      "misconceptions": [
+        "认为 fastText 仍然为每个词形单独学一个向量，子词只是训练前的分词步骤。",
+        "认为子词嵌入可以让任何词都不再出现未登录符号。",
+        "认为字节对编码的合并可以跨越单词边界，或认为其词表大小由 n 的取值直接固定。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-morphology",
+          "title": "词形变化与词级嵌入的缺口",
+          "role": "problem-introduction",
+          "description": "由形态学现象引出词级嵌入不共享词形参数的问题。",
+          "outcomeRefs": [
+            "explain-morphology-need"
+          ],
+          "order": 0
+        },
+        {
+          "id": "fasttext-vector",
+          "title": "fastText 的子词表示",
+          "role": "core-concept",
+          "description": "字符 n 元组的提取规则与子词向量求和公式。",
+          "outcomeRefs": [
+            "compose-fasttext-vector"
+          ],
+          "order": 1
+        },
+        {
+          "id": "fasttext-tradeoffs",
+          "title": "子词表示的代价与收益",
+          "role": "analysis",
+          "description": "参数、复杂度与罕见词表示质量之间的权衡。",
+          "outcomeRefs": [
+            "compose-fasttext-vector",
+            "explain-morphology-need"
+          ],
+          "order": 2
+        },
+        {
+          "id": "bpe-mechanism",
+          "title": "字节对编码的贪心合并",
+          "role": "core-concept",
+          "description": "固定词表需求、初始符号与最频繁符号对合并规则。",
+          "outcomeRefs": [
+            "trace-bpe-merges"
+          ],
+          "order": 3
+        },
+        {
+          "id": "bpe-walkthrough",
+          "title": "从合并到切分：教材算例",
+          "role": "worked-example",
+          "description": "用词频表核对合并序列，并用学得的符号表切分新词。",
+          "outcomeRefs": [
+            "trace-bpe-merges",
+            "segment-unseen-words"
+          ],
+          "order": 4
+        },
+        {
+          "id": "synthesis-check",
+          "title": "辨析与达成检查",
+          "role": "assessment",
+          "description": "澄清未登录符号与子词膨胀的边界，并完成教材练习要点。",
+          "outcomeRefs": [
+            "explain-morphology-need",
+            "compose-fasttext-vector",
+            "trace-bpe-merges",
+            "segment-unseen-words"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-morphology-need",
+          "compose-fasttext-vector",
+          "trace-bpe-merges",
+          "segment-unseen-words"
+        ],
+        "method": "先用符号表切分两个新词并标出退化片段，再解释每次合并对词表规模的影响。",
+        "successCriteria": [
+          "切分结果与符号表一致，能指出哪些片段不在词表中",
+          "能写出从 n 个初始符号得到 m 个符号所需的合并次数",
+          "能说明子词共享为什么改善罕见词表示，同时不夸大它对未登录问题的解决程度"
+        ],
+        "exerciseBlockId": "answer-check",
+        "summaryBlockId": "summary-block",
+        "nextPointId": "point-14-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "morphology-motivation",
+        "moduleId": "motivation-morphology",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "词形变化：词级嵌入没有利用的内部结构",
+        "markdown": "英语中 `helps`、`helped`、`helping` 是同一个词 `help` 的不同变形；`dog` 与 `dogs`、`cat` 与 `cats` 的构词关系相同。在法语和西班牙语等语言中，许多动词有 40 多种变形形式，芬兰语名词最多可能有 15 种变形。研究单词形成与词汇关系的学科是形态学，而 word2vec 和 GloVe 都没有刻画词的内部结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "word-level-shortfall",
+        "moduleId": "motivation-morphology",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：词级符号化带来的两个后果",
+        "markdown": "词级嵌入把每个词形当作独立符号：`help` 与 `helped` 的向量互不共享参数，只能靠各自出现的语料分别学习。由此产生两个后果：低频词形得不到充分训练；词表中没有出现的词形根本没有向量。子词方法把词拆成更小、可复用的单元，让相似词形共享参数，正是为了缓解这两点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "morphology-motivation"
+          ]
+        }
+      },
+      {
+        "id": "fasttext-subword-extraction",
+        "moduleId": "fasttext-vector",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：子词是一个字符 n 元组",
+        "markdown": "fastText 提出一种子词嵌入方法，其中子词是一个字符 n 元组。它可以看作子词级的跳元模型：不直接学习词级向量，而是用子词级向量之和表示中心词。以 `where` 为例，先在词的开头和末尾添加特殊字符 `<` 与 `>`，以区分前缀和后缀，再从中提取字符 n 元组。取 $n=3$ 时得到 `<wh`、`whe`、`her`、`ere`、`re>`，以及特殊子词 `<where>`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "where-subwords-enumeration",
+        "moduleId": "fasttext-vector",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：把 where 的 n 元组列全",
+        "markdown": "按同一规则把 `where` 的子词列全，可以看到 n 越大子词越长、数量也越多：\n\n- 3 元组：`<wh`、`whe`、`her`、`ere`、`re>`；\n- 4 元组：`<whe`、`wher`、`here`、`ere>`；\n- 5 元组：`<wher`、`where`、`here>`；\n- 6 元组：`<where`、`where>`。\n\n再加上特殊子词 `<where>`，这些子词的并集就是 fastText 为 `where` 使用的子词集合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fasttext-subword-extraction"
+          ]
+        }
+      },
+      {
+        "id": "fasttext-sum-formula",
+        "moduleId": "fasttext-vector",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材公式：中心词向量等于子词向量之和",
+        "markdown": "对任意词 $w$，记 $\\mathcal{G}_w$ 为其长度在 3 到 6 之间的所有子词与其特殊子词的并集；词表是所有词的子词的集合。若 $\\mathbf{z}_g$ 是词表中子词 $g$ 的向量，则 $w$ 作为中心词的向量为\n\n$$\\mathbf{v}_w = \\sum_{g \\in \\mathcal{G}_w} \\mathbf{z}_g.$$\n\nfastText 的其余部分与跳元模型相同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "composition-intuition",
+        "moduleId": "fasttext-vector",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：求和式意味着什么",
+        "markdown": "求和式说明两件事。其一，一个词的向量不是独立参数，而是若干共享子词向量的叠加，因此 `helped` 与 `helping` 会因为共享与 `help` 相关的子词而彼此接近。其二，只要一个词形的所有子词都在子词词表中出现，即使该词形本身没有在训练语料中出现，也能拼出一个向量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fasttext-sum-formula",
+            "where-subwords-enumeration"
+          ]
+        }
+      },
+      {
+        "id": "fasttext-tradeoffs",
+        "moduleId": "fasttext-tradeoffs",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材说明：更大的词表与更高的复杂度",
+        "markdown": "与跳元模型相比，fastText 的词表更大，模型参数也更多；为了计算一个词的表示，它的所有子词向量都必须求和，这带来更高的计算复杂度。作为回报，结构相似的词之间共享子词参数，罕见词甚至词表外的词也可能获得更好的向量表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "oov-generalization",
+        "moduleId": "fasttext-tradeoffs",
+        "depth": "support",
+        "kind": "application",
+        "title": "模型补充：在未登录词上的实际差别",
+        "markdown": "把这两点放到任务里：遇到训练语料没出现过、但由常见词缀构成的词形时，纯词级嵌入只能退回未知符号，而 fastText 可以用它的子词向量求和得到表示。代价是每个词都要先枚举子词并求和，词表与参数规模随语料增长更快，因此实践中通常要限制 n 的取值范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fasttext-tradeoffs",
+            "fasttext-sum-formula"
+          ]
+        }
+      },
+      {
+        "id": "bpe-motivation",
+        "moduleId": "bpe-mechanism",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：用字节对编码得到可变长度子词",
+        "markdown": "fastText 中所有提取的子词必须是指定长度，例如 3 到 6，因此词表大小不能预定义。为了在固定大小的词表中允许可变长度子词，可以应用字节对编码（BPE）这类压缩算法来提取子词。字节对编码对训练数据集做统计分析，以发现单词内的公共符号：从长度为 1 的符号开始，迭代地合并最频繁的连续符号对，产生新的更长符号。为提高效率，不考虑跨越单词边界的符号对。最后可以用这些符号像子词一样切分单词。该算法及其变体已用于 GPT-2、RoBERTa 等预训练模型的输入表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bpe-merge-trace",
+        "moduleId": "bpe-walkthrough",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材算法：初始化、统计与十次合并",
+        "markdown": "教材把符号词表初始化为 26 个英文小写字母、特殊词尾符号 `_` 和特殊未知符号 `[UNK]`。词频表为 `fast_` 4 次、`faster_` 3 次、`tall_` 5 次、`taller_` 4 次，每个词尾都附加 `_`，以便从符号序列恢复单词。由于只从单字符开始合并，先在每个词内部的连续字符之间插入空格作为分隔符。之后反复执行：返回词内最频繁的连续符号对，把它合并成新符号并加入符号词表，同时更新所有词的切分。10 次合并依次得到 `('t','a')`、`('ta','l')`、`('tal','l')`、`('f','a')`、`('fa','s')`、`('fas','t')`、`('e','r')`、`('er','_')`、`('tall','_')`、`('fast','_')`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bpe-count-example",
+        "moduleId": "bpe-walkthrough",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：用频次核对第一轮合并",
+        "markdown": "用原始词频核对第一轮的选择。初始切分下，`(t,a)` 出现在 `tall_` 与 `taller_` 中，加权频次为 $5+4=9$；`(a,l)` 与 `(l,l)` 同样各为 9；`(f,a)`、`(a,s)`、`(s,t)`、`(e,r)`、`(r,_)` 各为 $4+3=7$。多个符号对并列最高时，教材实现选出了 `(t,a)`。注意每次合并只新增一个符号，所以符号词表的大小等于初始符号数加上合并次数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bpe-merge-trace"
+          ]
+        }
+      },
+      {
+        "id": "bpe-segmentation",
+        "moduleId": "bpe-walkthrough",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材结果：合并后的切分与新词切分",
+        "markdown": "十次合并后，数据集中的词被子词切开：`fast_` 保持原样，`faster_` 切成 `fast er_`，`tall_` 保持原样，`taller_` 切成 `tall er_`。切分结果取决于所使用的数据集，也可以把从一个数据集学到的子词用于切分另一个数据集的单词。教材的 `segment_BPE` 采用贪心策略：从整词开始尝试，若当前片段在符号表中就接受并继续向后，否则缩短右端再试，从而得到尽可能长的子词；无法覆盖的部分记为 `[UNK]`。用该符号表切分 `tallest_` 与 `fatter_`，得到 `tall e s t _` 与 `f a t t er_`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "subword-boundaries-warning",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：未登录符号与子词膨胀",
+        "markdown": "子词嵌入并不能消除未登录问题：切分时任何不在符号表中的片段都会退化为 `[UNK]`。同时子词数量会快速膨胀——教材练习指出，英语中长度 6 的 n 元组约有 $3 \\times 10^8$ 种。因此实践上要么限制 n 的取值范围，要么限制词表规模或合并次数，在覆盖率和词表大小之间做取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bpe-segmentation",
+            "fasttext-tradeoffs"
+          ]
+        }
+      },
+      {
+        "id": "summary-block",
+        "moduleId": "synthesis-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：本点的三条结论",
+        "markdown": "三句话收束本点：fastText 把中心词表示为子词向量之和，让相似词形共享参数，从而改善罕见词和词表外词的表示；字节对编码通过迭代合并最频繁的连续符号对，在固定词表规模下得到可变长度子词；两者的共同代价是更大的词表与更高的计算复杂度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fasttext-sum-formula",
+            "bpe-motivation",
+            "bpe-segmentation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "synthesis-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材练习：四个检验理解的问题",
+        "markdown": "教材本节留下四个问题：子词太多会带来什么问题、如何解决；如何在连续词袋模型的基础上设计一个子词嵌入模型；初始符号词表大小为 $n$ 时，要得到大小为 $m$ 的词表需要多少次合并操作；如何扩展字节对编码的思想来提取短语。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000124"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "子词嵌入"
+              ],
+              "lineStart": 28396,
+              "lineEnd": 28610,
+              "assetRefs": [],
+              "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "answer-check",
+        "moduleId": "synthesis-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：练习参考要点",
+        "markdown": "合并次数可以直接从符号增长方式推出：每次合并只新增一个符号，所以从 $n$ 个初始符号扩充到 $m$ 个符号需要 $m-n$ 次合并。连续词袋版本的一种设计是把上下文词也拆成子词、用子词向量之和作为输入表示，中心词仍由子词向量之和表示，再按 CBOW 的目标训练；这是把教材的跳元做法对称迁移，并非教材原文。扩展到短语时，可以把短语内的词序列当作符号序列，对跨词的连续符号对同样做频次统计与合并，但这会突破教材“不跨越单词边界”的设定，属于额外的设计选择。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "bpe-segmentation",
+            "bpe-count-example"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "bpe-merge-quiz",
+        "type": "formative-check",
+        "anchorBlockId": "answer-check",
+        "moduleId": "synthesis-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-bpe-merges",
+          "segment-unseen-words"
+        ],
+        "learningPurpose": "检查学习者能否用学得的符号表切分新词，并解释每次合并对词表规模的影响。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "bpe-merge-trace",
+            "bpe-segmentation",
+            "answer-check"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "tokens": [
+            "tallest_",
+            "fatter_"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用教材中的符号表切分 `tallest_` 与 `fatter_`，并说明从 $n$ 个初始符号得到 $m$ 个符号需要多少次合并。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [
+    "point-14-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000124"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "子词嵌入"
+      ],
+      "lineStart": 28396,
+      "lineEnd": 28610,
+      "assetRefs": [],
+      "excerptSha256": "e5fec140aed6517599c2ffa149954482fbe0ec0506acc4dce779ab197e2280b4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2153,
+    410
+  ],
+  "scale": 0.87
+}

@@ -1,0 +1,602 @@
+{
+  "id": "point-5-6",
+  "title": "GPU",
+  "shortSummary": "说明张量与模型迁移到 GPU 的方式、设备一致性要求，以及多卡环境下的基本使用规则。",
+  "keyTerms": [
+    "GPU",
+    "设备",
+    "显存",
+    "张量迁移"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.72,
+  "prerequisites": [
+    "point-2-1",
+    "point-5-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-and-pitfall-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按“设备抽象—环境准备—张量迁移—复制开销与阻塞—模型迁移—检查表”的操作顺序重排教材内容，保留全部 API 写法、等价形式、失败条件与性能断言，在对应位置补充类比、错误恢复说明和自检清单。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "setup-and-select-device",
+          "text": "检查 GPU 环境，并用 torch.device 写出要使用的目标设备。"
+        },
+        {
+          "id": "transfer-tensors-consistently",
+          "text": "在指定设备上创建或迁移张量，并保证参与同一次运算的张量位于同一设备。"
+        },
+        {
+          "id": "reason-about-transfer-cost",
+          "text": "解释设备间数据搬运、同步点和日志回传为什么会拖慢训练。"
+        },
+        {
+          "id": "place-model-on-device",
+          "text": "把模型参数迁移到目标设备，并核验参数与输入确实落在同一 GPU 上。"
+        }
+      ],
+      "misconceptions": [
+        "认为框架会自动把另一个设备上的张量搬运过来完成运算。",
+        "认为把张量放到 GPU 上只是在原对象上打标记，不会占用额外资源。",
+        "认为每算一步就把损失打印出来只是日志习惯问题，与训练速度无关。"
+      ],
+      "modules": [
+        {
+          "id": "environment-and-device",
+          "title": "设备抽象与环境准备",
+          "role": "foundation",
+          "description": "建立设备概念，说明 CPU 与 GPU 的表示方式以及无 GPU 时的回退策略。",
+          "outcomeRefs": [
+            "setup-and-select-device"
+          ],
+          "order": 0
+        },
+        {
+          "id": "tensor-device-consistency",
+          "title": "张量迁移与设备一致性",
+          "role": "procedure",
+          "description": "在指定设备上创建张量、按需复制，并处理跨设备运算的失败情形。",
+          "outcomeRefs": [
+            "transfer-tensors-consistently"
+          ],
+          "order": 1
+        },
+        {
+          "id": "copy-cost-and-blocking",
+          "title": "复制开销、阻塞与日志",
+          "role": "analysis",
+          "description": "分析设备间传输与同步点的代价，给出日志回传的实践写法。",
+          "outcomeRefs": [
+            "reason-about-transfer-cost"
+          ],
+          "order": 2
+        },
+        {
+          "id": "model-on-device",
+          "title": "模型迁移与计算位置",
+          "role": "procedure",
+          "description": "把网络参数放到 GPU，并确认前向计算发生在同一设备上。",
+          "outcomeRefs": [
+            "place-model-on-device"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pitfalls-and-checklist",
+          "title": "常见错误与自检清单",
+          "role": "check",
+          "description": "汇总设备不一致、显存超限和搬运过量三类问题，形成训练前的检查顺序。",
+          "outcomeRefs": [
+            "transfer-tensors-consistently",
+            "reason-about-transfer-cost",
+            "place-model-on-device"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "setup-and-select-device",
+          "transfer-tensors-consistently",
+          "reason-about-transfer-cost",
+          "place-model-on-device"
+        ],
+        "method": "给定一段“双卡、混合设备”的代码，指出会在哪一行失败、需要做哪些复制，并说明为什么不应在训练循环里逐步把日志搬回 CPU。",
+        "successCriteria": [
+          "能写出一对等价的设备写法（如 cuda 与 cuda:0）并说明 cpu 设备覆盖的范围",
+          "能把设备不一致的运算改写为先复制到同一设备再计算",
+          "能说明复制发生在哪一步、占用哪块设备的显存",
+          "能指出训练循环中的同步点并给出批量回传日志的改法"
+        ],
+        "summaryBlockId": "summary-three-rules",
+        "nextPointId": "point-6-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "device-abstraction",
+        "moduleId": "environment-and-device",
+        "depth": "core",
+        "kind": "definition",
+        "title": "每个数组都有一个设备",
+        "markdown": "在 PyTorch 中，每个数组都有一个设备（device），书中也把它称作环境（context）。默认情况下，所有变量和相关的计算都分配给 CPU；只有当显式指定时，张量或模型才会落在 GPU 上。\n\n多个服务器上部署作业时，情况会更复杂：通过有意识地把数组分配到不同环境，可以尽量减少在设备之间传输数据的时间。例如在带 GPU 的服务器上训练神经网络时，通常希望模型参数就在 GPU 上。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-workbench-analogy",
+        "moduleId": "environment-and-device",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "类比：设备就是各自带台面的工作台",
+        "markdown": "可以把 CPU 和每块 GPU 想成不同的工作台：CPU 的台面是主内存，每块 GPU 的台面是它自己的显存。运算只能在数据所在的那张台面上进行，把材料从一张台面搬到另一张台面要额外花时间。\n\n这个类比同时解释了两件事：为什么跨设备相加会失败（原料不在同一张台面上），以及为什么搬运要省着做（搬一次的总时间可能超过在台面上加工的时间）。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "device-abstraction"
+          ]
+        }
+      },
+      {
+        "id": "device-spec",
+        "moduleId": "environment-and-device",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "CPU 与 GPU 的表示方式",
+        "markdown": "`torch.device('cpu')` 和 `torch.device('cuda')` 分别表示 CPU 与 GPU。需要注意的是：cpu 设备意味着所有物理 CPU 和内存，PyTorch 的计算会尝试使用所有 CPU 核心；而一个 GPU 设备只代表一块卡和相应的显存。\n\n有多块 GPU 时用 `torch.device(f'cuda:{i}')` 表示第 i 块卡（i 从 0 开始），并且 `cuda:0` 与 `cuda` 是等价的。可用 GPU 的数量由 `torch.cuda.device_count()` 查询。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "try-gpu-functions",
+        "moduleId": "environment-and-device",
+        "depth": "core",
+        "kind": "code",
+        "title": "无 GPU 时自动回退的辅助函数",
+        "markdown": "书中定义了两个方便的函数，让代码在缺少所需 GPU 时仍能运行：\n\n```python\ndef try_gpu(i=0):\n    if torch.cuda.device_count() >= i + 1:\n        return torch.device(f'cuda:{i}')\n    return torch.device('cpu')\n\ndef try_all_gpus():\n    devices = [torch.device(f'cuda:{i}')\n               for i in range(torch.cuda.device_count())]\n    return devices if devices else [torch.device('cpu')]\n```\n\n在拥有两块卡的机器上，`try_gpu()` 返回 `cuda:0`，`try_gpu(10)` 因为不存在第 11 块卡而回退到 `cpu`，`try_all_gpus()` 返回 `[cuda:0, cuda:1]`。这种写法把“设备选择”和“设备存在性检查”绑在一起，避免在无卡环境下直接报错。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-env-checklist",
+        "moduleId": "environment-and-device",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "开跑之前的环境检查顺序",
+        "markdown": "把教材的准备步骤整理成可执行顺序：\n\n1. 确认机器上至少有一块 NVIDIA GPU；\n2. 安装 NVIDIA 驱动与 CUDA，并按提示设置好路径；\n3. 用 `nvidia-smi` 查看显卡信息（型号、显存占用、温度、利用率）；\n4. 在代码中用 `torch.cuda.device_count()` 或 `try_gpu()` 探测可用设备。\n\n前两步决定“能不能用”，后两步决定“这段代码实际会跑在哪”。本节示例要求至少两块 GPU，对桌面机器可能偏奢侈，但在云上的多 GPU 实例很容易获得。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "device-spec",
+            "try-gpu-functions"
+          ]
+        }
+      },
+      {
+        "id": "tensor-default-cpu",
+        "moduleId": "tensor-device-consistency",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "张量默认创建在 CPU 上",
+        "markdown": "可以查询张量所在的设备。默认情况下，张量是在 CPU 上创建的：\n\n```python\nx = torch.tensor([1, 2, 3])\nx.device\n```\n\n输出的设备类型是 cpu。因此“代码能跑”并不代表“用上了 GPU”，位置必须显式检查。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "same-device-rule",
+        "moduleId": "tensor-device-consistency",
+        "depth": "core",
+        "kind": "warning",
+        "title": "参与同一次运算的张量必须在同一设备",
+        "markdown": "无论何时，只要我们对多个项进行操作，它们都必须在同一个设备上。例如对两个张量求和，必须确保两个张量位于同一设备，否则框架不知道在哪里存储结果，甚至不知道在哪里执行计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-auto-move-misconception",
+        "moduleId": "tensor-device-consistency",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "纠正：框架不会替你自动搬运",
+        "markdown": "常见误解是“框架看到设备不同就会自动把数据搬过去”。实际上，如果 X 在 `cuda:0`、Y 在 `cuda:1`，直接写 `X + Y` 会导致异常：运行时引擎在同一设备上找不到数据，运算直接失败。\n\n正确的恢复方式是先复制再计算，例如 `Z = X.cuda(1)`，让 Z 与 Y 都落在第二块卡上，然后执行 `Y + Z`。设备搬错位置时空闲的算力不会被用上，报错点往往就是那一行跨设备运算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "same-device-rule"
+          ]
+        }
+      },
+      {
+        "id": "create-on-gpu",
+        "moduleId": "tensor-device-consistency",
+        "depth": "core",
+        "kind": "example",
+        "title": "在创建时指定设备",
+        "markdown": "有几种方法可以在 GPU 上存储张量，最直接的一种是在创建时指定存储设备：\n\n```python\nX = torch.ones(2, 3, device=try_gpu())\n```\n\n结果张量的 device 显示为 `cuda:0`。在 GPU 上创建的张量只消耗这一块 GPU 的显存，可以用 `nvidia-smi` 查看显存使用情况。一般来说，需要确保不创建超过 GPU 显存限制的数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "copy-to-device",
+        "moduleId": "tensor-device-consistency",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "复制到另一块 GPU",
+        "markdown": "假设至少有两块 GPU，下面的代码在第二块卡上创建随机张量：\n\n```python\nY = torch.rand(2, 3, device=try_gpu(1))\n```\n\n要计算 X + Y，需要先决定在哪里执行。书中图 5.6.1 的做法是把 X 传输到第二块 GPU，在那里完成运算：\n\n```python\nZ = X.cuda(1)\nprint(X)\nprint(Z)\n```\n\n此时 X 仍在 `cuda:0`、Z 在 `cuda:1`，`Y + Z` 才能正常得到结果。如果 Z 已经位于第二块 GPU，再调用 `Z.cuda(1)` 会直接返回 Z 本身而不复制、不分配新内存（`Z.cuda(1) is Z` 为 True）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-copy-cost",
+        "moduleId": "tensor-device-consistency",
+        "depth": "support",
+        "kind": "note",
+        "title": "复制的代价不止一份显存",
+        "markdown": "复制并不“移动”数据：`X.cuda(1)` 之后 X 仍在原来的卡上，新副本额外占用了目标卡的显存，参与运算的两个副本还可能同时驻留。\n\n所以更省的做法是尽量在创建时就指定目标设备（如 `torch.ones(2, 3, device=try_gpu(1))`），让数据从一开始就落在最终会用到它的位置，避免“先建再搬”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "copy-to-device"
+          ]
+        }
+      },
+      {
+        "id": "transfer-cost",
+        "moduleId": "copy-cost-and-blocking",
+        "depth": "core",
+        "kind": "note",
+        "title": "传输比计算慢：为什么搬运要格外小心",
+        "markdown": "人们使用 GPU 做机器学习，是因为单块 GPU 相对运行速度快；但在设备（CPU、GPU 和其他机器）之间传输数据比计算慢得多。这也会让并行化更难，因为必须等数据发送或接收完成，才能继续后面的操作。\n\n由此得到几条经验：拷贝操作要格外小心；多个小操作比一个大操作糟糕得多；一次执行几个操作，好过在代码里散布许多单个操作。如果一个设备必须等待另一个设备，这样的操作就可能阻塞——这像客人到店才点单等咖啡，而不是通过电话预先订购。\n\n另外，打印张量或把张量转成 NumPy 格式时，如果数据不在内存中，框架会先把它复制到内存，带来额外传输开销；更糟的是，此时还受全局解释器锁约束，其他工作都得等 Python 完成。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-logging-practice",
+        "moduleId": "copy-cost-and-blocking",
+        "depth": "support",
+        "kind": "application",
+        "title": "实践：日志先留在 GPU，最后一次性回传",
+        "markdown": "把上面两条事实合起来看：训练循环里若每算一个小批量就把损失搬到 CPU 打印、或写进 NumPy 数组，相当于在热路径上插入一串同步点，设备要去等这些搬运动作。\n\n更稳的写法是为 GPU 上的日志预留内存（例如在 GPU 上累积每步损失），只在需要时移动较大的日志块，或在训练结束后一次性回传。判断标准很简单：搬运次数是否随迭代步数线性增长？如果是，就值得改成批量回传。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "transfer-cost"
+          ]
+        }
+      },
+      {
+        "id": "model-on-device",
+        "moduleId": "model-on-device",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "把模型参数放到 GPU",
+        "markdown": "类似地，神经网络模型也可以指定设备，下面的代码把模型参数放在 GPU 上：\n\n```python\nnet = nn.Sequential(nn.Linear(3, 1))\nnet = net.to(device=try_gpu())\n```\n\n当输入是 GPU 上的张量时，模型会在同一块 GPU 上计算结果，输出张量的 device 也显示为 `cuda:0`。可以用 `net[0].weight.data.device` 确认参数确实存放在同一块 GPU 上。总之，只要所有数据和参数都在同一个设备上，就可以有效地学习模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "pitfalls-and-checklist",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "训练前的四条自检",
+        "markdown": "按下面的顺序检查，可以覆盖本节出现的大部分失败：\n\n1. 设备是否真实存在：`torch.cuda.device_count()` 的结果是否覆盖你要用的下标？\n2. 输入是否在同一设备：`X.device` 与 `Y.device` 是否一致，跨设备时是否已先复制？\n3. 参数是否在同一设备：`net[0].weight.data.device` 是否与前向输入的设备相同？\n4. 热路径上是否有多余搬运：循环体里是否逐步打印、逐步转 NumPy，或反复调用 `.cuda()`？\n\n请拿一段自己写过的多卡代码逐条核对，并记下每一条不满足时会出现的现象（异常、显存翻倍还是速度下降）。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-on-device",
+            "copy-to-device"
+          ]
+        }
+      },
+      {
+        "id": "summary-three-rules",
+        "moduleId": "pitfalls-and-checklist",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "本节的三条结论：\n\n- 可以指定用于存储和计算的设备，例如 CPU 或 GPU；默认情况下数据在主内存中创建，然后用 CPU 计算。\n- 深度学习框架要求参与计算的所有输入数据都在同一设备上，无论是 CPU 还是 GPU。\n- 不经意地移动数据可能显著降低性能。典型错误是在 GPU 上算出每个小批量的损失后，立刻把它报告给用户或记进 NumPy 数组，触发全局解释器锁并阻塞所有 GPU；更好的做法是在 GPU 内部为日志分配内存，只移动较大的日志。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000042"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "GPU"
+              ],
+              "lineStart": 8630,
+              "lineEnd": 8887,
+              "assetRefs": [
+                "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+              ],
+              "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-next-point-bridge",
+        "moduleId": "pitfalls-and-checklist",
+        "depth": "support",
+        "kind": "note",
+        "title": "下一步：卷积层会把这些规则放大",
+        "markdown": "本节只用单个 `nn.Linear` 演示迁移，规则本身与网络结构无关：后面几章的计算会更密集，设备放置和搬运开销的影响也会更明显。\n\n进入卷积部分时，同样的检查顺序依然适用——先确认输入与参数在同一设备，再考虑如何减少循环中的搬运。差别只在于卷积核在图像网格上反复滑动，对带宽与并行度更敏感。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "summary-three-rules"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "device-placement-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-checklist",
+        "moduleId": "pitfalls-and-checklist",
+        "depth": "core",
+        "title": "判断代码会在哪里失败",
+        "outcomeRefs": [
+          "transfer-tensors-consistently",
+          "place-model-on-device"
+        ],
+        "learningPurpose": "检查学习者能否把设备一致性规则套用到未见过的一小段代码上，并给出最小修复。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "same-device-rule",
+            "copy-to-device",
+            "model-on-device"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenarios": [
+            {
+              "prompt": "X 在 cuda:0、Y 在 cuda:1，执行 X + Y",
+              "answer": "跨设备运算失败，需要先 X.cuda(1) 使两者同设备",
+              "failureMode": "runtime-error"
+            },
+            {
+              "prompt": "参数已 net.to(try_gpu())，输入是 CPU 张量",
+              "answer": "前向会因设备不一致失败，需要把输入也放到同一 GPU",
+              "failureMode": "runtime-error"
+            },
+            {
+              "prompt": "每步把损失 print 出来再继续训练",
+              "answer": "不报错但插入搬运与同步点，应改为在 GPU 上累积日志后批量回传",
+              "failureMode": "performance"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请对下面三种情形分别判断“会报错”还是“只是变慢”，并写出最小修复：\n\n1. X 在 cuda:0、Y 在 cuda:1，执行 X + Y；\n2. 参数已 `net.to(try_gpu())`，但输入是 CPU 张量；\n3. 每个小批量都 print 损失后再继续训练。"
+        }
+      }
+    ]
+  },
+  "subtitle": "深度学习计算",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000042"
+      ],
+      "headingPath": [
+        "深度学习计算",
+        "GPU"
+      ],
+      "lineStart": 8630,
+      "lineEnd": 8887,
+      "assetRefs": [
+        "parts/part-0003/images/6cbec4d92908f16ad7aad2eb9010d8ec6887a1170e196a8238463254fcafe6b2.jpg"
+      ],
+      "excerptSha256": "32c582764bf310b43c61af5bbe2fe5b7f7cc2495bed5df7666483716c0d6cc62"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3141,
+    1937
+  ],
+  "scale": 0.9
+}

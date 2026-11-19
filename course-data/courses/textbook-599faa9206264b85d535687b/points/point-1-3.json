@@ -1,0 +1,522 @@
+{
+  "id": "point-1-3",
+  "title": "自注意力",
+  "shortSummary": "说明自注意力如何在同一个序列内部建立联系，通过查询、键、值计算各位置相互关注的程度。",
+  "keyTerms": [
+    "自注意力",
+    "Query",
+    "Key",
+    "Value",
+    "缩放点积"
+  ],
+  "animationType": "attentionWeighting",
+  "animationSuggestion": "逐位置推进：先高亮当前查询向量，显示它与序列中各键的打分与权重条形，再演示按权重混合值向量得到输出，最后切换到下一位置；同一次重播使用相同输入序列和相同权重轨迹。",
+  "difficulty": "中等",
+  "importance": 0.95,
+  "prerequisites": [
+    "point-1-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对缩放点积、复杂度与多头机制的表述，按动机、投影、打分聚合、结构代价、多头的顺序重排，并补充维度和数值算例帮助理解量级。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-why",
+          "text": "说明自注意力为什么能在同一层内直接建模序列中任意两个位置的关系。"
+        },
+        {
+          "id": "explain-qkv",
+          "text": "解释查询、键、值三组投影的作用及其维度关系。"
+        },
+        {
+          "id": "compute-output",
+          "text": "按缩放点积打分、softmax 归一化和加权求和计算某个位置的输出。"
+        },
+        {
+          "id": "judge-cost",
+          "text": "从并行性、交互路径长度和 $T^2$ 开销比较自注意力与卷积、循环网络。"
+        },
+        {
+          "id": "explain-multihead",
+          "text": "说明多头自注意力如何在不同表示子空间中并行捕捉依赖关系。"
+        }
+      ],
+      "misconceptions": [
+        "把自注意力的查询、键、值当成三个不同序列的输入；它们都由同一个输入序列经不同投影矩阵得到。",
+        "把注意力权重直接当成输出；权重只决定聚合比例，输出是值向量按这些权重加权求和的结果。",
+        "因为自注意力能直接建模长距离依赖，就认为处理长序列没有额外代价，忽略了 $T \\times T$ 打分矩阵的计算与存储开销。"
+      ],
+      "modules": [
+        {
+          "id": "why-self-attention",
+          "title": "为什么需要自注意力",
+          "role": "motivation",
+          "description": "从变长序列的卷积、循环编码及其长距离依赖困难引入动态连接。",
+          "outcomeRefs": [
+            "explain-why"
+          ],
+          "order": 0
+        },
+        {
+          "id": "qkv-projections",
+          "title": "查询、键、值的投影",
+          "role": "core-model",
+          "description": "同一序列到 Q、K、V 的线性映射与维度关系。",
+          "outcomeRefs": [
+            "explain-qkv"
+          ],
+          "order": 1
+        },
+        {
+          "id": "scoring-and-aggregation",
+          "title": "打分、归一化与加权求和",
+          "role": "core-model",
+          "description": "缩放点积打分、softmax 权重与输出聚合。",
+          "outcomeRefs": [
+            "compute-output"
+          ],
+          "order": 2
+        },
+        {
+          "id": "structure-and-cost",
+          "title": "结构位置与计算代价",
+          "role": "comparison",
+          "description": "与卷积层、循环层的差别以及 $T^2$ 开销。",
+          "outcomeRefs": [
+            "judge-cost"
+          ],
+          "order": 3
+        },
+        {
+          "id": "multi-head",
+          "title": "多头自注意力",
+          "role": "extension",
+          "description": "多组投影、拼接与输出投影。",
+          "outcomeRefs": [
+            "explain-multihead"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "流程小结与检查",
+          "role": "practice",
+          "description": "串联四步计算流程并完成迁移练习。",
+          "outcomeRefs": [
+            "explain-why",
+            "explain-qkv",
+            "compute-output",
+            "judge-cost",
+            "explain-multihead"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-why",
+          "explain-qkv",
+          "compute-output",
+          "judge-cost",
+          "explain-multihead"
+        ],
+        "method": "先复述四步计算流程，再完成三道迁移练习并说明判断依据。",
+        "successCriteria": [
+          "能写出缩放点积注意力的矩阵形式并说明每一项的来源",
+          "能把数值打分归一化为权重并算出加权输出",
+          "能用路径长度与 $T^2$ 开销解释自注意力的适用边界"
+        ],
+        "exerciseBlockId": "self-attention-practice",
+        "summaryBlockId": "self-attention-summary",
+        "nextPointId": "point-1-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "seq-encoding-limits",
+        "moduleId": "why-self-attention",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：变长序列的卷积与循环编码",
+        "markdown": "用神经网络处理变长序列时，常见做法是用卷积网络或循环网络编码，从而得到一个相同长度的输出向量序列。卷积网络只在局部邻域内直接交互；循环网络逐步递推传播上下文，理论上可以建立长距离依赖，但由于信息传递路径较长以及梯度消失等问题，实际中往往更擅长建模局部或中等距离的依赖。\n\n如果希望更直接地建立输入序列中任意两个位置之间的依赖关系，一种方法是增加网络层数，通过更深的层级逐步传递信息；另一种方法是使用全连接网络。但全连接网络难以处理变长输入，因为不同长度的输入需要不同规模的连接结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dynamic-connections",
+        "moduleId": "why-self-attention",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：用注意力动态生成连接",
+        "markdown": "自注意力给出的正是这类“动态连接”：位置之间是否相关、相关多强，不由固定窗口或时间步决定，而由两端内容本身算出的匹配程度决定。这样同一层内任意两个位置都能直接交互，序列长度变化时也不需要改动连接结构，这正是它取代固定连接方式的理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "seq-encoding-limits"
+          ]
+        }
+      },
+      {
+        "id": "self-attention-definition",
+        "moduleId": "qkv-projections",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：自注意力的定义",
+        "markdown": "自注意力（self-attention）也称为内部注意力（Intra-Attention），是在同一个序列内部建立位置之间联系的注意力机制。它常采用查询–键–值（Query-Key-Value，QKV）模式，以引入可学习投影并提升模型能力：查询用来体现当前位置需要什么样的信息，键用来表示各位置能提供什么，值则是实际被加权汇总的内容。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-retrieval-analogy",
+        "moduleId": "qkv-projections",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：把一次自注意力看成一次内容检索",
+        "markdown": "可以把自注意力理解为对序列自身做一次检索：对每个位置，用它的查询向量去和序列中所有位置的键比对，得到一组权重，再按权重把对应的值向量混合起来。需要注意，这里的查询、键、值都来自同一个输入序列，只是经过了不同的线性投影；这一点把它与使用外部查询的一般注意力区分开。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "self-attention-definition"
+          ]
+        }
+      },
+      {
+        "id": "qkv-projection",
+        "moduleId": "qkv-projections",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：线性映射得到查询、键、值",
+        "markdown": "设输入序列矩阵为 $X = [x_1, \\dots, x_T] \\in \\mathbb{R}^{D_x \\times T}$，输出序列为 $H = [h_1, \\dots, h_T] \\in \\mathbb{R}^{D_v \\times T}$。对每个输入 $x_t$ 分别做三次线性映射，就得到查询向量 $q_t \\in \\mathbb{R}^{D_k}$、键向量 $k_t \\in \\mathbb{R}^{D_k}$ 和值向量 $v_t \\in \\mathbb{R}^{D_v}$。整段序列上的映射可以简写为\n\n$$Q = W_q X,\\quad K = W_k X,\\quad V = W_v X$$\n\n其中 $W_q, W_k \\in \\mathbb{R}^{D_k \\times D_x}$、$W_v \\in \\mathbb{R}^{D_v \\times D_x}$ 是可学习的参数矩阵。由于自注意力通常用点积计算打分，查询和键的维度取相同值 $D_k$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-projection-shapes",
+        "moduleId": "qkv-projections",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：一个具体的形状算例",
+        "markdown": "取序列长度 $T = 3$、输入维度 $D_x = 4$，并令 $D_k = D_v = 2$。此时 $X$ 的形状是 $4 \\times 3$，$W_q$、$W_k$、$W_v$ 的形状都是 $2 \\times 4$，于是 $Q$、$K$、$V$ 的形状都是 $2 \\times 3$：每个位置得到一个二维查询、二维键和二维值，三者的第 $t$ 列分别是 $q_t$、$k_t$、$v_t$。序列长度只改变矩阵的列数，不改变投影矩阵的形状。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "qkv-projection"
+          ]
+        }
+      },
+      {
+        "id": "scaled-dot-product",
+        "moduleId": "scoring-and-aggregation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：缩放点积打分与加权求和",
+        "markdown": "第二步是对第 $t$ 个查询向量 $q_t$，先计算它与各位置键的匹配程度并归一化，再对值向量加权求和：\n\n$$\\alpha_{j,t} = \\frac{\\exp\\left(s(q_t, k_j)\\right)}{\\sum_{i=1}^{T} \\exp\\left(s(q_t, k_i)\\right)},\\quad h_t = \\sum_{j=1}^{T} \\alpha_{j,t} v_j$$\n\n其中 $\\alpha_{j,t}$ 表示位置 $j$ 对位置 $t$ 的注意力权重。若打分函数取缩放点积，即 $s(q_t, k_j) = \\frac{q_t^\\top k_j}{\\sqrt{D_k}}$，则整个输出序列可以写成矩阵形式\n\n$$H = V\\,\\mathrm{softmax}\\!\\left(\\frac{Q^\\top K}{\\sqrt{D_k}}\\right)$$\n\n这里的 softmax 按列进行归一化，每一列对应一个查询位置上全部 $T$ 个权重。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scaling-derivation",
+        "moduleId": "scoring-and-aggregation",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：为什么除以 $\\sqrt{D_k}$",
+        "markdown": "假设查询和键的各分量相互独立、均值为 0、方差为 1，那么点积 $q_t^\\top k_j$ 是 $D_k$ 个独立项的求和，方差约为 $D_k$，标准差按 $\\sqrt{D_k}$ 增长。若不缩放，打分容易落在绝对值较大的区间，softmax 输出接近 one-hot，梯度变小、训练难以推进；除以 $\\sqrt{D_k}$ 相当于把打分的方差拉回约 1，让 softmax 工作在梯度较平稳的范围。这也解释了为什么缩放因子只与键的维度有关。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "scaled-dot-product"
+          ]
+        }
+      },
+      {
+        "id": "model-softmax-example",
+        "moduleId": "scoring-and-aggregation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：一次归一化与聚合的数值演算",
+        "markdown": "取某个查询位置，假设它已缩放的三个打分是 $[1.0,\\ 0.5,\\ -0.5]$。先做指数运算得到约 $[2.718,\\ 1.649,\\ 0.607]$，总和约 $4.974$，归一化后权重约为 $[0.546,\\ 0.331,\\ 0.122]$，三者相加为 1。若三个值向量分别是 $(1, 0)$、$(0, 1)$、$(1, 1)$，则输出为\n\n$$0.546 \\cdot (1, 0) + 0.331 \\cdot (0, 1) + 0.122 \\cdot (1, 1) \\approx (0.668,\\ 0.453)$$\n\n输出是值向量的加权平均：权重越大，该位置的取值对结果影响越大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "scaled-dot-product"
+          ]
+        }
+      },
+      {
+        "id": "layer-comparison",
+        "moduleId": "structure-and-cost",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材：与全连接层、卷积层和循环层的差别",
+        "markdown": "教材对比了全连接层与自注意力层：全连接层的权重是静态的可学习参数，自注意力层的连接权重则由输入内容动态决定，因此后者能自然地处理变长信息序列。自注意力层可以作为神经网络中的一层使用，既可以替换卷积层和循环层，也可以和它们交替使用。与循环结构相比，它可以直接建立任意两个位置之间的联系，显著缩短信息传播路径；与固定窗口卷积相比，它又能根据输入内容动态决定不同位置之间依赖的强弱。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "attention-complexity",
+        "moduleId": "structure-and-cost",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：结构比较与主要代价",
+        "markdown": "设序列长度为 $T$、表示维度为 $D$、卷积核宽度为 $k$，下面是三者在一个粗略比较中的定位：\n\n| 结构 | 信息交互范围 | 任意两位置的路径 | 并行性 |\n|---|---|---|---|\n| 卷积网络 | 局部邻域 | 需堆叠多层逐步传递 | 较高 |\n| 循环网络 | 逐步递推 | 随距离增长 | 受时间步串行限制 |\n| 自注意力 | 任意两位置直接交互 | 单层即可直达 | 高，矩阵乘法可并行 |\n\n自注意力并行性强、位置间交互路径最短，因此更容易建模长距离依赖；代价是标准全注意力的朴素实现需要显式构造 $T \\times T$ 的相关性矩阵，序列较长时计算和存储开销都会迅速增加。单个注意力头中，$Q^\\top K$ 与“权重乘 $V$”分别需要 $O(T^2 D_k)$ 和 $O(T^2 D_v)$ 次乘加，只有把维度视为常数时才简写为 $O(T^2)$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-complexity-example",
+        "moduleId": "structure-and-cost",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：$T^2$ 开销的量级估算",
+        "markdown": "以 $T = 1024$、$D_k = D_v = 64$ 估算：相关性矩阵共有 $1024^2 = 1{,}048{,}576$ 个分数；$Q^\\top K$ 约需 $T^2 D_k \\approx 6.7 \\times 10^7$ 次乘加，权重与 $V$ 相乘也需要同一数量级。若序列长度翻倍到 2048，这两项开销都约变为 4 倍。这就是长上下文场景中注意力成本快速上升的直接原因，也是高效注意力改进的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "attention-complexity"
+          ]
+        }
+      },
+      {
+        "id": "multi-head-attention",
+        "moduleId": "multi-head",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "教材：多头自注意力",
+        "markdown": "单头自注意力只在一个投影空间中计算不同位置之间的相关性。为了让模型在不同表示子空间中同时捕捉不同类型的依赖关系，可以并行地使用多个注意力头，这就是多头自注意力。设输入序列为 $H = [h_1, \\dots, h_T] \\in \\mathbb{R}^{D_h \\times T}$，第 $m$ 个头使用自己的投影矩阵 $W_q^m$、$W_k^m$、$W_v^m$，各头输出拼接后再做一次线性变换就得到多头自注意力层的输出：\n\n$$H' = W_o \\left[\\mathrm{head}_1; \\dots; \\mathrm{head}_M\\right],\\quad W_o \\in \\mathbb{R}^{D_h \\times M D_v}$$\n\n不同的注意力头可以分别关注不同的特征组合关系，使模型在同一层内并行提取多种组合模式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000004"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "自注意力"
+              ],
+              "lineStart": 44,
+              "lineEnd": 73,
+              "assetRefs": [],
+              "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-multihead-note",
+        "moduleId": "multi-head",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：多头改变的是表示空间而非量级",
+        "markdown": "多头的关键不在于堆叠更多参数，而在于提供多个彼此独立的匹配空间：同一输入序列在不同头里被投影成不同的查询、键和值，因此同一层内可以同时捕捉不同类型的依赖。若把每个头的维度取为 $D_k = D_v = D_h / M$，各头的计算量相加与单头满维投影处于同一量级；拼接之后由输出投影 $W_o$ 把 $M D_v$ 维重新映射回 $D_h$ 维。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "multi-head-attention"
+          ]
+        }
+      },
+      {
+        "id": "self-attention-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "四步流程小结",
+        "markdown": "把一次自注意力压缩成四步：\n\n1. 用 $W_q$、$W_k$、$W_v$ 把同一输入序列投影为 $Q$、$K$、$V$；\n2. 用 $Q^\\top K / \\sqrt{D_k}$ 得到 $T \\times T$ 的打分矩阵；\n3. 按列做 softmax，得到每个查询位置对各位置的注意力权重；\n4. 用权重对 $V$ 加权求和，得到输出序列 $H$。\n\n选择这一层时要同时接受它的两面性：并行性和最短交互路径带来长距离建模能力，$T^2$ 的计算与存储开销则限制可直接处理的序列长度；多头机制在不显著改变量级的前提下增加了可用的表示子空间数量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "scaled-dot-product",
+            "attention-complexity",
+            "multi-head-attention"
+          ]
+        }
+      },
+      {
+        "id": "self-attention-practice",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "迁移练习",
+        "markdown": "1. 输入序列长度为 $T = 4$，键向量维度 $D_k = 16$。若不做缩放，点积打分的标准差大约是多少？这会带来什么问题？\n2. 如果把自注意力中的 $Q$ 换成另一个序列投影得到的查询矩阵，它还是自注意力吗？请说明判断依据。\n3. 序列长度从 512 增加到 4096，注意力打分矩阵的元素个数变为原来的多少倍？\n\n自查方向：第 1 题用方差约 $D_k$ 估算；第 2 题回到查询、键、值是否来自同一序列；第 3 题看 $T^2$ 的比值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "self-attention-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "self-attention-check",
+        "type": "formative-check",
+        "anchorBlockId": "self-attention-practice",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-output",
+          "judge-cost"
+        ],
+        "learningPurpose": "检查学习者能否独立完成一次归一化聚合并用 $T^2$ 估算长序列代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "self-attention-practice"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出缩放点积注意力从 $Q$、$K$、$V$ 到输出 $H$ 的四步计算，并用 $T = 512$ 与 $T = 4096$ 比较打分矩阵的元素个数。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制与 Transformer：自注意力、结构及常见优化",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-599faa9206264b85d535687b",
+      "blockIds": [
+        "block-000004"
+      ],
+      "headingPath": [
+        "注意力机制与 Transformer：自注意力、结构及常见优化",
+        "自注意力"
+      ],
+      "lineStart": 44,
+      "lineEnd": 73,
+      "assetRefs": [],
+      "excerptSha256": "045d87b4bc1b666c278edb124a40f33d93bc71fc3e5ac4d53cdc9e1eab894263"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1260,
+    2163
+  ],
+  "scale": 0.95
+}

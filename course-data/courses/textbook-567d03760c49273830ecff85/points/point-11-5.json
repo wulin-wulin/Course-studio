@@ -1,0 +1,490 @@
+{
+  "id": "point-11-5",
+  "title": "小批量随机梯度下降",
+  "shortSummary": "说明小批量如何平衡梯度方差与计算效率，并讨论批量大小对训练的影响。",
+  "keyTerms": [
+    "小批量",
+    "批量大小",
+    "梯度方差",
+    "计算效率"
+  ],
+  "animationType": "stochasticGradientSampling",
+  "animationSuggestion": "在同一损失曲面上并排展示批量为 1、10 与全量的更新轨迹：每步高亮本次抽到的样本和平均梯度箭头，让学习者看到小批量轨迹的抖动如何随批量增大而收敛，并可点击重播复现同一随机序列、点击重新生成更换样本。",
+  "difficulty": "中等",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-11-3",
+    "point-11-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于小批量公式、方差缩放与实验结果的事实和数值，围绕批量大小的定量取舍补充推导、读图方法与练习。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-minibatch-gradient",
+          "text": "写出小批量梯度公式，并解释其期望不变、标准差按 $b^{-1/2}$ 收缩的统计性质。"
+        },
+        {
+          "id": "choose-batch-size",
+          "text": "依据统计效率与计算效率的权衡，为给定硬件和数据集选择合理的批量大小。"
+        },
+        {
+          "id": "diagnose-batch-effects",
+          "text": "根据损失曲线与每轮耗时判断批量大小对训练速度与收敛的影响。"
+        }
+      ],
+      "misconceptions": [
+        "认为批量越大越好：标准差只按 $b^{-1/2}$ 缩小，而每步计算代价近似线性增长，收益会迅速递减。",
+        "认为小批量随机梯度下降只是随机梯度下降的工程近似、没有统计好处：它的梯度期望与原梯度相同，但方差显著降低。",
+        "把“每轮耗时更短”等同于“收敛更快”：小批量在时间上占优，随机梯度下降在处理的样本数上可能下降更快。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-tradeoff",
+          "title": "两个极端与折中动机",
+          "role": "motivation",
+          "description": "从全量梯度下降与单样本随机梯度下降的效率短板引出小批量。",
+          "outcomeRefs": [
+            "explain-minibatch-gradient"
+          ],
+          "order": 0
+        },
+        {
+          "id": "hardware-efficiency",
+          "title": "向量化与缓存：计算效率从哪里来",
+          "role": "mechanism",
+          "description": "用内存层次、带宽和矩阵乘法基准解释批量处理为何更快。",
+          "outcomeRefs": [
+            "choose-batch-size"
+          ],
+          "order": 1
+        },
+        {
+          "id": "gradient-statistics",
+          "title": "小批量梯度及其统计性质",
+          "role": "derivation",
+          "description": "写出小批量梯度，推导方差与标准差的收缩速度。",
+          "outcomeRefs": [
+            "explain-minibatch-gradient"
+          ],
+          "order": 2
+        },
+        {
+          "id": "experiments",
+          "title": "批量大小对比实验",
+          "role": "worked-example",
+          "description": "读取教材实验表，比较时间、损失与更新次数。",
+          "outcomeRefs": [
+            "choose-batch-size",
+            "diagnose-batch-effects"
+          ],
+          "order": 3
+        },
+        {
+          "id": "implementation-and-check",
+          "title": "实现要点与自检",
+          "role": "practice",
+          "description": "整理优化器与训练循环的分工，并用练习检验批量大小的影响。",
+          "outcomeRefs": [
+            "choose-batch-size",
+            "diagnose-batch-effects"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-minibatch-gradient",
+          "choose-batch-size",
+          "diagnose-batch-effects"
+        ],
+        "method": "完成批量大小实验并解释曲线差异。",
+        "successCriteria": [
+          "能写出小批量梯度公式并说明期望与标准差的变化",
+          "能在给定显存与数据规模下给出批量大小的选择理由",
+          "能用时间与损失两个维度评价一次训练实验"
+        ],
+        "exerciseBlockId": "model-exercise-batch-size",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-11-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-two-extremes",
+        "moduleId": "motivation-tradeoff",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材导引：两种极端与折中方案",
+        "markdown": "教材把基于梯度的学习先摆在两个极端上：11.3 节的批量梯度下降用完整数据集计算梯度并更新一次参数，11.4 节的随机梯度下降一次只处理一个训练样本。二者各有利弊——当数据非常相似时，全量梯度并不“数据高效”；而由于 CPU 和 GPU 无法充分利用向量化，逐样本更新也不特别“计算高效”。小批量随机梯度下降（minibatch gradient descent）正是两者之间的折中：每次用一小批样本估计梯度，更新一次参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "优化算法",
+                "小批量随机梯度下降"
+              ],
+              "lineStart": 19279,
+              "lineEnd": 19663,
+              "assetRefs": [
+                "parts/part-0005/images/59e540676faf749dd68b8e4da6e2a8c6a13d3809699521c3ab187fbf8c5bead4.jpg",
+                "parts/part-0005/images/2bc0a6e9dcbb678137b9a87da680eddf9447eb011fd27b3a2bc5bf9fbcf5ddc4.jpg",
+                "parts/part-0005/images/fcacc71db5c4cec10dc51e9d1a7366e0898b83f034efa5a67439092fdb888d7e.jpg",
+                "parts/part-0005/images/842ae500cebd618ba7ec124f0e5a309768c63567e8f8257cd9e8d7bf910f9610.jpg",
+                "parts/part-0005/images/1a89cfae36f7ead13a06cd207aafb54a56118e8fcbcecc53b9e78fd319fbdd33.jpg",
+                "parts/part-0005/images/33a820d6be16ddbb208ebb93171c65c6fe35abdb815c489fba8bd31919eac84e.jpg"
+              ],
+              "excerptSha256": "e0a1fc0cbb29eb5e84d65c7bfd29e89fb9f49102e4f1bb8a56d5c4ae10d14ab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-interpolation",
+        "moduleId": "motivation-tradeoff",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：批量大小把两个极端连成一条谱",
+        "markdown": "把每次更新使用的样本数记为 $b$，两个极端就变成同一条谱上的端点：$b=n$ 是批量梯度下降，$b=1$ 是随机梯度下降，小批量取中间的 $1 < b < n$。设训练集大小为 $n$，则每个迭代轮数（epoch）的更新次数约为 $n/b$：$b$ 越小，单位样本带来的更新越多；$b$ 越大，单次更新的梯度越稳、但一轮内的更新越少。\n\n因此“选批量大小”不是选一个更准的梯度，而是在固定的数据预算下分配**更新次数**与**单次更新质量**。这一点决定了后面两条分析线索：计算效率看硬件能否把一次更新做满，统计效率看梯度噪声有多大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-two-extremes"
+          ]
+        }
+      },
+      {
+        "id": "textbook-vectorization",
+        "moduleId": "hardware-efficiency",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材依据：向量化、缓存与带宽",
+        "markdown": "教材指出，使用小批量的核心决策依据是计算效率。在多 GPU、多服务器并行时，需要向每块 GPU 发送至少一张图像；每台服务器 8 块 GPU、共 16 台服务器时，就得到大小为 128 的小批量。\n\n在单 GPU 甚至 CPU 上情况更微妙：设备有寄存器、L1/L2 缓存和共享的 L3 缓存，缓存越大延迟越高、带宽越低，而处理器能执行的操作远多于主内存接口所能提供的。教材给出的数量级估计是：2GHz、16 核、带 AVX-512 向量化的 CPU 每秒约可处理 $2 \\times 10^9 \\times 16 \\times 32 \\approx 1.024 \\times 10^{12}$ 个字节，GPU 的性能很容易再高出 100 倍；而中端服务器处理器的带宽可能不超过 100 Gb/s，不到处理器满负荷所需带宽的十分之一。这一算术是教材用来说明“内存供给跟不上算力”的数量级估计，不是对真实内存带宽的测量。内存接口通常为 64 位或更宽（GPU 上最多 384 位），读取单个字节也会因更宽的存取而付出代价；首次存取开销大，按序存取或突发读取相对便宜。\n\n以 $256 \\times 256$ 的矩阵乘法 $\\mathbf{A} = \\mathbf{B}\\mathbf{C}$ 为例，教材比较了逐元素、逐列、整矩阵和分块四种算法。逐元素计算需要反复把一行和一列搬到 CPU，逐列计算能把列向量留在缓存中、把内存带宽需求减半。教材打印的计时与读数分别是：逐元素约 1.66 秒，逐列约 0.023 秒；代码以 `gigaflops = [2/i for i in timer.times]` 输出的三次读数为 1.204、88.542、195.625，按 64 列分块的小批量乘法输出 2056.535。教材据此给出的定性结论是：小批量上的计算“基本上与完整矩阵一样有效”。这些读数是原书在特定机器和特定代码下的打印值，不是本课程的实测数据，也不能不经归一化就当作正确的绝对 GFLOP/s（见下方模型补充）。此外，Python 解释器和深度学习框架每次执行代码都要把命令插入计算图并调度，这笔额外开销在逐样本更新时会被反复支付。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "优化算法",
+                "小批量随机梯度下降"
+              ],
+              "lineStart": 19279,
+              "lineEnd": 19663,
+              "assetRefs": [
+                "parts/part-0005/images/59e540676faf749dd68b8e4da6e2a8c6a13d3809699521c3ab187fbf8c5bead4.jpg",
+                "parts/part-0005/images/2bc0a6e9dcbb678137b9a87da680eddf9447eb011fd27b3a2bc5bf9fbcf5ddc4.jpg",
+                "parts/part-0005/images/fcacc71db5c4cec10dc51e9d1a7366e0898b83f034efa5a67439092fdb888d7e.jpg",
+                "parts/part-0005/images/842ae500cebd618ba7ec124f0e5a309768c63567e8f8257cd9e8d7bf910f9610.jpg",
+                "parts/part-0005/images/1a89cfae36f7ead13a06cd207aafb54a56118e8fcbcecc53b9e78fd319fbdd33.jpg",
+                "parts/part-0005/images/33a820d6be16ddbb208ebb93171c65c6fe35abdb815c489fba8bd31919eac84e.jpg"
+              ],
+              "excerptSha256": "e0a1fc0cbb29eb5e84d65c7bfd29e89fb9f49102e4f1bb8a56d5c4ae10d14ab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-batching-wins",
+        "moduleId": "hardware-efficiency",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：读数口径、10.5 倍差异与计量修正",
+        "markdown": "先把读数口径说清楚。矩阵乘法按“一次乘加计两次浮点运算”计量时，两个 $n \\times n$ 矩阵相乘的工作量约为 $2n^3$ FLOP，因此\n\n$$\n\\text{GFLOP/s} = \\frac{2n^3}{t \\times 10^9}\n$$\n\n其中 $t$ 为秒。$n=256$ 时 $2n^3 = 33{,}554{,}432$ FLOP，即约 0.033554432 GFLOP。原代码打印的是 `2 / t`，没有按矩阵尺寸归一化，所以那些数字只能当作相对耗时指标，不能直接读成正确的绝对 GFLOP/s。要做横向比较时应改用下面的计量：\n\n```python\ndef matmul_gflops(n, seconds):\n    flops = 2 * n ** 3\n    return flops / (seconds * 1e9)\n```\n\n再看两条分块读数：整矩阵打印 195.625，64 列分块打印 2056.535，后者约为前者的 10.5 倍。这个差异不能理解为“分块算法本身快了十倍多”：它可能受到预热、缓存、布局和环境影响，不能仅凭输出归因算法快十倍；原示例未提供足够的预热、重复测量与环境信息，不能将这组读数视为严格可移植的受控性能结论。教材真正要传达的是定性结论：只要批量足够大、形状足够规整，小批量乘法就能获得与整矩阵相当的计算效率，而逐样本的小运算会被固定开销拖慢。\n\n还有两个边界：其一，$2n^3$ 假设一次乘加计两次浮点运算，若只按乘加指令数计则约为 $n^3$，绝对数值会相差一倍；其二，这些读数来自 $256 \\times 256$ 的小矩阵，规模变大后缓存行为改变，倍数关系不能外推。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-vectorization"
+          ]
+        }
+      },
+      {
+        "id": "textbook-minibatch-gradient",
+        "moduleId": "gradient-statistics",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材依据：小批量梯度与方差",
+        "markdown": "教材写出单样本更新的梯度\n\n$$\n\\mathbf{g}_t = \\partial_{\\mathbf{w}} f(\\mathbf{x}_t, \\mathbf{w})\n$$\n\n并把更新写成 $\\mathbf{w} \\leftarrow \\mathbf{w} - \\eta_t \\mathbf{g}_t$。小批量随机梯度下降把这个梯度替换为一个小批量 $\\mathcal{B}_t$ 上的平均：\n\n$$\n\\mathbf{g}_t = \\partial_{\\mathbf{w}} \\frac{1}{|\\mathcal{B}_t|} \\sum_{i \\in \\mathcal{B}_t} f(\\mathbf{x}_i, \\mathbf{w})\n$$\n\n由于 $\\mathbf{x}_t$ 与小批量 $\\mathcal{B}_t$ 的元素都是从训练集中随机抽出的，梯度的期望保持不变，而方差显著降低：小批量梯度由 $b = |\\mathcal{B}_t|$ 个独立梯度平均而成，其标准差降低 $b^{-1/2}$。这意味着更新方向更接近完整梯度。\n\n教材同时指出：选择较大的小批量看似普遍可行，但经过一段时间后，与计算代价的线性增长相比，标准差的额外减少微乎其微。实践中应选择足够大、能提供良好计算效率同时仍适合 GPU 内存的批量。教材还提示，7.5 节中批量规范化带来的噪声注入收益依赖小批量内的方差，随着批量增大、方差减小，这一收益也会减弱（参见 Ioffe, 2017）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "优化算法",
+                "小批量随机梯度下降"
+              ],
+              "lineStart": 19279,
+              "lineEnd": 19663,
+              "assetRefs": [
+                "parts/part-0005/images/59e540676faf749dd68b8e4da6e2a8c6a13d3809699521c3ab187fbf8c5bead4.jpg",
+                "parts/part-0005/images/2bc0a6e9dcbb678137b9a87da680eddf9447eb011fd27b3a2bc5bf9fbcf5ddc4.jpg",
+                "parts/part-0005/images/fcacc71db5c4cec10dc51e9d1a7366e0898b83f034efa5a67439092fdb888d7e.jpg",
+                "parts/part-0005/images/842ae500cebd618ba7ec124f0e5a309768c63567e8f8257cd9e8d7bf910f9610.jpg",
+                "parts/part-0005/images/1a89cfae36f7ead13a06cd207aafb54a56118e8fcbcecc53b9e78fd319fbdd33.jpg",
+                "parts/part-0005/images/33a820d6be16ddbb208ebb93171c65c6fe35abdb815c489fba8bd31919eac84e.jpg"
+              ],
+              "excerptSha256": "e0a1fc0cbb29eb5e84d65c7bfd29e89fb9f49102e4f1bb8a56d5c4ae10d14ab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-variance-scaling",
+        "moduleId": "gradient-statistics",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：把 $b^{-1/2}$ 展开成取舍规则",
+        "markdown": "设单个样本梯度的方差为 $\\sigma^2$，且批内样本独立同分布，则小批量梯度的方差与标准差为\n\n$$\n\\operatorname{Var}(\\mathbf{g}_t) = \\frac{\\sigma^2}{b}, \\qquad \\operatorname{std}(\\mathbf{g}_t) = \\frac{\\sigma}{\\sqrt{b}}\n$$\n\n这就是教材“标准差降低 $b^{-1/2}$”的来源。它是一条很“钝”的曲线：把 $b$ 从 1 增到 4，标准差减半；从 4 增到 16 才再减半；从 16 增到 64 又要四倍代价。而每轮的计算量约为 $n$ 个样本的前向与反向，随批量大小近似线性增长。\n\n于是取舍可以写成一句话：**批量增大带来的噪声下降是开方级的，付出的计算代价是线性级的。** 在硬件仍有空闲时，增大批量的边际收益主要来自摊薄固定开销，这部分收益很陡；一旦批量已经能喂满算力，继续增大就只能换来递减的方差收益，还会挤占显存。\n\n要注意两个边界：其一，$\\sigma^2/b$ 假设批内样本独立，若数据高度相关（例如同一序列的相邻片段）实际方差会更难下降；其二，批量大小与学习率强耦合，改变批量后通常需要重新调整学习率，否则比较实验会被学习率差异污染。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-minibatch-gradient"
+          ]
+        }
+      },
+      {
+        "id": "textbook-batch-size-experiments",
+        "moduleId": "experiments",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材依据：四种批量大小的对比实验",
+        "markdown": "教材在 NASA 的 Airfoil Self-Noise 数据集上取前 1,500 个样本（已做去均值、方差归一化），用线性回归和平方损失比较四种设置。批量大小为 1,500（即样本总数）时相当于批量梯度下降，每个迭代轮数只更新一次参数；批量大小为 1 时相当于随机梯度下降，每轮更新 1,500 次。\n\n| 方法 | 批量大小 | 学习率 | 每轮更新次数 | 最终损失 | 每轮耗时 |\n|---|---|---|---|---|---|\n| 批量梯度下降 | 1500 | 1 | 1 | 0.243 | 0.055 s |\n| 随机梯度下降 | 1 | 0.005 | 1500 | 0.246 | 0.102 s |\n| 小批量 | 100 | 0.4 | 15 | 0.243 | 0.003 s |\n| 小批量 | 10 | 0.05 | 150 | 0.243 | 0.013 s |\n\n教材的读法是：随机梯度下降在处理的样本数方面收敛快于梯度下降，但达到同样损失需要更多时间，因为逐个样本计算梯度并不高效；批量大小为 10 的小批量比随机梯度下降更有效，批量大小为 100 的小批量在运行时间上甚至优于梯度下降。小批量随机梯度下降因此能同时取得较好的收敛速度与计算效率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "优化算法",
+                "小批量随机梯度下降"
+              ],
+              "lineStart": 19279,
+              "lineEnd": 19663,
+              "assetRefs": [
+                "parts/part-0005/images/59e540676faf749dd68b8e4da6e2a8c6a13d3809699521c3ab187fbf8c5bead4.jpg",
+                "parts/part-0005/images/2bc0a6e9dcbb678137b9a87da680eddf9447eb011fd27b3a2bc5bf9fbcf5ddc4.jpg",
+                "parts/part-0005/images/fcacc71db5c4cec10dc51e9d1a7366e0898b83f034efa5a67439092fdb888d7e.jpg",
+                "parts/part-0005/images/842ae500cebd618ba7ec124f0e5a309768c63567e8f8257cd9e8d7bf910f9610.jpg",
+                "parts/part-0005/images/1a89cfae36f7ead13a06cd207aafb54a56118e8fcbcecc53b9e78fd319fbdd33.jpg",
+                "parts/part-0005/images/33a820d6be16ddbb208ebb93171c65c6fe35abdb815c489fba8bd31919eac84e.jpg"
+              ],
+              "excerptSha256": "e0a1fc0cbb29eb5e84d65c7bfd29e89fb9f49102e4f1bb8a56d5c4ae10d14ab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-read-experiment",
+        "moduleId": "experiments",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：三列一起读，才不会读错实验",
+        "markdown": "同样的实验数据，按不同的横轴会得到不同的结论，所以至少要同时看三类量：**已处理样本数**、**墙上时间**和**每轮更新次数**。\n\n- 看样本数：批量为 1 的方法每轮更新 1,500 次，损失在 1 个迭代轮数后就趋于平缓，所以“按样本计”它下降最快。\n- 看时间：批量为 1 时每轮 0.102 s，比批量为 1,500 时的 0.055 s 更慢，尽管两者处理了同样多的样本。差距来自 1,500 次低效的小运算。\n- 看时间与损失的联合：批量为 100 时每轮 0.003 s，损失 0.243；批量为 10 时每轮 0.013 s，损失同样是 0.243。批量越小，达到同一损失需要的样本更少但时间更多。\n\n由此可以给出实用判据：若瓶颈是墙上时间且显存允许，优先让批量大到能喂满算力（本例中 100 明显优于 1,500 和 1）；若瓶颈是样本预算（例如标注昂贵、只能少看数据），小批量更划算。教材的结论“批量 100 在运行时间上优于梯度下降”并不表示越大越好——1,500 已经等于整个数据集，每轮只能更新一次。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-batch-size-experiments",
+            "model-batch-interpolation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-implementation",
+        "moduleId": "implementation-and-check",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材依据：实现中的分工",
+        "markdown": "教材在 3.2 节已有小批量随机梯度下降实现，11.5 节把它通用化：给优化器增加 `states` 输入，把超参数放进 `hyperparams` 字典，以便本章后续算法复用同一训练函数。优化器本身只做参数更新并清空梯度：\n\n```python\ndef sgd(params, states, hyperparams):\n    for p in params:\n        p.data.sub_(hyperparams['lr'] * p.grad)\n        p.grad.data.zero_()\n```\n\n关键约定是：**训练函数先对一个批量的损失求平均，再反向传播，因此优化器中的梯度不需要再除以批量大小**。训练循环按“轮数 → 小批量”组织，每处理若干样本记录一次损失；通用训练函数 `train_ch11` 用同一套接口跑出了前面的四种对比实验。简洁实现则直接调用 `torch.optim.SGD`，在 `optimizer.zero_grad()`、前向、`l.mean().backward()`、`optimizer.step()` 的顺序中完成同样的更新。\n\n教材小结还强调：小批量随机梯度下降处理的是训练数据随机排列后得到的批量，每个观测值每轮只处理一次，但按随机顺序；训练期间降低学习率有助于训练；一般来说，小批量随机梯度下降比随机梯度下降和梯度下降更快，收敛风险也更小。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000088"
+              ],
+              "headingPath": [
+                "优化算法",
+                "小批量随机梯度下降"
+              ],
+              "lineStart": 19279,
+              "lineEnd": 19663,
+              "assetRefs": [
+                "parts/part-0005/images/59e540676faf749dd68b8e4da6e2a8c6a13d3809699521c3ab187fbf8c5bead4.jpg",
+                "parts/part-0005/images/2bc0a6e9dcbb678137b9a87da680eddf9447eb011fd27b3a2bc5bf9fbcf5ddc4.jpg",
+                "parts/part-0005/images/fcacc71db5c4cec10dc51e9d1a7366e0898b83f034efa5a67439092fdb888d7e.jpg",
+                "parts/part-0005/images/842ae500cebd618ba7ec124f0e5a309768c63567e8f8257cd9e8d7bf910f9610.jpg",
+                "parts/part-0005/images/1a89cfae36f7ead13a06cd207aafb54a56118e8fcbcecc53b9e78fd319fbdd33.jpg",
+                "parts/part-0005/images/33a820d6be16ddbb208ebb93171c65c6fe35abdb815c489fba8bd31919eac84e.jpg"
+              ],
+              "excerptSha256": "e0a1fc0cbb29eb5e84d65c7bfd29e89fb9f49102e4f1bb8a56d5c4ae10d14ab5"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-batch-size",
+        "moduleId": "implementation-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：动手检查表",
+        "markdown": "按下面的步骤做一次受控实验，就能把本点的公式与表格连起来：\n\n1. 固定数据集、模型和优化器，只改变批量大小 $b \\in \\{1, 10, 100, 1500\\}$，并记录每轮耗时、损失和每轮更新次数。\n2. 分别以“已处理样本数”和“墙上时间”为横轴画损失曲线，比较两种视角下谁更快。\n3. 对每个批量重新粗调学习率，确认结论不是学习率设置造成的假象。\n4. 把批量拆分方式改成“有放回抽样”，与无放回随机排列比较，观察梯度噪声与收敛的差别。\n\n自检问题：若把数据集每个观测复制一份而不告知算法，随机梯度下降、小批量随机梯度下降和批量梯度下降各自的梯度期望与方差会怎样变化？提示：全量梯度的期望不变，逐样本与批量的噪声结构改变，思考这会如何影响三种方法的曲线。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-implementation",
+            "textbook-batch-size-experiments"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "implementation-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：本点回顾与下一步",
+        "markdown": "把本点压缩成四条：向量化与缓存让“一次算一批”几乎不额外收费；批量大小在统计效率与计算效率之间移动；标准差按 $b^{-1/2}$ 收缩，而计算代价线性增长，所以批量只需大到能喂满硬件并放进显存；实验要同时看样本数、时间和更新次数。\n\n小批量还留下一个未解决的问题：即使平均了批内梯度，相邻小批量之间的噪声仍然存在，更新方向会来回摆动。11.6 节的动量法会用一个跨批次的“泄漏平均值”继续压低这种噪声，而本点的批量大小则成为调节该噪声的第一道旋钮。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-minibatch-gradient",
+            "textbook-batch-size-experiments",
+            "textbook-implementation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "batch-size-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-read-experiment",
+        "moduleId": "experiments",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-batch-size",
+          "diagnose-batch-effects"
+        ],
+        "learningPurpose": "检查学习者能否用样本数、时间和更新次数三个维度解释批量大小实验的差异。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-batch-size-experiments"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenario": "显存充足、训练受墙上时间限制，批量 100 每轮 0.003 s、批量 1500 每轮 0.055 s，两者最终损失均为 0.243。",
+          "options": [
+            "选批量 100：同样损失下每轮更快，且每轮更新 15 次而非 1 次",
+            "选批量 1500：梯度方差最小",
+            "选批量 1：按样本计收敛最快",
+            "无法判断：缺少学习率信息"
+          ],
+          "answerIndex": 0
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "比较批量 100 与批量 1500 的两轮耗时与更新次数，说明在显存充足、追求墙上时间时应选哪个，并写出依据。"
+        }
+      },
+      {
+        "id": "variance-scaling-explorer",
+        "type": "parameter-experiment",
+        "anchorBlockId": "model-variance-scaling",
+        "moduleId": "gradient-statistics",
+        "depth": "support",
+        "outcomeRefs": [
+          "explain-minibatch-gradient",
+          "choose-batch-size"
+        ],
+        "learningPurpose": "让学习者拖动批量大小，观察标准差按 $b^{-1/2}$ 收缩与计算代价线性增长之间的错位。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-minibatch-gradient"
+          ]
+        },
+        "config": {
+          "parameter": "batchSize",
+          "values": [
+            1,
+            2,
+            4,
+            16,
+            64,
+            256
+          ],
+          "display": [
+            "相对标准差",
+            "相对每步计算量"
+          ]
+        },
+        "fallback": {
+          "mode": "static-caption",
+          "caption": "批量从 1 增到 4，标准差减半；从 4 增到 16 再减半；从 16 增到 64 再减半，而每步计算量始终与批量成正比。"
+        }
+      }
+    ]
+  },
+  "subtitle": "优化算法",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000088"
+      ],
+      "headingPath": [
+        "优化算法",
+        "小批量随机梯度下降"
+      ],
+      "lineStart": 19279,
+      "lineEnd": 19663,
+      "assetRefs": [
+        "parts/part-0005/images/59e540676faf749dd68b8e4da6e2a8c6a13d3809699521c3ab187fbf8c5bead4.jpg",
+        "parts/part-0005/images/2bc0a6e9dcbb678137b9a87da680eddf9447eb011fd27b3a2bc5bf9fbcf5ddc4.jpg",
+        "parts/part-0005/images/fcacc71db5c4cec10dc51e9d1a7366e0898b83f034efa5a67439092fdb888d7e.jpg",
+        "parts/part-0005/images/842ae500cebd618ba7ec124f0e5a309768c63567e8f8257cd9e8d7bf910f9610.jpg",
+        "parts/part-0005/images/1a89cfae36f7ead13a06cd207aafb54a56118e8fcbcecc53b9e78fd319fbdd33.jpg",
+        "parts/part-0005/images/33a820d6be16ddbb208ebb93171c65c6fe35abdb815c489fba8bd31919eac84e.jpg"
+      ],
+      "excerptSha256": "e0a1fc0cbb29eb5e84d65c7bfd29e89fb9f49102e4f1bb8a56d5c4ae10d14ab5"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2717,
+    1379
+  ],
+  "scale": 0.95
+}

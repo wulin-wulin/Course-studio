@@ -1,0 +1,618 @@
+{
+  "id": "point-13-12",
+  "title": "风格迁移",
+  "shortSummary": "说明如何用内容损失与风格损失组合优化生成图像，并解释 Gram 矩阵的作用。",
+  "keyTerms": [
+    "风格迁移",
+    "内容损失",
+    "风格损失",
+    "Gram矩阵"
+  ],
+  "animationType": "styleTransferOptimization",
+  "animationSuggestion": "并排展示内容图像、风格图像与逐步演化的合成图像，下方绘制内容、风格、全变分三条损失曲线；允许调节风格权重与全变分权重，观察像素演化如何随之偏向笔触迁移、结构保持或去噪，并可重播同一条优化轨迹。",
+  "difficulty": "进阶",
+  "importance": 0.68,
+  "prerequisites": [
+    "point-7-2",
+    "point-11-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-with-parameter-experiment",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的定义、三部分损失、Gram 归一化与训练设置，围绕“合成图像即参数”的机制补充直觉、参数实验和诊断练习。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-objective",
+          "text": "说明风格迁移的输入、输出与要达成的目标。"
+        },
+        {
+          "id": "trace-pipeline",
+          "text": "梳理预训练特征抽取与合成图像梯度更新的完整计算流程。"
+        },
+        {
+          "id": "decompose-loss",
+          "text": "解释内容损失、风格损失与全变分损失各自衡量的差异，以及权重的作用。"
+        },
+        {
+          "id": "interpret-gram",
+          "text": "用通道特征相关性解释 Gram 矩阵及其归一化的含义。"
+        },
+        {
+          "id": "diagnose-output",
+          "text": "根据合成图像的不良表现判断应调整哪一项损失权重或层选择。"
+        }
+      ],
+      "misconceptions": [
+        "以为风格迁移会训练出一个新的“风格网络”，其实预训练网络参数冻结，被优化的只有合成图像本身。",
+        "把 Gram 矩阵当成两张图像素级的相似度，忽略它只保留通道特征的相关性而丢弃空间位置。",
+        "认为风格损失权重越大效果越好，忽视它会与内容损失、全变分损失争夺同一组像素。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-pipeline",
+          "title": "问题与整体流程",
+          "role": "problem-framing",
+          "description": "从滤镜的局限引出风格迁移任务，并说明“合成图像即参数”的流程。",
+          "outcomeRefs": [
+            "explain-objective",
+            "trace-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "feature-extraction",
+          "title": "用预训练网络抽取特征",
+          "role": "method-detail",
+          "description": "说明为何内容层取较深层、风格层取多层，以及中间层输出的保留方式。",
+          "outcomeRefs": [
+            "trace-pipeline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "loss-composition",
+          "title": "三部分损失与 Gram 矩阵",
+          "role": "quantitative-core",
+          "description": "依次建立内容损失、风格损失、全变分损失与最终加权和。",
+          "outcomeRefs": [
+            "decompose-loss",
+            "interpret-gram"
+          ],
+          "order": 2
+        },
+        {
+          "id": "optimization-loop",
+          "title": "初始化与训练循环",
+          "role": "procedure",
+          "description": "把图像定义为可训练参数，并用 Adam 迭代更新直到损失平稳。",
+          "outcomeRefs": [
+            "trace-pipeline",
+            "diagnose-output"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "误区澄清、诊断练习与小结",
+          "role": "formative-assessment",
+          "description": "用现象到权重的对应关系检查理解，并桥接到下一节的图像分类实战。",
+          "outcomeRefs": [
+            "explain-objective",
+            "diagnose-output"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-objective",
+          "trace-pipeline",
+          "decompose-loss",
+          "interpret-gram",
+          "diagnose-output"
+        ],
+        "method": "完成“现象—损失项”诊断练习，并用一句话说明每个权重的作用。",
+        "successCriteria": [
+          "能指出被优化的变量是合成图像而不是网络参数",
+          "能把风格差异归因到 Gram 矩阵而非像素差",
+          "能为三种典型不良输出选出对应的损失项或层调整"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-13-13"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-task",
+        "moduleId": "task-and-pipeline",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材定义：两张输入图像合成为一张",
+        "markdown": "风格迁移（style transfer）以两张图像为输入：内容图像提供要保留的物体与场景结构，风格图像提供要迁移的色彩与笔触，输出是一张合成图像。教材的例子把西雅图郊区拍摄的风景照作为内容图像，把秋天橡树油画作为风格图像，合成结果采用了油画的笔触与更鲜艳的颜色，同时保留山体等主体的形状。\n\n教材同时指出这种方法的动机：传统滤镜一次通常只改变照片的某个方面，要让照片接近理想风格往往需要尝试大量组合，复杂度不亚于模型调参，因此希望用神经网络自动完成这一过程。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-pipeline",
+        "moduleId": "task-and-pipeline",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材方法：合成图像是唯一被更新的变量",
+        "markdown": "教材给出的流程有三步。第一，初始化合成图像，例如直接把它初始化为内容图像；这张合成图像是风格迁移过程中唯一需要更新的变量，也就是“需要迭代的模型参数”。第二，选择一个预训练的卷积神经网络抽取图像特征，其参数在训练中不更新，只在若干层上取输出作为内容特征或风格特征。第三，按前向传播计算损失，再按反向传播迭代更新合成图像。\n\n训练结束时输出的是这张合成图像本身，而不是一个新训练的网络。教材用 3 个卷积层的示意图说明：取第二层输出作为内容特征，取第一层和第三层输出作为风格特征；实线箭头表示前向传播，虚线箭头表示反向传播。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pixels-as-parameters",
+        "moduleId": "task-and-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么可以把像素当参数",
+        "markdown": "常规训练更新的是网络权重，输入数据保持不变；风格迁移把这个关系反过来：预训练网络固定不变，被梯度更新的是合成图像的每个像素值。可以把它理解为“以图像为未知量”的拟合问题——损失函数衡量这张候选图像在特征空间里离内容图像和风格图像有多远，优化器直接修改像素来缩小这个距离。\n\n这一视角解释了两个现象：其一，同一次优化只产出一张合成图像，换一对内容图像和风格图像就要重新优化；其二，学习率、迭代步数这些训练超参数在这里影响的是“图像被改得多快”，而不是“模型学得多好”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-pixels",
+        "moduleId": "task-and-pipeline",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "常见误区：风格迁移不是训练一个新网络",
+        "markdown": "一种常见误解是风格迁移会先训练出一个可复用的“风格网络”，之后前向一次就能出图。按教材流程，预训练的 VGG-19 参数在整个过程中冻结，被优化的自始至终是合成图像的像素；因此同一次优化只对应一对内容图像与风格图像，更换风格需要重新优化，不会得到独立保存的风格模型。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-pixels-as-parameters"
+          ]
+        }
+      },
+      {
+        "id": "textbook-feature-layers",
+        "moduleId": "feature-extraction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材做法：用 VGG-19 的中间层做特征",
+        "markdown": "教材使用在 ImageNet 上预训练的 VGG-19 抽取特征，并利用“越靠近输入层越容易抽取细节信息、越靠近输出层越容易抽取全局信息”的规律选层：为避免合成图像过多保留内容图像的细节，内容层选 VGG 较靠近输出的层，教材取第四个卷积块的最后一个卷积层（索引 25）；风格层则从每个卷积块的第一个卷积层取输出（索引 0、5、10、19、28），以同时匹配局部与全局的风格。\n\n实现上只保留从输入到所需最深层之间的层，并逐层前向计算、把内容层与风格层的输出保存下来，而不是只调用一次得到最后一层输出。由于预训练参数不更新，内容图像与风格图像的特征可以在训练开始前一次性算好；合成图像的特征只能在每个训练步重新抽取。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layer-selection",
+        "moduleId": "feature-extraction",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充：多层风格层与换层实验",
+        "markdown": "同时使用 5 个风格层是有理由的：浅层通道更接近颜色与短笔触纹理，较深层的通道对应更大尺度的结构，只取一层容易让迁移结果偏窄——或者只有颜色没有笔触，或者有大块色彩而缺少细节。教材练习让读者替换内容层和风格层观察输出变化，正是为了建立这种“层—语义尺度”的对应感。\n\n判断换层是否合理，可以只看两件事：内容层越深，合成图像越不容易复刻原照片的细节；风格层组合的尺度跨度越大，输出越可能同时具备笔触与整体色调。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-feature-layers"
+          ]
+        }
+      },
+      {
+        "id": "textbook-content-loss",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "formula",
+        "title": "内容损失：内容层特征的平方误差",
+        "markdown": "内容损失与线性回归中的平方误差类似，衡量合成图像与内容图像在内容特征上的差异，两个输入都是内容层的输出：一个是合成图像的内容层输出 $\\hat{Y}$，另一个是内容图像的输出 $Y$。实现中把目标从梯度计算图中分离（`detach`），因为它是固定参考值而不是待优化变量。\n\n$$\\ell_{\\mathrm{content}}(\\hat{Y}, Y) = \\mathrm{mean}\\left((\\hat{Y} - Y)^2\\right)$$\n\n这里对特征张量的全部元素取平均，所以损失尺度与内容层的通道数、空间尺寸有关。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-gram-style-loss",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "formula",
+        "title": "风格损失：Gram 矩阵的平方误差",
+        "markdown": "为了表达风格层输出的风格，教材把该输出整理成矩阵 $\\mathbf{X}$：假设样本数为 1、通道数为 $c$、高宽分别为 $h$ 与 $w$，则 $\\mathbf{X}$ 有 $c$ 行、$hw$ 列，可看作由 $c$ 个长度为 $hw$ 的通道向量 $\\mathbf{x}_1, \\ldots, \\mathbf{x}_c$ 组成，其中 $\\mathbf{x}_i$ 表示通道 $i$ 上的特征。\n\nGram 矩阵 $\\mathbf{X}\\mathbf{X}^\\top \\in \\mathbb{R}^{c \\times c}$ 的第 $i$ 行第 $j$ 列元素是 $\\mathbf{x}_i$ 与 $\\mathbf{x}_j$ 的内积，表达通道 $i$ 与通道 $j$ 上风格特征的相关性，教材用它来表示风格层的风格。当 $hw$ 较大时 Gram 元素容易出现较大数值，所以实现中把 Gram 矩阵除以元素个数 $chw$：\n\n$$\\mathrm{Gram}(\\mathbf{X}) = \\frac{\\mathbf{X}\\mathbf{X}^\\top}{c\\,h\\,w}$$\n\n风格损失就是合成图像与风格图像在同一风格层上的 Gram 矩阵的平方误差均值；风格图像的 Gram 矩阵可以预先算好，合成图像的则每个训练步重算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gram-correlation",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充直觉：Gram 元素在度量什么",
+        "markdown": "把每个通道看成一个 $h \\times w$ 的“特征地图”，展平后就是一条向量。若两个通道在相同位置一起强烈激活，它们的内积就大，Gram 元素随之变大，表示这两种特征倾向于共现——例如“暖橙色区域”和“短促笔触”常常出现在同一片位置。\n\n因此 Gram 矩阵刻画的是“哪些特征搭配出现”，而不是“这些特征出现在哪里”。这正好对应风格可以搬运的性质：内容图像与风格图像的物体布局完全不同，但通道特征的组合模式可以被复现。也正因为空间位置被丢掉，Gram 相似不等于两张图像素接近，不能拿它当通用的图像相似度指标。\n\n除以 $chw$ 只是尺度归一化：当特征图更大或通道更多时，内积求和的项数变多，不做归一化会让风格损失的数值随输入分辨率大幅漂移，破坏与内容损失、全变分损失之间的权重平衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-gram-style-loss"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-gram",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "常见误区：Gram 矩阵不是像素相似度",
+        "markdown": "另一个常见误解是把 Gram 矩阵当成两张图像素级的相似度。它只记录同一图层内通道特征的内积，空间位置在把通道展平时就已经被求和掉；两个 Gram 矩阵接近只说明“哪些特征搭配出现”相似，也就是说风格接近，并不说明合成图像的像素、物体位置或轮廓与风格图像一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-gram-correlation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-tv-loss",
+        "moduleId": "loss-composition",
+        "depth": "support",
+        "kind": "formula",
+        "title": "全变分损失：抑制高频噪点",
+        "markdown": "只优化内容与风格两项时，合成图像里常出现大量高频噪点，即特别亮或特别暗的颗粒像素。教材采用全变分去噪：设 $x_{i,j}$ 为坐标 $(i,j)$ 处的像素值，降低\n\n$$\\sum_{i,j} |x_{i,j} - x_{i+1,j}| + |x_{i,j} - x_{i,j+1}|$$\n\n就能让相邻像素的值更接近，从而平滑掉这些孤立颗粒。实现上分别对竖直和水平方向的相邻差取绝对值再求均值，两项各乘 0.5 相加。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-total-loss",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "formula",
+        "title": "总损失：三项加权和",
+        "markdown": "风格迁移的损失函数是内容损失、风格损失与全变分损失的加权和，通过调节权重超参数权衡“保留内容、迁移风格、去噪”三方面的相对重要性。记内容权重 $c$、风格权重 $s$、全变分权重 $t$，教材代码取 $c = 1$、$s = 10^3$、$t = 10$，并在求和时把风格项再乘 10：\n\n$$\\mathcal{L} = 10\\sum_i s\\,\\ell_{\\mathrm{style},i} + \\sum_i c\\,\\ell_{\\mathrm{content},i} + t\\,\\ell_{\\mathrm{tv}}$$\n\n风格损失与内容损失都是对各自选中的层分别计算后再求和，所以风格项本身已是多层之和，再乘权重后往往在数值上占主导，这是教材设置下能明显迁移风格的原因之一。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-weights-experiment",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "参数实验：权重变化会带来什么",
+        "markdown": "教材练习要求调整权重观察输出，可以把结果整理成一张预期的“操作—现象”表：\n\n| 调整 | 预期输出变化 |\n|---|---|\n| 增大内容权重 | 合成图像更贴近内容图像的结构与细节，风格笔触变弱 |\n| 增大风格权重 | 色彩与笔触更明显，过大会让物体形状被涂抹 |\n| 增大全变分权重 | 画面更平滑、噪点更少，过大会抹掉笔触纹理 |\n| 换用不同的风格层组合 | 迁移到的风格尺度改变，浅层偏纹理、深层偏大块结构 |\n\n这些权重没有通用最优值：它们与内容图像、风格图像的尺寸、迭代步数以及使用的层共同决定结果。合理的做法是先固定一组默认值跑通，再按“想改变哪一种现象”只调一个权重，观察三条损失曲线的相对变化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-total-loss"
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-weights",
+        "moduleId": "loss-composition",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "常见误区：风格权重并非越大越好",
+        "markdown": "把风格权重单调调大并不会单调改善效果。三类损失共享同一组像素：风格项过强时，优化会不断用风格色彩与笔触覆盖内容结构，导致物体形状被涂抹；全变分项过强则把笔触纹理一起磨平。权重应当按“这次想改善哪一种现象”来调整，并结合三条损失曲线的相对变化判断是否失衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-weights-experiment"
+          ]
+        }
+      },
+      {
+        "id": "textbook-training-loop",
+        "moduleId": "optimization-loop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材流程：初始化、迭代与超参数",
+        "markdown": "教材定义一个 `SynthesizedImage` 模型，把合成图像存为模型参数，前向传播直接返回该参数；`get_init` 用内容图像初始化它，创建 Adam 优化器，并预先算好风格图像在各风格层的 Gram 矩阵。\n\n训练循环每一步依次做四件事：清空梯度；抽取当前合成图像的内容特征与风格特征；按三项加权和计算总损失；反向传播并更新参数，同时按调度器调整学习率。教材设置学习率 0.3、训练 500 个 epoch，并每 50 个 epoch 把学习率乘以 0.8；训练前把内容图像和风格图像的高宽调整为 300 和 450 像素，每 10 个 epoch 输出一次当前合成图像与三条损失值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000115"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "风格迁移"
+              ],
+              "lineStart": 26051,
+              "lineEnd": 26390,
+              "assetRefs": [
+                "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+                "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+                "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+                "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+                "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+                "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+              ],
+              "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-convergence-reading",
+        "moduleId": "optimization-loop",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：怎样判断这次优化“跑完了”",
+        "markdown": "这里没有留出验证集，也没有学习任何会在新数据上使用的网络参数，所以不存在通常意义上的泛化误差，判断依据是两件事：三条损失曲线是否趋于平稳，以及定期输出的合成图像在视觉上是否稳定。\n\n曲线之间的关系也能提示问题：若风格损失持续下降而内容损失明显上升，通常是风格项相对过强；若总损失下降但画面颗粒感反而明显，说明全变分项不足以压住噪点；若三条曲线都在早期就几乎不动，则应先检查学习率与初始化图像，而不是继续加训练轮数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-training-loop"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "诊断练习：现象对应哪一项",
+        "markdown": "对下面三种输出，先判断最可能的问题，再给出一个调整方向：\n\n1. 合成图像几乎就是内容图像加了很轻微的颜色偏移。\n2. 油画颜色很浓，但山体轮廓被涂抹得难以辨认。\n3. 风格与结构都还能辨认，但画面出现大量孤立的亮暗颗粒。\n\n参考判断：第 1 种说明风格项影响太弱，可提高风格权重，或检查风格层索引是否真的取到了对应卷积层；第 2 种说明内容约束不足，可提高内容权重或适当降低风格权重；第 3 种是典型的高频噪点，可提高全变分权重。回答时请同时写出你依据的是三项损失中的哪一项，以及为什么另外两项不是主要原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-misconception-weights",
+            "model-convergence-reading"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "风格迁移把“用梯度优化参数”的对象从网络权重换成了图像像素：预训练卷积网络提供固定的内容特征与风格特征，内容损失约束结构与内容图像一致，Gram 矩阵上的风格损失约束通道相关性接近风格图像，全变分损失抑制噪点，三者按权重相加后反向传播更新合成图像。\n\n下一节转入实战竞赛：在 CIFAR-10 图像分类任务中组织数据增广、训练、验证与提交，那里被优化的对象重新变成网络参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-exercise"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "weight-diagnosis-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "decompose-loss",
+          "diagnose-output"
+        ],
+        "learningPurpose": "检查学习者能否把合成图像的典型不良表现归因到内容、风格或全变分损失，并给出对应调整。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-total-loss",
+            "model-weights-experiment"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "scenarios": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出三种现象各自对应的损失项：风格过弱、内容结构被破坏、高频噪点，并说明你会调整哪个权重。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000115"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "风格迁移"
+      ],
+      "lineStart": 26051,
+      "lineEnd": 26390,
+      "assetRefs": [
+        "parts/part-0007/images/ae8720e65f95f6ce70a6dcdb009419b8742157c8c178aecd86b1530f993982c3.jpg",
+        "parts/part-0007/images/1da39e476cca1d5cb37563ecb40a7ca48f3a392bee47caf1272ecb744664004c.jpg",
+        "parts/part-0007/images/6d9e480432f71b002d8acb45ea7fb46ad53e1e67d7569fa96583df7655825204.jpg",
+        "parts/part-0007/images/94fe94111acb8116c82147c5ff5ef5d8bb8bc8b73b49770132f3a26243e72b45.jpg",
+        "parts/part-0007/images/82f5734beacbacaa88804cf525a12f73d9ee16690c35373ca0a383483a5af643.jpg",
+        "parts/part-0007/images/97863105cf67a124f6bc0b78d519fa3642fc8905fd2136631807f1cbcc5286f8.jpg"
+      ],
+      "excerptSha256": "d8fab8b63d259f7a91005f74551b676518df1d1d19c82b746a9cd69c66971673"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3660,
+    31
+  ],
+  "scale": 0.92
+}

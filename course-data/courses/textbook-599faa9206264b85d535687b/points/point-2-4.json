@@ -1,0 +1,549 @@
+{
+  "id": "point-2-4",
+  "title": "偏好对齐与策略优化",
+  "shortSummary": "说明偏好对齐的基本思路，比较基于人类反馈的强化学习与直接偏好优化等策略优化方法。",
+  "keyTerms": [
+    "偏好对齐",
+    "RLHF",
+    "奖励模型",
+    "策略优化",
+    "DPO"
+  ],
+  "animationType": "preferenceAlignment",
+  "animationSuggestion": "用两条水平奖励条分别表示胜出与落败回答，随训练推进互相拉开；同时用权重指示条显示梯度权重随差距增大而缩小，突出 DPO 的自适应难例聚焦。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-2-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "沿教材的偏好数据—奖励建模—策略优化主线讲解，围绕方法比较重排顺序，补充必要直觉与情境化取舍，公式与结论严格遵循教材。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-alignment-goal",
+          "text": "说明后训练中偏好对齐要解决的问题及其与监督微调的区别。"
+        },
+        {
+          "id": "explain-bt-reward",
+          "text": "解释偏好数据如何通过 Bradley-Terry 模型转化为可训练的奖励模型。"
+        },
+        {
+          "id": "explain-rlhf-kl",
+          "text": "说明 RLHF 的 KL 约束目标以及奖励过度优化的成因。"
+        },
+        {
+          "id": "explain-dpo",
+          "text": "解释 DPO 如何用策略相对参考策略的对数概率比消去独立奖励模型。"
+        },
+        {
+          "id": "explain-grpo",
+          "text": "解释 GRPO 如何用组内相对优势替代价值函数基线。"
+        },
+        {
+          "id": "compare-methods",
+          "text": "在给定奖励来源与数据条件下比较 RLHF、DPO、GRPO 并说明取舍依据。"
+        }
+      ],
+      "misconceptions": [
+        "把偏好对齐等同于监督微调，认为增加更多示例就能保证有用、诚实、无害。",
+        "认为 Bradley-Terry 奖励模型给出的是绝对奖励值，忽略偏好数据只能确定同一指令内的相对差值。",
+        "把 DPO 当成与 KL 约束无关的纯监督训练，忽略参考策略和系数 beta 的作用。",
+        "认为 GRPO 完全不需要奖励信号，实际上它仍用奖励模型或规则奖励做组内比较。"
+      ],
+      "modules": [
+        {
+          "id": "alignment-problem",
+          "title": "偏好对齐要解决什么问题",
+          "role": "introduction",
+          "description": "从监督微调的局限引出有用性、诚实性、无害性与偏好数据。",
+          "outcomeRefs": [
+            "explain-alignment-goal"
+          ],
+          "order": 0
+        },
+        {
+          "id": "reward-modeling",
+          "title": "偏好数据与奖励建模",
+          "role": "mechanism",
+          "description": "偏好对、Bradley-Terry 模型与奖励模型训练。",
+          "outcomeRefs": [
+            "explain-bt-reward"
+          ],
+          "order": 1
+        },
+        {
+          "id": "rlhf-dpo",
+          "title": "RLHF 与 DPO 的策略优化",
+          "role": "derivation",
+          "description": "KL 约束目标、DPO 推导、梯度含义与等价条件。",
+          "outcomeRefs": [
+            "explain-rlhf-kl",
+            "explain-dpo"
+          ],
+          "order": 2
+        },
+        {
+          "id": "grpo",
+          "title": "GRPO 的组相对优势",
+          "role": "mechanism",
+          "description": "组内归一化优势与去价值函数的思想。",
+          "outcomeRefs": [
+            "explain-grpo"
+          ],
+          "order": 3
+        },
+        {
+          "id": "comparison",
+          "title": "方法比较与选择",
+          "role": "comparison",
+          "description": "统一维度比较并给出情境化选择依据。",
+          "outcomeRefs": [
+            "compare-methods"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-alignment-goal",
+          "explain-bt-reward",
+          "explain-rlhf-kl",
+          "explain-dpo",
+          "explain-grpo",
+          "compare-methods"
+        ],
+        "method": "完成方法选择自检，并从奖励来源、数据在线性与工程成本三方面给出依据。",
+        "successCriteria": [
+          "能说明偏好数据为何采用相对比较",
+          "能区分 RLHF、DPO、GRPO 的关键差异",
+          "能针对给定条件给出有依据的方法选择"
+        ],
+        "summaryBlockId": "point-summary",
+        "nextPointId": "point-2-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "alignment-goal",
+        "moduleId": "alignment-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "从监督微调到偏好对齐",
+        "markdown": "监督微调让模型学会「按指令作答」，但同一条指令下可能有多个都算合格的回答，它们在 **有用性、诚实性、无害性** 上仍有差别。偏好对齐（Alignment）利用对回答的评价来调整模型的输出分布，使其更贴近人类意图与价值。\n\n诚实性要求模型尽量依据可核验的信息作答，并在不确定时表达不确定性；当模型生成语言连贯、看似合理却与事实不符的内容时，就出现 **幻觉**（Hallucination）。\n\n由于这三类要求很难写成一个可直接优化的单一损失函数，实践中转而比较同一指令下的多个回答，用「哪个更好」构造偏好数据。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "why-relative",
+        "moduleId": "alignment-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：为什么用相对比较",
+        "markdown": "可以把对齐想成在一批都「及格」的答卷里排序，而不是给每份答卷打绝对分。绝对分需要稳定、可复现的评分尺度，不同标注者很难统一；而「A 比 B 好」只需局部比较，更容易达成共识。这种相对信号也正好对应后文 Bradley-Terry 模型只依赖奖励差值的性质。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "alignment-goal"
+          ]
+        }
+      },
+      {
+        "id": "preference-data",
+        "moduleId": "reward-modeling",
+        "depth": "core",
+        "kind": "definition",
+        "title": "偏好数据与 Bradley-Terry 模型",
+        "markdown": "对同一条指令 $x$，让模型生成两个回答 $y_1$、$y_2$，由标注者判断哪个更好，胜出回答记为 $y_w$、落败回答记为 $y_l$，收集大量偏好对构成数据集。评价来源最初主要是人类，后来也扩展到 AI 反馈和可自动验证的规则。\n\nBradley-Terry 模型假设存在潜在奖励函数 $r(x,y)$，则胜出概率为\n\n$$P(y_w \\succ y_l \\mid x) = \\sigma\\big(r(x,y_w) - r(x,y_l)\\big),$$\n\n其中 $\\sigma(\\cdot)$ 是 Logistic 函数：奖励差越大，偏好概率越接近 1；两者相近时接近 0.5。\n\n奖励函数有一个自由度：对同一指令下所有回答同时加上只依赖 $x$ 的常数 $c(x)$，偏好概率不变。所以偏好数据只能确定奖励的相对值，这一性质在 DPO 推导中起关键作用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bt-intuition",
+        "moduleId": "reward-modeling",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：模型只吃奖励差",
+        "markdown": "Bradley-Terry 只吃奖励 **差**：$\\sigma\\big(r(x,y_w)-r(x,y_l)\\big)$。这意味着模型永远只学「谁比谁好多少」，整体平移 $c(x)$ 会被差值抵消，奖励的绝对零点没有意义。正因如此，DPO 后面可以放心把奖励改写成策略概率比——只要差值一致，偏好概率就一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "preference-data"
+          ]
+        }
+      },
+      {
+        "id": "reward-model",
+        "moduleId": "reward-modeling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "奖励模型的训练方式",
+        "markdown": "基于 Bradley-Terry 模型训练参数化奖励模型 $r_\\phi(x,y)$：通常以预训练语言模型为骨干，取输入序列最后一个词元位置的隐藏表示，经线性变换得到标量奖励。给定偏好数据集，目标是最大化正确预测人类偏好的对数似然，即让胜出回答的奖励尽量高于落败回答的奖励。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reward-loss",
+        "moduleId": "reward-modeling",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "补充：奖励模型的目标函数",
+        "markdown": "把训练目标写成负对数似然：\n\n$$\\mathcal{L}(\\phi) = -\\mathbb{E}_{(x,y_w,y_l)\\sim\\mathcal{D}}\\Big[\\log \\sigma\\big(r_\\phi(x,y_w)-r_\\phi(x,y_l)\\big)\\Big]$$\n\n它类似二元分类：奖励差越大、方向越对，$\\sigma$ 越接近 1，损失越小。此时被优化的只是奖励模型，策略模型尚未更新。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "reward-model",
+            "preference-data"
+          ]
+        }
+      },
+      {
+        "id": "rlhf-kl",
+        "moduleId": "rlhf-dpo",
+        "depth": "core",
+        "kind": "formula",
+        "title": "RLHF 的 KL 约束目标",
+        "markdown": "把语言模型视为策略 $\\pi_\\theta$，用强化学习优化即 RLHF。风险是模型过度迎合奖励模型的评分而没真正提升质量，称为 **奖励过度优化**（Reward Over-optimization），与 Goodhart 定律一致。为此加入对参考策略 $\\pi_{\\mathrm{ref}}$ 的 KL 惩罚：\n\n$$\\max_{\\pi_\\theta}\\ \\mathbb{E}_{x\\sim\\mathcal{D},\\,y\\sim\\pi_\\theta(\\cdot\\mid x)}\\big[r_\\phi(x,y)\\big] - \\beta\\,\\mathrm{KL}\\big(\\pi_\\theta(\\cdot\\mid x)\\,\\|\\,\\pi_{\\mathrm{ref}}(\\cdot\\mid x)\\big)$$\n\n其中 $\\beta>0$ 控制惩罚强度：$\\beta$ 越大，新策略越接近参考策略；$\\beta$ 越小，优化自由度越大但越容易奖励过度优化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "dpo-core",
+        "moduleId": "rlhf-dpo",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "DPO 的核心思路",
+        "markdown": "直接偏好优化（DPO）利用 RLHF 目标函数的解析解，把奖励函数用策略本身表示，从而 **不再显式训练独立的奖励模型**，也避开常规 RLHF 的在线策略采样，把对齐转成类似监督学习的优化。\n\n经典 RLHF 通常用近端策略优化（PPO）：用当前策略采样回答，用奖励模型打分并计算 KL 惩罚，用价值函数网络估计优势，再用 PPO 裁剪目标更新策略；代价是需要同时维护策略、参考、奖励和价值四个模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "dpo-steps",
+        "moduleId": "rlhf-dpo",
+        "depth": "advanced",
+        "kind": "worked-example",
+        "title": "补充：DPO 推导三步",
+        "markdown": "**第一步：最优策略。** 在归一化约束下用拉格朗日乘数法求解，得 $\\pi^*(y\\mid x)=\\frac{1}{Z(x)}\\pi_{\\mathrm{ref}}(y\\mid x)\\exp\\big(\\frac{1}{\\beta}r(x,y)\\big)$，其中 $Z(x)=\\sum_y \\pi_{\\mathrm{ref}}(y\\mid x)\\exp\\big(\\frac{1}{\\beta}r(x,y)\\big)$。最优策略是参考策略经奖励加权的「玻尔兹曼分布」。\n\n**第二步：用策略表示奖励。** 取对数整理得 $r(x,y)=\\beta\\log\\frac{\\pi^*(y\\mid x)}{\\pi_{\\mathrm{ref}}(y\\mid x)}+\\beta\\log Z(x)$，关键是 $Z(x)$ 只依赖 $x$、与 $y$ 无关。\n\n**第三步：消去奖励模型。** 代入 Bradley-Terry 后，比较 $y_w$ 与 $y_l$ 时 $\\beta\\log Z(x)$ 正好相减抵消，偏好概率只剩策略概率比。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "dpo-core",
+            "rlhf-kl"
+          ]
+        }
+      },
+      {
+        "id": "dpo-gradient",
+        "moduleId": "rlhf-dpo",
+        "depth": "core",
+        "kind": "formula",
+        "title": "DPO 损失与梯度",
+        "markdown": "定义隐式奖励 $\\hat r_\\theta(x,y)=\\beta\\log\\frac{\\pi_\\theta(y\\mid x)}{\\pi_{\\mathrm{ref}}(y\\mid x)}$，DPO 损失为\n\n$$\\mathcal{L}_{\\mathrm{DPO}}(\\theta)=-\\mathbb{E}_{(x,y_w,y_l)\\sim\\mathcal{D}}\\Big[\\log\\sigma\\big(\\hat r_\\theta(x,y_w)-\\hat r_\\theta(x,y_l)\\big)\\Big]$$\n\n它与奖励模型训练形式相近，区别是用策略相对参考策略的对数概率比作隐式奖励。梯度前的权重 $\\sigma\\big(\\hat r_\\theta(x,y_l)-\\hat r_\\theta(x,y_w)\\big)$ 自动调节更新幅度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "dpo-reading",
+        "moduleId": "rlhf-dpo",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：梯度的自适应含义与等价条件",
+        "markdown": "当模型已给胜出回答更高的隐式奖励时，权重小于 0.5，更新幅度较小，不再过度关注已学好的样本；当模型错误地偏好落败回答时，权重大于 0.5，更新幅度较大，自动聚焦「难样本」，类似在线难例挖掘。\n\nDPO 与 RLHF 在理想条件下有相同最优解：偏好服从 Bradley-Terry、策略类足够表达最优解、且优化能达到全局最优。但实践中数据分布、采样方式和优化轨迹不同，结果仍会不同；DPO 只能利用离线偏好数据，随策略更新可能出现分布漂移，且对数据质量敏感。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "dpo-gradient"
+          ]
+        }
+      },
+      {
+        "id": "grpo",
+        "moduleId": "grpo",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "GRPO 的组相对优势",
+        "markdown": "组相对策略优化（GRPO）从在线强化学习角度出发，用组内相对比较替代价值函数基线。标准 PPO 需要训练与策略同规模的价值网络作基线，开销很大；GRPO 对每条指令从当前策略采样 $G$ 个回答，用奖励模型或规则打分，再以组内均值和标准差归一化，得到组相对优势\n\n$$\\hat A^{(i)}=\\frac{r^{(i)}-\\operatorname{mean}(\\mathbf{r})}{\\operatorname{std}(\\mathbf{r})+\\varepsilon_{\\mathrm{num}}}$$\n\n归一化后优势以零为中心：高于组内平均的回答获得正优势，低于平均的获得负优势。策略优化沿用 PPO 的裁剪机制并加入 KL 正则项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "grpo-note",
+        "moduleId": "grpo",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：GRPO 与 PPO 的差别",
+        "markdown": "一句话概括：GRPO 用「同一题目的组内排名」替代「价值网络估计的基线」。PPO 的基线 $V(x)$ 要学「这条指令的期望回报大概多少」，需要与策略同规模的网络；GRPO 不学这个期望，而把当前策略对同一指令采样的多个回答放在一起，用它们自己的均值当基线、标准差当尺度。\n\n组越大，均值估计越稳，但显存和采样成本越高。GRPO 特别适合有可验证奖励的任务（如数学、代码），可用规则直接判断对错；代价是奖励信号可能受测试覆盖、格式约束或评价规则漏洞影响。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "grpo"
+          ]
+        }
+      },
+      {
+        "id": "method-landscape",
+        "moduleId": "comparison",
+        "depth": "core",
+        "kind": "summary",
+        "title": "三条路线的共同趋势",
+        "markdown": "RLHF、DPO 和 GRPO 体现了两条并行趋势：**简化训练流程** 与 **适应不同的奖励来源**。RLHF 保留完整在线强化学习框架，灵活但需要奖励、价值等多个模型；DPO 从离线学习角度消去奖励模型与在线采样；GRPO 从在线强化学习角度用组内相对优势替代价值函数。\n\n三者并非互斥，常在不同训练阶段组合使用，例如先用 DPO 做初步对齐，再用 GRPO 在特定任务上优化推理能力。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000012"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "偏好对齐与策略优化"
+              ],
+              "lineStart": 500,
+              "lineEnd": 565,
+              "assetRefs": [],
+              "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+            }
+          ]
+        }
+      },
+      {
+        "id": "compare-table",
+        "moduleId": "comparison",
+        "depth": "core",
+        "kind": "table",
+        "title": "补充：统一维度比较",
+        "markdown": "| 维度 | RLHF（PPO） | DPO | GRPO |\n|---|---|---|---|\n| 是否显式奖励模型 | 需要独立奖励模型 | 不需要，用策略概率比作隐式奖励 | 可用奖励模型或规则 |\n| 是否需要价值函数 | 需要 | 不需要 | 不需要，用组内相对优势 |\n| 采样方式 | 在线采样 | 离线偏好数据 | 在线采样 |\n| 训练流程复杂度 | 高，四模型协同 | 低，接近监督学习 | 中，省去价值网络 |\n| 主要风险 | 奖励过度优化、工程复杂 | 分布漂移、对数据质量敏感 | 组大小与奖励规则设计 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "method-landscape",
+            "rlhf-kl",
+            "dpo-core",
+            "grpo"
+          ]
+        }
+      },
+      {
+        "id": "decision-guide",
+        "moduleId": "comparison",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：按情境选择方法",
+        "markdown": "- 有稳定、可标注的偏好数据，且希望流程简单稳定 → 优先考虑 DPO；\n- 奖励来自可自动验证的规则（数学、代码），且希望每轮用最新策略采样、减轻分布漂移 → 考虑 GRPO；\n- 需要最灵活的在线优化、愿意承担多模型工程成本 → 用 RLHF（PPO）；\n- 实际项目常分阶段组合：先 DPO 做通用对齐，再用 GRPO 针对推理等能力在线优化。\n\n判断关键不是「哪个方法最新」，而是 **奖励从哪来**、**数据是否在线**、**能维护几个模型**。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "compare-table"
+          ]
+        }
+      },
+      {
+        "id": "point-summary",
+        "moduleId": "comparison",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本点小结与衔接",
+        "markdown": "偏好对齐先用「哪个更好」构造偏好数据，Bradley-Terry 模型把它变成只依赖奖励差值的概率；奖励模型把偏好学成打分器，RLHF 再用 KL 约束的强化学习优化策略。DPO 利用解析解把奖励改写成策略与参考策略的对数概率比，消去奖励模型；GRPO 用组内相对优势替代价值函数，在保留在线采样的同时降低复杂度。\n\n下一步会看到，奖励信号的粒度（结果奖励 vs 过程奖励）和推理阶段的计算分配，会进一步影响模型的多步推理能力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "method-landscape",
+            "compare-table"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "method-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "decision-guide",
+        "moduleId": "comparison",
+        "depth": "core",
+        "title": "方法选择自检",
+        "outcomeRefs": [
+          "compare-methods"
+        ],
+        "learningPurpose": "检查学习者能否根据奖励来源和数据条件在 RLHF、DPO、GRPO 之间做出有依据的选择。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "compare-table",
+            "decision-guide"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "question": "某团队只有一批离线偏好对，希望训练流程尽量简单稳定，应优先选择哪种方法？",
+          "answer": "DPO"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "若只有离线偏好数据且希望流程简单稳定，应优先考虑 DPO：它不需要独立奖励模型、在线采样和价值网络。"
+        }
+      }
+    ]
+  },
+  "subtitle": "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-599faa9206264b85d535687b",
+      "blockIds": [
+        "block-000012"
+      ],
+      "headingPath": [
+        "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+        "偏好对齐与策略优化"
+      ],
+      "lineStart": 500,
+      "lineEnd": 565,
+      "assetRefs": [],
+      "excerptSha256": "b04580079a35405253301434a266fa180378b69a5813313776c6b0f901caf5cd"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2527,
+    1913
+  ],
+  "scale": 0.98
+}

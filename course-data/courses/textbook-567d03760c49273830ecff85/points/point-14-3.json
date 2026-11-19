@@ -1,0 +1,632 @@
+{
+  "id": "point-14-3",
+  "title": "用于预训练词嵌入的数据集",
+  "shortSummary": "介绍大规模语料的读取、词表构建、下采样与批量采样流程，并说明语料规模与采样窗口对训练的影响。",
+  "keyTerms": [
+    "语料",
+    "词表",
+    "下采样",
+    "批量采样"
+  ],
+  "animationType": "corpusSubsampling",
+  "animationSuggestion": "逐句展示词元序列，按保留率对每个词元做保留或丢弃标记，实时累计每句词元数并绘制下采样前后的长度直方图；允许对比调大或调小 t 时的丢弃幅度，并支持重播同一轮采样与重新生成采样。",
+  "difficulty": "中等",
+  "importance": 0.58,
+  "prerequisites": [
+    "point-14-1",
+    "point-14-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-pipeline",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的数据集、超参数取值与公式，按数据准备流水线重排讲解，并在每个环节补充参数影响与检查点。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-corpus-vocab",
+          "text": "说明 PTB 语料的组织方式，以及 min_freq 与 <unk> 如何决定词表规模。"
+        },
+        {
+          "id": "apply-subsampling",
+          "text": "用教材下采样公式解释高频词被丢弃的概率，并判断某个词是否会被保留。"
+        },
+        {
+          "id": "construct-training-pairs",
+          "text": "按随机窗口规则提取中心词与上下文词，并说明噪声词采样分布的设置。"
+        },
+        {
+          "id": "build-batch-masks",
+          "text": "解释填充、掩码与标签在小批量中的作用，并读懂各张量的形状。"
+        }
+      ],
+      "misconceptions": [
+        "把下采样理解为删除低频词，实际上被丢弃的是相对频率高于阈值的高频词。",
+        "认为填充位置也参与损失计算，实际上掩码为 0 的位置在计算损失时被排除。",
+        "认为上下文窗口大小是固定的，实际上每个中心词的窗口大小在 1 到 max_window_size 之间随机采样。",
+        "认为噪声词可以取到上下文词，实际上采样时会排除已出现在该样本上下文中的词。"
+      ],
+      "modules": [
+        {
+          "id": "corpus-and-vocab",
+          "title": "语料读取与词表构建",
+          "role": "problem-setup",
+          "description": "从 PTB 原始文本行到固定词表。",
+          "outcomeRefs": [
+            "explain-corpus-vocab"
+          ],
+          "order": 0
+        },
+        {
+          "id": "frequency-subsampling",
+          "title": "高频词下采样",
+          "role": "mechanism",
+          "description": "丢弃概率公式及其实际效果。",
+          "outcomeRefs": [
+            "apply-subsampling"
+          ],
+          "order": 1
+        },
+        {
+          "id": "center-context",
+          "title": "中心词与上下文词提取",
+          "role": "procedure",
+          "description": "随机窗口与样本对构造。",
+          "outcomeRefs": [
+            "construct-training-pairs"
+          ],
+          "order": 2
+        },
+        {
+          "id": "negative-sampling",
+          "title": "噪声词采样",
+          "role": "mechanism",
+          "description": "按 0.75 次幂频率分布抽取负例。",
+          "outcomeRefs": [
+            "build-batch-masks"
+          ],
+          "order": 3
+        },
+        {
+          "id": "batching",
+          "title": "小批量构造与填充",
+          "role": "procedure",
+          "description": "拼接、补齐、掩码与标签。",
+          "outcomeRefs": [
+            "build-batch-masks"
+          ],
+          "order": 4
+        },
+        {
+          "id": "assembly-and-check",
+          "title": "整合流水线与自检",
+          "role": "summary-and-check",
+          "description": "串联各步骤并检查常见错误。",
+          "outcomeRefs": [
+            "explain-corpus-vocab",
+            "apply-subsampling",
+            "construct-training-pairs",
+            "build-batch-masks"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-corpus-vocab",
+          "apply-subsampling",
+          "construct-training-pairs",
+          "build-batch-masks"
+        ],
+        "method": "完成流水线自检题，并为每个环节写出输入、输出与关键超参数。",
+        "successCriteria": [
+          "能按顺序说出六个数据准备步骤及其输入输出",
+          "能写出下采样丢弃概率公式并说明阈值 t 的作用",
+          "能解释 masks 与 labels 中 0/1 的含义"
+        ],
+        "summaryBlockId": "section-summary",
+        "exerciseBlockId": "model-self-check",
+        "nextPointId": "point-14-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "section-overview",
+        "moduleId": "corpus-and-vocab",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "本节要解决的问题",
+        "markdown": "word2vec 的模型细节与训练方法已经在 14.1 节和 14.2 节讲过，本节开始处理实现问题：以跳元模型和负采样为例，把原始文本数据转换成训练期间可以迭代读取的小批量。换言之，这里不训练模型，只负责造出训练所需的数据管道。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-map",
+        "moduleId": "corpus-and-vocab",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：把流程看成一条流水线",
+        "markdown": "教材给出的实现顺序可以理解为一条六级流水线：\n\n1. 读取语料并切分为句子；\n2. 用 `min_freq` 构建词表，稀有词统一映射为 `<unk>`；\n3. 按概率丢弃部分高频词；\n4. 为每个中心词抽取随机窗口内的上下文词；\n5. 为上下文词采样噪声词作为负例；\n6. 把长度不一的样本拼接、补齐成小批量，并生成掩码与标签。\n\n后一步的所有输入都来自前一步的输出，因此任何一步的超参数或统计口径出错，都会顺流影响批量形状和损失计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "section-overview"
+          ]
+        }
+      },
+      {
+        "id": "ptb-corpus",
+        "moduleId": "corpus-and-vocab",
+        "depth": "core",
+        "kind": "example",
+        "title": "PTB 语料与词表",
+        "markdown": "教材使用 PennTreeBank（PTB）语料，取自《华尔街日报》文章，并已划分为训练集、验证集和测试集。原始格式中每一行是一句由空格分隔的话，这里把每个单词视为一个词元。\n\n`read_ptb` 读入 `ptb.train.txt` 并按行切分出词元列表，训练集共有 42069 句。随后用 `d2l.Vocab(sentences, min_freq=10)` 构建词表：出现次数少于 10 次的词替换为 `<unk>`，原数据集本身也带有表示稀有词的 `<unk>` 词元。这样得到的词表大小为 6719。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vocab-tradeoff",
+        "moduleId": "corpus-and-vocab",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：min_freq 的取舍",
+        "markdown": "`min_freq` 决定词表覆盖率与词表规模之间的平衡。调大它会进一步压缩词表、加快训练，但更多词被并入 `<unk>`，这些词之间的语义差别也随之丢失；调小它则保留更多细粒度词，代价是嵌入矩阵行数变大、低频词的向量也更难得到充分训练。教材选择 10 是在 PTB 这一规模下给出的具体取值，不是通用常量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ptb-corpus"
+          ]
+        }
+      },
+      {
+        "id": "frequency-motivation",
+        "moduleId": "frequency-subsampling",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么要对高频词下采样",
+        "markdown": "文本数据中 `the`、`a`、`in` 这类高频词在非常大的语料库中可能出现数十亿次，但它们经常与许多不同词共现，提供的有用信息很少。直观地说，上下文窗口中的 `chip` 与低频词 `intel` 的共现，比它与高频词 `a` 的共现更有训练价值。此外，大量高频词的训练速度也很慢。因此在训练词嵌入模型时可以对高频词进行下采样。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "subsample-formula",
+        "moduleId": "frequency-subsampling",
+        "depth": "core",
+        "kind": "formula",
+        "title": "丢弃概率公式",
+        "markdown": "数据集中的每个词 $w_i$ 以如下概率被丢弃：\n\n$$P(w_i) = \\max\\left(1 - \\sqrt{\\frac{t}{f(w_i)}}, 0\\right)$$\n\n其中 $f(w_i)$ 是 $w_i$ 的词数与数据集中总词数的比率，常量 $t$ 是超参数，实验中取 $10^{-4}$。只有当相对比率 $f(w_i) > t$ 时该词才可能被丢弃，且相对比率越高，被丢弃的概率越大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "subsample-effect",
+        "moduleId": "frequency-subsampling",
+        "depth": "core",
+        "kind": "example",
+        "title": "下采样的实际效果",
+        "markdown": "实现上先排除 `<unk>` 词元，再用 `random.uniform(0, 1) < math.sqrt(1e-4 / counter[token] * num_tokens)` 作为保留判据，因此 1 减去保留率即为上式给出的丢弃概率。\n\n从统计结果看：高频词 `the` 的数量从 50770 降到 2056，采样率不到 1/20；低频词 `join` 的数量则从 45 保持为 45，完全保留。下采样通过删除高频词显著缩短句子，从而加速训练。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-subsample-intuition",
+        "moduleId": "frequency-subsampling",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：读懂保留率与阈值",
+        "markdown": "把公式反过来看更直观：保留概率为 $\\min\\left(\\sqrt{t / f(w_i)}, 1\\right)$。当 $f(w_i) \\le t$ 时保留率被截断为 1，低频词因此原样保留；当 $f(w_i)$ 远大于 $t$ 时，保留率按 $1/\\sqrt{f(w_i)}$ 的量级下降，词越常见被删得越多。\n\n由此还可以推断：下采样不会改变词表本身，`the` 依然在词表中，只是它在训练语料中的出现次数被削减；`<unk>` 在计数前已被剔除，所以也不会被当作高频词处理。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "subsample-formula",
+            "subsample-effect"
+          ]
+        }
+      },
+      {
+        "id": "center-context-window",
+        "moduleId": "center-context",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "提取中心词与上下文词",
+        "markdown": "`get_centers_and_contexts(corpus, max_window_size)` 从语料中提取所有中心词及其上下文词。对每一行，若词数少于 2 则跳过，因为无法形成“中心词-上下文词”对；否则该行每个词都依次作为中心词，并随机采样 1 到 `max_window_size` 之间的整数作为本次的上下文窗口大小。与中心词距离不超过该窗口大小的词就是它的上下文词，中心词自身被排除。\n\n教材用两句话、共 10 个词的人工数据集（最大窗口为 2）演示：中心词 2 的上下文词是 `[0, 1, 3, 4]`，而处在句首的中心词 0 只有上下文词 `[1]`。在 PTB 上把最大窗口设为 5 后，共得到 1499984 个“中心词-上下文词”对。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-window-randomness",
+        "moduleId": "center-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：随机窗口带来的两个后果",
+        "markdown": "窗口大小逐词随机，意味着同一中心词在不同轮次、不同位置看到的上下文范围不同，近距离词被选中的机会多于远距离词，这与“越近的上下文越相关”的直觉一致。\n\n它也带来两个实现上的后果：其一，单个样本的上下文词数量不固定，这正是后面必须填充和加掩码的原因；其二，样本对总数由语料规模、行数和窗口设置共同决定，改变 `max_window_size` 会直接改变训练实例数量与数据加载耗时。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "center-context-window"
+          ]
+        }
+      },
+      {
+        "id": "negative-sampling",
+        "moduleId": "negative-sampling",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "为上下文词采样噪声词",
+        "markdown": "负采样用于近似训练。教材定义了 `RandomGenerator` 类，用一个（可能未规范化的）采样权重列表 `sampling_weights` 在 $\\{1, \\dots, n\\}$ 中随机抽取：每次调用 `draw` 会缓存 10000 个 `random.choices` 结果并依次返回。\n\n对每一对中心词和上下文词，随机抽取 $K$ 个噪声词（实验中 $K = 5$）。根据 word2vec 论文的建议，噪声词 $w$ 的采样概率 $P(w)$ 设为其在字典中相对频率的 0.75 次幂。实现时 `sampling_weights` 取 `counter[vocab.to_tokens(i)]**0.75`，索引从 1 开始以跳过 `<unk>`；抽取到的噪声词若已出现在该样本的上下文词中则丢弃重抽，直到噪声词数量达到上下文词数的 $K$ 倍。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-negative-weights",
+        "moduleId": "negative-sampling",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么用 0.75 次幂",
+        "markdown": "对频率取 0.75 次幂相当于把原始频率分布“压平”一些：常见词的权重相对被削弱，稀有词的权重相对被抬高，但仍保持“越常见越容易被抽到”的次序。这样既不会让少量极高频词垄断负例，也不会让几乎不出现的词获得过高概率。\n\n需要注意，这里抽的是噪声词分布，它并不等于真实语料分布；指数 0.75 是教材引用的经验设置，并不是由数据自动学出的参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "negative-sampling"
+          ]
+        }
+      },
+      {
+        "id": "batchify-masks-labels",
+        "moduleId": "batching",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "拼接、填充、掩码与标签",
+        "markdown": "小批量中第 $i$ 个样本包含中心词、$n_i$ 个上下文词和 $m_i$ 个噪声词。由于上下文窗口大小不同，$n_i + m_i$ 对不同样本也不同。`batchify` 的做法是：把每个样本的上下文词与噪声词拼接后补零，直到长度达到本批次的最大值 $\\max(n + m)$（记为 `max_len`）。\n\n为在计算损失时排除填充，定义与 `contexts_negatives` 一一对应的掩码 `masks`：填充位置为 0，真实词元位置为 1。为区分正反例，再用 `labels` 标记：上下文词（正例）为 1，噪声词与填充为 0。\n\n教材用两个样本演示：$x_1 = (1, [2, 2], [3, 3, 3, 3])$，$x_2 = (1, [2, 2, 2], [3, 3])$，得到\n\n```txt\ncenters            = [[1], [1]]\ncontexts_negatives = [[2, 2, 3, 3, 3, 3], [2, 2, 2, 3, 3, 0]]\nmasks              = [[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 0]]\nlabels             = [[1, 1, 0, 0, 0, 0], [1, 1, 1, 0, 0, 0]]\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-shapes",
+        "moduleId": "batching",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：形状如何确定",
+        "markdown": "把上面的例子放大到真实设置（`batch_size = 512`、`max_window_size = 5`、每词 5 个噪声词），第一个批量的形状为：\n\n| 张量 | 形状 | 含义 |\n|---|---|---|\n| `centers` | 512 × 1 | 每行一个中心词索引 |\n| `contexts_negatives` | 512 × 60 | 上下文词与噪声词拼接并补齐 |\n| `masks` | 512 × 60 | 1 表示真实词元，0 表示填充 |\n| `labels` | 512 × 60 | 1 表示正例，0 表示负例或填充 |\n\n第二维不是固定的 60，而是该批次内 $\\max(n_i + m_i)$ 的实际值；换批次、换窗口或换 $K$ 都会改变它。`masks` 与 `labels` 的列数必须与 `contexts_negatives` 严格一致，否则逐元素相乘时会对不上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "batchify-masks-labels"
+          ]
+        }
+      },
+      {
+        "id": "pipeline-assembly",
+        "moduleId": "assembly-and-check",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "整合为数据迭代器",
+        "markdown": "`load_data_ptb(batch_size, max_window_size, num_noise_words)` 把上述步骤串起来：读取 PTB、构建词表、下采样、把词元映射为索引、提取中心词与上下文词、采样噪声词，然后封装 `PTBDataset` 并用 `DataLoader` 装载，`shuffle=True`，`collate_fn=batchify`，并按 `d2l.get_dataloader_workers()` 设置工作进程数，最终返回数据迭代器和词表。\n\n教材以 `load_data_ptb(512, 5, 5)` 验证，第一个批量的四个张量形状分别为 `[512, 1]`、`[512, 60]`、`[512, 60]`、`[512, 60]`。下一节 14.4 的预训练就直接调用这个函数取得数据迭代器与词表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-checklist",
+        "moduleId": "assembly-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：数据准备检查清单",
+        "markdown": "按顺序核对以下五项，可以定位大多数数据管道问题：\n\n1. 句子是否按行切分，空行和单词语句是否被正确处理；\n2. 词表是否用训练集统计、稀有词是否已并入 `<unk>`；\n3. 下采样是否在计数前剔除 `<unk>`，之后的索引是否仍取自同一词表；\n4. 每个样本的噪声词数量是否为其上下文词数的 $K$ 倍，且不与上下文词重复；\n5. `masks`、`labels` 与 `contexts_negatives` 的列数是否一致。\n\n任何一项出错都不会报语法错误，但会悄悄改变损失或训练信号，因此比代码报错更值得警惕。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "ptb-corpus",
+            "subsample-effect",
+            "negative-sampling",
+            "pipeline-assembly"
+          ]
+        }
+      },
+      {
+        "id": "section-summary",
+        "moduleId": "assembly-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "- 高频词在训练中可能不是那么有用，可以对它们进行下采样，以便加快训练速度。\n- 为了提高计算效率，以小批量方式加载样本；可以定义其他变量来区分填充标记与非填充标记，以及正例与负例。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000121"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "用于预训练词嵌入的数据集"
+              ],
+              "lineStart": 27513,
+              "lineEnd": 27985,
+              "assetRefs": [
+                "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+              ],
+              "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-common-mistakes",
+        "moduleId": "assembly-and-check",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：四个常见误解",
+        "markdown": "**误解一：下采样会删掉低频词。** 只有相对频率高于阈值 $t$ 的词才可能被丢弃，低频词保留率为 1，教材中 `join` 的 45 次出现全部保留。\n\n**误解二：填充位置参与损失计算。** `masks` 中为 0 的位置正是为排除填充而设，否则零填充会被当作真实词元贡献梯度。\n\n**误解三：窗口大小固定为 `max_window_size`。** 每个中心词的窗口在 1 到 `max_window_size` 之间随机采样，因此样本长度天然不齐。\n\n**误解四：噪声词可以等于上下文词。** 采样时若抽到上下文词会丢弃重抽，保证负例与正例不重叠。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "section-summary",
+            "batchify-masks-labels"
+          ]
+        }
+      },
+      {
+        "id": "model-self-check",
+        "moduleId": "assembly-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：流水线自检",
+        "markdown": "1. 某词在语料中的相对频率为 $f(w) = 10^{-2}$，取 $t = 10^{-4}$，它的丢弃概率约为多少？若 $f(w) = 10^{-5}$ 呢？\n2. 一个句子的词数为 1，它会产生多少个中心词？为什么？\n3. 某样本上下文词 3 个、噪声词 15 个，同批次最大长度为 30，`masks` 与 `labels` 中 0 的个数分别是多少？\n\n提示：第 1 题直接代入公式并注意 $\\max(\\cdot, 0)$ 的截断；第 3 题注意 `labels` 中噪声词也记为 0。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "subsample-formula",
+            "center-context-window",
+            "batchify-masks-labels",
+            "model-common-mistakes"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pipeline-formative-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-self-check",
+        "moduleId": "assembly-and-check",
+        "depth": "core",
+        "title": "数据准备流水线自检",
+        "outcomeRefs": [
+          "apply-subsampling",
+          "build-batch-masks"
+        ],
+        "learningPurpose": "检查学习者能否把下采样公式与批量掩码规则迁移到新的数值和样本上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "subsample-formula",
+            "batchify-masks-labels"
+          ]
+        },
+        "config": {
+          "questions": 3,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出下采样丢弃概率公式，并说明一个上下文词 3 个、噪声词 15 个、批次最大长度 30 的样本在 `masks` 和 `labels` 中各有几个 0，并解释每个 0 的来源。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000121"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "用于预训练词嵌入的数据集"
+      ],
+      "lineStart": 27513,
+      "lineEnd": 27985,
+      "assetRefs": [
+        "parts/part-0007/images/3f5ff74db307ac1ccc66d3383dc55efd11a203e22460be6c3bb2c22556969770.jpg"
+      ],
+      "excerptSha256": "ed8e0d3e0e542cbbd27b25c539f5a02082d8f0173cd40ad4d8f42ea608aeb9a6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2384,
+    393
+  ],
+  "scale": 0.85
+}

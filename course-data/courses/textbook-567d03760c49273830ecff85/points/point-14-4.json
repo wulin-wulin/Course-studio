@@ -1,0 +1,560 @@
+{
+  "id": "point-14-4",
+  "title": "预训练word2vec",
+  "shortSummary": "说明跳元模型与连续词袋模型的训练目标、参数更新与词向量导出方式，并比较两种目标的方向差异。",
+  "keyTerms": [
+    "跳元模型",
+    "连续词袋",
+    "词向量",
+    "训练目标"
+  ],
+  "animationType": "negativeSamplingEmbedding",
+  "animationSuggestion": "分步展示一个批次：高亮中心词与其真实上下文词、若干噪声词，显示点积得分如何经 Sigmoid 变成概率、掩码如何排除填充位置，再显示梯度方向与嵌入矩阵中被更新的一行；同时用副图绘制 epoch–loss 曲线下降，并提供重播按钮回到同一初始参数与同一采样批次。",
+  "difficulty": "进阶",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-14-1",
+    "point-14-2",
+    "point-14-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-then-workflow",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的实现顺序、数值与代码语义，围绕「从索引到词向量」的目标补充维度推演、掩码含义、训练曲线解读与跳元/连续词袋对照，不引入教材之外的结论。",
+      "estimatedMinutes": 22,
+      "outcomes": [
+        {
+          "id": "explain-forward",
+          "text": "解释跳元模型如何用两层嵌入与批量矩阵乘法把中心词、上下文与噪声词索引变成点积得分。"
+        },
+        {
+          "id": "explain-loss",
+          "text": "说明带掩码的二元交叉熵如何屏蔽填充位置，并对正负样本做规范化。"
+        },
+        {
+          "id": "explain-training",
+          "text": "描述参数初始化、优化器与训练循环各步骤如何更新两个嵌入矩阵。"
+        },
+        {
+          "id": "apply-embeddings",
+          "text": "从训练好的嵌入矩阵导出词向量，并用余弦相似度检索语义相近的词。"
+        },
+        {
+          "id": "compare-cbow",
+          "text": "比较跳元模型与连续词袋模型的预测方向差异，并说明二者共享的训练与导出方式。"
+        }
+      ],
+      "misconceptions": [
+        "把训练得到的两个嵌入矩阵当成只能保留一个，误以为另一个矩阵没有用途。",
+        "以为填充位置也参与损失计算，忽略了掩码把填充位置的权重置零。",
+        "把 skip_gram 的输出当成概率，忽视了它只是点积得分，需要再配合 Sigmoid 与二元交叉熵。",
+        "认为词向量需要人工标注语义标签，实际上训练目标直接来自语料中的上下文共现与噪声词。"
+      ],
+      "modules": [
+        {
+          "id": "pipeline-overview",
+          "title": "从语料批次到词向量的整体流程",
+          "role": "overview",
+          "outcomeRefs": [
+            "explain-forward",
+            "explain-training"
+          ],
+          "order": 0
+        },
+        {
+          "id": "embedding-forward",
+          "title": "嵌入层与批量点积",
+          "role": "core-mechanism",
+          "outcomeRefs": [
+            "explain-forward"
+          ],
+          "order": 1
+        },
+        {
+          "id": "masked-loss",
+          "title": "带掩码的二元交叉熵",
+          "role": "core-mechanism",
+          "outcomeRefs": [
+            "explain-loss"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-loop",
+          "title": "参数初始化与训练循环",
+          "role": "procedure",
+          "outcomeRefs": [
+            "explain-training"
+          ],
+          "order": 3
+        },
+        {
+          "id": "export-apply",
+          "title": "导出词向量并检索近义词",
+          "role": "application",
+          "outcomeRefs": [
+            "apply-embeddings"
+          ],
+          "order": 4
+        },
+        {
+          "id": "compare-and-check",
+          "title": "目标对照与达成检查",
+          "role": "comparison-and-check",
+          "outcomeRefs": [
+            "compare-cbow",
+            "apply-embeddings",
+            "explain-loss"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-forward",
+          "explain-loss",
+          "explain-training",
+          "apply-embeddings",
+          "compare-cbow"
+        ],
+        "method": "完成前向形状推演、掩码损失解释与近义词检索三类检查题，并说明每个结论对应的教材实现位置。",
+        "successCriteria": [
+          "能写出 (批量大小, 1) 与 (批量大小, max_len) 经两层嵌入与批量矩阵乘法后的输出形状",
+          "能说明 mask 与 label 在损失中的不同作用",
+          "能引用训练超参数与导出矩阵说明词向量的来源"
+        ],
+        "exerciseBlockId": "model-self-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-14-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-pipeline-overview",
+        "moduleId": "pipeline-overview",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材做法：在 PTB 上用负采样预训练跳元模型",
+        "markdown": "教材在 14.4 节把 14.1 节定义的跳元模型落到代码：先在 PTB 语料上用负采样预训练 word2vec。数据侧直接调用 `d2l.load_data_ptb` 获得数据迭代器和词表，关键设置是批量大小 512、最大窗口 5、每个中心词采 5 个噪声词。\n\n训练结束后，嵌入层的权重矩阵就是所需的词向量，本节其余内容都在说明如何把索引变成得分、如何定义损失、如何更新参数，以及如何取出这些向量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-map",
+        "moduleId": "pipeline-overview",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把各步骤串成一条流水线",
+        "markdown": "下面这张流程视图是对教材各步骤的串联，属于模型补充，不改变教材的实现顺序：\n\n1. 数据迭代器给出一批中心词索引、上下文与噪声词索引、掩码和标签。\n2. 两层嵌入把索引查成向量。\n3. 批量矩阵乘法得到中心词与每个候选词的点积得分。\n4. 得分经 Sigmoid 与二元交叉熵变成损失，掩码屏蔽填充位置。\n5. 反向传播与 Adam 更新两个嵌入矩阵。\n6. 重复若干轮后，从嵌入矩阵取出词向量并用于相似度检索。\n\n这条流水线说明：词向量不是人工写出来的，而是训练目标在语料上反复更新嵌入矩阵得到的副产物。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pipeline-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-embedding-layer",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "kind": "definition",
+        "title": "嵌入层：行数等于字典大小，列数等于向量维数",
+        "markdown": "嵌入层把词元的索引映射到其特征向量。该层的权重是一个矩阵，行数等于字典大小（`input_dim`），列数等于每个标记的向量维数（`output_dim`）。词嵌入模型训练之后，这个权重就是所需要的词向量。\n\n教材用 20 个词、4 维的小例子说明形状变化：当小批量词元索引形状为 (2, 3) 时，嵌入层返回形状为 (2, 3, 4) 的向量，也就是把每个索引替换成一行 4 维向量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-embedding-lookup",
+        "moduleId": "embedding-forward",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：嵌入层本质是一次查表",
+        "markdown": "从线性代数角度看，嵌入层等价于对 one-hot 向量做一次矩阵乘法：one-hot 只在第 i 位为 1，乘完矩阵后恰好留下第 i 行。因此前向计算不需要真的构造 one-hot 矩阵，直接按索引取行即可。\n\n这也解释了两个代价：词表越大，嵌入矩阵的行数越多；向量维数越高，每行越长。词向量的存储开销约等于「词表大小 × 向量维数」。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-embedding-layer"
+          ]
+        }
+      },
+      {
+        "id": "tb-forward-pass",
+        "moduleId": "embedding-forward",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "跳元模型的前向传播与输出形状",
+        "markdown": "在前向传播中，跳元语法模型的输入包括形状为（批量大小，1）的中心词索引 `center`，以及形状为（批量大小，`max_len`）的上下文与噪声词索引 `contexts_and_negatives`。这两个变量先通过嵌入层从词元索引转换成向量，然后做批量矩阵相乘，返回形状为（批量大小，1，`max_len`）的输出。\n\n输出中的每个元素是中心词向量和某个上下文词或噪声词向量的点积。教材示例把形状 (2, 1) 与 (2, 4) 的输入送入 `skip_gram`，得到形状 (2, 1, 4) 的输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-forward-meaning",
+        "moduleId": "embedding-forward",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：这些得分意味着什么",
+        "markdown": "把形状对齐来看：输出 (批量大小, 1, `max_len`) 中第 1 维是「一个中心词」，第 3 维是「`max_len` 个候选词」，每个候选词对应一个点积得分。所以每个中心词只需对 1 个真实上下文词和若干噪声词打分，而不必对整个词表做 softmax。\n\n这些得分是 logits，不是概率；只有送入 Sigmoid 之后才变成 (0, 1) 区间内的值。也正因为只对少量候选打分，负采样才把「从几万词中挑一个」的大词表多分类问题化成了若干二分类判断，这正是 14.2 节近似训练思路在代码中的落点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-forward-pass",
+            "tb-embedding-layer"
+          ]
+        }
+      },
+      {
+        "id": "tb-bce-loss",
+        "moduleId": "masked-loss",
+        "depth": "core",
+        "kind": "formula",
+        "title": "SigmoidBCELoss：带掩码的二元交叉熵",
+        "markdown": "根据 14.2.1 节中负采样损失函数的定义，教材使用二元交叉熵损失。`SigmoidBCELoss` 在内部调用 `binary_cross_entropy_with_logits`，把掩码作为 `weight`、把 `reduction` 设为 `\"none\"`，最后对第 1 维取平均。\n\n教材给出的计算示例中，两行预测的规范化损失分别为 0.9352 与 1.8462。用 Sigmoid 激活逐项手算、再在非掩码预测上取平均，可以得到相同结果，这说明掩码只影响哪些位置参与平均，而不改变每个位置本身的交叉熵定义。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mask-formula",
+        "moduleId": "masked-loss",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：掩码与标签各自的作用",
+        "markdown": "设第 i 个候选位置的掩码为 $m_i\\in\\{0,1\\}$、标签为 $y_i\\in\\{0,1\\}$、点积得分为 $s_i=\\mathbf{u}_i^\\top \\mathbf{v}$，则该样本的规范化损失可写成\n\n$$\\mathcal{L} = -\\frac{1}{\\sum_i m_i}\\sum_i m_i\\left[ y_i\\log\\sigma(s_i) + (1-y_i)\\log\\left(1-\\sigma(s_i)\\right)\\right]$$\n\n其中 $m_i=0$ 的位置（例如为对齐形状而填充的候选）不进入分子也不进入分母；$y_i=1$ 对应真实上下文词，$y_i=0$ 对应噪声词。教材把每个样本的损失除以 `mask.sum(axis=1)` 再乘 `mask.shape[1]`，是为了先按有效候选数归一、再还原到统一尺度，便于跨批次累计。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-bce-loss"
+          ]
+        }
+      },
+      {
+        "id": "tb-param-init",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "warning",
+        "title": "两个嵌入层：中心词一个、上下文词一个",
+        "markdown": "教材定义了两个嵌入层，分别把词表中的所有单词当作中心词和上下文词使用，词向量维度 `embed_size` 设置为 100。也就是说，训练结束后会得到两个形状相同的嵌入矩阵，分别承担两种角色。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-matrices",
+        "moduleId": "training-loop",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么保留两个矩阵，导出时用哪个",
+        "markdown": "同一个词作中心词和作上下文词时的角色不同，分开参数让模型可以分别学习这两种用法，因此教材用两个嵌入层而不是共用一个矩阵。\n\n检索近义词时，教材传入的是 `net[0]`，即中心词矩阵。若希望得到一个统一的词向量，实践中的常见做法是把两个矩阵相加或拼接，这属于模型补充的使用选择，不改变教材训练流程与损失定义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-param-init"
+          ]
+        }
+      },
+      {
+        "id": "tb-train",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练循环与教材报告的结果",
+        "markdown": "训练前对嵌入层权重做 Xavier 均匀初始化，优化器使用 Adam。每个批次依次执行：清零梯度；把中心词、上下文与噪声词、掩码与标签搬到设备；用 `skip_gram` 计算得分；把预测 reshape 成标签形状后计算带掩码的二元交叉熵；按掩码数量归一化并还原尺度后求和；反向传播并更新参数。\n\n教材设置学习率 0.002、训练 5 个 epoch，报告损失 0.410，吞吐约 377799.5 tokens/s（cuda:0）。由于填充位置被掩码排除，损失计算与前面章节的常规训练函数略有不同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-curve",
+        "moduleId": "training-loop",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：怎样读训练曲线",
+        "markdown": "训练函数用 `Animator(xlabel='epoch', ylabel='loss')` 记录每个 epoch 内的平均损失。教材给出的曲线随 epoch 增加而下降并在末期趋于平缓，说明参数更新确实在降低训练目标；由于每轮仍在对上下文词与噪声词重新采样，曲线会有小幅波动。\n\n需要注意：这条曲线只反映训练目标，不能据此断言词向量的语义质量已经达到某个标准；近义词效果要在 14.4.3 节的检索任务上单独观察，更系统的评估留给 14.7 节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-train"
+          ]
+        }
+      },
+      {
+        "id": "tb-similar",
+        "moduleId": "export-apply",
+        "depth": "core",
+        "kind": "application",
+        "title": "训练后：用余弦相似度检索近义词",
+        "markdown": "训练完 word2vec 模型后，可以用词向量的余弦相似度在词表中找到与输入词语义最相似的词。教材的 `get_similar_tokens` 先取嵌入矩阵 $W$（`embed.weight.data`），再取查询词向量 $x$，计算 $W$ 每行与 $x$ 的余弦相似度，分母加上 1e-9 以保证数值稳定，最后取 top-k 并删除查询词本身。\n\n教材示例中，与 chip 最相似的词是 microprocessor（0.773），其次是 hitachi（0.589）与 computers（0.582）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000122"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "预训练word2vec"
+              ],
+              "lineStart": 27986,
+              "lineEnd": 28245,
+              "assetRefs": [
+                "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+              ],
+              "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cosine",
+        "moduleId": "export-apply",
+        "depth": "support",
+        "kind": "formula",
+        "title": "补充：余弦相似度与数值稳定项",
+        "markdown": "两个词向量的余弦相似度为\n\n$$\\cos(\\mathbf{x},\\mathbf{y}) = \\frac{\\mathbf{x}^\\top \\mathbf{y}}{\\lVert \\mathbf{x}\\rVert\\,\\lVert \\mathbf{y}\\rVert}$$\n\n它只比较方向、忽略长度，因此词频高低带来的向量长度差异不会主导排序。分母加上 1e-9 是为了避免向量范数为 0 时出现除零；取 top-k 后删掉查询词，是因为查询词与自身的相似度必然最高，保留它会挤掉一个有效近邻。\n\n检索结果完全取决于训练语料：在 PTB 上 chip 的近邻偏向硬件与计算机相关词，换一份语料结果就会改变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-similar"
+          ]
+        }
+      },
+      {
+        "id": "model-cbow",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：跳元模型与连续词袋模型的方向差异",
+        "markdown": "教材 14.4 的代码实现的是跳元模型：用一个中心词预测窗口内的上下文词。连续词袋模型（CBOW）方向相反，用窗口内的上下文词预测中心词。\n\n| 对比维度 | 跳元模型 | 连续词袋模型 |\n|---|---|---|\n| 输入 | 单个中心词索引 | 窗口内多个上下文词索引 |\n| 预测目标 | 上下文词（含负样本判别） | 中心词 |\n| 每个样本的监督信号 | 一个中心词可产生多个（上下文，噪声词）对 | 多个上下文词共同对应一个中心词 |\n| 训练与导出 | 两层嵌入 + 点积得分 + 负采样损失，训练后从嵌入矩阵导出词向量 | 在负采样近似下可用同样的二分类损失训练，同样从嵌入矩阵导出词向量 |\n\n两者共享嵌入查表、点积打分和从权重矩阵导出词向量这套机制，差异集中在预测方向与样本组织方式上；不要因为二者都属于 word2vec 就把它们当成同一种训练目标。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-forward-pass",
+            "tb-similar"
+          ]
+        }
+      },
+      {
+        "id": "model-self-check",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自测：形状、掩码与导出",
+        "markdown": "先独立作答，再对照检查要点：\n\n1. 批量大小为 2、`max_len` 为 4、向量维数为 4 时，`skip_gram` 的输出形状是什么？\n2. 为什么掩码为 0 的位置既不进入损失的分子也不进入分母？如果只把分子置零而保留在分母中，会发生什么？\n3. 训练完成后想检索 chip 的近义词，应该用哪个矩阵，余弦相似度的分母为什么要加 1e-9？\n\n检查要点：(1) (2, 1, 4)，第 3 维对应 1 个真实上下文词加若干噪声词；(2) 填充位置不是有效候选，若留在分母会人为压低损失、削弱有效样本的梯度；(3) 用中心词矩阵 `net[0]`，1e-9 用于防止范数为零时除零。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-forward-pass",
+            "tb-bce-loss",
+            "tb-similar"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：一条从索引到词向量的闭环",
+        "markdown": "把本节压缩成一条闭环：索引经两层嵌入变成向量，中心词与上下文/噪声词的点积给出得分，带掩码的二元交叉熵在有效候选上计算损失，Adam 反复更新两个嵌入矩阵，训练结束后从中心词矩阵取出词向量并用余弦相似度检索近邻。\n\n判断自己是否真的掌握，可以看能否回答三件事：每个张量的形状如何变化、掩码改变了什么、词向量最终来自哪里。下一节的 GloVe 会用全局共现统计重新解释同一个跳元目标，届时应能看出两者的联系与差别。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pipeline-overview",
+            "tb-forward-pass",
+            "tb-bce-loss",
+            "tb-train",
+            "tb-similar"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "forward-mask-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-self-check",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-forward",
+          "explain-loss",
+          "apply-embeddings"
+        ],
+        "learningPurpose": "检查学习者能否把前向形状、掩码语义与导出矩阵三处关键细节对应到教材实现。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-forward-pass",
+            "tb-bce-loss",
+            "tb-similar"
+          ]
+        },
+        "config": {
+          "questionCount": 3,
+          "revealAnswersAfterSubmit": true
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出 `skip_gram` 在批量大小 2、`max_len` 4、向量维数 4 时的输出形状，说明掩码为 0 的位置为何不进入损失分母，并指出检索近义词应使用哪个嵌入矩阵。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [
+    "point-14-6",
+    "point-14-7"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000122"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "预训练word2vec"
+      ],
+      "lineStart": 27986,
+      "lineEnd": 28245,
+      "assetRefs": [
+        "parts/part-0007/images/3ea101a03651f2b66e85f9d3f65ff25196d0b4975142fc0fce004407e3c45b89.jpg"
+      ],
+      "excerptSha256": "8f7e14fd7e7a877cd05bede855ff94f511afaeeb983a3ea9b79cca8812f331ca"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2370,
+    512
+  ],
+  "scale": 0.91
+}

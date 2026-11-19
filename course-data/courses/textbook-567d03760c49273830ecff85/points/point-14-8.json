@@ -1,0 +1,582 @@
+{
+  "id": "point-14-8",
+  "title": "来自Transformers的双向编码器表示（BERT）",
+  "shortSummary": "介绍 BERT 的双向编码器结构、预训练目标与下游任务适配方式。",
+  "keyTerms": [
+    "BERT",
+    "双向编码器",
+    "预训练",
+    "下游任务"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-10-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-comparison-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对上下文无关/敏感表示与 ELMo、GPT、BERT 的对比结论，把 14.8 节的输入表示与两个预训练任务按“先为什么、再怎么做、最后如何迁移”的顺序重排，并补充可自检的对照例子与练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-context-sensitivity",
+          "text": "解释上下文无关表示与上下文敏感表示的区别，并说明 BERT 如何同时取得双向编码与任务无关架构。"
+        },
+        {
+          "id": "describe-input-representation",
+          "text": "说明 BERT 输入序列如何由特殊词元、片段索引以及词元/片段/位置三类嵌入构造出来。"
+        },
+        {
+          "id": "explain-pretraining-tasks",
+          "text": "解释掩蔽语言模型的 15% 选词与 80/10/10 替换策略，以及下一句预测的样本构造与作用。"
+        },
+        {
+          "id": "apply-downstream-adaptation",
+          "text": "针对给定下游任务判断应接哪种输出层，并说明微调时编码器与新输出层各自的训练方式。"
+        }
+      ],
+      "misconceptions": [
+        "把 BERT 的“双向”理解为两个方向的语言模型各训练一次再拼接，而不是同一个 Transformer 编码器同时利用左右上下文。",
+        "认为 BERT 预训练需要人工标注数据，实际上掩蔽语言模型和下一句预测的标签都能从语料本身得到。",
+        "以为掩蔽语言模型已经足够，下一句预测只是额外装饰；实际上掩蔽语言模型并不显式建模两个文本序列之间的逻辑关系。"
+      ],
+      "modules": [
+        {
+          "id": "context-gap",
+          "title": "为什么需要上下文敏感表示",
+          "role": "motivation",
+          "description": "从同一词在不同上下文中含义不同出发，建立上下文无关表示的局限。",
+          "outcomeRefs": [
+            "explain-context-sensitivity"
+          ],
+          "order": 0
+        },
+        {
+          "id": "bert-positioning",
+          "title": "ELMo、GPT 与 BERT 的取舍",
+          "role": "comparison",
+          "description": "比较三条技术路线的双向性与任务相关性，定位 BERT 的设计动机。",
+          "outcomeRefs": [
+            "explain-context-sensitivity"
+          ],
+          "order": 1
+        },
+        {
+          "id": "input-representation",
+          "title": "BERT 输入表示",
+          "role": "mechanism",
+          "description": "拆解输入序列构造与三类嵌入的相加方式。",
+          "outcomeRefs": [
+            "describe-input-representation"
+          ],
+          "order": 2
+        },
+        {
+          "id": "pretraining-mlm",
+          "title": "预训练任务之一：掩蔽语言模型",
+          "role": "mechanism",
+          "description": "说明双向预测如何通过掩蔽与替换策略自监督地实现。",
+          "outcomeRefs": [
+            "explain-pretraining-tasks"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pretraining-nsp",
+          "title": "预训练任务之二：下一句预测",
+          "role": "mechanism",
+          "description": "说明句对分类样本的构造、判别头与两个任务的联合损失。",
+          "outcomeRefs": [
+            "explain-pretraining-tasks"
+          ],
+          "order": 4
+        },
+        {
+          "id": "downstream-transfer",
+          "title": "迁移到下游任务与自检",
+          "role": "transfer",
+          "description": "按任务性质选择输出层，并用练习检查理解。",
+          "outcomeRefs": [
+            "apply-downstream-adaptation",
+            "explain-pretraining-tasks"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-context-sensitivity",
+          "describe-input-representation",
+          "explain-pretraining-tasks",
+          "apply-downstream-adaptation"
+        ],
+        "method": "完成输出层选择练习，并口头复述输入表示与两个预训练任务的分工。",
+        "successCriteria": [
+          "能指出 GPT 只能单向看上下文导致的具体失败例子",
+          "能写出一个含特殊词元的 BERT 输入序列及其片段索引",
+          "能说明 15% 与 80/10/10 各自解决什么问题",
+          "能为序列分类与词元标注任务分别选出合适的输出层"
+        ],
+        "exerciseBlockId": "model-head-selection-check",
+        "nextPointId": "point-14-9"
+      }
+    },
+    "blocks": [
+      {
+        "id": "context-independent-limits",
+        "moduleId": "context-gap",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：上下文无关表示的局限",
+        "markdown": "word2vec 和 GloVe 这类词嵌入模型在预训练后输出一个矩阵，每一行是词表中某个词的向量。教材指出，它们是**与上下文无关**的：对同一个词始终分配相同向量，不考虑词的上下文。\n\n形式上，词元 $x$ 的上下文无关表示是函数 $f(x)$，只以 $x$ 为输入。面对自然语言中丰富的多义现象和复杂语义，这种表示具有明显局限。教材用 \"a crane is flying\"（一只鹤在飞）和 \"a crane driver came\"（一名吊车司机来了）说明：同一个 \"crane\" 在两处含义完全不同，理应得到不同表示。\n\n与之相对，**上下文敏感**表示是 $f(x, c(x))$，同时依赖词元及其上下文 $c(x)$。教材列举的早期代表包括 TagLM、CoVe 和 ELMo。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-crane-contrast",
+        "moduleId": "context-gap",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：把 crane 的两处用法对齐到函数形式",
+        "markdown": "把教材例子写成函数对比会更清楚。若只用词嵌入，\"crane\" 在两句话里取到同一个向量，即 $f(\\text{crane})$ 只有一份输出；而上下文敏感表示会分别计算 $f(\\text{crane}, c_1)$ 与 $f(\\text{crane}, c_2)$，其中 $c_1$ 含 \"is flying\"，$c_2$ 含 \"driver\"。\n\n这也解释了为什么词向量的相似度与类比实验只在该词义基本固定的前提下可靠：一旦上下文改变了词义，固定向量的结论就不再适用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "context-independent-limits"
+          ]
+        }
+      },
+      {
+        "id": "elmo-vs-gpt",
+        "moduleId": "bert-positioning",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "教材：ELMo 与 GPT 各自的短板",
+        "markdown": "教材把两条路线放在两个维度上比较。\n\n**ELMo** 为输入序列中的每个词分配表示：它把预训练双向 LSTM 的所有中间层表示组合起来，再作为附加特征接到下游任务的既有监督模型中（例如与 GloVe 表示拼接），而预训练的双向 LSTM 权重在下游训练时保持冻结。它改进了情感分析、自然语言推断、语义角色标注、共指消解、命名实体识别和问答六项任务，但每个任务仍然依赖**特定于任务的架构**。\n\n**GPT** 基于 Transformer 解码器，预训练一个表示文本序列的语言模型，是**任务无关**的：下游任务只需在输出后接一个线性输出层预测标签，并对预训练解码器的全部参数做微调。它在 12 项任务上评估并改善了其中 9 项。\n\n但 GPT 由于语言模型的自回归特性，只能从左到右向前看。教材的例子是 \"i went to the bank to deposit cash\"（我去银行存现金）与 \"i went to the bank to sit down\"（我去河岸边坐下）：两句中 \"bank\" 左侧的上下文相同，GPT 因而返回相同表示，尽管含义不同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bank-left-context",
+        "moduleId": "bert-positioning",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么左侧相同就足以暴露单向量问题",
+        "markdown": "教材的两句 bank 例子刻意让 \"bank\" 之前的词完全一致，真正区分词义的 \"deposit cash\" 与 \"sit down\" 都在右侧。单向模型在编码 \"bank\" 时右侧还不可见，因此它拿到的输入证据完全相同，只能输出同一个表示。\n\n这个构造说明：单向限制不是精度问题，而是信息可见性问题——缺失的上下文无法靠更大的模型或更多数据在编码该位置时补回来。要同时利用两侧，编码器必须在编码每个位置时就允许双向访问。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "elmo-vs-gpt"
+          ]
+        }
+      },
+      {
+        "id": "bert-combines-both",
+        "moduleId": "bert-positioning",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：BERT 如何结合两者优点",
+        "markdown": "BERT（来自 Transformers 的双向编码器表示）把 ELMo 与 GPT 的优点结合起来：它对上下文做**双向编码**，同时对大多数自然语言处理任务只需**最少的架构改变**。其做法是用预训练的 Transformer 编码器，基于双向上下文表示任意词元。\n\n在下游任务的监督学习中，BERT 与 GPT 有两点相似：第一，BERT 表示被送入一个新增输出层，按任务性质只做最小架构改动，例如预测每个词元或预测整个序列；第二，微调预训练 Transformer 编码器的全部参数，而新增的输出层从头开始训练。教材用图 14.8.1 对比了 ELMo、GPT 与 BERT 的差异。\n\nBERT 进一步改进了 11 种自然语言处理任务，可分为四大类：单一文本分类（如情感分析）、文本对分类（如自然语言推断）、问答、文本标记（如命名实体识别）。教材强调，从上下文敏感的 ELMo 到任务无关的 GPT 与 BERT，三者都于 2018 年提出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-sequence-construction",
+        "moduleId": "input-representation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：BERT 输入序列的构造",
+        "markdown": "自然语言处理中，有些任务（如情感分析）以单个文本为输入，有些任务（如自然语言推断）以一对文本序列为输入。BERT 输入序列统一表示这两种情况。\n\n- 单个文本：特殊词元 `<cls>`、文本序列的标记、特殊分隔词元 `<sep>` 依次连结。\n- 文本对：`<cls>`、第一个文本序列的标记、`<sep>`、第二个文本序列的标记、`<sep>` 依次连结。\n\n教材特别提醒要把术语“BERT 输入序列”与其他类型的“序列”区分开：一个 BERT 输入序列可以包含一个或两个文本序列。为了区分文本对，学到的片段嵌入 $e_A$ 与 $e_B$ 分别加到第一、第二序列的词元嵌入上；单文本输入只使用 $e_A$。\n\n教材给出的 `get_tokens_and_segments` 即按此规则返回词元列表与片段索引：第一片段记为 0，第二片段记为 1。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "embedding-sum",
+        "moduleId": "input-representation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：三类嵌入相加与 BERTEncoder",
+        "markdown": "BERT 选择 Transformer 编码器作为双向架构。与原始 Transformer 编码器一样，位置信息被加入每个位置；但与原始版本不同，BERT 使用**可学习**的位置嵌入。教材用图 14.8.2 表明：BERT 输入序列的嵌入是**词元嵌入、片段嵌入和位置嵌入的和**。\n\n`BERTEncoder` 的结构与 Transformer 编码器相近，区别在于它额外使用片段嵌入，并把位置嵌入实现为可训练参数。前向推断时先相加词元嵌入与片段嵌入，再加上截取到当前序列长度的那段位置嵌入，然后逐层通过编码块；输出保留形状（批量大小，最大序列长度，隐藏大小）。\n\n教材的演示实例中，词表大小为 10000、隐藏大小为 768、输入为 2 个长度为 8 的序列，前向推断返回形状 (2, 8, 768) 的编码结果，其中每个词元由一个 768 维向量表示。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-input-walkthrough",
+        "moduleId": "input-representation",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：手算一个文本对的输入序列",
+        "markdown": "取第一句 $A$ 为 `this movie is great`（4 个词元），第二句 $B$ 为 `it is good`（3 个词元）。按教材规则拼接：\n\n```text\n词元:   <cls> this movie is great <sep> it is good <sep>\n索引:     0     1    2    3    4     5    6   7    8    9\n片段:     0     0    0    0    0     0    1   1    1    1\n```\n\n共 10 个位置：`<cls>` 与第一句连同其后的 `<sep>` 取片段 0，第二句连同末尾的 `<sep>` 取片段 1。若只有第一句，则序列在位置 5 结束，片段全为 0，且只使用 $e_A$。\n\n把这三列想成三张等长的嵌入表：词元嵌入查词表、片段嵌入只查 0 或 1 两行、位置嵌入查前 10 行，三者在同一位置逐元素相加后才是编码器的输入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "input-sequence-construction",
+            "embedding-sum"
+          ]
+        }
+      },
+      {
+        "id": "mlm-task",
+        "moduleId": "pretraining-mlm",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：掩蔽语言模型（MLM）",
+        "markdown": "编码器给出每个词元及特殊标记的表示后，BERT 用两个任务计算预训练损失。第一个是**掩蔽语言模型**。\n\n常规语言模型用左侧上下文预测词元；为了双向编码上下文，BERT 改为随机掩蔽词元，再用来自双向上下文的词元以自监督方式预测被掩蔽的词元。具体做法是随机选择 15% 的词元作为待预测的掩蔽词元。\n\n为了避免使用标签作弊，同时又不让预训练与微调之间出现不匹配（人造的 `<mask>` 不会出现在微调中），对被选中的词元按以下比例替换输入：\n\n- 80% 的时间替换为特殊词元 `<mask>`，例如 \"this movie is great\" 变成 \"this movie is `<mask>`\"；\n- 10% 的时间替换为随机词元，例如变成 \"this movie is drink\"；\n- 10% 的时间保持标签词元不变，例如仍是 \"this movie is great\"。\n\n教材指出，15% 中被替换为随机词元的那 10% 带来偶然噪声，鼓励 BERT 的双向上下文编码不过度偏向 `<mask>` 词元。预测由单隐藏层的多层感知机完成：输入编码结果与待预测位置，输出这些位置上对整个词表的预测，再用交叉熵计算损失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mlm-why-mix",
+        "moduleId": "pretraining-mlm",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：三种替换各解决什么问题",
+        "markdown": "把 80/10/10 看成针对两个不同风险的对策，比死记比例更有效。\n\n- **只用 `<mask>` 的风险**：`<mask>` 只在预训练出现，微调时输入里根本没有它，模型会学到“看到 `<mask>` 才做预测”的捷径，造成预训练与微调不匹配。\n- **10% 随机词元**：让模型不能假定被预测位置一定是 `<mask>`，必须真正依赖上下文判断，同时引入噪声迫使表示更稳健。\n- **10% 保持不变**：保证被选中的位置在输入中仍是原词时也要输出该词，进一步削弱对 `<mask>` 的依赖。\n\n因此 15% 是“要预测多少”，80/10/10 是“预测时输入长什么样”。两者分工不同，比例本身不是目的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "mlm-task"
+          ]
+        }
+      },
+      {
+        "id": "nsp-task",
+        "moduleId": "pretraining-nsp",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：下一句预测（NSP）",
+        "markdown": "掩蔽语言建模能够编码双向上下文来表示单词，但不能显式建模两个文本序列之间的逻辑关系。为帮助理解句对关系，BERT 在预训练中加入第二个任务——**下一句预测**，它是一个二元分类任务。\n\n生成句子对时，一半时间第二句确实是第一句的连续句子，标签为“真”；另一半时间第二句从语料库中随机抽取，标签为“假”。判别时使用单隐藏层的多层感知机，以编码后的 `<cls>` 词元表示作为输入：由于编码器中的自注意力，`<cls>` 的表示已经编码了两个句子，输出层给出二分类预测。\n\n教材还强调，两个预训练任务的标签都能直接从预训练语料获得，无需人工标注。原始 BERT 在图书语料库与英文维基百科的合集上预训练，两者分别有 8 亿和 25 亿个单词。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "joint-pretraining-loss",
+        "moduleId": "pretraining-nsp",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：两个任务的整合",
+        "markdown": "整合代码时，预训练 BERT 的最终损失函数是掩蔽语言模型损失与下一句预测损失的**线性组合**。`BERTModel` 由三个部分组合而成：`BERTEncoder` 产生编码表示，`MaskLM` 在给定待预测位置上输出词表预测，`NextSentencePred` 基于 `<cls>` 表示输出二分类预测。\n\n前向推断因此返回三样东西：编码后的 BERT 表示、掩蔽语言模型预测和下一句预测结果。教材据此把“双向上下文表示”与“句间关系判断”放在同一个预训练目标中训练。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-nsp-purpose",
+        "moduleId": "pretraining-nsp",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：为什么 MLM 单独不够",
+        "markdown": "MLM 的每个预测只看单个位置的双向上下文，它的监督信号是“这个词是什么”，并不要求模型比较两个句子。而自然语言推断、问答等下游任务恰恰需要判断前提与假设、问题与段落之间的关系。\n\nNSP 把这种关系判断提前放进预训练：正例要求模型识别衔接，负例要求模型识别随机拼接。使用 `<cls>` 的汇总表示作为判据，也顺便让这个特殊位置学会承载整段输入的摘要信息，这正是后续句级任务接输出层的常用入口。\n\n需要注意，教材这里描述的是原始 BERT 的设计；NSP 是否必要属于后续研究讨论的问题，本知识点只要求理解它在原始方案中的定位与实现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "nsp-task",
+            "joint-pretraining-loss"
+          ]
+        }
+      },
+      {
+        "id": "downstream-adaptation",
+        "moduleId": "downstream-transfer",
+        "depth": "core",
+        "kind": "application",
+        "title": "教材：下游任务只需最小架构改动",
+        "markdown": "BERT 对大多数自然语言处理任务只需要最少的架构改动。做法是：把预训练得到的表示送入一个新增的输出层，按任务性质决定输出粒度——预测每个词元，或预测整个序列；然后在监督学习中对预训练 Transformer 编码器的全部参数做微调，而新增输出层从头开始训练。\n\n教材把 BERT 改进的任务归为四类：单一文本分类、文本对分类、问答、文本标记，并指出针对下游应用的 BERT 微调将在第 15 节展开。\n\n这一安排与第 13 章图像微调的思路一致：预训练提供通用表示，任务相关的部分保持轻量。区别在于 BERT 微调默认更新编码器的全部参数，而不是冻结特征。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000126"
+              ],
+              "headingPath": [
+                "自然语言处理：预训练",
+                "来自Transformers的双向编码器表示（BERT）"
+              ],
+              "lineStart": 28896,
+              "lineEnd": 29278,
+              "assetRefs": [
+                "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+                "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+              ],
+              "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-head-selection-check",
+        "moduleId": "downstream-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检：为不同任务选择输出层",
+        "markdown": "对下面两个任务，分别判断应使用什么粒度的输出层，并说明理由。\n\n1. 判断一条影评是正面还是负面。\n2. 找出句子中所有人名和地名所在的位置。\n\n参考答案要点：任务 1 只需要一个整句判断，属于单文本序列分类，使用 `<cls>` 位置的表示接分类层即可；任务 2 需要对每个词元都给出标签，属于文本标记，应在每个位置的表示上接分类层。两者都保持编码器主体不变，只更换新增的输出层，并在微调时更新编码器全部参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "downstream-adaptation",
+            "joint-pretraining-loss"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "downstream-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一节衔接",
+        "markdown": "本知识点的主线可以压缩成三句：\n\n1. 固定词向量无法表达多义，BERT 用 Transformer 编码器同时利用左右上下文；\n2. 输入表示是词元嵌入、片段嵌入与可学习位置嵌入之和，特殊词元 `<cls>`、`<sep>` 区分单文本与文本对；\n3. 预训练由掩蔽语言模型（15%，80/10/10）与下一句预测组成，下游任务只加轻量输出层并微调全部编码器参数。\n\n下一节将说明如何构造适合这两个任务的预训练数据集，包括掩码样本的生成与输入表示的组装。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "bert-combines-both",
+            "embedding-sum",
+            "mlm-task",
+            "nsp-task",
+            "downstream-adaptation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "bert-head-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-head-selection-check",
+        "moduleId": "downstream-transfer",
+        "depth": "core",
+        "title": "为任务选择 BERT 输出层",
+        "outcomeRefs": [
+          "apply-downstream-adaptation"
+        ],
+        "learningPurpose": "检查学习者能否把“按任务性质决定输出粒度”的规则迁移到分类与标注两类任务。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "downstream-adaptation"
+          ]
+        },
+        "config": {
+          "question": "判断一条影评的正负极性，应在 BERT 的哪个位置接输出层？",
+          "options": [
+            "在 <cls> 位置的表示上接分类层，预测整个序列的标签",
+            "在每个词元位置各接一个分类层，再对结果取平均",
+            "只使用 <sep> 位置的表示接分类层"
+          ],
+          "answerIndex": 0,
+          "explanation": "情感分析属于单文本序列分类，只需一个整句判断；<cls> 的表示汇总了整段输入，是接句级输出层的入口。逐词元输出用于文本标记任务。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请说明情感分析与命名实体识别分别应在哪个输出粒度上接分类层，并写出教材中“按任务性质对模型架构做最小改动”的依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：预训练",
+  "clusterId": "chapter-14",
+  "clusterIds": [
+    "chapter-14"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000126"
+      ],
+      "headingPath": [
+        "自然语言处理：预训练",
+        "来自Transformers的双向编码器表示（BERT）"
+      ],
+      "lineStart": 28896,
+      "lineEnd": 29278,
+      "assetRefs": [
+        "parts/part-0008/images/7e0af21d76d812a54336cddb0da914d4151468ff83dd07d811f0ba0899d2bcc7.jpg",
+        "parts/part-0008/images/afe47e74ae09f70e08589f6a02487711d85293038d901af5755e0b18c9b67d63.jpg"
+      ],
+      "excerptSha256": "86fce162c79dbe985ba27a7ebf8430ecff62c58ff68c69259005bd86b5bb4cbb"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2014,
+    217
+  ],
+  "scale": 0.97
+}

@@ -1,0 +1,291 @@
+{
+  "schema_version": "course-animation-runtime/1.0",
+  "source_schema_version": "course-content-animations/1.0",
+  "format": "sandboxed-iframe",
+  "animations": [
+    {
+      "type": "attentionWeighting",
+      "component": "AttentionWeighting",
+      "title": "注意力打分与加权聚合",
+      "mechanism": {
+        "inputs": "一组输入向量、查询向量或当前查询位置，以及选定的打分函数与投影矩阵",
+        "changingState": "查询与各键的打分、归一化后的注意力权重、加权求和得到的输出向量，以及正在推进的查询位置",
+        "transitionRule": "按打分函数计算查询与各键的分数，经 Softmax 归一化为权重，再对值向量加权求和；存在多个查询位置时逐位置重复该过程",
+        "terminalState": "全部查询位置处理完毕，每个位置的权重各自归一化为 1，输出向量等于对应值向量的加权和",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-2",
+          "suggestion": "逐位置显示查询与键的匹配打分，用条形长度表示归一化前后的注意力权重，并同步展示值向量按权重累加成最终输出；允许重播同一组输入以对照权重分布。"
+        },
+        {
+          "pointId": "point-1-3",
+          "suggestion": "逐位置推进：先高亮当前查询向量，显示它与序列中各键的打分与权重条形，再演示按权重混合值向量得到输出，最后切换到下一位置；同一次重播使用相同输入序列和相同权重轨迹。"
+        }
+      ]
+    },
+    {
+      "type": "kvCacheDecoding",
+      "component": "KvCacheDecoding",
+      "title": "KV 缓存增量解码",
+      "mechanism": {
+        "inputs": "前缀填充阶段写入的键缓存与值缓存，以及解码步新输入的词元",
+        "changingState": "KV 缓存的长度与内容、当前步查询向量的注意力输出，以及缓存占用的可视规模",
+        "transitionRule": "用新词元计算查询、键、值，把键与值追加到缓存末尾，再让查询与全部已缓存键值做 Softmax 注意力并加权求和得到输出，采样出下一个词元后重复",
+        "terminalState": "生成结束词元或达到最大生成长度，缓存停止增长并显示最终占用",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-1-5",
+          "suggestion": "逐帧显示缓存行向右追加一格、当前查询在缓存上扫描并按权重聚合值，同时用并排对照显示不缓存时需要重算整段前缀的重复计算量。"
+        }
+      ]
+    },
+    {
+      "type": "pretrainingLoop",
+      "component": "PretrainingLoop",
+      "title": "预训练迭代",
+      "mechanism": {
+        "inputs": "一段固定的连续词元序列、初始模型参数、学习率和训练步数预算",
+        "changingState": "当前窗口内各位置对下一词元的预测分布、交叉熵损失值以及模型参数",
+        "transitionRule": "用窗口内真实下一词元作为标签计算交叉熵，反向传播得到梯度并按优化器规则更新参数，然后把窗口向前滑动一个词元",
+        "terminalState": "达到预定训练步数或计算预算，损失曲线趋于平稳并停止下降",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-2",
+          "suggestion": "用一条横向词元带展示滑动窗口：高亮当前位置的预测分布，标出它与真实下一词元的差异并累加为损失，再用参数更新动画和同步下降的损失曲线表现训练步推进；重播回到相同的初始参数与同一段语料。"
+        }
+      ]
+    },
+    {
+      "type": "instructionTuningLoop",
+      "component": "InstructionTuningLoop",
+      "title": "指令微调迭代",
+      "mechanism": {
+        "inputs": "一条指令–回答样本、初始预训练模型参数、学习率与训练轮数",
+        "changingState": "每个回答词元的预测损失与累加得到的总损失，以及反向传播后被更新的模型参数",
+        "transitionRule": "把指令与输入拼接为条件输入，仅在回答词元位置累加负对数似然，再沿梯度更新参数，然后进入下一个 epoch 重复该过程",
+        "terminalState": "达到设定的训练轮数，或留出集表现不再改善时停止",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-3",
+          "suggestion": "按词元逐个展示：指令与输入部分被掩码，回答词元依次产生损失并累加到总损失，随后执行一次参数更新；再以 epoch 为单位展示训练损失快速下降、而示范表述的拟合逐渐加深，帮助理解为什么轮数通常控制在 1–3 个 epoch。"
+        }
+      ]
+    },
+    {
+      "type": "preferenceAlignment",
+      "component": "PreferenceAlignment",
+      "title": "偏好对齐的策略更新",
+      "mechanism": {
+        "inputs": "同一条指令下的偏好对、参考策略、初始策略以及 KL 系数",
+        "changingState": "胜出与落败回答的相对奖励及其差距，以及该样本在梯度中的权重",
+        "transitionRule": "每步用当前策略计算两者隐式奖励差，按 logistic 权重向增大胜出回答相对奖励的方向更新策略，同时受参考策略的 KL 约束",
+        "terminalState": "偏好损失趋于稳定、样本权重下降，策略分布不再明显偏离参考策略",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-4",
+          "suggestion": "用两条水平奖励条分别表示胜出与落败回答，随训练推进互相拉开；同时用权重指示条显示梯度权重随差距增大而缩小，突出 DPO 的自适应难例聚焦。"
+        }
+      ]
+    },
+    {
+      "type": "testTimeScaling",
+      "component": "TestTimeScaling",
+      "title": "测试时扩展的采样与验证",
+      "mechanism": {
+        "inputs": "一道复杂问题、相当于若干次完整生成的算力预算，以及验证方式",
+        "changingState": "已生成的候选推理路径集合、每条路径的得分或票数、已经消耗的计算预算",
+        "transitionRule": "按预算并行采样新路径，用所选验证方式给路径打分或累计票数；保留高分或高票路径，剪去低分分支并回溯展开其他分支",
+        "terminalState": "预算耗尽，或某条路径通过验证阈值时，输出得分最高或票数最多的答案",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-5",
+          "suggestion": "用同一道题并排展示单条长链与多路采样加验证两种花法：逐条生成候选路径，实时标出票数或分数，剪枝后回溯到其他分支，最后高亮被选中的答案并显示预算消耗，让学习者看到同样的算力如何被分配到搜索与验证上。"
+        }
+      ]
+    },
+    {
+      "type": "agentLoop",
+      "component": "AgentLoop",
+      "title": "智能体交互循环",
+      "mechanism": {
+        "inputs": "任务描述、初始环境状态，以及驾驶舱维护的记忆",
+        "changingState": "第 t 步的输入上下文、模型原始输出、被解析后的可执行操作、环境状态与观察",
+        "transitionRule": "驾驶舱构造上下文，模型生成输出，解析为动作后交由环境执行，环境更新状态并返回观察，反馈写入记忆供下一轮使用",
+        "terminalState": "任务完成或失败时驾驶舱结束循环；也可在越权被拒绝、达到停止条件或步数上限时终止",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-6",
+          "suggestion": "逐步播放同一任务的若干轮循环，高亮当前上下文、动作、环境状态与观察的传递方向，并在越权请求被拒绝时显示环境状态保持不变，支持重播同一条轨迹。"
+        }
+      ]
+    },
+    {
+      "type": "contextAssembly",
+      "component": "ContextAssembly",
+      "title": "上下文窗口组装",
+      "mechanism": {
+        "inputs": "任务描述与系统提示、交互历史、工具返回的观察、检索结果与记忆条目，以及上下文窗口的容量预算",
+        "changingState": "上下文中各条内容的占用位置与总长度，以及哪些条目被保留、被压缩摘要或被移出",
+        "transitionRule": "每一步按相关性、重要性和时效选择候选内容放入窗口；超出预算时压缩早期内容，或按会话级策略重置上下文",
+        "terminalState": "任务完成并输出结果，或上下文达到容量上限而触发压缩或重置",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-7",
+          "suggestion": "用一条容量有限的上下文窗口展示多步交互：新内容逐步进入、低价值内容被挤出，接近上限时分支演示压缩与重置，并标注信息损失发生的位置。"
+        }
+      ]
+    },
+    {
+      "type": "toolInvocation",
+      "component": "ToolInvocation",
+      "title": "工具调用与校验",
+      "mechanism": {
+        "inputs": "任务描述、当前步骤已加载的工具子集及其名称、功能描述、参数模式和返回格式，以及当前步骤的输入状态",
+        "changingState": "模型生成的调用请求、驾驶舱的校验结论、工具执行结果与观察内容，以及记录下来的下一步状态",
+        "transitionRule": "模型依据当前观察从已加载工具中生成结构化调用请求；驾驶舱校验参数与权限，通过则执行并把结果作为观察返回，不通过则返回错误观察",
+        "terminalState": "任务在该步执行后达成目标，或达到步数预算、连续校验失败等停止条件",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-8",
+          "suggestion": "逐步展示已加载工具列表、模型生成的调用请求、驾驶舱校验分支和返回的观察，并在每个节点标出被记录的四项状态；允许点击重播回到同一初始工具集合，同时展示一次被拒绝的调用如何转入错误观察。"
+        }
+      ]
+    },
+    {
+      "type": "agentRlTraining",
+      "component": "AgentRlTraining",
+      "title": "智能体强化学习迭代",
+      "mechanism": {
+        "inputs": "初始策略、一组训练任务、环境以及固定的采样轨迹数和学习率",
+        "changingState": "每一轮采样出的多条轨迹、各轨迹的奖励与组内相对优势，以及策略更新后下一轮轨迹的分布",
+        "transitionRule": "对同一任务采样多条轨迹，用可验证结果给出奖励，按组内均值与标准差归一化得到优势，再按优势方向更新策略参数",
+        "terminalState": "达到预定训练步数或验证奖励不再提升时停止，并显示最后一轮的轨迹分布",
+        "replayMode": "both"
+      },
+      "bindings": [
+        {
+          "pointId": "point-2-9",
+          "suggestion": "逐步展示同一任务采样多条轨迹，用奖励条比较组内相对优势，再显示策略更新后新一批轨迹向高奖励方向集中；支持重播同一批样本，也支持重新生成不同样本。"
+        }
+      ]
+    },
+    {
+      "type": "textVectorization",
+      "component": "TextVectorization",
+      "title": "文本转向量",
+      "mechanism": {
+        "inputs": "一段输入文本、选定的分词规则以及对应词表；切换视角时还包括 Embedding 的维度",
+        "changingState": "当前处理到第几个词元、已生成的词元位置编号序列、逐词累加得到的文本向量",
+        "transitionRule": "按分词规则取出下一个词元，在词表中查得其位置编号，按词表大小生成该词元的 One-Hot 向量并累加进文本向量；切换为 Embedding 视角时改为取该词元的稠密向量",
+        "terminalState": "全部词元处理完毕，得到一个长度固定的文本向量",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-5",
+          "suggestion": "逐步高亮当前词元与它在词表中的位置，动态生成对应向量并累加，同时显示向量剩余的非零位置数；允许切换按字与按词两种切分，对比 N 维稀疏向量与 D 维稠密向量的长度和稀疏度，并提供重播回到同一初始文本。"
+        }
+      ]
+    },
+    {
+      "type": "ragRetrieval",
+      "component": "RagRetrieval",
+      "title": "RAG 检索增强生成",
+      "mechanism": {
+        "inputs": "用户问题、知识库中文档切分后的文本块及其向量，以及负责作答的 LLM",
+        "changingState": "检索结果集合、拼装完成的提示词，以及最终的答案",
+        "transitionRule": "把问题向量与知识库中各文本块的向量做相似度比较，取相似度最高的若干文本块，按顺序填入提示词模板后再交给 LLM 归纳生成",
+        "terminalState": "LLM 输出结合检索上下文的最终答案；若检索无相关结果，则退化为模型自身回答或提示知识不足",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-9",
+          "suggestion": "依次展示问题向量化、在知识库中按相似度检索 topK 文本块、把上下文与问题填入提示词、最后由 LLM 生成答案的过程，并可对比有无检索时同一问题的回答差异。"
+        }
+      ]
+    },
+    {
+      "type": "ragPipeline",
+      "component": "RagPipeline",
+      "title": "知识库问答流水线",
+      "mechanism": {
+        "inputs": "用户问题、已完成离线加工的向量索引，其中包含文本块原文与其向量",
+        "changingState": "问题是否通过合规校验、问题向量与索引中各片段的相似度、被选中的文本块集合、填入 prompt 的内容以及 LLM 返回的答案",
+        "transitionRule": "问题先经合规校验，通过后转为向量；在向量库中按相似度降序检索并取前若干片段；把原文片段与问题一起填入 prompt 模板；交由 LLM 基于这些片段生成答案",
+        "terminalState": "LLM 返回以检索片段为依据的答案；重播回到同一个问题与同一份索引",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-10",
+          "suggestion": "分两段播放：先展示离线端的文档切片与向量入库，再展示在线端的问题校验、向量化、相似度排序、topK 高亮与其拼入 prompt 的过程，最后显示答案及其对应的原文片段，允许重播。"
+        }
+      ]
+    },
+    {
+      "type": "dingtalkQaRoundtrip",
+      "component": "DingtalkQaRoundtrip",
+      "title": "钉钉问答往返链路",
+      "mechanism": {
+        "inputs": "钉钉群中用户提出的问题，以及已准备好的私域知识库和可用的 LLM 服务",
+        "changingState": "请求当前所处的环节，以及每一步产生的中转结果",
+        "transitionRule": "服务收到消息后先向知识库检索相关私域文档，再把检索结果组织进提示交给 LLM，LLM 生成答案后由服务整理并通过钉钉机器人回传",
+        "terminalState": "答案回到钉钉群，完成一次问答，随后等待下一条消息",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-16",
+          "suggestion": "用五个节点表示消息入口、服务、知识库、LLM 与回复，沿一次真实问答逐步点亮节点并显示该步的中转结果，支持重播回到同一条示例问题。"
+        }
+      ]
+    },
+    {
+      "type": "dingtalkPostHandler",
+      "component": "DingtalkPostHandler",
+      "title": "钉钉机器人 POST 处理",
+      "mechanism": {
+        "inputs": "钉钉群中的一条提问消息，以及已配置的机器人回调地址与端口",
+        "changingState": "请求所处的处理阶段与最终返回内容：等待到达、已接收 POST 请求、正在执行查询、结果已格式化、已返回响应",
+        "transitionRule": "钉钉机器人把消息以 POST 发到服务端口，服务取出问题后调用知识库与 LLM 的查询，把返回内容整理成机器人消息格式后返回 HTTP 响应",
+        "terminalState": "服务返回成功响应，回答出现在钉钉群里；下一条消息从初始状态重新开始",
+        "replayMode": "restart"
+      },
+      "bindings": [
+        {
+          "pointId": "point-3-20",
+          "suggestion": "逐步推进一条群消息在各阶段的位置，并在接收与返回两步标出监听端口和日志中记录的源端 IP，让学习者看清端口配置与日志取 IP 分别作用于链路的哪一段。"
+        }
+      ]
+    }
+  ],
+  "assets": {
+    "runtime.js": {
+      "bytes": 354512,
+      "sha256": "a6391e931ff3d7147e56e673dd5c68353235d667a7e6762d06b18cb222f710a0"
+    },
+    "runtime.css": {
+      "bytes": 45492,
+      "sha256": "2b1b03bc5d698ccf16063cb95fdc6d8949a96c6fdd6e9f2f802274fc556cda63"
+    }
+  }
+}

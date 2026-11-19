@@ -1,0 +1,555 @@
+{
+  "id": "point-4-5",
+  "title": "逐层规范化",
+  "shortSummary": "介绍批归一化、层归一化等逐层规范化方法，说明其计算方式与对训练的稳定作用。",
+  "keyTerms": [
+    "批归一化",
+    "层归一化",
+    "规范化",
+    "训练稳定"
+  ],
+  "animationType": "normalizationDrift",
+  "animationSuggestion": "用同一坐标系画出净输入分布随训练步的变化：上方显示漂移的原始分布，下方显示经批量统计量标准化并缩放平移后的分布；提供重播回到初始分布，并标注均值、标准差与当前步数。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-4-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-then-selection",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于逐层规范化动机、各方法统计维度与适用边界的结论，按“为什么有效、怎么做、怎么选”重排，补充算例与选择检查表。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-motivation",
+          "text": "解释逐层规范化为什么能让深度网络更容易训练，并说明内部协变量偏移与优化地形两个角度。"
+        },
+        {
+          "id": "compute-batch-norm",
+          "text": "写出批归一化的标准化与缩放平移计算，并区分训练与推理阶段使用的统计量。"
+        },
+        {
+          "id": "compute-layer-norm",
+          "text": "说明层归一化、均方根规范化与批归一化在统计维度和计算步骤上的差别。"
+        },
+        {
+          "id": "choose-normalization",
+          "text": "依据网络类型、批量大小与任务场景选择合适的逐层规范化方法并说明理由。"
+        }
+      ],
+      "misconceptions": [
+        "认为批归一化的作用主要是消除内部协变量偏移，而忽略后续研究指出的优化地形平滑作用。",
+        "认为推理阶段仍用当前批次的均值与方差做规范化。",
+        "认为层归一化与批归一化只是名称不同，忽略两者统计维度分别为层内神经元和跨样本。",
+        "认为规范化必然削弱网络表示能力，忽略缩放参数与平移参数可以调整取值区间。"
+      ],
+      "modules": [
+        {
+          "id": "why-normalize",
+          "title": "为什么要在层内做规范化",
+          "role": "motivation",
+          "description": "从内部协变量偏移和优化地形两方面建立动机。",
+          "outcomeRefs": [
+            "explain-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "batch-norm-mechanism",
+          "title": "批归一化的计算",
+          "role": "derivation",
+          "description": "位置选择、标准化公式与缩放平移的可逆性。",
+          "outcomeRefs": [
+            "compute-batch-norm"
+          ],
+          "order": 1
+        },
+        {
+          "id": "batch-norm-training",
+          "title": "统计量、正则化与限制",
+          "role": "boundary-check",
+          "description": "训练与推理的统计量差异、梯度依赖与适用限制。",
+          "outcomeRefs": [
+            "compute-batch-norm"
+          ],
+          "order": 2
+        },
+        {
+          "id": "layer-norm-mechanism",
+          "title": "层归一化与均方根规范化",
+          "role": "comparison",
+          "description": "沿神经元维度统计的做法及其在循环网络中的用法。",
+          "outcomeRefs": [
+            "compute-layer-norm"
+          ],
+          "order": 3
+        },
+        {
+          "id": "choose-and-compare",
+          "title": "方法比较与选择",
+          "role": "decision-guide",
+          "description": "权重规范化、局部响应规范化与按场景选择规范化方法。",
+          "outcomeRefs": [
+            "choose-normalization"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-motivation",
+          "compute-batch-norm",
+          "compute-layer-norm",
+          "choose-normalization"
+        ],
+        "method": "完成三组情境的方法选择与计算核对，并说明依据。",
+        "successCriteria": [
+          "能写出批归一化的一次前向计算并指出统计量来源",
+          "能说明层归一化与批归一化的统计维度差别",
+          "能为卷积网络大批量、循环网络、大模型三类情境给出方法及理由"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-4-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-why-normalize",
+        "moduleId": "why-normalize",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：逐层规范化的两个理由",
+        "markdown": "逐层规范化（Layer-wise Normalization）把传统机器学习中的数据规范化方法搬到深度网络里，对隐藏层的输入做规范化，使网络更容易训练。教材给出两方面的理由。\n\n第一是更好的尺度不变性：一个神经层的输入就是前一层乃至更早各层的输出，前面层的参数一变，这一层的输入分布就跟着变；用随机梯度下降训练时，每次参数更新都会改变输入分布，而且层越高改变越明显，就像高楼低层的微小偏移会在高层放大。从机器学习角度看，输入分布改变意味着该层参数需要重新学习，这一现象称为内部协变量偏移（Internal Covariate Shift）。对每层输入做规范化，可以把分布稳定在相近的尺度范围内，使该层对输入尺度不敏感，也有利于参数初始化与超参数选择。\n\n第二是更平滑的优化地形：规范化让大部分神经层的输入落在不饱和区域，梯度不至于过小，缓解梯度消失；同时使优化地形更平滑、梯度更稳定，因此可以使用更大的学习率并加快收敛。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-covariate-analogy",
+        "moduleId": "why-normalize",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：为什么层数越高偏移越大",
+        "markdown": "把教材的高楼类比展开一点：设每层都把输入放大 $1.1$ 倍，输入端 $1\\%$ 的扰动经过十层后约为 $1.1^{10} \\approx 2.6$ 倍，到了高层已经是量级变化。这说明“低层小偏移、高层大偏移”不是异常，而是复合映射的正常后果。\n\n由此可以理解规范化的定位：它并不冻结底层参数，也不阻止分布变化，而是把每层输入的尺度重新锚定到可控范围，让该层不必为上一层尺度的漂移反复重新适应。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-normalize"
+          ]
+        }
+      },
+      {
+        "id": "tb-batch-norm-placement",
+        "moduleId": "batch-norm-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：批归一化的位置与标准化",
+        "markdown": "批归一化（Batch Normalization，BN）可以作用于任意中间层。设第 $l$ 层的净输入为 $z^{(l)}$，输出为 $a^{(l)}$，即 $a^{(l)} = f(Wa^{(l-1)} + b)$。要提高优化效率就要让净输入分布一致；虽然也可以规范化输入 $a^{(l-1)}$，但对净输入 $z^{(l)}$ 规范化更有利于优化，因此实践中把规范化放在仿射变换 $Wa^{(l-1)} + b$ 之后、激活函数之前。\n\n对 $z^{(l)}$ 的每一维做标准化，使其均值为 $0$、方差为 $1$：\n\n$$\\hat{z}^{(l)} = \\frac{z^{(l)} - \\mu_{\\mathcal{B}}}{\\sqrt{\\sigma_{\\mathcal{B}}^2 + \\epsilon}}$$\n\n其中 $\\epsilon$ 是为保持数值稳定性而设置的非常小的常数。$\\mu_{\\mathcal{B}}$ 与 $\\sigma_{\\mathcal{B}}^2$ 是当前参数下 $z^{(l)}$ 在整个训练集上的期望与方差；由于训练基于小批量随机梯度下降，准确计算全训练集统计量代价较高，实际用当前小批量的均值和方差近似。逐层规范化要在中间层反复执行、效率要求高，白化这类复杂度高的方法不合适，因此一般使用标准化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-norm-steps",
+        "moduleId": "batch-norm-mechanism",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "算例：一个小批量上的四步计算",
+        "markdown": "取某层某个神经元的净输入在一个大小为 $K$ 的小批量上的取值，批归一化在一次前向中做四件事。\n\n1. 求批量均值：$\\mu_{\\mathcal{B}} = \\frac{1}{K}\\sum_{k=1}^{K} z^{(k,l)}$\n2. 求批量方差：$\\sigma_{\\mathcal{B}}^2 = \\frac{1}{K}\\sum_{k=1}^{K}\\left(z^{(k,l)} - \\mu_{\\mathcal{B}}\\right)^2$\n3. 标准化：$\\hat{z}^{(k,l)} = \\frac{z^{(k,l)} - \\mu_{\\mathcal{B}}}{\\sqrt{\\sigma_{\\mathcal{B}}^2 + \\epsilon}}$\n4. 缩放平移：$y^{(k,l)} = \\gamma\\hat{z}^{(k,l)} + \\beta$\n\n代入一组数：某神经元在 $K = 4$ 个样本上的净输入为 $1, 3, 5, 7$，则 $\\mu_{\\mathcal{B}} = 4$、$\\sigma_{\\mathcal{B}}^2 = 5$。取 $\\epsilon = 0$ 时四个标准化结果约为 $-1.34, -0.45, 0.45, 1.34$，其均值为 $0$、方差为 $1$，与公式一致。注意这个结果只由这四个样本决定：换一批样本，同一个样本的规范化输出就会改变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-batch-norm-placement"
+          ]
+        }
+      },
+      {
+        "id": "tb-batch-norm-affine",
+        "moduleId": "batch-norm-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：缩放平移与可还原性",
+        "markdown": "对净输入做标准化会让取值集中到 $0$ 附近；若使用 Sigmoid 型激活函数，这个区间恰好接近线性区，会削弱网络的非线性性质。为使规范化不损害表示能力，教材在标准化后附加一个缩放和平移变换来改变取值区间：\n\n$$y^{(l)} = \\gamma \\odot \\hat{z}^{(l)} + \\beta$$\n\n其中 $\\gamma$ 与 $\\beta$ 分别是缩放和平移的参数向量。从最保守的角度考虑，可以用标准化的逆变换把规范化后的变量还原为原来的值：当 $\\gamma = \\sqrt{\\sigma_{\\mathcal{B}}^2 + \\epsilon}$、$\\beta = \\mu_{\\mathcal{B}}$ 时，规范化后的变量复原为 $z^{(l)}$。正因为批量规范化本身带有平移变换，前面那个仿射变换不再需要偏置参数。批归一化因此可以看作一个特殊的神经层，加在每一层非线性激活函数之前。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-norm-invert-check",
+        "moduleId": "batch-norm-mechanism",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "核对：逆变换如何把规范化结果还原",
+        "markdown": "用上一步的算例验证教材给出的逆变换取值。批量均值 $\\mu_{\\mathcal{B}} = 4$、方差 $\\sigma_{\\mathcal{B}}^2 = 5$、取 $\\epsilon = 0$，于是 $\\gamma = \\sqrt{5} \\approx 2.236$、$\\beta = 4$。对样本 $z = 7$，标准化得 $\\hat{z} \\approx 1.34$，代入 $\\gamma\\hat{z} + \\beta \\approx 2.236 \\times 1.34 + 4 \\approx 7$，确实回到原值。\n\n这个可逆性说明批归一化没有强制丢弃原始尺度，而是把“保留多少规范化效果”交给可学习的 $\\gamma$ 与 $\\beta$。若某层需要更接近线性的取值区间，它可以学出较小的 $\\gamma$；若某些维度不需要规范化，也可以学到接近逆变换的参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-batch-norm-affine"
+          ]
+        }
+      },
+      {
+        "id": "tb-batch-norm-statistics",
+        "moduleId": "batch-norm-training",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：统计量是净输入的函数",
+        "markdown": "教材特别提醒：每次小批量的 $\\mu_{\\mathcal{B}}$ 和 $\\sigma_{\\mathcal{B}}^2$ 是净输入 $z^{(l)}$ 的函数，而不是常量。因此在计算参数梯度时需要考虑 $\\mu_{\\mathcal{B}}$ 与 $\\sigma_{\\mathcal{B}}^2$ 的影响，不能把它们当作与参数无关的常数略去。\n\n当训练完成时，用整个数据集上的均值 $\\mu$ 和方差 $\\sigma^2$ 分别代替每次小批量的 $\\mu_{\\mathcal{B}}$ 与 $\\sigma_{\\mathcal{B}}^2$；实践中这两个统计量也可以用移动平均来计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-norm-inference",
+        "moduleId": "batch-norm-training",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "澄清：推理阶段不能用当前批次统计量",
+        "markdown": "一个常见错误是把训练时的做法原样搬到推理：对一条测试样本，用“这一批测试数据”的均值与方差去规范化。这与教材的说明不符，会带来两个实际问题。\n\n- 预测结果将依赖同批次的其他样本：同一样本换一批陪伴样本，输出就变了；批量大小为 $1$ 时甚至无法计算批内方差。\n- 训练与推理使用的统计量来源不同，会造成行为不一致。\n\n正确做法是教材所述：训练结束后用整个数据集（或训练中维护的移动平均）的均值与方差，在推理时把它们当作固定常量使用。换句话说，批归一化在推理阶段退化为逐维的固定仿射变换，不再有样本间耦合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-batch-norm-statistics"
+          ]
+        }
+      },
+      {
+        "id": "tb-batch-norm-limits",
+        "moduleId": "batch-norm-training",
+        "depth": "support",
+        "kind": "warning",
+        "title": "教材：正则化副作用与适用限制",
+        "markdown": "逐层规范化不仅提高优化效率，还可以作为一种隐形的正则化方法：训练时网络对一个样本的预测不仅与该样本自身相关，也与同一批次中的其他样本相关；由于选取批次具有随机性，网络不容易“过拟合”到某个特定样本，从而提高泛化能力。\n\n它同时带来两条限制。第一，批量规范化是对一个中间层的单个神经元做规范化，统计量跨样本计算，因此要求小批量样本数量不能太小，否则难以计算单个神经元的统计信息。第二，如果一个神经元净输入的分布在神经网络中动态变化，例如循环神经网络，就难以直接应用批量规范化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-norm-check",
+        "moduleId": "batch-norm-training",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查：三个场景下批归一化是否合适",
+        "markdown": "判断下列场景中直接使用批归一化会遇到什么问题，并说明依据。\n\n1. 图像分类任务，批量大小为 $256$，主干是卷积网络。\n2. 在线逐帧推理的语音模型，每次只来一条样本。\n3. 处理变长文本的循环网络，隐状态分布随训练不断移动。\n\n参考思路：场景 1 批量足够大、属于卷积网络，批归一化可用且常见；场景 2 的关键是统计量来源，推理应使用训练得到的全局统计量，若训练批量本身很小则批内统计不可靠；场景 3 对应教材指出的净输入分布动态变化，批归一化的跨样本假设不成立，应改用沿神经元维度统计的方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-batch-norm-limits"
+          ]
+        }
+      },
+      {
+        "id": "tb-layer-norm",
+        "moduleId": "layer-norm-mechanism",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：层归一化与它在循环网络中的用法",
+        "markdown": "层归一化（Layer Normalization，LN）是对一个中间层的所有神经元进行规范化。设第 $l$ 层净输入为 $z^{(l)}$，该层神经元数量为 $M_l$，其均值与方差为\n\n$$\\mu^{(l)} = \\frac{1}{M_l}\\sum_{i=1}^{M_l} z_i^{(l)}, \\qquad \\sigma^{(l)2} = \\frac{1}{M_l}\\sum_{i=1}^{M_l}\\left(z_i^{(l)} - \\mu^{(l)}\\right)^2$$\n\n层归一化定义为\n\n$$\\hat{z}^{(l)} = \\frac{z^{(l)} - \\mu^{(l)}}{\\sqrt{\\sigma^{(l)2} + \\epsilon}} \\odot \\gamma + \\beta$$\n\n其中 $\\gamma$ 与 $\\beta$ 分别是缩放和平移的参数向量，与 $z^{(l)}$ 同维。\n\n层归一化可以应用在循环神经网络中：设 $t$ 时刻循环神经网络的隐藏层为 $h_t$，对其做层归一化后再参与状态更新，其中 $x_t$ 为该时刻输入。在标准循环神经网络中，循环神经层的净输入一般会随着时间慢慢变大或变小，从而导致梯度爆炸或消失，层归一化可以有效缓解这种状况。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-layer-vs-batch",
+        "moduleId": "layer-norm-mechanism",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "对比：同一矩阵上的行与列",
+        "markdown": "教材指出，层归一化与批量规范化整体上十分类似，差别在于统计量的计算维度。取含 $K$ 个样本的小批量，把每个样本的净输入按列堆叠成矩阵 $Z^{(l)} = [z^{(1,l)}, \\dots, z^{(K,l)}]$，则：\n\n| 方法 | 统计维度 | 规范化对象 | 统计量依赖 |\n|---|---|---|---|\n| 批量规范化 | 沿样本方向求和 | 每一行，即单个神经元跨样本 | 同一批次的其他样本 |\n| 层归一化 | 沿神经元方向求和 | 每一列，即单个样本的整层神经元 | 仅该样本自身 |\n\n由此可以直接读出各自的适用面。批量规范化需要足够大的批量才能估出可靠的跨样本统计，且样本之间存在耦合；层归一化的统计量完全来自当前样本的整层神经元，既不依赖批量大小，也不要求分布随时间稳定，因此适合循环网络与序列模型。教材同时给出实践倾向：在卷积神经网络和批量较大的视觉任务中批量规范化更常见，在循环神经网络、Transformer 以及批量较小的场景中层归一化往往更自然。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-layer-norm",
+            "tb-batch-norm-placement"
+          ]
+        }
+      },
+      {
+        "id": "tb-rms-norm",
+        "moduleId": "layer-norm-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：均方根规范化",
+        "markdown": "在序列建模和大语言模型中，均方根规范化（Root Mean Square Normalization，RMSNorm）是一种常用方法。与层归一化相比，它不再对输入做均值中心化，只根据均方根（Root Mean Square，RMS）来调整尺度，因此计算更简单。\n\n给定一层的净输入 $z^{(l)} \\in \\mathbb{R}^{M_l}$，其均方根为\n\n$$\\mathrm{RMS}(z^{(l)}) = \\sqrt{\\frac{1}{M_l}\\sum_{i=1}^{M_l}\\left(z_i^{(l)}\\right)^2}$$\n\nRMS 规范化定义为\n\n$$\\hat{z}^{(l)} = \\frac{z^{(l)}}{\\mathrm{RMS}(z^{(l)})} \\odot \\gamma$$\n\n其中 $\\gamma$ 为可学习的缩放参数。和层归一化相比，RMS 规范化少了减均值这一步，计算和实现都更简单，同时仍保留了对输入尺度变化的抑制作用。从实践上看，它尤其适合 Transformer 类模型，因此在很多现代大模型中比层归一化更常见。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-rms-norm-compute",
+        "moduleId": "layer-norm-mechanism",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：少一步的尺度调整",
+        "markdown": "取某层某一时刻的净输入为 $z = (3, -1, 1, -3)$，该层神经元数 $M_l = 4$。\n\n- 层归一化：均值 $\\mu = 0$、方差 $\\sigma^2 = 5$，标准化结果为约 $(1.34, -0.45, 0.45, -1.34)$。\n- RMS 规范化：均方根 $\\mathrm{RMS}(z) = \\sqrt{(9 + 1 + 1 + 9)/4} = \\sqrt{5} \\approx 2.236$，直接相除得约 $(1.34, -0.45, 0.45, -1.34)$。\n\n这组输入均值恰为 $0$，两种方法结果相同。若换成 $z = (4, 0, 2, -2)$，均值 $\\mu = 1$，层归一化会先减去 $1$ 再做缩放，RMS 规范化则不减均值，两者输出不同：前者把整层平移到零均值，后者保留原有的整体偏移，只压缩尺度。这就是教材所说“少了减均值这一步”的实际后果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-rms-norm",
+            "tb-layer-norm"
+          ]
+        }
+      },
+      {
+        "id": "tb-weight-norm-lrn",
+        "moduleId": "choose-and-compare",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：权重规范化与局部响应规范化",
+        "markdown": "权重规范化（Weight Normalization）是对神经网络的连接权重做规范化：通过再参数化方法把连接权重分解为长度和方向两种参数。对第 $l$ 层 $a^{(l)} = f(Wa^{(l-1)} + b)$，将权重写作 $w_i = g_i\\frac{v_i}{\\lVert v_i \\rVert}$，其中 $v_i$ 是与 $a^{(l-1)}$ 同维的列向量，$g_i$ 是标量。由于神经网络中权重经常是共享的，权重数量往往比神经元数量少，因此权重规范化的开销比较小。\n\n局部响应规范化（Local Response Normalization，LRN）是 AlexNet（2012 年）中使用的早期方法，它利用同一空间位置上相邻特征图（通道）的活性值进行规范化，而不是在单个特征图的空间邻域内计算。随着批量规范化、层规范化等方法的发展，LRN 在现代深度网络中已经较少使用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+                "逐层规范化"
+              ],
+              "lineStart": 1057,
+              "lineEnd": 1111,
+              "assetRefs": [],
+              "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-selection-guide",
+        "moduleId": "choose-and-compare",
+        "depth": "core",
+        "kind": "application",
+        "title": "选择检查表：按场景挑选规范化方法",
+        "markdown": "把教材的结论整理成决策顺序：先看瓶颈在样本维度还是特征维度，再看批量是否足够大，最后看是否要额外控制权重尺度。\n\n| 场景特征 | 首选方法 | 依据 |\n|---|---|---|\n| 卷积网络、视觉任务、批量较大 | 批量规范化 | 跨样本统计可靠，样本间耦合带来的正则化副作用可接受 |\n| 批量很小或逐样本在线推理 | 层归一化 | 统计量只依赖当前样本的整层神经元，与批量大小无关 |\n| 循环网络、Transformer | 层归一化 | 净输入分布随时间变化，跨样本假设不成立 |\n| 大语言模型，希望降低归一化开销 | RMS 规范化 | 不减均值，计算更简单，仍抑制尺度变化 |\n| 只想约束连接权重的尺度 | 权重规范化 | 用长度与方向再参数化，权重共享时开销小 |\n| 复现 2012 年前后的卷积网络 | 局部响应规范化 | 历史方案，现代网络已少用 |\n\n使用时还要注意：规范化一般放在仿射变换之后、激活函数之前；加入批量规范化后该层仿射变换可省去偏置；推理阶段一律使用训练得到的固定统计量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-weight-norm-lrn",
+            "model-layer-vs-batch",
+            "tb-rms-norm"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "choose-and-compare",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：三个情境的方案与理由",
+        "markdown": "为下列情境选择逐层规范化方案，并写出教材依据。\n\n1. 一个图像分类卷积网络，训练批量 $256$，推理按单张图片进行。\n2. 一个字符级循环语言模型，序列长度可变，训练批量 $16$。\n3. 一个参数规模很大的 Transformer，训练成本敏感，希望归一化层尽量轻。\n\n要求：每题说明放在网络的什么位置、训练与推理的统计量分别来自哪里。\n\n自查要点：情境 1 用批量规范化并说明推理改用全局统计量；情境 2 用层归一化并说明净输入分布随时间变化使跨样本统计不可靠；情境 3 用 RMS 规范化并说明少了减均值这一步。若你把情境 2 判给批量规范化，需要先说明为何批量内统计仍然可靠。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-selection-guide",
+            "model-layer-vs-batch"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "choose-and-compare",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点衔接",
+        "markdown": "逐层规范化把数据预处理的思路推进到每个隐藏层：它稳定各层输入的尺度，让优化地形更平滑，从而支持更大的学习率与更快的收敛。批量规范化跨样本统计、依赖批量大小，并在训练中附带隐形的正则化效果；层归一化沿神经元维度统计、不依赖批量，适合循环网络与序列模型；RMS 规范化在层归一化的基础上省去减均值，适合大模型；权重规范化则从参数侧控制尺度。\n\n这些方法的超参数（是否使用、放在哪几层、批量大小如何与之配合）本身并不会由梯度自动学出，如何系统地搜索它们正是下一点要讨论的超参数优化问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-normalize",
+            "model-selection-guide"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "norm-selection-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise",
+        "moduleId": "choose-and-compare",
+        "depth": "support",
+        "outcomeRefs": [
+          "choose-normalization"
+        ],
+        "learningPurpose": "检查学习者能否把规范化方法的统计维度与适用条件迁移到新的网络情境，并说出依据。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-batch-norm-check",
+            "model-layer-vs-batch"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            "图像卷积网络大批量训练、单张推理时该用哪种规范化，推理统计量来自哪里",
+            "变长序列的循环网络为何不适合直接使用批量规范化"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出三个情境各自选用的规范化方法，并各用一句话说明教材中的依据；无法作答时可回到“同一矩阵上的行与列”对比表重新判断。"
+        }
+      }
+    ]
+  },
+  "subtitle": "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [
+    "point-4-3"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-97f1fe376125afb2e4c552d6",
+      "blockIds": [
+        "block-000030"
+      ],
+      "headingPath": [
+        "网络优化与正则化：优化器、初始化、归一化与训练诊断",
+        "逐层规范化"
+      ],
+      "lineStart": 1057,
+      "lineEnd": 1111,
+      "assetRefs": [],
+      "excerptSha256": "eba105070e4ddc3d92c3e291091642228dc2ceb976dea199ad3707f1d09efdae"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1188,
+    1234
+  ],
+  "scale": 0.96
+}

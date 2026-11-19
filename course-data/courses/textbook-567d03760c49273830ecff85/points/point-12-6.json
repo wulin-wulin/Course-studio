@@ -1,0 +1,513 @@
+{
+  "id": "point-12-6",
+  "title": "多GPU的简洁实现",
+  "shortSummary": "使用框架的高层并行接口实现多 GPU 训练，并说明设备管理与参数同步细节。",
+  "keyTerms": [
+    "多GPU",
+    "高层接口",
+    "设备管理",
+    "参数同步"
+  ],
+  "animationType": "dataParallelEpochLoop",
+  "animationSuggestion": "按一个 epoch 播放：批量切分到 k 个设备 → 各设备并行前向与反向 → 局部梯度汇总到主设备求平均 → 参数更新并同步回各设备，同时用面板标注单卡与双卡的每轮耗时对比。",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-12-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-implementation-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的网络选择、初始化顺序、DataParallel 写法与实测数据，围绕排查多 GPU 配置这一任务补充接口职责说明、同步链条和调参提醒。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-high-level-gap",
+          "text": "说明高层并行接口替学习者完成了设备复制、批量切分、梯度聚合与参数同步中的哪些步骤。"
+        },
+        {
+          "id": "implement-dataparallel",
+          "text": "用 nn.DataParallel 组织出可在多个 GPU 上运行的单循环训练代码，并正确处理设备放置与参数初始化。"
+        },
+        {
+          "id": "diagnose-init-failure",
+          "text": "定位多 GPU 训练中因初始化顺序或设备不匹配导致的报错。"
+        },
+        {
+          "id": "interpret-scaling",
+          "text": "结合实测结果解释批量、学习率与 GPU 数量同时扩大时的吞吐收益与精度代价。"
+        }
+      ],
+      "misconceptions": [
+        "以为多 GPU 训练必须在循环里显式遍历每块设备；实际上批量切分与梯度聚合可以由并行封装完成。",
+        "看到每轮耗时下降就认为模型质量同步提升；实测精度还受批量、学习率与训练轮数的影响。"
+      ],
+      "modules": [
+        {
+          "id": "context-and-goal",
+          "title": "为什么要用高层接口",
+          "role": "motivation",
+          "outcomeRefs": [
+            "explain-high-level-gap"
+          ],
+          "order": 0
+        },
+        {
+          "id": "model-and-devices",
+          "title": "网络与设备准备",
+          "role": "setup",
+          "outcomeRefs": [
+            "explain-high-level-gap",
+            "diagnose-init-failure"
+          ],
+          "order": 1
+        },
+        {
+          "id": "training-loop",
+          "title": "训练回路的写法",
+          "role": "procedure",
+          "outcomeRefs": [
+            "implement-dataparallel"
+          ],
+          "order": 2
+        },
+        {
+          "id": "sync-semantics",
+          "title": "一次迭代的同步链条",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "explain-high-level-gap",
+            "implement-dataparallel"
+          ],
+          "order": 3
+        },
+        {
+          "id": "scaling-and-measurement",
+          "title": "批量扩展与实测对比",
+          "role": "analysis",
+          "outcomeRefs": [
+            "interpret-scaling"
+          ],
+          "order": 4
+        },
+        {
+          "id": "consolidation",
+          "title": "检查表与迁移",
+          "role": "consolidation",
+          "outcomeRefs": [
+            "diagnose-init-failure",
+            "interpret-scaling"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-high-level-gap",
+          "implement-dataparallel",
+          "diagnose-init-failure",
+          "interpret-scaling"
+        ],
+        "method": "先完成迁移练习中的排查判断，再对照检查表逐项核对自己写过的多 GPU 脚本。",
+        "successCriteria": [
+          "能指出并行封装接手的具体步骤，以及训练循环中仍需自己保留的操作",
+          "给出的排查顺序与初始化顺序、批量/学习率匹配等具体证据一一对应"
+        ],
+        "exerciseBlockId": "model-transfer-check",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-12-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "context-and-goal",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材引入：从零实现到高层接口",
+        "markdown": "为每个新模型都从零实现并行训练既重复又容易出错，而自行打磨同步工具来获得高性能同样代价不低。本节改用深度学习框架的高级 API 完成同一件事：数学与算法与 12.5 节的多 GPU 训练完全一致，只是把设备放置、数据切分和参数同步交给框架执行。\n\n也正因为如此，本节的示例代码至少需要两个 GPU 才能运行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-high-level-value",
+        "moduleId": "context-and-goal",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：高层接口替你做了什么",
+        "markdown": "把 12.5 节的手写流程与本节的代码对照，可以看出高层接口收编的主要是“样板代码”：按设备注册模型副本、在每次前向时切分小批量、在反向之后归约梯度，并把更新结果送回各设备。\n\n学习者保留的只是训练回路的骨架——取数据、清零梯度、前向算损失、反向传播、更新参数，这正是不同模型之间真正有差异的部分。因此判断一段多 GPU 代码是否仍然正确，应检查这些显式步骤，而不是以为换成了封装接口就可以不再理解数据并行的语义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-network",
+        "moduleId": "model-and-devices",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "教材选择的网络及其修改",
+        "markdown": "教材选用 ResNet-18，而不是 12.5 节的 LeNet。它依然容易、快速地训练，但比 LeNet 复杂，能更真实地体现并行带来的收益。因为输入图像很小，网络相对原版稍作修改：开头使用更小的卷积核、步长和填充，并且删除了最大汇聚层。\n\n这正是 `resnet18` 辅助函数所构造的结构——随后堆叠四个残差块、全局平均池化层与全连接层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-devices",
+        "moduleId": "model-and-devices",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材做法：取得设备并初始化网络",
+        "markdown": "准备好网络之后，教材先用 `d2l.try_all_gpus()` 取得当前可用的 GPU 列表，而把真正的参数初始化留到训练回路里执行：对每个 `nn.Linear` 与 `nn.Conv2d` 用 `init_weights` 重新初始化权重。\n\n小结对此给出了明确的顺序要求：每台设备上的网络需要先初始化，然后再尝试访问该设备上的参数，否则会遇到错误。也就是说，初始化不是可以随手挪到末尾的收尾动作，而是训练开始前必须先完成的前置条件。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-init-order",
+        "moduleId": "model-and-devices",
+        "depth": "core",
+        "kind": "warning",
+        "title": "模型补充：为什么初始化顺序不能颠倒",
+        "markdown": "并行封装在包装模型时要接触参数所在设备，如果参数尚未创建、或仍只存在于 CPU 上，后续的设备访问就会失败。\n\n实践中稳妥的顺序是：确定设备列表 → 构造网络并初始化权重 → 把网络交给并行封装 → 让优化器持有封装后的参数。这样 `trainer` 管理的始终是真正参与计算的参数对象，也不会出现优化器绑定到旧参数副本、更新看似执行却毫无效果的情况。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-devices"
+          ]
+        }
+      },
+      {
+        "id": "tb-loop-requirements",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "高效并行训练要完成的四件事",
+        "markdown": "教材指出，用于训练的代码需要执行几个基本功能才能实现高效并行：\n\n1. 在所有设备上初始化网络参数；\n2. 在数据集上迭代时，把小批量数据分配到所有设备上；\n3. 跨设备并行计算损失及其梯度；\n4. 聚合梯度，并相应地更新参数。\n\n最后还要并行地计算精确度并发布网络的最终性能。除了拆分和聚合数据之外，这段训练代码与前几章的单设备实现非常相似。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-dataparallel",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "code",
+        "title": "用 DataParallel 组织训练回路",
+        "markdown": "训练函数中与并行相关的改动只有少数几行：\n\n```python\nnet = nn.DataParallel(net, device_ids=devices)\ntrainer = torch.optim.SGD(net.parameters(), lr)\n```\n\n每个小批量上，代码先把 `X` 与 `y` 搬到 `devices[0]`，再依次执行 `trainer.zero_grad()`、前向计算损失、`l.backward()` 与 `trainer.step()`。训练循环里并没有出现显式的多设备遍历：批量切分与梯度聚合都由 `DataParallel` 在幕后完成。\n\n教材还展示了预热与双卡两次运行：单卡 `num_gpus=1, batch_size=256, lr=0.1`，双卡 `num_gpus=2, batch_size=512, lr=0.2`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-device0-dispatch",
+        "moduleId": "training-loop",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么数据只送到 devices[0]",
+        "markdown": "只看 `X.to(devices[0])` 会以为这是单卡训练，其实主设备充当的是入口：并行封装从前向开始处接手输入，按设备数量切分批量再分发，所以循环里不需要手工 scatter。\n\n这也解释了另一个常见困惑——多 GPU 场景下 `trainer.step()` 仍然只调用一次。更新发生在梯度聚合之后，各设备上的参数副本由框架保持一致，而不是每块卡各自独立更新一份模型。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dataparallel"
+          ]
+        }
+      },
+      {
+        "id": "model-dataparallel-flow",
+        "moduleId": "sync-semantics",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：一次迭代中的参数同步链条",
+        "markdown": "把上面两步连起来，一次迭代的状态变化是：\n\n1. 主设备上的小批量被切成 k 份，连同模型副本分发到 k 个设备；\n2. 各设备用本地数据分片独立完成前向与反向，得到局部梯度；\n3. 局部梯度汇总到主设备并求平均，得到与单卡等价的批量梯度；\n4. 优化器在主设备上更新参数，更新后的参数再回到其他设备参与下一轮计算。\n\n需要强调的是，第 3 步不会改变学习目标：它只是把 k 份局部梯度还原成一个大批量上的梯度，因此 12.5 节的算法结论依然成立。真正的额外代价出现在第 1、3、4 步的通信上，而计算与通信的相对大小决定了并行是否划算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loop-requirements",
+            "tb-dataparallel"
+          ]
+        }
+      },
+      {
+        "id": "tb-scaling",
+        "moduleId": "scaling-and-measurement",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材实测：单卡与双卡的对比",
+        "markdown": "教材先在单卡上预热：批量 256、学习率 0.1，得到测试精度 0.93、每轮 12.2 秒。随后用两块 GPU，并把批量扩大到 512、学习率提高到 0.2，结果是测试精度 0.67、每轮 7.4 秒。\n\n作者对这一对比的解释是：ResNet-18 比 12.5 节评估的 LeNet 复杂得多，计算所需时间明显大于同步参数所需的时间；并行化开销的相关性因此变小，这种操作提高了模型的可伸缩性。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scaling-tradeoff",
+        "moduleId": "scaling-and-measurement",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：吞吐变好不等于精度自动变好",
+        "markdown": "上面两组数字需要分开读。每轮由 12.2 秒降到 7.4 秒，说明计算量足够大时并行确实有效；而 0.67 低于 0.93 则提醒我们，同时放大批量与学习率会改变优化轨迹，在固定的 10 轮预算下模型未必走到同样好的解。\n\n常见的经验规则是：在 k 个 GPU 上把批量扩为原来的 k 倍，学习率也相应上调（教材中由 0.1 提到 0.2）。但这只是起点，仍要结合训练轮数、学习率调度与验证精度重新调参。比较不同 GPU 数量的结果时，应同时报告吞吐与精度，而不是只看每轮耗时。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-scaling"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "consolidation",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材把本节要点归纳为三条：神经网络可以在（能找到数据的）单 GPU 上进行自动评估；每台设备上的网络需要先初始化，然后再尝试访问该设备上的参数，否则会遇到错误；优化算法在多个 GPU 上自动聚合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000101"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU的简洁实现"
+              ],
+              "lineStart": 22462,
+              "lineEnd": 22656,
+              "assetRefs": [
+                "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+                "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+              ],
+              "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "模型补充：多 GPU 实现的检查表",
+        "markdown": "把单卡脚本改成多卡时，可以按下面的顺序自查：\n\n- 设备是否真的可见，数量是否与 `device_ids` 一致；\n- 参数是否在封装之前完成初始化，优化器是否绑定封装后的参数；\n- 每个小批量是否只搬到主设备，交给并行层切分；\n- 批量与学习率是否随 GPU 数同步调整，训练轮数是否仍然足够；\n- 每轮耗时与测试精度是否都被记录，便于判断并行是否真的划算。\n\n任一项不满足，报错或精度下降更可能来自配置，而不是模型结构本身。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-dataparallel"
+          ]
+        }
+      },
+      {
+        "id": "model-transfer-check",
+        "moduleId": "consolidation",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "模型补充：迁移练习",
+        "markdown": "假设你在 4 块 GPU 上训练同一个 ResNet-18，把批量提到 1024、学习率提到 0.4，训练轮数仍为 10 轮，结果测试精度只有 0.55。请依据本节的四步流程判断：问题更可能出在设备与初始化配置，还是出在批量与训练预算的匹配上？写出你的排查顺序，并说明每一步你会观察什么证据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-scaling"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "multi-gpu-config-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-transfer-check",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "outcomeRefs": [
+          "diagnose-init-failure",
+          "interpret-scaling"
+        ],
+        "learningPurpose": "检查学习者能否把本节的步骤清单用于排查多 GPU 配置与调参问题。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-loop-requirements",
+            "tb-dataparallel"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出你的排查顺序，并说明每一步预期观察到的证据；若证据不足，请指出还需要补充哪一项记录。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算性能",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000101"
+      ],
+      "headingPath": [
+        "计算性能",
+        "多GPU的简洁实现"
+      ],
+      "lineStart": 22462,
+      "lineEnd": 22656,
+      "assetRefs": [
+        "parts/part-0006/images/5977ff9edaf6b2eacc67fb9807e89529a950b40ceb93eed86427b122811c8c62.jpg",
+        "parts/part-0006/images/c30c88287db761ef20dc954f73cb1ed53c0102686aa3d399cb5c99fda9a90a30.jpg",
+        "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg"
+      ],
+      "excerptSha256": "6e47df4b3d11d37dd496daef2530ddba5450a68e11d26cd6d2400a0ac4b2981e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3394,
+    1279
+  ],
+  "scale": 0.86
+}

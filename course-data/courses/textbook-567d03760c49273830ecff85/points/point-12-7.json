@@ -1,0 +1,609 @@
+{
+  "id": "point-12-7",
+  "title": "参数服务器",
+  "shortSummary": "介绍参数服务器架构中工作节点与服务器节点的分工、通信模式与扩展性权衡。",
+  "keyTerms": [
+    "参数服务器",
+    "工作节点",
+    "环同步",
+    "键值存储",
+    "扩展性"
+  ],
+  "animationType": "ringAllreduce",
+  "animationSuggestion": "用 n=4 的环按步推进，同时高亮四个正在发送的块，标出每步后各节点持有的部分聚合值；切换到 all-gather 阶段后显示块如何传回全部节点，并在侧边对照“只传一份完整梯度”的线性时间，让学习者看出分块流水线为什么让总时间趋于常数。",
+  "difficulty": "进阶",
+  "importance": 0.55,
+  "prerequisites": [
+    "point-12-4",
+    "point-12-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的带宽数值、算例与七步流程，按“问题—定量估算—策略—抽象—取舍”重排讲解顺序，补充顺序无关性与扩展条件，但不改动教材的结论与边界。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-roles",
+          "text": "说明参数服务器中工作节点与服务器节点各自承担的计算与通信职责，以及 push/pull 接口的作用。"
+        },
+        {
+          "id": "reason-cost",
+          "text": "用梯度大小、链路带宽和节点数估算一次参数同步的通信代价，并解释环同步为何能让时间趋于常数。"
+        },
+        {
+          "id": "choose-strategy",
+          "text": "根据服务器互联结构与工作节点规模选择单点聚合、多参数服务器或环同步策略，并说明其瓶颈与取舍。"
+        }
+      ],
+      "misconceptions": [
+        "认为参数服务器必定是单个中心节点，忽略了用多个参数服务器分担参数与带宽的做法。",
+        "认为增加参数服务器数量就一定能线性加速，忽略了工作节点规模与层次化通信的配合条件。",
+        "认为环同步是与树形同步本质不同的新算法，实际上差别只在同步路径的精细程度。",
+        "认为参数同步的时间只取决于梯度大小，忽略了链路带宽差异带来的数量级差别。"
+      ],
+      "modules": [
+        {
+          "id": "why-param-server",
+          "title": "从单机到多机的同步难题",
+          "role": "motivation",
+          "description": "用带宽差异与分工需求引出参数服务器的动机。",
+          "outcomeRefs": [
+            "explain-roles"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-parallel-sync",
+          "title": "数据并行的梯度聚合与通信代价",
+          "role": "quantitative-analysis",
+          "description": "固定变量与单位，估算集中式与分片并行聚合的同步时间。",
+          "outcomeRefs": [
+            "reason-cost"
+          ],
+          "order": 1
+        },
+        {
+          "id": "ring-synchronization",
+          "title": "环同步：把带宽用满",
+          "role": "algorithm",
+          "description": "从 NVLink 拓扑到分块流水线，推导环同步的时间特征。",
+          "outcomeRefs": [
+            "reason-cost",
+            "choose-strategy"
+          ],
+          "order": 2
+        },
+        {
+          "id": "multi-machine-training",
+          "title": "多机训练流程与中心瓶颈",
+          "role": "procedure",
+          "description": "按七步流程走一遍跨机训练，分析 O(m) 到 O(m/n) 的扩展条件。",
+          "outcomeRefs": [
+            "explain-roles",
+            "choose-strategy"
+          ],
+          "order": 3
+        },
+        {
+          "id": "key-value-abstraction",
+          "title": "键值存储抽象",
+          "role": "abstraction",
+          "description": "用交换归约与 push/pull 把系统复杂性收进接口。",
+          "outcomeRefs": [
+            "explain-roles"
+          ],
+          "order": 4
+        },
+        {
+          "id": "tradeoffs-and-check",
+          "title": "策略取舍与达成检查",
+          "role": "synthesis",
+          "description": "统一维度比较三种策略，并用练习检查估算能力。",
+          "outcomeRefs": [
+            "explain-roles",
+            "reason-cost",
+            "choose-strategy"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-roles",
+          "reason-cost",
+          "choose-strategy"
+        ],
+        "method": "完成三道估算与判断题，并写出所用变量、单位与假设。",
+        "successCriteria": [
+          "能区分工作节点与服务器节点的职责，并说明 push/pull 各自做什么",
+          "能对给定的梯度大小与链路带宽算出量级正确的同步时间",
+          "能针对具体集群条件选出聚合策略并指出其瓶颈"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-13-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-why-param-server",
+        "moduleId": "why-param-server",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为什么需要参数服务器",
+        "markdown": "从单个 GPU 扩展到多 GPU，再扩展到跨机架、跨交换机的多台服务器之后，分布式训练的同步算法会迅速变复杂。教材指出两个直接原因。\n\n第一是带宽差异极大：NVLink 可通过设置实现跨 6 条链路、高达 100 GB/s 的带宽，16 通道 PCIe 4.0 提供 32 GB/s，而高速 100GbE 以太网也只能提供约 10 GB/s。\n\n第二是要求开发者既能完成统计学习建模、又精通系统和网络并不切实际。参数服务器的目的正是把这部分系统复杂性从建模工作中分离出来。这一思想最早由 Smola 和 Narayanamurthy（2010）在分布式隐变量模型的背景下引入，随后 Ahmed 等（2012）描述了 Push 和 Pull 的语义，Li 等（2014）描述了系统与开源库。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-role-split",
+        "moduleId": "why-param-server",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：两种节点的分工",
+        "markdown": "把教材的动机落成角色分工，参数服务器把参与训练的机器分成两类。\n\n- **工作节点**：各自读取不同的批量数据，在本地 GPU 上计算预测与梯度，然后把梯度推送到共享存储。\n- **服务器节点**：持有全局参数（或其中一部分），接收并聚合来自各工作节点的梯度，执行参数更新，再把新参数广播回去。\n\n一个不失准确的类比是把服务器节点看作共享仓库、工作节点看作工人：工人各自加工手中的原料，把结果交给仓库汇总，仓库更新库存后再把新配方发回所有工人。后面要讲的 push/pull 抽象，就是把这个分工固化成接口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-why-param-server"
+          ]
+        }
+      },
+      {
+        "id": "textbook-data-parallel",
+        "moduleId": "data-parallel-sync",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：数据并行的梯度聚合",
+        "markdown": "教材先回顾数据并行这一实现最简单的分布式策略：把批量数据切分到各 GPU，各卡用同一份参数分别计算梯度。图 12.7.1 的关键在于，梯度的聚合需要在单个 GPU（GPU0）上完成，然后再把更新后的参数广播给所有 GPU。\n\n选择 GPU0 聚合看似很随便，实际上聚合位置可以改变：只要优化算法支持，也可以在 CPU 上聚合，甚至让某个 GPU 聚合一部分参数、另一个 GPU 聚合另一部分。例如有四个与参数向量相关的梯度 $\\mathbf{g}_1, \\dots, \\mathbf{g}_4$ 时，可以让一个 GPU 负责聚合一个 $\\mathbf{g}_i$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sync-cost",
+        "moduleId": "data-parallel-sync",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：一次梯度同步的代价估算",
+        "markdown": "把上面的策略变成可计算的估算，先固定三个量：$S$ 为一次同步要传输的梯度或参数总大小（MB），$B$ 为所用链路的有效带宽（GB/s），单次传输时间为 $S/B$。\n\n教材的算例是 $S = 160\\ \\mathrm{MB}$，GPU 与交换机之间的链路为 16 GB/s，于是传完整个梯度约需 $160/16 = 10\\ \\mathrm{ms}$。\n\n- **集中到 GPU0**：把 $1/4$ 的梯度（40 MB）送到 GPU0 约 10 ms，3 次共 30 ms；回传权重向量再花 30 ms，合计约 **60 ms**。\n- **集中到 CPU**：4 个 GPU 都要把数据送到 CPU，多出约 40 ms 的惩罚，合计约 **80 ms**。\n- **分片并行聚合**：把梯度切成 4 份 40 MB，在不同 GPU 上同时聚合；PCIe 交换机在所有链路间提供全带宽，传输只需 $2.5 \\times 3 = 7.5\\ \\mathrm{ms}$，同步总计约 **15 ms**。\n\n同样一次参数同步，策略不同就从 15 ms 变到 80 ms，相差五倍以上。这说明瓶颈不是梯度总量本身，而是有多少链路在同时搬运它。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-data-parallel"
+          ]
+        }
+      },
+      {
+        "id": "model-cost-experiment",
+        "moduleId": "data-parallel-sync",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：三种聚合方式的对照",
+        "markdown": "把教材算例整理成表，可以直接读出选择依据：\n\n| 聚合方式 | 数据经过的链路 | 同步耗时 | 主要限制 |\n|---|---|---|---|\n| 单 GPU 聚合 | GPU→GPU，再回传全部权重 | 约 60 ms | 目标 GPU 成为汇聚点 |\n| CPU 聚合 | 每个 GPU→CPU | 约 80 ms | 每卡都要一次跨 PCIe 传输 |\n| 分片并行聚合 | 多组 GPU 同时互传 | 约 15 ms | 需要交换机支持全带宽并行 |\n\n参数实验：若梯度总量 $S$ 加倍，三种方式的时间都近似加倍；若把链路从 16 GB/s 降到典型的 1–10GbE 范围（有效带宽约 100 MB/s 到 1 GB/s），集中式方案的同步时间会膨胀到秒级，这正是多机训练必须改用参数服务器结构的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-sync-cost"
+          ]
+        }
+      },
+      {
+        "id": "textbook-pipeline",
+        "moduleId": "data-parallel-sync",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：通信与计算的重叠",
+        "markdown": "教材还给出一个不依赖具体策略的优化：在深度网络中，从顶部到底部算完所有梯度需要时间，因此某些参数的梯度一旦算好，就可以立刻开始同步，不必等整轮反向传播结束。把这部分通信与仍在进行的计算重叠起来，可以进一步压低同步在总训练时间中的占比（细节见 Sergeev 和 Del Balso，2018，以及 Horovod）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-ring-topology",
+        "moduleId": "ring-synchronization",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：NVLink 互联与双环分解",
+        "markdown": "当硬件互联足够强时，问题就从“有没有带宽”变成“如何用满带宽”。以 AWS p3.16xlarge 和 NVIDIA DGX-2 为例：每个 GPU 通过最多 16 GB/s 的 PCIe 链路连到主机 CPU，同时还带 6 条 NVLink，每条以 300 Gbit/s 双向传输，折合每方向约 $1300 \\div 8 \\div 2 \\approx 18\\ \\mathrm{GB/s}$。聚合后的 NVLink 带宽明显高于 PCIe。\n\nWang 等（2018）的研究结果表明，最优同步策略是把网络分解成两个环：一个具有双 NVLink 带宽的环（1-2-3-4-5-6-7-8-1），一个具有常规带宽的环（1-4-6-3-5-8-2-7-1）。在这种拓扑上设计高效的同步协议就变得非常重要。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-ring-pipeline",
+        "moduleId": "ring-synchronization",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：分块环同步的流水线",
+        "markdown": "教材用一个思维实验说明环同步为什么快。设环上有 $n$ 个节点：如果只传一份完整梯度，节点 1 发给节点 2，节点 2 与本地的相加后再发给节点 3，依此类推，$n-1$ 步后聚合结果落在最后被访问的节点上。时间随节点数线性增长，而且任何时刻只有一个节点在通信。\n\n改成把梯度切成 $n$ 块、从节点 $i$ 开始同步块 $i$ 之后，每块只有 $1/n$，总时间变成 $(n-1)/n \\approx 1$：环变大时，聚合梯度所花的时间基本不再增加。\n\n实测算例：跨 8 块 V100 同步 160 MB，时间约为 $2 \\times 160\\ \\mathrm{MB} \\div (3 \\times 18\\ \\mathrm{GB/s}) \\approx 6\\ \\mathrm{ms}$，即使已经用了 8 个 GPU，仍优于 PCIe 方案。教材同时提醒两点：实践中框架无法把通信组合成大突发传输，实际数字通常更差；并且环同步与其他同步算法在本质上并没有不同，相对简单的树算法，它唯一的区别是同步路径稍微精细一些。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-ring-cost",
+        "moduleId": "ring-synchronization",
+        "depth": "support",
+        "kind": "formula",
+        "title": "模型补充：环同步时间的来源",
+        "markdown": "把教材的分块思想写成估算式。设梯度总大小 $S$、每条链路有效带宽 $B$、环节点数 $n$，先聚合再散发两个阶段的总传输量约为 $2S(n-1)/n$，因此\n\n$$T_{\\text{ring}} \\approx \\frac{2(n-1)}{n} \\cdot \\frac{S}{B}$$\n\n当 $n$ 很大时，$(n-1)/n$ 接近 1，$T_{\\text{ring}}$ 趋近于 $2S/B$，与节点数几乎无关。代入 $S = 160\\ \\mathrm{MB}$、$B = 3 \\times 18\\ \\mathrm{GB/s}$，得到约 6 ms，与教材算例一致。\n\n式中因子 2 来自两个阶段各要走一遍环；$(n-1)/n$ 说明节点越多、单节点承担的比例越小。两个效应叠加，才使总时间趋于常数——这与“只传一份完整梯度”时的线性增长形成对照。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-ring-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "textbook-multi-machine",
+        "moduleId": "multi-machine-training",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：多机训练的七步流程与中心瓶颈",
+        "markdown": "跨机器训练时，服务器之间往往只通过相对低带宽的结构相连，速度可能慢一个数量级；不同机器的运行速度也有细微差别，所以同步算法必须先把它们对齐。教材把一次分布式并行训练拆成七步：\n\n1. 每台机器读取一组不同的批量数据，切分到各 GPU 并传输到显存，各 GPU 分别计算预测和梯度。\n2. 一台机器上所有本地 GPU 的梯度聚合到一个 GPU 上，或把梯度的不同部分聚合到不同 GPU 上。\n3. 每台机器的梯度发送到其本地 CPU。\n4. 所有 CPU 把梯度发送到中央参数服务器，由它聚合全部梯度。\n5. 用聚合后的梯度更新参数，并把更新后的参数广播回各 CPU。\n6. 更新后的参数发送到本地一个或多个 GPU。\n7. 所有 GPU 上的参数更新完成。\n\n机器变多后，中央参数服务器成为瓶颈：$m$ 个工作节点把所有梯度送到服务器需要 $\\mathcal{O}(m)$ 的时间。把参数服务器增加到 $n$ 个后，每个服务器只需存储 $\\mathcal{O}(1/n)$ 的参数，更新与优化的总时间变为 $\\mathcal{O}(m/n)$。实际应用中常让同一台机器既做工作节点又做服务器，但确保多台机器在没有不合理延迟的情况下协同工作仍然相当困难。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-multi-server-scaling",
+        "moduleId": "multi-machine-training",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：O(m/n) 成立的条件",
+        "markdown": "从 $\\mathcal{O}(m)$ 到 $\\mathcal{O}(m/n)$ 不是自动发生的，它依赖两个前提。\n\n1. **参数可切分**：不同参数可以分布在不同服务器上，同一轮更新中彼此不冲突。\n2. **通信分层**：机内先用高带宽链路（PCIe 或 NVLink）把梯度聚到本地 CPU，机器之间只传聚合后的结果，避免每个 GPU 单独跨网络发送。\n\n一旦层次被打破，参数服务器会重新变成瓶颈：例如工作节点数 $m$ 增长而服务器数 $n$ 不变，或者跨机带宽只有机内的十分之一。因此“加服务器就能线性扩展”只在 $m$ 与 $n$ 大致同步增长、且通信分层合理时成立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-multi-machine"
+          ]
+        }
+      },
+      {
+        "id": "textbook-kv-store",
+        "moduleId": "key-value-abstraction",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：键值存储的 push 与 pull",
+        "markdown": "实现分布式多 GPU 训练的步骤绝非易事，这正是公共抽象值得使用的原因：重新定义具有更新语义的键值存储。\n\n在许多工作节点和许多 GPU 中，梯度 $i$ 的计算可以写成\n\n$$\\mathbf{g}_i = \\sum_{k \\in \\text{workers}} \\sum_{j \\in \\text{GPUs}} \\mathbf{g}_{ijk},$$\n\n其中 $\\mathbf{g}_{ijk}$ 是工作节点 $k$ 的 GPU $j$ 上算出的梯度 $i$ 的一部分。这个运算的关键在于它是**交换归约**：把许多向量变成一个向量，而运算顺序无关紧要。因此不需要对“何时收到哪个梯度”做细粒度控制，不同 $i$ 之间也彼此独立。\n\n由此可以定义两个操作，用键 $i$ 索引不同的梯度集合：\n\n- **push(key, value)**：把特定的梯度值从工作节点送到公共存储，并在那里以某种方式（例如相加）聚合；\n- **pull(key, value)**：从公共存储取回聚合值（例如组合来自所有工作节点的梯度）。\n\n把所有同步的复杂性藏在简单的 push 和 pull 之后，就把“希望用简单术语表达优化”的统计建模人员与“需要处理分布式同步固有复杂性”的系统工程师解耦了。教材也指出，它与 Dynamo（DeCandia 等，2007）引入的键值存储之间的相似并非巧合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000102"
+              ],
+              "headingPath": [
+                "计算性能",
+                "参数服务器"
+              ],
+              "lineStart": 22657,
+              "lineEnd": 22820,
+              "assetRefs": [
+                "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+                "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+                "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+                "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+                "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+                "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+                "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+                "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+                "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+              ],
+              "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-kv-order-independence",
+        "moduleId": "key-value-abstraction",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：顺序无关不等于幂等",
+        "markdown": "交换归约的性质可以直接推出一条工程结论：工作节点不必按固定顺序到达，服务器先收到谁的梯度都可以，最终聚合结果相同。\n\n但要注意，这只是**顺序无关**，不是幂等——同一份梯度被 push 两次仍然会被累加两次。由此可以解释两个设计取舍：\n\n- 同步训练可以容忍节点到达时间的抖动，因为求和与到达顺序无关；\n- 但重传或故障恢复必须能识别重复的梯度，否则会悄悄改变参数更新的结果。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-kv-store"
+          ]
+        }
+      },
+      {
+        "id": "model-tradeoffs",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：三种同步策略的取舍",
+        "markdown": "把全节的策略放到同一组维度上比较：\n\n| 维度 | 单点聚合 | 多参数服务器 | 环同步 |\n|---|---|---|---|\n| 主要瓶颈 | 汇聚点链路带宽 | 跨机带宽与服务器数量 | 单链路带宽与环节点数 |\n| 适合规模 | 单机多卡 | 多机、参数可切分 | 高带宽定制互联（如 NVLink 集群） |\n| 扩展方式 | 切分梯度到多卡聚合 | 增加 $n$，让 $m/n$ 保持稳定 | 增大环，时间趋于 $2S/B$ |\n| 典型风险 | 汇聚点过载 | $m$ 增而 $n$ 不增 | 拓扑不匹配时收益有限 |\n\n取舍规则可以概括为：先看瓶颈在哪一段链路，再决定把负载分散给谁。如果瓶颈在机内汇聚点，切分梯度；如果在跨机链路，增加参数服务器并做层次化聚合；如果机内已有大量高带宽互联而单链路仍是瓶颈，用环把多条链路同时用起来。教材的小结也强调这一点：同步需要高度适应特定网络基础设施和服务器内连接，环同步对 p3 和 DGX-2 最优，对其他服务器则未必；增加多个参数服务器时，分层同步策略可以工作得很好。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-data-parallel",
+            "textbook-ring-topology",
+            "textbook-multi-machine",
+            "textbook-kv-store"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：检查与练习",
+        "markdown": "用下面的问题检验自己是否真的会用这套框架：\n\n1. 一台 4 卡服务器，PCIe 链路 16 GB/s，梯度共 160 MB。若只允许在一个 GPU 上聚合，估算同步时间；若允许切成 4 份并行聚合，再估算一次。（提示：40 MB 传输约 2.5 ms。）\n2. 环节点从 4 增加到 16。如果每块梯度的大小不变，环同步总时间会怎样变化？如果梯度总量固定、只是块数随节点增加，答案是否不同？\n3. 某集群把参数服务器从 2 台增加到 8 台，工作节点数不变，扩展性没有改善，最可能的原因是什么？\n\n完成标准：三道题都要写出所用变量、单位与假设，而不只是给出一个数字。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-tradeoffs"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：小结与下一点桥接",
+        "markdown": "参数服务器可以压缩成三句话：\n\n- 它把参数放在服务器节点、把计算留在工作节点，用 push/pull 隐藏同步细节；\n- 单点聚合、多参数服务器、环同步的差别，本质上是“数据走哪条链路、有多少节点同时通信”；\n- 扩展性来自带宽与分片的匹配，而不是服务器数量的堆叠。\n\n下一个知识点转向图像增广，那里处理的是数据侧的扩展：用随机变换扩大训练分布，以降低模型对位置、颜色等属性的依赖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-tradeoffs",
+            "textbook-multi-machine"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "sync-cost-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise",
+        "moduleId": "tradeoffs-and-check",
+        "depth": "core",
+        "title": "同步代价与策略选择的即时检查",
+        "outcomeRefs": [
+          "reason-cost",
+          "choose-strategy"
+        ],
+        "learningPurpose": "检查学习者能否把同步时间估算与策略选择联系起来，而不是记住孤立数字。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-sync-cost",
+            "model-ring-cost",
+            "textbook-multi-machine"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "prompt": "160 MB 梯度、16 GB/s 链路、单 GPU 聚合，同步时间约为多少？",
+              "answer": "约 60 ms：30 ms 送去聚合，30 ms 回传权重。"
+            },
+            {
+              "prompt": "工作节点数增长而参数服务器数不变，瓶颈出现在哪里？",
+              "answer": "跨机链路与服务器带宽，总时间仍随工作节点数线性增长。"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "口头回答：用 $S$、$B$、$n$ 写出一次同步的时间量级，并说明在什么条件下增加参数服务器能改善扩展性。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算性能",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000102"
+      ],
+      "headingPath": [
+        "计算性能",
+        "参数服务器"
+      ],
+      "lineStart": 22657,
+      "lineEnd": 22820,
+      "assetRefs": [
+        "parts/part-0006/images/6c8590ec42522719570d672309191a60eb3ec1d31b27656d9fefe2079948f26e.jpg",
+        "parts/part-0006/images/07edb16225f98e1baabf6f531997785ae2293dd65670e74886dbc52245799efb.jpg",
+        "parts/part-0006/images/e778a461b1d6f12f61710a863b01929ce9a338ae6fe82cb701a9c41ce9b7913d.jpg",
+        "parts/part-0006/images/6e441dd1a5e3eb94374d269b116fb089d44e71fe0a118c351db22307850c25d2.jpg",
+        "parts/part-0006/images/773b168e9db4a24b1a5af6257cce3f7322eb05f7216af684e73164068fd2cb22.jpg",
+        "parts/part-0006/images/ec78024c4763fcd6321768f45ef06cfdbe8e8bcb9faa34f96d086ba85cae361c.jpg",
+        "parts/part-0006/images/8fc166fcb091df13c5d443422d02ddbbec3904809b1aad2f269ce4b9ee5c7b4f.jpg",
+        "parts/part-0006/images/b060a7b849e7b5e86ddb41b3ba6ae59557c8a1cb545ad9cc140c2d45be460320.jpg",
+        "parts/part-0006/images/dd572d709815c76ca4a275c6431d0bedc6bd4f18342a15acd7675a16ab1c66f3.jpg"
+      ],
+      "excerptSha256": "165c750860fbda0561ea865a635dc531135946543a13ce6385c79b76e89c089d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3508,
+    1300
+  ],
+  "scale": 0.84
+}

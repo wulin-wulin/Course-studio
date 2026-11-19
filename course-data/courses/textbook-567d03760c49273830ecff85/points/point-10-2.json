@@ -1,0 +1,433 @@
+{
+  "id": "point-10-2",
+  "title": "注意力汇聚：Nadaraya-Watson 核回归",
+  "shortSummary": "用核回归说明基于相似度的加权平均如何实现非参数注意力汇聚，并比较不同核宽度带来的平滑效果。",
+  "keyTerms": [
+    "Nadaraya-Watson",
+    "核回归",
+    "注意力汇聚",
+    "加权平均"
+  ],
+  "animationType": "kernelRegressionAttention",
+  "animationSuggestion": "让查询点沿输入轴逐步移动，同时显示各训练键上随距离变化的权重柱和数值、当前输出点，以及已描出的预测曲线；提供重播按钮回到同一初始查询，并提供核尺度参数 w 的切换，对比权重分布变尖锐后曲线的平滑程度变化。",
+  "difficulty": "进阶",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-3-4",
+    "point-10-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的回归设定、核回归公式与非参数/带参数对比，围绕公式推导、手算算例和参数实验补足变量含义与权重变化的因果解释。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-nw-pooling",
+          "text": "解释 Nadaraya-Watson 核回归如何用查询与键的相似度构造注意力权重并对值做加权平均。"
+        },
+        {
+          "id": "compute-gaussian-softmax",
+          "text": "把高斯核代入注意力汇聚，写出 softmax 形式的权重并计算给定查询下的汇聚输出。"
+        },
+        {
+          "id": "compare-parametric-nonparametric",
+          "text": "区分非参数与带参数注意力汇聚，说明可学习参数 w 如何改变权重尖锐程度与曲线平滑性。"
+        }
+      ],
+      "misconceptions": [
+        "认为注意力权重可以随意取值，只要总和为 1；实际上权重由 softmax 产生，必须非负且总和为 1。",
+        "认为带参数的注意力汇聚因为多学了参数就一定更好；教材的实验中它的预测曲线反而不如非参数模型平滑。",
+        "把 Nadaraya-Watson 核回归当成参数模型；它是非参数模型，不含可学习的核参数。",
+        "认为距离查询越远的键会获得越大的注意力权重；权重的分数是距离平方的相反数，最近邻反而权重最大。"
+      ],
+      "modules": [
+        {
+          "id": "problem-setup",
+          "title": "回归问题与人工数据集",
+          "role": "problem-introduction",
+          "description": "用教材的含噪非线性回归任务说明要解决什么问题、数据如何生成。",
+          "outcomeRefs": [
+            "explain-nw-pooling"
+          ],
+          "order": 0
+        },
+        {
+          "id": "average-pooling-baseline",
+          "title": "平均汇聚为什么不够",
+          "role": "baseline-analysis",
+          "description": "用最朴素的平均汇聚暴露忽略查询位置的缺陷，为引入核权重铺垫。",
+          "outcomeRefs": [
+            "explain-nw-pooling"
+          ],
+          "order": 1
+        },
+        {
+          "id": "kernel-attention-pooling",
+          "title": "非参数注意力汇聚与高斯核",
+          "role": "derivation",
+          "description": "从核回归公式推到 softmax 形式，并配手算算例说明权重的来源。",
+          "outcomeRefs": [
+            "explain-nw-pooling",
+            "compute-gaussian-softmax"
+          ],
+          "order": 2
+        },
+        {
+          "id": "parametric-pooling",
+          "title": "带参数注意力汇聚与参数 w",
+          "role": "parameter-experiment",
+          "description": "引入可学习尺度 w，解释训练设置以及它为何让曲线更不平滑。",
+          "outcomeRefs": [
+            "compute-gaussian-softmax",
+            "compare-parametric-nonparametric"
+          ],
+          "order": 3
+        },
+        {
+          "id": "compare-and-check",
+          "title": "对比、检查与下一点桥接",
+          "role": "comparison-and-check",
+          "description": "统一维度比较三种汇聚方式，完成计算检查并引出注意力评分函数。",
+          "outcomeRefs": [
+            "compare-parametric-nonparametric"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-nw-pooling",
+          "compute-gaussian-softmax",
+          "compare-parametric-nonparametric"
+        ],
+        "method": "完成权重与输出的手算检查题，并说明核宽度变化对权重分布的影响。",
+        "successCriteria": [
+          "能写出高斯核下的 softmax 权重公式",
+          "手算权重之和为 1 且最近键权重最大",
+          "能解释 w 增大时权重更尖锐、曲线更不平滑"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-10-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-regression-setup",
+        "moduleId": "problem-setup",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材的回归任务与数据生成方式",
+        "markdown": "教材把注意力汇聚落到一个最小的回归任务上：给定成对的“输入－输出”数据集 $\\{(x_1,y_1),\\dots,(x_n,y_n)\\}$，要学习 $f$ 使任意新输入 $x$ 的预测 $\\hat{y}=f(x)$ 尽量准确。\n\n演示数据由一个非线性函数生成，并叠加均值为 0、标准差为 0.5 的正态噪声：\n\n$$y_i = 2\\sin(x_i) + x_i^{0.8} + \\epsilon.$$\n\n教材用该函数采样 50 个训练样本与 50 个测试样本，并先对训练输入排序，以便更清楚地观察后面的注意力模式。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000077"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力汇聚：Nadaraya-Watson 核回归"
+              ],
+              "lineStart": 16141,
+              "lineEnd": 16440,
+              "assetRefs": [
+                "parts/part-0005/images/219cbdebc229c23899ec98f4bcf5729e28adfbeca7a579c527c9a6153c7d55f3.jpg",
+                "parts/part-0005/images/af0f312feb4b61992a097c68356d33971fb7ebbdc22671db2f49bb55fb751049.jpg",
+                "parts/part-0005/images/988cb9eda4c2b1f3cf2d63fa68d0249fcb94cca4a3ee8ebb8cfa86c9105ef4ec.jpg",
+                "parts/part-0005/images/05ec59ceb7b9d5f382aaaff0a46351184e99515575654a960d476ec3b42f4150.jpg",
+                "parts/part-0005/images/62c5877d55acb3b8ce32d328e8d6c5af0a8156a5427a1305f62be967c5316848.jpg",
+                "parts/part-0005/images/768669c2d3c4305c1c09e17958e3fe6a0fc4d879dbe3e7a9a078f462ce6215c7.jpg",
+                "parts/part-0005/images/35554a22a7b3738d63d232d9722892fe4ba421a60a18ee30812a2b0643580069.jpg"
+              ],
+              "excerptSha256": "ce1cd24f2b1e4a97cf171956bf57d0546375c7d06c736289952ba346c4e0df30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-neighbor-intuition",
+        "moduleId": "problem-setup",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：把回归想成“问邻居”",
+        "markdown": "可以先把这个问题想成“问邻居”：面对一个新的输入 $x$，不必凭空猜一个函数，而是找出训练集中输入位置与它相近的样本，再按相近程度把它们的输出平均起来。位置越近的样本越可信，发言权就越大。\n\n这个直觉正是“注意力”一词在此处的含义：模型把有限的“注意力”分配到训练样本上，分配比例由查询与各样本输入的相似度决定。平均汇聚只是“所有邻居发言权相同”的退化特例。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-regression-setup"
+          ]
+        }
+      },
+      {
+        "id": "textbook-average-pooling",
+        "moduleId": "average-pooling-baseline",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材的平均汇聚估计器",
+        "markdown": "最简单的估计器是平均汇聚：它对所有训练输出取同一个平均值，与查询 $x$ 无关：\n\n$$f(x) = \\frac{1}{n}\\sum_{i=1}^{n} y_i.$$\n\n教材指出这个估计器“确实不够聪明”：真实函数与预测函数相差很大，画出的预测曲线是一条水平线，完全无法跟随数据在 $[0,5]$ 上的起伏。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000077"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力汇聚：Nadaraya-Watson 核回归"
+              ],
+              "lineStart": 16141,
+              "lineEnd": 16440,
+              "assetRefs": [
+                "parts/part-0005/images/219cbdebc229c23899ec98f4bcf5729e28adfbeca7a579c527c9a6153c7d55f3.jpg",
+                "parts/part-0005/images/af0f312feb4b61992a097c68356d33971fb7ebbdc22671db2f49bb55fb751049.jpg",
+                "parts/part-0005/images/988cb9eda4c2b1f3cf2d63fa68d0249fcb94cca4a3ee8ebb8cfa86c9105ef4ec.jpg",
+                "parts/part-0005/images/05ec59ceb7b9d5f382aaaff0a46351184e99515575654a960d476ec3b42f4150.jpg",
+                "parts/part-0005/images/62c5877d55acb3b8ce32d328e8d6c5af0a8156a5427a1305f62be967c5316848.jpg",
+                "parts/part-0005/images/768669c2d3c4305c1c09e17958e3fe6a0fc4d879dbe3e7a9a078f462ce6215c7.jpg",
+                "parts/part-0005/images/35554a22a7b3738d63d232d9722892fe4ba421a60a18ee30812a2b0643580069.jpg"
+              ],
+              "excerptSha256": "ce1cd24f2b1e4a97cf171956bf57d0546375c7d06c736289952ba346c4e0df30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-average-limitation",
+        "moduleId": "average-pooling-baseline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：常数预测的结构性缺陷",
+        "markdown": "平均汇聚的问题不是“参数没调好”，而是结构上就没有可调的表达能力：它的预测对所有 $x$ 完全相同，导数 $\\partial f / \\partial x = 0$。\n\n换句话说，这个模型无法表示“输入变大时输出也随之变化”这类最基本的关系。无论训练多久、数据多少，它都只能给出同一条水平线。要改变这一点，权重就必须随查询位置变化，这也正是 Nadaraya 与 Watson 的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-average-pooling"
+          ]
+        }
+      },
+      {
+        "id": "textbook-nw-kernel",
+        "moduleId": "kernel-attention-pooling",
+        "depth": "core",
+        "kind": "definition",
+        "title": "Nadaraya-Watson 核回归与注意力汇聚",
+        "markdown": "Nadaraya 与 Watson 的改进是按输入位置对输出加权：\n\n$$f(x) = \\sum_{i=1}^{n} \\frac{K(x-x_i)}{\\sum_{j=1}^{n} K(x-x_j)} y_i,$$\n\n其中 $K$ 是核函数，该估计器称为 Nadaraya-Watson 核回归。把它改写成更一般的注意力汇聚形式，就得到\n\n$$f(x) = \\sum_{i=1}^{n} \\alpha(x,x_i) y_i,$$\n\n这里 $x$ 是查询，$(x_i,y_i)$ 是键值对，$\\alpha(x,x_i)$ 是注意力权重。对任意查询，这些权重都是非负的，并且总和为 1，因此构成一个有效的概率分布。\n\n取高斯核 $K(u)=\\frac{1}{\\sqrt{2\\pi}}\\exp\\left(-\\frac{u^2}{2}\\right)$ 代入后，归一化常数被约去，得到\n\n$$f(x) = \\sum_{i=1}^{n} \\operatorname{softmax}\\left(-\\frac{1}{2}(x-x_i)^2\\right) y_i.$$\n\n键 $x_i$ 越接近查询 $x$，分配给它的注意力权重越大。该模型不含可学习参数，属于非参数注意力汇聚；教材特别指出它具有一致性：数据足够多时会收敛到最优结果。教材代码正是先对 $-(x-x_i)^2/2$ 按行做 softmax 得到注意力权重，再用矩阵乘法对训练输出加权求和。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000077"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力汇聚：Nadaraya-Watson 核回归"
+              ],
+              "lineStart": 16141,
+              "lineEnd": 16440,
+              "assetRefs": [
+                "parts/part-0005/images/219cbdebc229c23899ec98f4bcf5729e28adfbeca7a579c527c9a6153c7d55f3.jpg",
+                "parts/part-0005/images/af0f312feb4b61992a097c68356d33971fb7ebbdc22671db2f49bb55fb751049.jpg",
+                "parts/part-0005/images/988cb9eda4c2b1f3cf2d63fa68d0249fcb94cca4a3ee8ebb8cfa86c9105ef4ec.jpg",
+                "parts/part-0005/images/05ec59ceb7b9d5f382aaaff0a46351184e99515575654a960d476ec3b42f4150.jpg",
+                "parts/part-0005/images/62c5877d55acb3b8ce32d328e8d6c5af0a8156a5427a1305f62be967c5316848.jpg",
+                "parts/part-0005/images/768669c2d3c4305c1c09e17958e3fe6a0fc4d879dbe3e7a9a078f462ce6215c7.jpg",
+                "parts/part-0005/images/35554a22a7b3738d63d232d9722892fe4ba421a60a18ee30812a2b0643580069.jpg"
+              ],
+              "excerptSha256": "ce1cd24f2b1e4a97cf171956bf57d0546375c7d06c736289952ba346c4e0df30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-softmax-derivation",
+        "moduleId": "kernel-attention-pooling",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：补全推导并手算一个查询",
+        "markdown": "教材跳过了高斯核代入的中间步骤，这里补全。分子分母中的 $\\frac{1}{\\sqrt{2\\pi}}$ 完全抵消，剩下的比值就是\n\n$$\\alpha(x,x_i) = \\frac{\\exp\\left(-\\frac{1}{2}(x-x_i)^2\\right)}{\\sum_{j=1}^{n}\\exp\\left(-\\frac{1}{2}(x-x_j)^2\\right)},$$\n\n即对分数 $-\\frac{1}{2}(x-x_i)^2$ 做 softmax。指数函数恒正，所以权重天然非负；再除以总和后归一化为 1。分数是距离平方的相反数，距离越小得分越高。\n\n一个可以直接手算的例子：设键 $x_1=0,\\ x_2=1,\\ x_3=2$，值 $y_1=1,\\ y_2=3,\\ y_3=2$，查询 $x=0.9$。三个分数分别是 $-0.405,-0.005,-0.605$，对应指数为 $0.667,0.995,0.546$，总和为 $2.208$，归一化权重约为 $0.302,0.451,0.247$。汇聚输出为\n\n$$0.302\\times 1 + 0.451\\times 3 + 0.247\\times 2 \\approx 2.15.$$\n\n离查询最近的键 $x_2$ 贡献最大，这正是“近邻获得更多注意力”的定量体现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-nw-kernel"
+          ]
+        }
+      },
+      {
+        "id": "textbook-parametric-pooling",
+        "moduleId": "parametric-pooling",
+        "depth": "core",
+        "kind": "formula",
+        "title": "带参数的注意力汇聚",
+        "markdown": "非参数模型有一致性，但仍可以把可学习参数集成进注意力汇聚：在查询 $x$ 与键 $x_i$ 的距离上乘以可学习参数 $w$，就得到\n\n$$f(x) = \\sum_{i=1}^{n} \\operatorname{softmax}\\left(-\\frac{1}{2}\\left((x-x_i)w\\right)^2\\right) y_i.$$\n\n教材用这个带参数版本做训练：模型只含一个参数 $w$，损失为平方损失，优化器为随机梯度下降（学习率 0.5，训练 5 个迭代周期）。训练时每个样本都用除自己以外的全部训练样本作为键值对，并用批量矩阵乘法一次性算出整个小批量的加权和。\n\n训练完成后的观察是：预测曲线能够拟合带噪声的训练数据，但不如非参数模型平滑；在注意力权重较大的区域，曲线变得更为尖锐。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000077"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "注意力汇聚：Nadaraya-Watson 核回归"
+              ],
+              "lineStart": 16141,
+              "lineEnd": 16440,
+              "assetRefs": [
+                "parts/part-0005/images/219cbdebc229c23899ec98f4bcf5729e28adfbeca7a579c527c9a6153c7d55f3.jpg",
+                "parts/part-0005/images/af0f312feb4b61992a097c68356d33971fb7ebbdc22671db2f49bb55fb751049.jpg",
+                "parts/part-0005/images/988cb9eda4c2b1f3cf2d63fa68d0249fcb94cca4a3ee8ebb8cfa86c9105ef4ec.jpg",
+                "parts/part-0005/images/05ec59ceb7b9d5f382aaaff0a46351184e99515575654a960d476ec3b42f4150.jpg",
+                "parts/part-0005/images/62c5877d55acb3b8ce32d328e8d6c5af0a8156a5427a1305f62be967c5316848.jpg",
+                "parts/part-0005/images/768669c2d3c4305c1c09e17958e3fe6a0fc4d879dbe3e7a9a078f462ce6215c7.jpg",
+                "parts/part-0005/images/35554a22a7b3738d63d232d9722892fe4ba421a60a18ee30812a2b0643580069.jpg"
+              ],
+              "excerptSha256": "ce1cd24f2b1e4a97cf171956bf57d0546375c7d06c736289952ba346c4e0df30"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-w-effect",
+        "moduleId": "parametric-pooling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：w 是一个可学习的核宽度旋钮",
+        "markdown": "参数 $w$ 的作用相当于一个可学习的尺度：把距离乘以 $w$，等价于把高斯核的宽度改成 $1/|w|$。\n\n- $w$ 越大，$(x-x_i)w$ 被放大，softmax 各分数之间的差异随之放大，权重分布更尖锐，模型更依赖最近的少数几个键；\n- $w$ 越小，分数差异被压缩，权重更接近均匀，输出更平滑，趋近于平均汇聚。\n\n这就解释了教材的观察：训练后的带参数模型在权重集中的区域更“贴”噪声点，因此曲线不如非参数模型平滑。$w$ 的价值不在于一定更好，而在于让“平滑程度”本身成为可以从数据中学到的量；代价则是引入参数、可能拟合噪声。非参数模型没有这个旋钮，但依靠一致性在数据足够多时同样能逼近真实函数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-parametric-pooling"
+          ]
+        }
+      },
+      {
+        "id": "model-comparison-table",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：三种汇聚方式的统一对比",
+        "markdown": "| 方法 | 注意力权重 | 可学习参数 | 平滑程度 | 主要局限 |\n|---|---|---|---|---|\n| 平均汇聚 | 全部为 $1/n$ | 无 | 常数预测，完全不变化 | 忽略查询位置 |\n| 非参数注意力汇聚 | $\\operatorname{softmax}\\left(-\\frac{1}{2}(x-x_i)^2\\right)$ | 无 | 平滑 | 核宽度固定，需要足够数据才有一致性 |\n| 带参数注意力汇聚 | $\\operatorname{softmax}\\left(-\\frac{1}{2}((x-x_i)w)^2\\right)$ | $w$ | 可学习，可能更尖锐 | 可能拟合噪声，不再自动平滑 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-average-pooling",
+            "textbook-nw-kernel",
+            "textbook-parametric-pooling"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：检查能否独立算出一个汇聚输出",
+        "markdown": "给定键 $x_1=0,\\ x_2=2$ 与值 $y_1=0,\\ y_2=10$，查询 $x=0.5$。\n\n1. 写出两个 softmax 分数，并判断哪个键会获得更大的权重。\n2. 算出两个权重与最终的汇聚输出。\n3. 若把核变窄（等价于 $w$ 变大），权重和输出会怎样变化？\n\n参考要点：两个分数为 $-\\frac{1}{2}(0.5)^2=-0.125$ 与 $-\\frac{1}{2}(1.5)^2=-1.125$，$x_1$ 更近因而权重更大；权重约为 $0.731$ 与 $0.269$，输出约为 $2.69$；核变窄后权重进一步向 $x_1$ 集中，输出更接近 $0$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-comparison-table"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "compare-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：小结与下一点桥接",
+        "markdown": "本节的主线可以压缩成三句话：注意力汇聚是用权重对值做加权平均；Nadaraya-Watson 核回归把权重取为查询与键相似度的归一化结果，因此是非参数的；把距离乘上可学习参数 $w$ 后，平滑程度变成可学习的量。\n\n这里的高斯核只是把相似度映射成分数的一种具体选择。下一个知识点会把 $\\frac{1}{2}(x-x_i)^2$ 这类形式一般化为注意力评分函数，讨论加性评分与缩放点积评分，并说明 softmax 归一化和掩蔽在其中的作用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "nw-weight-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "compare-and-check",
+        "depth": "core",
+        "title": "核回归权重与汇聚输出检查",
+        "outcomeRefs": [
+          "compute-gaussian-softmax",
+          "compare-parametric-nonparametric"
+        ],
+        "learningPurpose": "检查学习者能否独立完成高斯核 softmax 权重与汇聚输出的计算，并解释核宽度变化对结果的影响。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-nw-kernel",
+            "textbook-parametric-pooling"
+          ]
+        },
+        "config": {
+          "items": 3,
+          "attempts": 2,
+          "showFormulaHintAfterAttempts": 1
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按正文给出的两个键值对，先写出两个 softmax 分数并比较大小，再算出权重与汇聚输出，最后说明核变窄时权重分布如何变化。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000077"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "注意力汇聚：Nadaraya-Watson 核回归"
+      ],
+      "lineStart": 16141,
+      "lineEnd": 16440,
+      "assetRefs": [
+        "parts/part-0005/images/219cbdebc229c23899ec98f4bcf5729e28adfbeca7a579c527c9a6153c7d55f3.jpg",
+        "parts/part-0005/images/af0f312feb4b61992a097c68356d33971fb7ebbdc22671db2f49bb55fb751049.jpg",
+        "parts/part-0005/images/988cb9eda4c2b1f3cf2d63fa68d0249fcb94cca4a3ee8ebb8cfa86c9105ef4ec.jpg",
+        "parts/part-0005/images/05ec59ceb7b9d5f382aaaff0a46351184e99515575654a960d476ec3b42f4150.jpg",
+        "parts/part-0005/images/62c5877d55acb3b8ce32d328e8d6c5af0a8156a5427a1305f62be967c5316848.jpg",
+        "parts/part-0005/images/768669c2d3c4305c1c09e17958e3fe6a0fc4d879dbe3e7a9a078f462ce6215c7.jpg",
+        "parts/part-0005/images/35554a22a7b3738d63d232d9722892fe4ba421a60a18ee30812a2b0643580069.jpg"
+      ],
+      "excerptSha256": "ce1cd24f2b1e4a97cf171956bf57d0546375c7d06c736289952ba346c4e0df30"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1568,
+    973
+  ],
+  "scale": 0.93
+}

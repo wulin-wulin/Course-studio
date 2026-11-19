@@ -1,0 +1,554 @@
+{
+  "id": "point-10-6",
+  "title": "自注意力和位置编码",
+  "shortSummary": "解释自注意力如何在序列内部建立依赖，以及位置编码如何补回顺序信息。",
+  "keyTerms": [
+    "自注意力",
+    "位置编码",
+    "序列依赖",
+    "正弦函数"
+  ],
+  "animationType": "selfAttentionMatrix",
+  "animationSuggestion": "逐行高亮当前查询对全部位置的注意力权重，用连线粗细表示权重大小，并同步显示加权求和得到该位置输出的过程；重播回到第 1 个查询。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-10-2",
+    "point-10-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的自注意力定义、三项架构指标与正弦位置编码公式，围绕“同序列三元角色、路径长度代价、频率结构”重排讲解并补充直觉、算例与检查题。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-self-attention",
+          "text": "解释自注意力中查询、键、值来自同一输入，并说明输出与输入同长同维。"
+        },
+        {
+          "id": "compare-architectures",
+          "text": "用计算复杂度、顺序操作数和最大路径长度比较 CNN、RNN 与自注意力。"
+        },
+        {
+          "id": "derive-positional-encoding",
+          "text": "写出正弦位置编码公式，并说明频率随编码维度降低、编码值域受限。"
+        },
+        {
+          "id": "explain-relative-position",
+          "text": "说明固定偏移下位置编码之间可用不依赖位置索引的线性投影相互转换。"
+        }
+      ],
+      "misconceptions": [
+        "认为自注意力本身就能区分词元顺序，不需要额外位置信息。",
+        "把“最大路径长度为 O(1)”误解为总计算量小，忽略 O(n^2 d) 的二次方复杂度。",
+        "认为位置编码只能通过学习得到，不知道正弦编码是固定且无需训练的。",
+        "把位置编码的频率方向说反，误以为编码维度越高频率越高。"
+      ],
+      "modules": [
+        {
+          "id": "import-motivation",
+          "title": "问题导入：序列编码与自注意力",
+          "role": "motivation",
+          "description": "从 CNN、RNN 序列编码出发，引出同序列同时充当查询、键和值的动机。",
+          "outcomeRefs": [
+            "explain-self-attention"
+          ],
+          "order": 0
+        },
+        {
+          "id": "self-attention-definition",
+          "title": "自注意力的定义与形状",
+          "role": "definition-and-worked-example",
+          "description": "给出输出公式，解读结构约束，并用小规模算例走通一次加权汇聚。",
+          "outcomeRefs": [
+            "explain-self-attention"
+          ],
+          "order": 1
+        },
+        {
+          "id": "architecture-comparison",
+          "title": "三种序列架构的定量比较",
+          "role": "quantitative-comparison",
+          "description": "用计算复杂度、顺序操作数和最大路径长度比较三种架构，并解释指标的实际含义与代价。",
+          "outcomeRefs": [
+            "compare-architectures"
+          ],
+          "order": 2
+        },
+        {
+          "id": "positional-encoding",
+          "title": "正弦位置编码公式与实现",
+          "role": "formula-and-parameters",
+          "description": "给出固定位置编码公式，解读频率、维度配对与实现切片要点，并做数值示例。",
+          "outcomeRefs": [
+            "derive-positional-encoding"
+          ],
+          "order": 3
+        },
+        {
+          "id": "absolute-relative-position",
+          "title": "绝对位置与相对位置信息",
+          "role": "mechanism-derivation",
+          "description": "用二进制类比解释绝对位置，再推导偏移 δ 下的旋转投影关系。",
+          "outcomeRefs": [
+            "explain-relative-position"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "review-and-check",
+          "description": "汇总四个要点，用三道检查题确认能否比较代价并推导编码性质。",
+          "outcomeRefs": [
+            "explain-self-attention",
+            "compare-architectures",
+            "derive-positional-encoding",
+            "explain-relative-position"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-self-attention",
+          "compare-architectures",
+          "derive-positional-encoding",
+          "explain-relative-position"
+        ],
+        "method": "完成三道检查题并口头说明架构比较表与位置编码公式的依据。",
+        "successCriteria": [
+          "能说清查询、键、值同源且输出形状不变",
+          "能写出三种架构的复杂度、顺序操作数与最大路径长度",
+          "能说明相邻维度配对、频率随维度降低以及偏移 δ 的旋转投影"
+        ],
+        "exerciseBlockId": "self-attention-exercise",
+        "summaryBlockId": "point-summary",
+        "nextPointId": "point-10-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "seq-encoding-context",
+        "moduleId": "import-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "序列编码与自注意力的提出",
+        "markdown": "深度学习常用卷积神经网络（CNN）或循环神经网络（RNN）对序列编码。引入注意力机制后，可以把同一组词元序列同时作为查询、键和值输入注意力池化：每个查询关注所有键－值对并得到一个注意力输出。由于查询、键和值来自同一组输入，这种机制称为**自注意力**（self-attention），也称为**内部注意力**（intra-attention）。本节用自注意力编码序列，并讨论如何把序列顺序作为补充信息注入。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "自注意力和位置编码"
+              ],
+              "lineStart": 17190,
+              "lineEnd": 17370,
+              "assetRefs": [
+                "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+                "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+                "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+              ],
+              "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "self-attention-intuition",
+        "moduleId": "import-motivation",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充直觉：一个词元既是提问者也是被查者",
+        "markdown": "把一句话想象成一次内部讨论：每个位置先用自身内容提出一个“问题”（查询），再去和所有位置亮出的“名片”（键）比对，最后按匹配程度汇总大家提供的“信息”（值）。因为提问者、名片和信息都出自同一句话，这里没有任何外部上下文，全部依赖都在序列内部建立。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "seq-encoding-context"
+          ]
+        }
+      },
+      {
+        "id": "self-attention-formula",
+        "moduleId": "self-attention-definition",
+        "depth": "core",
+        "kind": "formula",
+        "title": "自注意力的输出定义",
+        "markdown": "给定由词元组成的输入序列 $\\mathbf{x}_1, \\ldots, \\mathbf{x}_n$，其中 $\\mathbf{x}_i \\in \\mathbb{R}^d$。自注意力的输出是一个长度相同的序列 $\\mathbf{y}_1, \\ldots, \\mathbf{y}_n$，其中\n\n$$\\mathbf{y}_i = f(\\mathbf{x}_i, (\\mathbf{x}_1, \\mathbf{x}_1), \\ldots, (\\mathbf{x}_n, \\mathbf{x}_n)) \\in \\mathbb{R}^d$$\n\n函数 $f$ 就是教材前面定义的注意力汇聚函数。用多头注意力对一个形状为（批量大小，时间步的数目或词元序列的长度，$d$）的张量做自注意力时，输出与输入的张量形状相同。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "自注意力和位置编码"
+              ],
+              "lineStart": 17190,
+              "lineEnd": 17370,
+              "assetRefs": [
+                "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+                "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+                "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+              ],
+              "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "self-attention-shape",
+        "moduleId": "self-attention-definition",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "从公式读出三条结构约束",
+        "markdown": "上式可以直接读出三条约束：\n\n- **同源**：查询、键、值都由同一组 $\\mathbf{x}_i$ 变换得到，没有额外输入。\n- **全连接**：输出 $\\mathbf{y}_i$ 对全部 $n$ 个位置做加权汇聚，任意两个位置之间只隔一次注意力运算。\n- **形状不变**：输出仍是长度 $n$、维度 $d$ 的序列，所以自注意力层可以逐层堆叠而张量形状不变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "self-attention-formula"
+          ]
+        }
+      },
+      {
+        "id": "self-attention-example",
+        "moduleId": "self-attention-definition",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：n = 4 时如何得到 y₂",
+        "markdown": "取 $n=4$、$d=2$。计算 $\\mathbf{y}_2$ 时，用 $\\mathbf{x}_2$ 得到查询，用四个词元分别得到键，用缩放点积打分并做 softmax 归一化，得到四个和为 1 的权重 $\\alpha_{21},\\ldots,\\alpha_{24}$，再对相应的值向量加权求和：\n\n$$\\mathbf{y}_2 = \\alpha_{21}\\mathbf{v}_1 + \\alpha_{22}\\mathbf{v}_2 + \\alpha_{23}\\mathbf{v}_3 + \\alpha_{24}\\mathbf{v}_4$$\n\n对 $\\mathbf{y}_1,\\mathbf{y}_3,\\mathbf{y}_4$ 重复同样过程，就得到形状不变的输出。注意这些权重不是位置先验，而是由查询与键的内容相似度算出来的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "self-attention-formula",
+            "self-attention-shape"
+          ]
+        }
+      },
+      {
+        "id": "architecture-cost-table",
+        "moduleId": "architecture-comparison",
+        "depth": "core",
+        "kind": "table",
+        "title": "CNN、RNN 与自注意力的三项指标",
+        "markdown": "教材比较三种把 $n$ 个 $d$ 维词元映射为等长序列的架构，指标是计算复杂度、顺序操作数和任意两个位置之间的最大路径长度。\n\n| 架构 | 计算复杂度 | 顺序操作 | 最大路径长度 |\n|---|---|---|---|\n| 卷积神经网络（核大小 $k$） | $\\mathcal{O}(knd^2)$ | $\\mathcal{O}(1)$ | $\\mathcal{O}(n/k)$ |\n| 循环神经网络 | $\\mathcal{O}(nd^2)$ | $\\mathcal{O}(n)$ | $\\mathcal{O}(n)$ |\n| 自注意力 | $\\mathcal{O}(n^2d)$ | $\\mathcal{O}(1)$ | $\\mathcal{O}(1)$ |\n\n结论是：CNN 和自注意力都拥有并行计算的优势，而且自注意力的最大路径长度最短；但它的计算复杂度关于序列长度的二次方，所以在很长的序列中计算会非常慢。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "自注意力和位置编码"
+              ],
+              "lineStart": 17190,
+              "lineEnd": 17370,
+              "assetRefs": [
+                "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+                "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+                "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+              ],
+              "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "path-length-meaning",
+        "moduleId": "architecture-comparison",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "三项指标各自意味着什么",
+        "markdown": "顺序操作数决定能否并行：RNN 必须等前一个时间步的隐状态算完，$n$ 步只能串行；CNN 与自注意力的各位置互相独立，可以一次算完。最大路径长度决定信息与梯度要跨多少步才能把两个位置的关联传递到位，路径越长，学习远距离依赖越困难。自注意力让任意两个位置直接相连，因此在这一点上有结构性优势。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "architecture-cost-table"
+          ]
+        }
+      },
+      {
+        "id": "long-sequence-tradeoff",
+        "moduleId": "architecture-comparison",
+        "depth": "support",
+        "kind": "warning",
+        "title": "路径短不等于代价小",
+        "markdown": "最大路径长度 $\\mathcal{O}(1)$ 只说明任意两个位置之间不需要经过中间位置，并不表示总计算量小。自注意力要显式构造 $n \\times n$ 的注意力权重矩阵，复杂度为 $\\mathcal{O}(n^2d)$；序列变长时，二次方项迅速成为瓶颈，这正是后续长序列注意力改进的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "architecture-cost-table",
+            "path-length-meaning"
+          ]
+        }
+      },
+      {
+        "id": "positional-encoding-formula",
+        "moduleId": "positional-encoding",
+        "depth": "core",
+        "kind": "formula",
+        "title": "基于正弦和余弦的固定位置编码",
+        "markdown": "自注意力为了并行计算放弃了顺序操作，因此需要额外注入位置信息。教材采用基于正弦函数和余弦函数的固定位置编码：设输入表示 $\\mathbf{X} \\in \\mathbb{R}^{n \\times d}$，位置编码是同样形状的矩阵 $\\mathbf{P} \\in \\mathbb{R}^{n \\times d}$，把二者相加得到 $\\mathbf{X} + \\mathbf{P}$，其中\n\n$$p_{i,2j} = \\sin\\left(\\frac{i}{10000^{2j/d}}\\right), \\qquad p_{i,2j+1} = \\cos\\left(\\frac{i}{10000^{2j/d}}\\right)$$\n\n$\\mathbf{P}$ 的第 $i$ 行代表词元在序列中的位置，列代表位置编码的不同维度：偶数列用正弦、奇数列用余弦。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "自注意力和位置编码"
+              ],
+              "lineStart": 17190,
+              "lineEnd": 17370,
+              "assetRefs": [
+                "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+                "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+                "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+              ],
+              "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "positional-encoding-variables",
+        "moduleId": "positional-encoding",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "公式中的频率与实现要点",
+        "markdown": "读这个公式要抓住四点：\n\n- **频率随维度降低**：第 $j$ 对的频率是 $\\omega_j = 1/10000^{2j/d}$，$j$ 增大时分母变大、频率单调降低。\n- **成对使用**：维度 $2j$ 与 $2j+1$ 共用同一频率，分别取正弦与余弦，相当于一对相位差 $90^\\circ$ 的信号。\n- **无需训练**：所有位置共用同一组频率，矩阵 $\\mathbf{P}$ 可以由公式直接生成，实现时一次算到足够长度、按当前序列长度切片再加到嵌入上。\n- **值域受限**：每个编码值都在 $[-1,1]$ 内，不会因位置靠后而数值爆炸。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "positional-encoding-formula"
+          ]
+        }
+      },
+      {
+        "id": "positional-encoding-example",
+        "moduleId": "positional-encoding",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "数值示例：d = 4 时的编码",
+        "markdown": "取 $d=4$，则 $j \\in \\{0,1\\}$。$j=0$ 时频率为 $1$，$j=1$ 时频率为 $1/10000^{2/4} = 1/100$。在位置 $i=0$ 处：\n\n$$p_{0,0}=\\sin 0=0,\\quad p_{0,1}=\\cos 0=1,\\quad p_{0,2}=\\sin 0=0,\\quad p_{0,3}=\\cos 0=1$$\n\n在位置 $i=1$ 处，第 0 对（频率 $1$）的变化很明显（$\\sin 1 \\approx 0.841$），第 1 对（频率 $1/100$）几乎没有移动（$\\sin 0.01 \\approx 0.010$）。这就是“低维变化快、高维变化慢”的具体样子。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "positional-encoding-formula",
+            "positional-encoding-variables"
+          ]
+        }
+      },
+      {
+        "id": "absolute-position-binary",
+        "moduleId": "absolute-relative-position",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "绝对位置信息：二进制类比",
+        "markdown": "正弦位置编码的绝对值解释可以借助二进制表示。教材打印 $0$ 到 $7$ 的二进制形式：最低位每 1 个数翻转一次，次低位每 2 个数翻转一次，第三位每 4 个数翻转一次。位越高，交替频率越低。位置编码用三角函数在编码维度上复现同样的“高位低频”结构，但输出是连续浮点数，因此比二进制表示更节省空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "自注意力和位置编码"
+              ],
+              "lineStart": 17190,
+              "lineEnd": 17370,
+              "assetRefs": [
+                "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+                "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+                "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+              ],
+              "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "binary-frequency-analogy",
+        "moduleId": "absolute-relative-position",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充类比：一组不同转速的齿轮",
+        "markdown": "可以把位置编码看成一组咬合的齿轮：低维是转得很快的小齿轮，高维是转得很慢的大齿轮。每个位置都会在每对齿轮上留下一个唯一的相位组合，模型据此区分“第几个词元”。这也解释了为什么位置编码可以固定而不必训练——区分位置依靠的是频率组合的唯一性，而不是可学习参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "absolute-position-binary"
+          ]
+        }
+      },
+      {
+        "id": "relative-position-formula",
+        "moduleId": "absolute-relative-position",
+        "depth": "core",
+        "kind": "formula",
+        "title": "相对位置信息：偏移 δ 的线性投影",
+        "markdown": "除绝对位置之外，这种位置编码还允许模型学习相对位置信息。对于任何确定的位置偏移 $\\delta$，位置 $i+\\delta$ 处的编码都可以线性投影位置 $i$ 处的编码得到。令 $\\omega_j = 1/10000^{2j/d}$，则任意一对 $(p_{i,2j}, p_{i,2j+1})$ 满足\n\n$$\\begin{bmatrix}\\cos(\\delta\\omega_j) & \\sin(\\delta\\omega_j) \\\\ -\\sin(\\delta\\omega_j) & \\cos(\\delta\\omega_j)\\end{bmatrix}\\begin{bmatrix}p_{i,2j} \\\\ p_{i,2j+1}\\end{bmatrix} = \\begin{bmatrix}p_{i+\\delta,2j} \\\\ p_{i+\\delta,2j+1}\\end{bmatrix}$$\n\n右侧正是 $2\\times 2$ 投影矩阵作用后的结果，而这个投影矩阵只依赖偏移量 $\\delta$ 与频率 $\\omega_j$，不依赖任何位置索引 $i$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000081"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "自注意力和位置编码"
+              ],
+              "lineStart": 17190,
+              "lineEnd": 17370,
+              "assetRefs": [
+                "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+                "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+                "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+              ],
+              "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "relative-projection-meaning",
+        "moduleId": "absolute-relative-position",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "为什么“不依赖 i”很重要",
+        "markdown": "这条性质意味着模型不必记住“第 5 个位置长什么样”，只要学到一个与起点无关的旋转操作，就能把任意位置的编码平移到偏移 $\\delta$ 之后的位置。于是“相隔 3 个词元”这类相对关系在参数上表现为一个固定变换，注意力层更容易利用它建模局部顺序和相对距离。注意这个矩阵是旋转矩阵，长度不变，只改变相位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "relative-position-formula",
+            "absolute-position-binary"
+          ]
+        }
+      },
+      {
+        "id": "point-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结",
+        "markdown": "- 自注意力让同一组词元同时充当查询、键和值，输出与输入等长同维，任意两个位置直接相连。\n- 与 CNN、RNN 相比，自注意力的顺序操作数为 $\\mathcal{O}(1)$、最大路径长度为 $\\mathcal{O}(1)$，代价是 $\\mathcal{O}(n^2d)$ 的二次方复杂度。\n- 顺序信息通过把正弦位置编码矩阵加到输入上注入：$\\mathbf{X}+\\mathbf{P}$，低维变化快、高维变化慢。\n- 任意固定偏移 $\\delta$ 的位置编码之间只差一个不依赖位置的旋转矩阵，因此模型也能利用相对位置信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "self-attention-formula",
+            "architecture-cost-table",
+            "positional-encoding-formula",
+            "relative-position-formula"
+          ]
+        }
+      },
+      {
+        "id": "self-attention-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "advanced",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. 若把 $L$ 层基于位置编码的自注意力堆叠成深度架构，位置信息会随层数发生什么变化？可能带来什么问题？\n2. 设 $d=8$，写出 $j=2$ 那一对维度对应的频率 $\\omega_2$，并说明它比 $j=0$ 的那一对快还是慢。\n3. 序列长度从 512 增加到 4096 时，自注意力的计算量大约变为原来的多少倍？据此说明长序列的瓶颈在哪里。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "architecture-cost-table",
+            "positional-encoding-variables",
+            "point-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "architecture-and-encoding-check",
+        "type": "formative-check",
+        "anchorBlockId": "self-attention-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "compare-architectures",
+          "derive-positional-encoding"
+        ],
+        "learningPurpose": "检查学习者能否用同一组指标比较架构代价，并从公式直接读出频率性质。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "architecture-cost-table",
+            "positional-encoding-formula"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "format": "short-answer"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请填写三种架构的计算复杂度、顺序操作数与最大路径长度，并解释 $j$ 增大时位置编码频率为何降低。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000081"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "自注意力和位置编码"
+      ],
+      "lineStart": 17190,
+      "lineEnd": 17370,
+      "assetRefs": [
+        "parts/part-0005/images/38f163642a21654f66992a2cbac39d65c1963deec02d13a43ba463f830af6599.jpg",
+        "parts/part-0005/images/1e54f44ca617223950cd775be8478541d61f03feefb49491546ee05f354a864e.jpg",
+        "parts/part-0005/images/22c6882aa8d01a5342154525b1d9415c2ca55a9e8b490a2b62f29a6c111dbd0b.jpg"
+      ],
+      "excerptSha256": "e1b4693e5ff9540affb9c75177379e32cd384a6f72297b0d530575ec441f0dc1"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1213,
+    1180
+  ],
+  "scale": 0.94
+}

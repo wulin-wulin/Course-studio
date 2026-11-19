@@ -1,0 +1,583 @@
+{
+  "id": "point-12-5",
+  "title": "多GPU训练",
+  "shortSummary": "说明数据并行下如何切分批量、复制模型、汇总梯度并同步更新参数。",
+  "keyTerms": [
+    "数据并行",
+    "梯度汇总",
+    "参数同步",
+    "多GPU"
+  ],
+  "animationType": "dataParallelAllreduce",
+  "animationSuggestion": "并排显示两块 GPU 的分片数据与参数副本，逐步演示前向、反向得到局部梯度，用汇聚箭头展示梯度求和，再广播回各卡并同步更新参数；可切换 k 与批量大小，观察有效批量和每卡工作量的变化。",
+  "difficulty": "进阶",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-5-6",
+    "point-11-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-procedure-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对三种拆分方式与数据并行五步循环的表述，围绕同步原语补充机制解释、代码顺序约束与实验诊断，不改变教材的数值与结论。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-parallel-strategies",
+          "text": "区分网络并行、分层并行与数据并行，并说明为什么数据并行最方便。"
+        },
+        {
+          "id": "trace-data-parallel-loop",
+          "text": "按顺序复述 k 块 GPU 上数据并行的切分、局部计算、梯度聚合、广播与更新过程。"
+        },
+        {
+          "id": "explain-sync-primitives",
+          "text": "说明参数分发 get_params 与 allreduce 各自的作用、实现要点及梯度求和的含义。"
+        },
+        {
+          "id": "scale-batch-and-lr",
+          "text": "根据 GPU 数量调整批量大小与学习率，并诊断小模型下没有明显加速的原因。"
+        }
+      ],
+      "misconceptions": [
+        "认为增加 GPU 数量就能训练更大的模型；数据并行只是扩大有效批量，每块 GPU 仍保存完整的参数副本。",
+        "认为每块 GPU 可以各自更新参数后再对齐；必须先聚合梯度并广播，否则各副本会分叉。",
+        "认为多 GPU 一定线性加速；模型和数据都很小时，同步与 Python 前端开销会吃掉收益。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-strategies",
+          "title": "从拆分方式到数据并行",
+          "role": "concept-comparison",
+          "description": "先比较三种并行拆分，再用统一维度说明数据并行的适用条件。",
+          "outcomeRefs": [
+            "explain-parallel-strategies"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-parallel-loop",
+          "title": "数据并行的迭代循环",
+          "role": "mechanism",
+          "description": "把一次小批量训练拆成五步，并解释聚合后的梯度为何等价于全批量梯度。",
+          "outcomeRefs": [
+            "trace-data-parallel-loop"
+          ],
+          "order": 1
+        },
+        {
+          "id": "sync-primitives",
+          "title": "参数分发与 allreduce",
+          "role": "procedure-code",
+          "description": "用 get_params 复制参数、用 allreduce 求和并广播，落实同步的两个基本操作。",
+          "outcomeRefs": [
+            "explain-sync-primitives"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-loop-and-scaling",
+          "title": "训练循环与批量、学习率扩展",
+          "role": "quantitative",
+          "description": "在 train_batch 中串起切分、反向、聚合与更新，并推导批量大小随 GPU 数量的缩放。",
+          "outcomeRefs": [
+            "trace-data-parallel-loop",
+            "scale-batch-and-lr"
+          ],
+          "order": 3
+        },
+        {
+          "id": "pitfalls-and-check",
+          "title": "加速诊断与达成检查",
+          "role": "diagnosis-check",
+          "description": "用教材的双卡实验诊断加速比，完成批量扩展与关系判断的检查题。",
+          "outcomeRefs": [
+            "explain-parallel-strategies",
+            "trace-data-parallel-loop",
+            "explain-sync-primitives",
+            "scale-batch-and-lr"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-parallel-strategies",
+          "trace-data-parallel-loop",
+          "explain-sync-primitives",
+          "scale-batch-and-lr"
+        ],
+        "method": "完成检查题：给定 k 与单卡批量推导有效批量，并写出一次数据并行迭代的五步顺序与不加速的诊断依据。",
+        "successCriteria": [
+          "五步顺序正确且不遗漏梯度广播",
+          "能说明 allreduce 求和与全批量梯度的对应关系",
+          "能指出小模型下开销主要来自同步与 Python 前端"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-12-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-strategies",
+        "moduleId": "problem-and-strategies",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：三种拆分 GPU 工作量的方式",
+        "markdown": "要在多块 GPU 上训练同一个网络，先要决定拆分什么。教材把候选方案归为三类：\n\n- **网络并行**：不同 GPU 负责不同层，数据依次流过后续层。它能让单卡放下更大的网络，并控制每卡显存占用，但层与层之间需要密集同步；当各层计算量不匹配，或接口处要传输的激活值与梯度超过总线带宽时，代价很高。\n- **分层并行**：把同一层内的工作拆开，例如 4 块 GPU 各算 16 个通道，而不是单卡算 64 个通道；全连接层则拆分输出单元。通道或单元数量不太少时性能有明显提升，可用显存也近似线性扩展，但每层都依赖其他分片的结果，需要大量同步或屏障操作，传输量可能比拆层更大。\n- **数据并行**：每块 GPU 拿到不同的观测，却执行完全相同类型的工作；每个小批量训练结束后再聚合梯度。它的同步只发生在每次小批量处理之后，实现最简单，且可应用于任何情况。代价是添加更多 GPU 并不会让模型本身变大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-strategy-compare",
+        "moduleId": "problem-and-strategies",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：用统一维度比较三种方案",
+        "markdown": "教材在图 12.5.2 中并列了四种情形（原始问题、网络并行、分层并行、数据并行）。把三者的取舍压到三个维度上看更清楚：\n\n| 维度 | 网络并行 | 分层并行 | 数据并行 |\n|---|---|---|---|\n| 同步频率 | 层与层之间持续同步 | 每层都要等全部分片 | 每个小批量结束同步一次 |\n| 单卡显存放得下什么 | 只放部分层 | 只放部分通道或单元 | 必须放下完整参数与优化状态 |\n| 能扩大的对象 | 网络深度与规模 | 网络宽度 | 有效批量与吞吐 |\n\n因此判断顺序可以固定为：如果单卡显存已经放不下参数，数据并行帮不上忙，只能考虑拆层或拆层内工作；如果参数放得下、只想让每个迭代处理更多样本，数据并行是默认选择。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-strategies"
+          ]
+        }
+      },
+      {
+        "id": "tb-data-parallel-loop",
+        "moduleId": "data-parallel-loop",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：k 块 GPU 的数据并行循环",
+        "markdown": "假设一台机器有 $k$ 块 GPU。每块 GPU 独立维护一组完整的模型参数，但各卡上的参数值保持相同且同步。图 12.5.3 以 $k=2$ 演示了这套做法。一次训练迭代包含五步：\n\n1. 把当前随机小批量样本分成 $k$ 份，均匀分配到各块 GPU；\n2. 每块 GPU 用分到的小批量子集计算损失和梯度；\n3. 把 $k$ 块 GPU 的局部梯度聚合，得到当前小批量的随机梯度；\n4. 把聚合后的梯度重新分发到每块 GPU；\n5. 每块 GPU 用这份梯度更新自己维护的完整参数集。\n\n第 3、4 步合起来就是一次跨设备的“求和并广播”，它保证所有副本在同一个小批量后仍取相同的参数值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-grad-equivalence",
+        "moduleId": "data-parallel-loop",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么聚合后仍等价于全批量训练",
+        "markdown": "把批量均匀切成 $k$ 份后，全批量损失可以写成各分片损失之和：\n\n$$L(\\theta) = \\sum_{i=1}^{k} L_i(\\theta)$$\n\n梯度是线性算子，因此 $\\nabla L(\\theta) = \\sum_{i=1}^{k} \\nabla L_i(\\theta)$。每块 GPU 只算自己那份 $\\nabla L_i$，allreduce 求和后正好得到全批量梯度。这正是第 3 步用求和而不是求平均的原因：归一化留到最后按全批量大小统一做。也正因如此，数据并行改变的是每个迭代看到多少数据，而不是优化目标本身。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-data-parallel-loop"
+          ]
+        }
+      },
+      {
+        "id": "tb-param-distribution",
+        "moduleId": "sync-primitives",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：用 get_params 分发参数",
+        "markdown": "高效的多 GPU 训练需要两个基本操作。第一个是向多个设备分发参数并附加梯度：`get_params` 先用 `p.to(device)` 把每个参数复制到目标设备，再对复制结果调用 `requires_grad_()`，让它们在后续前向与反向中记录梯度。\n\n```python\ndef get_params(params, device):\n    new_params = [p.to(device) for p in params]\n    for p in new_params:\n        p.requires_grad_()\n    return new_params\n```\n\n把参数复制到 0 号 GPU 后打印可以看到：权重已在对应设备上，而由于还没有做任何计算，梯度尚未产生（教材输出显示为 `None`）。如果没有参数，就不可能在 GPU 上评估网络，因此这一步是后续所有局部计算的前提。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-allreduce",
+        "moduleId": "sync-primitives",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：allreduce 求和并广播",
+        "markdown": "第二个基本操作是跨设备对参数求和，也就是 allreduce。教材的写法先把第 1 到第 $k-1$ 个向量累加进第 0 个设备上的结果，再把结果广播回其余设备：\n\n```python\ndef allreduce(data):\n    for i in range(1, len(data)):\n        data[0][:] += data[i].to(data[0].device)\n    for i in range(1, len(data)):\n        data[i][:] = data[0].to(data[i].device)\n```\n\n关键细节是：累加前必须把分片复制到累积结果所在的设备，否则跨设备相加无法进行。教材用两组向量验证：设备 0 上是 `[[1., 1.]]`，设备 1 上是 `[[2., 2.]]`；调用 allreduce 后，两块设备上都变成 `[[3., 3.]]`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-sum",
+        "moduleId": "sync-primitives",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：求和、广播与更新三者的配合",
+        "markdown": "把两个原语接起来看，一次同步其实包含三个动作，缺一不可：\n\n1. **求和**：把各卡上的局部梯度累加成全批量梯度；\n2. **广播**：让每块 GPU 都拿到同一份聚合结果，而不是只有 0 号卡正确；\n3. **更新**：各卡用同一份梯度、同一个学习率更新各自的副本。\n\n如果只求和而不广播，或者各卡先各自更新再对齐，各副本就会在下一步前向时分叉，后续算出的梯度也不再对应同一个模型。因此 allreduce 的“reduce + broadcast”语义是参数同步的核心，而不只是数据传输的优化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-param-distribution",
+            "tb-allreduce"
+          ]
+        }
+      },
+      {
+        "id": "tb-train-batch",
+        "moduleId": "training-loop-and-scaling",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：train_batch 中串起一次多 GPU 迭代",
+        "markdown": "`train_batch` 把上述步骤落到一个小批量上：先用 `split_batch` 把 `X` 和 `y` 切分并散射到各设备；再在每块 GPU 上分别计算分片损失之和并各自反向传播；随后在 `torch.no_grad()` 下对所有设备上的同位置梯度调用 allreduce；最后各卡用 `d2l.sgd` 更新自己的参数。\n\n```python\ndef train_batch(X, y, device_params, devices, lr):\n    X_shards, y_shards = split_batch(X, y, devices)\n    ls = [loss(lenet(X_shard, device_W), y_shard).sum()\n          for X_shard, y_shard, device_W in zip(\n              X_shards, y_shards, device_params)]\n    for l in ls:\n        l.backward()\n    with torch.no_grad():\n        for i in range(len(device_params[0])):\n            allreduce(\n                [device_params[c][i].grad for c in range(len(devices))])\n    for param in device_params:\n        d2l.sgd(param, lr, X.shape[0])\n```\n\n教材强调，更新时传入的是全尺寸小批量的样本数 `X.shape[0]`，而不是单卡分片的大小；并行本身不需要额外代码，因为计算图在小批量内的设备之间没有依赖关系，框架会自动并行执行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-train-batch-notes",
+        "moduleId": "training-loop-and-scaling",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：代码顺序上的三个约束",
+        "markdown": "这段代码的语句顺序不是风格问题，每一步都有约束：\n\n- **先 backward 再 allreduce**：梯度只有在反向传播后才存在于 `.grad` 中，提前聚合只会读到旧值或 `None`。\n- **聚合放在 `torch.no_grad()` 中**：allreduce 是纯数据搬运与累加，不应被记入计算图，否则会额外占用显存并污染梯度。\n- **广播完成后再更新**：所有卡必须使用同一份聚合梯度，才能保证下一步前向时参数副本仍然一致。\n\n另外，若要在计时中看到真实耗时，需要在每轮结束后调用 `torch.cuda.synchronize()`；否则前端只是把指令排入队列，测到的并不是设备实际完成的时间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-train-batch",
+            "tb-allreduce"
+          ]
+        }
+      },
+      {
+        "id": "tb-batch-scaling",
+        "moduleId": "training-loop-and-scaling",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：批量大小要按 GPU 数量扩展",
+        "markdown": "在 $k$ 块 GPU 上训练时，需要把小批量大小扩大为 $k$ 的倍数，这样每块 GPU 的工作量与单卡训练时相同。因此在 16 块 GPU 的服务器上可以显著增大小批量数据量；与此同时，学习率可能也需要相应提高。\n\n教材还提醒，批量规范化要跟着调整，例如为每块 GPU 保留单独的批量规范化参数。也就是说，数据并行并不只是“把数据切开”，它同时改变了有效批量、优化步长和归一化统计的粒度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lr-scaling",
+        "moduleId": "training-loop-and-scaling",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "模型补充：有效批量与学习率调整的边界",
+        "markdown": "设单卡批量为 $b$，GPU 数量为 $k$，则有效批量为\n\n$$B_{\\mathrm{eff}} = k \\times b$$\n\n批量变大后，梯度估计的方差下降，单步方向更稳定，因此通常可以把学习率调大一些；把学习率按 $k$ 倍放大是常见的起始猜测，但它不是定理。教材的练习也要求比较不同学习率下的精度，并观察随 GPU 数量增加学习率应如何扩展。实践边界是：批量过大时每步收益递减，通信与内存开销上升，学习率放得过大还会导致训练不稳定，必须以验证集结果为准，而不是机械套用倍数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-batch-scaling",
+            "model-grad-equivalence"
+          ]
+        }
+      },
+      {
+        "id": "tb-experiment",
+        "moduleId": "pitfalls-and-check",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：单卡与双卡的 Fashion-MNIST 对比",
+        "markdown": "教材用批量大小 256、学习率 0.2 在 Fashion-MNIST 上跑 10 轮：\n\n- 单 GPU：测试精度 0.84，约 2.7 秒/轮；\n- 双 GPU：测试精度 0.83，约 3.6 秒/轮。\n\n两次实验的精度基本相同，说明不同的 GPU 个数在算法寻优方面是相同的；但双卡没有带来有意义的加速，反而更慢。教材给出的原因是模型太小、数据集也太小，这套从零实现的多 GPU 方法受到巨大的 Python 开销影响。教材同时指出，后续会遇到更复杂的模型和更复杂的并行化方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-no-speedup",
+        "moduleId": "pitfalls-and-check",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：加速比为什么会被吃掉",
+        "markdown": "加速比可写成 $S(k) = T_1 / T_k$，其中 $T_k$ 是 $k$ 卡每轮耗时。数据并行的每轮时间至少包含三部分：各卡前向与反向、梯度 allreduce 与广播、以及 Python 前端逐条下发指令的开销。\n\n当模型很小时，单卡的计算时间本来就短，通信与前端开销占比迅速上升，于是 $T_2$ 可能接近甚至超过 $T_1$，出现教材中的 2.7 秒变 3.6 秒。反过来，模型越大、每卡计算越重，计算才能掩盖固定的同步成本。诊断时应先分别测量单卡时间、同步时间和前端时间，再判断是增加 GPU 还是先减少 Python 层循环更有效。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-experiment"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "pitfalls-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：本节小结",
+        "markdown": "- 可以在多个 GPU 上拆分深度网络的训练：拆分可以发生在层之间、跨层或跨数据上；前两者需要严格编排数据传输，最后一种是最简单的策略。\n- 数据并行训练本身并不复杂，它通过增加有效的小批量数据量提高训练效率。\n- 在数据并行中，数据跨多个 GPU 拆分，每块 GPU 执行自己的前向传播和反向传播，随后所有梯度被聚合为一，再向所有 GPU 广播。\n- 小批量数据量更大时，学习率也需要稍微提高一些。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000100"
+              ],
+              "headingPath": [
+                "计算性能",
+                "多GPU训练"
+              ],
+              "lineStart": 22119,
+              "lineEnd": 22461,
+              "assetRefs": [
+                "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+                "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+                "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+                "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+                "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+              ],
+              "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "pitfalls-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：批量扩展与关系判断",
+        "markdown": "1. 在 $k$ 块 GPU 上训练时，把批量大小从 $b$ 改为 $k \\cdot b$。若单卡批量是 64、使用 4 块 GPU，有效批量是多少？每块 GPU 每步处理多少样本？\n2. 判断并说明理由：“把模型复制到 8 块 GPU 上做数据并行，就能训练参数规模是原来 8 倍的模型。”\n3. 写出一次数据并行迭代的五步顺序，并标出哪一步保证了各卡参数仍然一致。\n\n参考要点：第 1 题有效批量为 256，每卡 64；第 2 题错误，每卡仍保存完整参数副本，数据并行扩大的是有效批量而不是模型规模；第 3 题的关键是梯度聚合后的广播，缺少广播会让副本分叉。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-data-parallel-loop",
+            "tb-batch-scaling",
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "pitfalls-and-check",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：下一节的衔接",
+        "markdown": "本节从零手写了参数复制、allreduce、数据切分和训练循环，目的是看清同步的每一步。下一节“多GPU的简洁实现”用框架的高级 API 完成同样的数学与算法，代码更短，但代价是这些同步细节被封装起来。阅读下一节时，可以用本节的五步循环逐条对照高层接口实际做了什么。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-train-batch",
+            "tb-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "data-parallel-check",
+        "type": "formative-check",
+        "title": "一次数据并行迭代的顺序检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "pitfalls-and-check",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-data-parallel-loop",
+          "explain-sync-primitives",
+          "scale-batch-and-lr"
+        ],
+        "learningPurpose": "检查学习者能否在不看正文的情况下复原五步循环、指出广播的作用，并正确推导有效批量。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-data-parallel-loop",
+            "tb-batch-scaling"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出数据并行一次迭代的五个步骤，标出保证参数副本一致的那一步，并用单卡批量 64、4 块 GPU 计算有效批量。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算性能",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000100"
+      ],
+      "headingPath": [
+        "计算性能",
+        "多GPU训练"
+      ],
+      "lineStart": 22119,
+      "lineEnd": 22461,
+      "assetRefs": [
+        "parts/part-0006/images/08eac0d72c5ce598665b9efddeb30bc2c7bfc727d19daf71f2d2141382e244ba.jpg",
+        "parts/part-0006/images/fc0eb614a1e7dc6b03cbb8ec4c9b6f8fa11f5f4614da15531f9a54e072cf9da5.jpg",
+        "parts/part-0006/images/cacdad844ba41c453f3ba4fc3344d6abbc705bad0cfa74b47cdd91cee6b02a7a.jpg",
+        "parts/part-0006/images/d378e4f80e8daa3955cbd1ecb7e0044dbff50ef610bf27c8e8ac02aa2477b6cb.jpg",
+        "parts/part-0006/images/31061ced4a3c1ad810e5059f0f02f3db35f966d2eace5942e62423e09d908600.jpg"
+      ],
+      "excerptSha256": "5a8ec1d762c9d44cbd3a2011b93197e0f81afb1b8bddeb6834e88805ca6da73c"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3271,
+    1264
+  ],
+  "scale": 0.92
+}

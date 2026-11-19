@@ -1,0 +1,533 @@
+{
+  "id": "point-3-3",
+  "title": "线性回归的简洁实现",
+  "shortSummary": "使用框架的数据加载器、网络层、损失函数与优化器重写线性回归，比较手工实现的差异。",
+  "keyTerms": [
+    "DataLoader",
+    "优化器",
+    "损失函数",
+    "高层接口"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-3-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-manual-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的组件顺序与数值设置，把装配步骤重排为可执行的检查清单，并在每步后补充顺序约束以及与从零实现的对照。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-high-level",
+          "text": "说明高层 API 接管了从零实现中的哪些重复工作，以及哪些部分仍然要学习者自己组装。"
+        },
+        {
+          "id": "assemble-pipeline",
+          "text": "按正确顺序装配 DataLoader、nn.Linear、MSELoss 与 SGD，并设置批量大小、初始化与学习率。"
+        },
+        {
+          "id": "implement-train-loop",
+          "text": "写出训练循环的前向、清零梯度、反向传播、优化器更新四步，并解释顺序不可交换的原因。"
+        },
+        {
+          "id": "compare-manual",
+          "text": "比较简洁实现与从零实现在代码量、可控性和默认行为上的差异，判断何时应当下潜到手工实现。"
+        }
+      ],
+      "misconceptions": [
+        "认为用了高层 API 之后框架会自动完成训练，不再需要显式写训练循环。",
+        "认为 trainer.zero_grad() 可以省略，因为优化器会在更新后自动清空梯度。",
+        "认为把损失从按批求和改成按批平均不需要调整学习率。"
+      ],
+      "modules": [
+        {
+          "id": "why-high-level-api",
+          "title": "为什么改用高层接口",
+          "role": "concept-intuition",
+          "description": "先把框架替代的重复工作与仍然保留的手工环节分开。",
+          "outcomeRefs": [
+            "explain-high-level"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-pipeline",
+          "title": "生成与读取数据集",
+          "role": "procedure",
+          "description": "用 TensorDataset 与 DataLoader 组织小批量，并解释批量与打乱的作用。",
+          "outcomeRefs": [
+            "explain-high-level",
+            "assemble-pipeline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "model-and-initialization",
+          "title": "定义模型并初始化参数",
+          "role": "procedure",
+          "description": "声明层、确认输入输出形状，并用以下划线结尾的方法原地设置初值。",
+          "outcomeRefs": [
+            "assemble-pipeline"
+          ],
+          "order": 2
+        },
+        {
+          "id": "loss-and-optimizer",
+          "title": "损失函数与优化器",
+          "role": "procedure",
+          "description": "装配 MSE 损失与小批量随机梯度下降，确认默认的按批平均语义。",
+          "outcomeRefs": [
+            "assemble-pipeline"
+          ],
+          "order": 3
+        },
+        {
+          "id": "training-loop",
+          "title": "训练循环的执行顺序",
+          "role": "mechanism",
+          "description": "按前向、清零、反向、更新四个步骤组织循环，并说明梯度累加带来的顺序约束。",
+          "outcomeRefs": [
+            "implement-train-loop"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-compare",
+          "title": "结果核对、对比与迁移",
+          "role": "practice-check",
+          "description": "核对训练结果，比较两版实现的取舍并完成教材练习的迁移问题。",
+          "outcomeRefs": [
+            "implement-train-loop",
+            "compare-manual"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-high-level",
+          "assemble-pipeline",
+          "implement-train-loop",
+          "compare-manual"
+        ],
+        "method": "独立写出一份可运行的简洁实现，并回答批量缩放、损失替换与梯度访问三类迁移问题。",
+        "successCriteria": [
+          "数据加载、模型、损失、优化器四类组件齐全且参数匹配",
+          "训练循环四步顺序正确，能说明清零梯度的位置",
+          "能定量说明损失求和与求平均对学习率的影响",
+          "能举出一个需要回到手工实现排查的具体情形"
+        ],
+        "exerciseBlockId": "model-check-exercises",
+        "summaryBlockId": "tb-training-result",
+        "nextPointId": "point-3-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-why-frameworks",
+        "moduleId": "why-high-level-api",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "框架接管了哪些重复工作",
+        "markdown": "3.2 节的从零实现只用到两类能力：用张量保存数据并完成线性代数运算，用自动微分计算梯度。数据迭代、损失计算、参数更新和网络层定义这些几乎每个模型都要重写一遍的部分，现代深度学习库已经直接提供。本节仍然训练同一个线性回归模型，只是把这些组件换成框架实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-framework-analogy",
+        "moduleId": "why-high-level-api",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：复用组件改变了什么",
+        "markdown": "可以把它想成建博客：手写每个标签能让人理解结构，但每开一个新站都从头写一遍并不划算。换成现成框架后，注意力从“怎么实现”转向“选哪些组件、按什么顺序接起来”。代价是细节被封装，出错时要回到 3.2 节的实现去对照张量形状与更新公式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-frameworks"
+          ]
+        }
+      },
+      {
+        "id": "tb-data-pipeline",
+        "moduleId": "data-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "生成数据集并用 DataLoader 读取",
+        "markdown": "生成数据集的方式与 3.2 节相同：给定真实权重 `true_w = torch.tensor([2, -3.4])` 和偏置 `true_b = 4.2`，得到 1000 个样本的 `features` 与 `labels`。读取时把两组张量交给 `load_array`：它先用 `data.TensorDataset(*data_arrays)` 把特征与标签按样本对齐成一个数据集，再用 `data.DataLoader(dataset, batch_size, shuffle=is_train)` 返回按小批量取数的迭代器。示例取 `batch_size = 10`，`is_train` 为真时在每个迭代周期内打乱数据；验证时用 `next(iter(data_iter))` 打印第一个小批量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shuffle-batch",
+        "moduleId": "data-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：批量与打乱各自控制什么",
+        "markdown": "`batch_size` 决定一次前向和一次参数更新用多少个样本，因此也决定每轮迭代的次数与梯度的噪声水平；`shuffle=True` 让每个周期的样本顺序不同，避免把数据的排列顺序当成规律。每次 `iter(data_iter)` 都会新建一个迭代器，所以单独用 `next(iter(data_iter))` 检查时看到的是新一轮的第一批；训练循环写成 `for X, y in data_iter` 时，框架会在每个周期重新创建迭代器并遍历全部小批量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-data-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "tb-model-definition",
+        "moduleId": "model-and-initialization",
+        "depth": "core",
+        "kind": "definition",
+        "title": "用 Sequential 与 Linear 定义模型",
+        "markdown": "模型只需要声明使用哪些层：`net = nn.Sequential(nn.Linear(2, 1))`。`Sequential` 把多个层串成流水线，输入先进入第一层，第一层的输出作为第二层的输入。本例只有一个层，`nn.Linear(2, 1)` 的第一个参数指定输入特征形状为 2，第二个参数指定输出特征形状为 1；这个单层被称为全连接层，因为它的每个输入都通过矩阵-向量乘法得到每个输出。教材仍然使用 `Sequential`，是为了与后面几乎所有的多层模型保持同一种“标准流水线”写法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-linear-shape",
+        "moduleId": "model-and-initialization",
+        "depth": "core",
+        "kind": "formula",
+        "title": "补充：两个参数与输出形状的对应关系",
+        "markdown": "`nn.Linear(2, 1)` 内部维护形状为 $2 \\times 1$ 的权重矩阵和长度为 1 的偏置，对一个样本的前向计算是 $\\hat{y} = \\mathbf{x}\\mathbf{W} + b$，其中 $\\mathbf{x}$ 是该样本的 2 维特征。输出特征数写成 1，是因为线性回归的目标是一个标量；若改成 $k$，同一层会输出 $k$ 维，输入数据不必改动，只是权重矩阵的第二维随之变成 $k$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-parameter-init",
+        "moduleId": "model-and-initialization",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "访问并替换初始参数",
+        "markdown": "框架在构造层时已经给出默认初值，教材显式覆盖它们：先用 `net[0]` 选中网络中的第一个层，再通过 `net[0].weight.data.normal_(0, 0.01)` 把权重改为从均值 0、标准差 0.01 的正态分布采样，用 `net[0].bias.data.fill_(0)` 把偏置置零。`normal_` 和 `fill_` 以下划线结尾，表示原地替换参数值，而不是返回一个新张量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-init-rationale",
+        "moduleId": "model-and-initialization",
+        "depth": "advanced",
+        "kind": "misconception",
+        "title": "补充：初始化尺度与原地修改的代价",
+        "markdown": "把权重初始化在零附近、偏置置零，模型的初始预测接近零，适合从这个位置开始做梯度更新；对单层线性回归来说初值只影响起点与早期步长，但尺度过大会让初始预测和损失迅速变大。另一个常见误解是把 `normal_` 当成普通的赋值函数：它修改的就是参数本身，重复调用会覆盖已经训练过的权重，因此只应出现在训练开始之前。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parameter-init"
+          ]
+        }
+      },
+      {
+        "id": "tb-loss-definition",
+        "moduleId": "loss-and-optimizer",
+        "depth": "core",
+        "kind": "definition",
+        "title": "用 MSELoss 定义损失",
+        "markdown": "损失由 `loss = nn.MSELoss()` 定义。它计算均方误差，也就是平方 $L_2$ 范数意义下的误差；默认情况下返回所有样本损失的平均值，而不是求和。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-optimizer-definition",
+        "moduleId": "loss-and-optimizer",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "用 optim.SGD 定义优化算法",
+        "markdown": "`trainer = torch.optim.SGD(net.parameters(), lr=0.03)` 实例化小批量随机梯度下降。实例化时要给出待优化的参数（从 `net.parameters()` 获得）以及优化算法所需的超参数字典；SGD 只需要设置学习率 `lr`，这里取 0.03。`optim` 模块实现了该算法的许多变种，接口形式一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reduction-lr",
+        "moduleId": "loss-and-optimizer",
+        "depth": "advanced",
+        "kind": "formula",
+        "title": "补充：损失求和与求平均如何换算学习率",
+        "markdown": "`MSELoss` 默认对小批量取平均，因此学习率 0.03 对应的是按平均损失走一步。若把损失改成小批量求和，梯度会整体放大 $m$ 倍（$m$ 为批大小），要保持相同的更新幅度就要把学习率除以 $m$；反过来，把求和改成求平均时梯度缩小 $m$ 倍，学习率需要乘以 $m$。这正是教材练习 1 的定量答案。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loss-definition",
+            "tb-optimizer-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-loop",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练循环与核心操作顺序",
+        "markdown": "训练过程与从零实现非常相似：每个迭代周期遍历一次数据集，不断取出小批量 `X, y`；对每个小批量先用 `net(X)` 生成预测并计算损失 `l`（前向传播），再反向传播计算梯度，最后调用优化器更新参数。代码在反向传播前用 `trainer.zero_grad()` 清空上一批的梯度。每个周期结束时用整个数据集重新计算损失并打印，3 个周期的输出依次为 0.000248、0.000103、0.000103。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loop-order",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：四步顺序为什么不能交换",
+        "markdown": "PyTorch 的梯度默认累加，`backward()` 把新算出的梯度加到参数的 `.grad` 上，因此每批开始前必须 `trainer.zero_grad()`；`trainer.step()` 只读取当前 `.grad` 并更新参数，它既不会自动清零，也不会重新计算梯度。若把清零放到更新之后，下一批梯度会与上一批叠加，等效于用方向偏移的更大步长更新；若漏掉 `backward()`，`step()` 使用的梯度是零或旧值，参数不再反映当前批次的损失。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training-loop"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-result",
+        "moduleId": "check-and-compare",
+        "depth": "core",
+        "kind": "summary",
+        "title": "结果核对与教材小结",
+        "markdown": "训练结束后读取参数：`w = net[0].weight.data`、`b = net[0].bias.data`，再与 `true_w`、`true_b` 相减，得到权重误差约为 -0.0010 与 -0.0003、偏置误差约为 -0.0003，估计参数与生成数据的真实参数非常接近。教材小结给出三点：可以用 PyTorch 的高级 API 更简洁地实现模型；`data` 模块提供数据处理工具，`nn` 模块定义大量神经网络层和常见损失函数；以下划线结尾的方法可以原地替换参数，从而完成初始化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000020"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的简洁实现"
+              ],
+              "lineStart": 3680,
+              "lineEnd": 3898,
+              "assetRefs": [],
+              "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-manual-comparison",
+        "moduleId": "check-and-compare",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：与从零实现的对照与取舍",
+        "markdown": "两版实现的数学对象完全相同：同一组真实参数、同一个平方损失、同一种小批量随机梯度下降，因此训练出的参数也接近。差别在于控制权。简洁版把数据迭代、参数分配、梯度计算和更新规则藏进 `load_array`、`nn.Linear`、`MSELoss` 与 `SGD` 内部，代码更短、更不容易写错，但默认行为（损失的 reduction、初始化方式、优化器细节）需要查文档确认；从零版代码更长，却能看到每一步张量的形状与数值。常见的工程做法是先用高层接口跑通基线，再从可疑环节下潜到手写实现定位问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training-result",
+            "tb-training-loop",
+            "tb-data-pipeline"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercises",
+        "moduleId": "check-and-compare",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "达成检查：教材练习的迁移",
+        "markdown": "1. 把 `MSELoss` 的按批平均改为按批求和，学习率应如何调整才能保持相同的更新幅度？\n2. 用 Huber 损失替换平方损失：在阈值 σ 之外，它对大误差样本的惩罚从平方变为线性，这种性质在什么数据上更稳健？\n3. 训练后如何访问线性回归的梯度？提示：观察 `net[0].weight.grad` 与 `net[0].bias.grad` 在 `backward()` 之后、`zero_grad()` 之前的内容。\n\n回答时请引用梯度累加与批量缩放两条规则，而不是只给结论。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loss-definition",
+            "model-loop-order",
+            "model-manual-comparison"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pipeline-order-check",
+        "type": "formative-check",
+        "title": "装配顺序自检",
+        "anchorBlockId": "model-check-exercises",
+        "moduleId": "check-and-compare",
+        "depth": "core",
+        "outcomeRefs": [
+          "implement-train-loop",
+          "assemble-pipeline"
+        ],
+        "learningPurpose": "检查学习者能否在打乱步骤后指出错误，并用梯度累加规则说明原因。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-training-loop",
+            "model-loop-order"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给出乱序的四步（backward、step、zero_grad、前向计算），要求写出正确顺序，并说明若省略 zero_grad 会发生什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "线性神经网络",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000020"
+      ],
+      "headingPath": [
+        "线性神经网络",
+        "线性回归的简洁实现"
+      ],
+      "lineStart": 3680,
+      "lineEnd": 3898,
+      "assetRefs": [],
+      "excerptSha256": "3998c632c3c0fc83dababb38a3424268cde4d9ac772cc53456fdce9ce755711f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2702,
+    2830
+  ],
+  "scale": 0.92
+}

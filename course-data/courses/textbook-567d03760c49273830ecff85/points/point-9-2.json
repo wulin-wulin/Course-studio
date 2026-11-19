@@ -1,0 +1,657 @@
+{
+  "id": "point-9-2",
+  "title": "长短期记忆网络（LSTM）",
+  "shortSummary": "说明输入门、遗忘门、输出门与记忆单元如何选择性保存和输出长期信息。",
+  "keyTerms": [
+    "LSTM",
+    "遗忘门",
+    "记忆单元",
+    "门控"
+  ],
+  "animationType": "lstmGating",
+  "animationSuggestion": "逐步展示同一时间步内三个门与候选记忆元如何由 X_t、H_{t-1} 算出，再用一个隐藏单元的数值演示 C_t 与 H_t 的更新；允许把遗忘门调到接近 1 观察旧记忆被保留、把输出门调到接近 0 观察记忆保留但不进入隐状态。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-8-4",
+    "point-8-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的门定义、公式、取值范围与实现要点，按“问题动机—门与候选记忆元—记忆元更新—隐状态输出—实现—检查与迁移”重排，并补充数值算例、参数成本估算与迁移练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-lstm-gates",
+          "text": "解释输入门、遗忘门、输出门与候选记忆元各自控制什么，并说明它们为什么取值在 (0,1)。"
+        },
+        {
+          "id": "derive-lstm-update",
+          "text": "写出记忆元与隐状态的更新公式，说明各张量形状与取值范围。"
+        },
+        {
+          "id": "analyze-lstm-limits",
+          "text": "判断门取极端值时信息如何流动，并解释 LSTM 为什么能缓解梯度消失与梯度爆炸。"
+        },
+        {
+          "id": "implement-lstm",
+          "text": "描述从零实现的参数、状态 (H, C) 与逐时间步计算顺序，并说明 nn.LSTM 简洁实现的差异。"
+        }
+      ],
+      "misconceptions": [
+        "把记忆元当成隐状态的一部分，认为它会一起传递给输出层。",
+        "把各个门理解成非 0 即 1 的硬开关，忽略它们是逐元素的比例。",
+        "认为输出门关闭会清空记忆元，实际上只是不把记忆暴露为隐状态。",
+        "认为 LSTM 能彻底消除梯度消失，而不只是缓解。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-motivation",
+          "title": "长期记忆的问题与设计动机",
+          "role": "problem-introduction",
+          "outcomeRefs": [
+            "explain-lstm-gates"
+          ],
+          "order": 0
+        },
+        {
+          "id": "gates-and-candidate",
+          "title": "三个门与候选记忆元",
+          "role": "definition-and-formula",
+          "outcomeRefs": [
+            "explain-lstm-gates",
+            "derive-lstm-update"
+          ],
+          "order": 1
+        },
+        {
+          "id": "cell-update-and-flow",
+          "title": "记忆元更新与信息保留",
+          "role": "derivation-and-analysis",
+          "outcomeRefs": [
+            "derive-lstm-update",
+            "analyze-lstm-limits"
+          ],
+          "order": 2
+        },
+        {
+          "id": "hidden-output",
+          "title": "隐状态与输出门",
+          "role": "mechanism-explanation",
+          "outcomeRefs": [
+            "derive-lstm-update",
+            "analyze-lstm-limits"
+          ],
+          "order": 3
+        },
+        {
+          "id": "implementation",
+          "title": "从零实现与简洁实现",
+          "role": "procedure-and-cost",
+          "outcomeRefs": [
+            "implement-lstm"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与下一步",
+          "role": "formative-check",
+          "outcomeRefs": [
+            "explain-lstm-gates",
+            "analyze-lstm-limits",
+            "implement-lstm"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-lstm-gates",
+          "derive-lstm-update",
+          "analyze-lstm-limits",
+          "implement-lstm"
+        ],
+        "method": "完成两道数值与机制检查题，并用自己的话复述记忆元的更新顺序与输出路径。",
+        "successCriteria": [
+          "能正确计算给定门值与候选值下的 C_t 与 H_t",
+          "能说明记忆元与隐状态的区别以及各自去向",
+          "能解释遗忘门接近 1 时长期信息为何更容易保留"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-9-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "problem-and-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材提出的问题",
+        "markdown": "教材指出，隐变量模型长期存在**长期信息保存**与**短期输入缺失**两个问题：隐藏状态既要记住很久以前的信息，又要在当前输入缺失时仍能维持合理推断。长短期记忆网络（long short-term memory, LSTM）是解决这一问题的最早方法之一（Hochreiter and Schmidhuber, 1997）。它与门控循环单元共享许多属性，设计稍微复杂一些，却比门控循环单元早诞生了近 20 年。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-motivation-contrast",
+        "moduleId": "problem-and-motivation",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：把“记住、写入、读出”拆成三个旋钮",
+        "markdown": "普通循环网络的隐状态是一个整体：每个时间步都用同一个激活函数把旧状态和新输入混在一起，因此“保留多久”“写入多少”“何时读出”无法分别调节。LSTM 的出发点是把这三件事拆成三个取值在 $(0,1)$ 的可学习比例，再额外维护一个不直接暴露给输出层的记忆元 $C_t$。可以先把它想成一个带三个阀门的水箱：进水阀决定写入多少，泄水阀决定排掉多少旧水，出水阀决定当前向外放多少。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-gates",
+        "moduleId": "gates-and-candidate",
+        "depth": "core",
+        "kind": "definition",
+        "title": "记忆元与三个门",
+        "markdown": "LSTM 引入记忆元（memory cell，简称单元 cell），其形状与隐状态相同，用于记录附加信息，并用三个门控制它：**输出门**（output gate）决定从单元中输出多少条目，**输入门**（input gate）决定何时把数据读入单元，**遗忘门**（forget gate）负责重置单元内容。当前时间步输入 $X_t$ 与前一时间步隐状态 $H_{t-1}$ 一起送入三个带 sigmoid 激活的全连接层，因此三个门的值都落在 $(0,1)$ 区间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-gate-equations",
+        "moduleId": "gates-and-candidate",
+        "depth": "core",
+        "kind": "formula",
+        "title": "三个门的计算公式与形状",
+        "markdown": "设隐藏单元数为 $h$、批量大小为 $n$、输入数为 $d$，则 $X_t \\in \\mathbb{R}^{n\\times d}$，$H_{t-1} \\in \\mathbb{R}^{n\\times h}$，三个门都是 $n\\times h$ 的矩阵：\n\n$$I_t = \\sigma(X_t W_{xi} + H_{t-1} W_{hi} + b_i)$$\n\n$$F_t = \\sigma(X_t W_{xf} + H_{t-1} W_{hf} + b_f)$$\n\n$$O_t = \\sigma(X_t W_{xo} + H_{t-1} W_{ho} + b_o)$$\n\n其中 $W_{xi}, W_{xf}, W_{xo} \\in \\mathbb{R}^{d\\times h}$，$W_{hi}, W_{hf}, W_{ho} \\in \\mathbb{R}^{h\\times h}$，$b_i, b_f, b_o \\in \\mathbb{R}^{1\\times h}$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gate-intuition",
+        "moduleId": "gates-and-candidate",
+        "depth": "support",
+        "kind": "example",
+        "title": "把门值读成逐元素的比例",
+        "markdown": "门不是非 0 即 1 的硬开关。$F_t$ 的每个分量表示旧记忆元的保留比例，$I_t$ 的每个分量表示候选内容的写入比例，$O_t$ 的每个分量表示记忆的读出比例。三个门都按隐藏单元逐元素独立，所以同一个时间步里，某些维度可以继续记忆，另一些维度已经被新输入覆盖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-gates",
+            "tb-gate-equations"
+          ]
+        }
+      },
+      {
+        "id": "tb-candidate",
+        "moduleId": "cell-update-and-flow",
+        "depth": "core",
+        "kind": "formula",
+        "title": "候选记忆元",
+        "markdown": "候选记忆元 $\\tilde{C}_t$ 的计算与三个门类似，但激活函数换成 $\\tanh$，取值落在 $(-1,1)$：\n\n$$\\tilde{C}_t = \\tanh(X_t W_{xc} + H_{t-1} W_{hc} + b_c)$$\n\n它表示“本时间步准备写入单元的新内容”，实际写入幅度还要由输入门决定。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-cell-update",
+        "moduleId": "cell-update-and-flow",
+        "depth": "core",
+        "kind": "formula",
+        "title": "记忆元更新",
+        "markdown": "记忆元通过逐元素乘法更新：\n\n$$C_t = F_t \\odot C_{t-1} + I_t \\odot \\tilde{C}_t$$\n\n教材强调了一个关键极端情形：如果遗忘门始终为 1 且输入门始终为 0，则过去的记忆元 $C_{t-1}$ 会原样保存并传递到当前时间步。引入这种设计是为了缓解梯度消失问题，并更好地捕获序列中的长距离依赖关系。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cell-arithmetic",
+        "moduleId": "cell-update-and-flow",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充算例：单元值可以超过 1",
+        "markdown": "取某个隐藏单元上的标量算例：$C_{t-1}=0.8$，$F_t=0.9$，$I_t=0.5$，$\\tilde{C}_t=0.6$，则\n\n$$C_t = 0.9\\times 0.8 + 0.5\\times 0.6 = 0.72 + 0.30 = 1.02$$\n\n注意记忆元的值可以超出 $[-1,1]$：$\\tanh$ 只用于约束候选内容与生成隐状态，记忆元本身是跨时间步的累加器。这解释了为什么输出处还要再压一次范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cell-update"
+          ]
+        }
+      },
+      {
+        "id": "model-forget-analysis",
+        "moduleId": "cell-update-and-flow",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "沿记忆元通路看梯度",
+        "markdown": "比较两条通路：在普通循环网络里，误差每经过一个时间步都要乘上权重与激活函数的导数，长序列上容易衰减或爆炸；在 LSTM 里，$C_t$ 对 $C_{t-1}$ 的主要依赖是遗忘门 $F_t$，当 $F_t$ 接近 1 时这条通路近似恒等映射，误差信号可以跨很多时间步传回。反过来，需要快速丢弃旧信息的任务会学到较小的 $F_t$。所以教材把 LSTM 的作用概括为**缓解**梯度消失与梯度爆炸，而不是无条件消除。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cell-update",
+            "tb-candidate"
+          ]
+        }
+      },
+      {
+        "id": "tb-hidden",
+        "moduleId": "hidden-output",
+        "depth": "core",
+        "kind": "formula",
+        "title": "隐状态是记忆元的门控版本",
+        "markdown": "隐状态由输出门作用于记忆元的 $\\tanh$ 结果得到：\n\n$$H_t = O_t \\odot \\tanh(C_t)$$\n\n这保证 $H_t$ 始终落在 $(-1,1)$ 内。只要输出门接近 1，就能把记忆信息有效传递给预测部分；而输出门接近 0 时，仍然保留记忆元内的信息，只是不需要更新隐状态。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-output-scenario",
+        "moduleId": "hidden-output",
+        "depth": "core",
+        "kind": "application",
+        "title": "情境：中间步骤不暴露记忆",
+        "markdown": "在语言模型里读到“这只猫……它”时，模型可能要在很多步内保存“单数、动物”这类信息，但这些中间时间步并不需要把它暴露给输出层。此时输出门可以接近 0，让 $C_t$ 继续累积，直到需要预测代词或动词形式时再把输出门打开。这正是“记忆元属于内部信息、只有隐状态进入输出层”的实际意义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-hidden"
+          ]
+        }
+      },
+      {
+        "id": "model-why-two-tanh",
+        "moduleId": "hidden-output",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "为什么候选处和输出处都要用 tanh",
+        "markdown": "教材练习追问：候选记忆元已经用过 $\\tanh$，为什么隐状态还要再压一次？两者作用不同。候选处的 $\\tanh$ 约束的是**写入内容的符号与幅度**，使其落在 $(-1,1)$；而 $C_t$ 是跨时间步累加的结果，可以超出 $[-1,1]$。输出处的 $\\tanh$ 把累加值重新压回与普通循环网络隐状态相同的量级，再乘以输出门；少了这一步，隐状态会随记忆累加不断增大。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-candidate",
+            "tb-hidden"
+          ]
+        }
+      },
+      {
+        "id": "tb-implementation",
+        "moduleId": "implementation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "从零实现的参数与计算顺序",
+        "markdown": "从零实现时，参数按标准差 0.01 的高斯分布初始化，偏置置零；输入门、遗忘门、输出门和候选记忆元各有一组 $(W_x, W_h, b)$，另加输出层参数 $(W_{hq}, b_q)$。状态需要返回两个形状为（批量大小, 隐藏单元数）的全零张量 $(H, C)$。每个时间步依次计算 $I_t, F_t, O_t, \\tilde{C}_t$，更新 $C_t$ 与 $H_t$，再由 $H_t$ 计算输出。教材特别说明：只有隐状态会传递到输出层，记忆元 $C_t$ 不直接参与输出计算。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-api-and-scale",
+        "moduleId": "implementation",
+        "depth": "support",
+        "kind": "note",
+        "title": "简洁实现、训练开销与后续模型",
+        "markdown": "简洁实现只需 `nn.LSTM(num_inputs, num_hiddens)`，再交给循环模型封装。教材在时光机器数据集上的对比显示，简洁实现达到困惑度 1.1、约 23.5 万 tokens/s，从零实现为困惑度 1.3、约 1.77 万 tokens/s。教材还指出，LSTM 已有多层、残差连接、不同类型的正则化等变体，但由于序列的长距离依赖性，训练 LSTM 与其他序列模型的成本依然很高，后续才出现 Transformer 等替代模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-param-count",
+        "moduleId": "implementation",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充：与 GRU 的计算成本对比",
+        "markdown": "按上面的形状可以估算：LSTM 每个时间步有 4 组权重，分别是 $(d\\times h)$ 的输入权重与 $(h\\times h)$ 的隐状态权重（三个门加候选），再加 4 个偏置，单层参数量约为 $4h(d+h)+4h$；GRU 只有重置门、更新门与候选三组，约为 $3h(d+h)+3h$。隐藏维度相同时，LSTM 的参数与每步矩阵乘法大约比 GRU 多三分之一，这也是教材练习要求比较计算成本时的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-implementation",
+            "tb-api-and-scale"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材小结：LSTM 有三种类型的门——输入门、遗忘门和输出门；隐藏层输出包括隐状态与记忆元，只有隐状态会传递到输出层，而记忆元完全属于内部信息；LSTM 可以缓解梯度消失和梯度爆炸。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000068"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "长短期记忆网络（LSTM）"
+              ],
+              "lineStart": 14318,
+              "lineEnd": 14569,
+              "assetRefs": [
+                "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+                "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+                "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+                "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+                "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+                "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+                "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+              ],
+              "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查题",
+        "markdown": "1. 设某个隐藏单元上 $C_{t-1}=1$，$F_t=0.5$，$I_t=0.5$，$\\tilde{C}_t=-1$，求 $C_t$；若再有 $O_t=0.5$，求 $H_t$ 并说明其符号。\n\n2. 如果把输出门长期固定为 0，记忆元还能不能保存信息？预测端又会看到什么？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cell-update",
+            "tb-hidden",
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "下一步：沿深度堆叠",
+        "markdown": "单层 LSTM 只沿时间方向处理一条序列。若要同时得到不同时间尺度、层次化的表示，下一步就是把多个循环层沿深度堆叠，这正是下一节“深度循环神经网络”的主题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "lstm-update-check",
+        "type": "formative-check",
+        "title": "记忆元与隐状态的数值检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "derive-lstm-update",
+          "analyze-lstm-limits"
+        ],
+        "learningPurpose": "检查学习者能否按更新公式算出记忆元与隐状态，并区分两者的作用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-cell-update",
+            "tb-hidden",
+            "model-check"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考答案：1) $C_t = 0.5\\times 1 + 0.5\\times(-1) = 0$，于是 $H_t = 0.5\\times\\tanh(0) = 0$，符号中性。2) 记忆元仍会按输入门和遗忘门更新并保存信息，但隐状态恒为 0，预测端完全看不到记忆内容。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000068"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "长短期记忆网络（LSTM）"
+      ],
+      "lineStart": 14318,
+      "lineEnd": 14569,
+      "assetRefs": [
+        "parts/part-0004/images/9bc63d92325e52bebf5957ca3402c1d9d121afd53029eabed6d2ea794ad2d649.jpg",
+        "parts/part-0004/images/241448d542d20537ccc8aae536c2fc939918145d273280f6a394dcc97252af7f.jpg",
+        "parts/part-0004/images/9561ce1d0de05022de247a1046d2498ec9d86d7632e7a6e95dc908fb671dba3e.jpg",
+        "parts/part-0004/images/22cbc91da97ed2da5de8d326d090c6a3afcc106e383381c4941f0a4a9025f4ab.jpg",
+        "parts/part-0004/images/19cf99ed459f2d17f1da554299b618bba3f9a6e0894e4f9e1f7832b252bc28c4.jpg",
+        "parts/part-0004/images/8b3678c8701a887846968cb3d204207c3e7e6904a3724a161962ee3cd1fc3a9e.jpg",
+        "parts/part-0004/images/4c131b63a3eb4b79d98316aef8dfdaf5341289f8f4e7ec5bacdd00cf9bcd66bf.jpg"
+      ],
+      "excerptSha256": "b0d0cbb321513c108b03d09f8c2dc56cf0752657c22792d33b164aa63561a491"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    762,
+    1069
+  ],
+  "scale": 0.98
+}

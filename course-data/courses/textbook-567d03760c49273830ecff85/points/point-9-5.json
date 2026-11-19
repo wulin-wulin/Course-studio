@@ -1,0 +1,502 @@
+{
+  "id": "point-9-5",
+  "title": "机器翻译与数据集",
+  "shortSummary": "介绍机器翻译任务的输入输出、平行语料预处理与词表构建，以及数据集加载流程。",
+  "keyTerms": [
+    "机器翻译",
+    "平行语料",
+    "词表",
+    "数据加载"
+  ],
+  "animationType": "sequencePadding",
+  "animationSuggestion": "逐步显示一条短句被逐个追加 <pad> 或在第 num_steps 个词元处被截断，同时同步更新有效长度计数，让填充位置与有效长度的一一对应可见。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-8-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对机器翻译任务与数据处理的定义和操作顺序，围绕“句子对如何变成定长批量”重排讲解，补充每步的目的、取舍与自检问题。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-mt-task",
+          "text": "说明机器翻译作为序列转换任务的输入输出，并区分统计机器翻译与神经机器翻译。"
+        },
+        {
+          "id": "preprocess-corpus",
+          "text": "按教材顺序对平行语料执行规范化预处理与单词级词元化，并解释每步目的。"
+        },
+        {
+          "id": "build-bilingual-vocab",
+          "text": "解释为何分别构建源语言与目标语言词表，以及特殊词元和低频词处理的规则。"
+        },
+        {
+          "id": "load-nmt-batch",
+          "text": "用截断、填充和有效长度把句子对组装成定长小批量，并说明数据加载器的输出。"
+        }
+      ],
+      "misconceptions": [
+        "把填充词元 <pad> 当成真实内容参与损失与注意力计算。",
+        "认为机器翻译可以直接复用单语语言模型的语料读取与预处理代码。",
+        "以为有效长度等于固定长度 num_steps，因而忽略每条序列的截断与填充差异。"
+      ],
+      "modules": [
+        {
+          "id": "mt-task",
+          "title": "任务定位：从语言模型到序列转换",
+          "role": "concept-intro",
+          "description": "明确机器翻译的输入输出与两种技术路线，为数据处理建立目标。",
+          "outcomeRefs": [
+            "explain-mt-task"
+          ],
+          "order": 0
+        },
+        {
+          "id": "corpus-pipeline",
+          "title": "平行语料的下载与规范化",
+          "role": "procedure",
+          "description": "按教材顺序执行下载、空格与大小写规范化，并理解这些步骤为何必要。",
+          "outcomeRefs": [
+            "explain-mt-task",
+            "preprocess-corpus"
+          ],
+          "order": 1
+        },
+        {
+          "id": "tokens-and-vocab",
+          "title": "单词级词元化与双语词表",
+          "role": "procedure-and-tradeoff",
+          "description": "把句对切成词元列表，并解释词表规模、低频词与特殊词元的处理。",
+          "outcomeRefs": [
+            "preprocess-corpus",
+            "build-bilingual-vocab"
+          ],
+          "order": 2
+        },
+        {
+          "id": "batch-loader",
+          "title": "定长批量与数据迭代器",
+          "role": "procedure",
+          "description": "用截断、填充、结束词元和有效长度构造可直接训练的小批量。",
+          "outcomeRefs": [
+            "build-bilingual-vocab",
+            "load-nmt-batch"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "自检与向编码器-解码器衔接",
+          "role": "summary",
+          "description": "用一道判断检查填充与有效长度的理解，并引出下一节的架构需求。",
+          "outcomeRefs": [
+            "load-nmt-batch",
+            "explain-mt-task"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-mt-task",
+          "preprocess-corpus",
+          "build-bilingual-vocab",
+          "load-nmt-batch"
+        ],
+        "method": "在给定原始句对的条件下，复述从下载到批量的完整步骤，并用有效长度判断批张量中哪些位置属于填充。",
+        "successCriteria": [
+          "能说清预处理三步各自解决的问题",
+          "能区分源、目标两个词表与 <pad>/<bos>/<eos> 的职责",
+          "能根据批张量与非填充计数正确读出有效长度"
+        ],
+        "summaryBlockId": "model-summary-and-bridge",
+        "nextPointId": "point-9-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-task-definition",
+        "moduleId": "mt-task",
+        "depth": "core",
+        "kind": "definition",
+        "title": "机器翻译与序列转换",
+        "markdown": "机器翻译（machine translation）指的是把序列从一种语言自动翻译成另一种语言。教材把它作为**序列转换模型**（sequence transduction）的核心问题：输入是长度可变的源语言序列，输出是长度可变的目标语言序列。\n\n这一研究领域可以追溯到数字计算机发明后不久的 20 世纪 40 年代，当时的工作与第二次世界大战中的语言编码破译相关。在神经网络端到端学习兴起之前，统计机器翻译长期占主导，它把翻译拆成翻译模型与语言模型等部分分别做统计分析；因此基于神经网络的方法被称为**神经机器翻译**（neural machine translation），以区别于统计方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-pairs-change-preprocessing",
+        "moduleId": "mt-task",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么不能沿用语言模型的数据流程",
+        "markdown": "单语语言模型的样本是一段连续文本，而机器翻译的样本是源语言与目标语言的**文本序列对**（平行语料）。因此预处理的第一约束不是“把文本变成词元”，而是“保持句对仍然成对对齐”：两侧必须同步过滤、同步编号，否则第 $i$ 条源句会配错目标句。\n\n这也解释了教材为什么为机器翻译单独设计数据流程：语言模型的读取代码只处理一条文本流，没有“成对”这一结构，直接复用会丢掉对齐约束。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-definition"
+          ]
+        }
+      },
+      {
+        "id": "tb-corpus-download",
+        "moduleId": "corpus-pipeline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "英—法平行语料",
+        "markdown": "教材使用 Tatoeba 项目的“英—法”双语句子对数据集：每一行是制表符分隔的文本序列对，左边英文、右边法语；每个文本序列可以是一个句子，也可以是包含多个句子的段落。在这个将英语翻译成法语的任务中，英语是**源语言**（source language），法语是**目标语言**（target language）。\n\n`read_data_nmt` 先下载 `fra-eng.zip`，再读取其中的 `fra.txt` 并返回整段原始文本。此时数据仍是未切分的字符串，还不能直接送进模型。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-preprocessing-steps",
+        "moduleId": "corpus-pipeline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "预处理三步",
+        "markdown": "`preprocess_nmt` 对原始文本依次做三件事：\n\n1. 用普通空格替换不间断空格（non-breaking space），并去掉另一类窄空格字符；\n2. 把大写字母统一转成小写字母；\n3. 在单词与标点符号之间插入空格。\n\n处理之后，“Go. Va !” 变成 “go . va !”。这样标点会成为独立词元，英文与法文两侧遵循同一套切分规则。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-preprocessing-rationale",
+        "moduleId": "corpus-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：每一步在解决什么问题",
+        "markdown": "这三步的目的不是把文本“洗得好看”，而是让后续按空格切分的结果稳定可复现：\n\n- 替换特殊空格：不同来源的空格字符若原样保留，按空格切分时会出现看不见的切分失败；统一成普通空格后切分规则才唯一。\n- 小写化：“Go” 与 “go” 被合并为同一个词，直接降低词表稀疏程度；代价是丢失原文大小写信息，遇到需要保留大小写的任务要另行处理。\n- 标点两侧补空格：标点因此成为独立词元，无需为每种标点编写特例分支。\n\n按“先规范化、再切分”的顺序执行，才能使同一套规则同时适用于源语言和目标语言。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-preprocessing-steps"
+          ]
+        }
+      },
+      {
+        "id": "tb-tokenization",
+        "moduleId": "tokens-and-vocab",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "单词级词元化",
+        "markdown": "与第 8 章的字符级词元化不同，机器翻译更偏好**单词级词元化**。`tokenize_nmt` 按制表符把每行拆成两段，再按空格切成词元列表，其中每个词元要么是一个词，要么是一个标点符号。\n\n函数返回两个词元列表：`source[i]` 是源语言（英语）第 $i$ 个句对的词元列表，`target[i]` 是目标语言（法语）第 $i$ 个句对的词元列表。教材也提示，最先进的模型可能使用更高级的词元化技术。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tokenization-tradeoff",
+        "moduleId": "tokens-and-vocab",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：单词级与字符级的取舍",
+        "markdown": "两种粒度在三个维度上互换：\n\n| 维度 | 字符级 | 单词级 |\n|---|---|---|\n| 词表大小 | 小 | 明显更大 |\n| 序列长度 | 长 | 短 |\n| 未登录词 | 几乎不出现 | 低频词多 |\n\n单词级序列更短、单个词元语义更集中，适合翻译任务；代价是词表膨胀。教材用“出现次数少于 2 次即映射为未知词元”来压住词表规模，相当于用少量信息损失换取可训练的词表大小。字符级则把这个问题转化为长序列建模问题，并非免费的改进。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tokenization"
+          ]
+        }
+      },
+      {
+        "id": "tb-vocabulary",
+        "moduleId": "tokens-and-vocab",
+        "depth": "core",
+        "kind": "definition",
+        "title": "双语词表与特殊词元",
+        "markdown": "由于数据由语言对组成，需要分别为源语言和目标语言构建**两个词表**。使用单词级词元化时词表会明显变大，因此把出现次数少于 2 次的低频词元统一视为未知词元 `<unk>`。\n\n除此之外还指定三个特殊词元：小批量中用于把序列填充到相同长度的填充词元 `<pad>`，以及序列的开始词元 `<bos>` 和结束词元 `<eos>`。这些特殊词元在自然语言处理任务中比较常用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-special-token-roles",
+        "moduleId": "tokens-and-vocab",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：三个特殊词元各自的职责",
+        "markdown": "三个词元不能互换，因为它们在训练与推理中承担不同信号：\n\n- `<pad>`：只为批处理的形状对齐服务，所在位置并不存在真实内容；\n- `<bos>`：解码时作为第一个输入，告诉模型可以开始生成；\n- `<eos>`：既是训练目标的一部分，也是推理时的停止条件——模型逐词元生成，一旦输出 `<eos>` 就认为该序列翻译完成。\n\n把三者混用会同时破坏批处理形状对齐和结束判定，因此词表必须显式保留它们的独立索引。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vocabulary"
+          ]
+        }
+      },
+      {
+        "id": "tb-truncate-pad",
+        "moduleId": "batch-loader",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "截断与填充",
+        "markdown": "机器翻译的每个样本是由源和目标组成的文本序列对，两侧序列长度可能不同。为了提高计算效率，仍用**截断**（truncation）与**填充**（padding）实现一次处理一个小批量：设小批量中每个序列的目标长度为 `num_steps`，则\n\n- 词元数少于 `num_steps` 时，在末尾持续添加 `<pad>` 直到达到该长度；\n- 词元数多于 `num_steps` 时，截断为前 `num_steps` 个词元，丢弃剩余部分。\n\n`truncate_pad` 就实现这一操作，使所有文本序列形状一致，从而能堆叠成同形状的小批量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-build-batch",
+        "moduleId": "batch-loader",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "批量构造与数据加载器",
+        "markdown": "`build_array_nmt` 把词元列表转成可训练张量：先把每条序列映射为词元索引，再在末尾追加 `<eos>` 表示序列结束，然后用 `truncate_pad` 补齐或截断到 `num_steps`。有效长度由“张量中不等于 `<pad>` 的位置计数”得到，因此计入 `<eos>`、不计入填充。\n\n`load_data_nmt` 把整个流程串起来：读取并预处理文本、词元化、分别构建源与目标词表、对两侧各调用一次 `build_array_nmt`，最后返回数据迭代器以及源语言、目标语言两个词表。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000071"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "机器翻译与数据集"
+              ],
+              "lineStart": 14906,
+              "lineEnd": 15231,
+              "assetRefs": [
+                "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+                "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+              ],
+              "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-padding-misconception",
+        "moduleId": "batch-loader",
+        "depth": "core",
+        "kind": "misconception",
+        "title": "模型补充：填充位置不是内容",
+        "markdown": "常见误解是：既然 `<pad>` 也在张量里，就可以当作普通词元一起计算损失。实际上填充位置是批处理时人为补齐的，真实序列在那里并不存在。若把填充算进损失，模型会被训练去预测填充词元，不同长度句子的损失也会被填充比例稀释。\n\n同理，`<eos>` 也不是可有可无的标点：它是序列结束的监督信号。这正是有效长度要单独保存、后续在损失与注意力计算中屏蔽填充位置的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-truncate-pad",
+            "tb-build-batch"
+          ]
+        }
+      },
+      {
+        "id": "model-batch-walkthrough",
+        "moduleId": "batch-loader",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：读一批真实输出",
+        "markdown": "教材以 `batch_size=2, num_steps=8` 取出的第一批数据可以看出规则：\n\n- `X` 第一行 `[7, 43, 4, 3, 1, 1, 1, 1]`，其中索引 `1` 是 `<pad>`，所以有效长度为 4；\n- `Y` 第一行 `[6, 7, 40, 4, 3, 1, 1, 1]`，有效长度为 5。\n\n两行都补齐到了 8 个位置，但真实内容分别只有 4 个和 5 个词元。若只记住“长度是 8”，就会在后续计算中把填充当成有效输入；正确做法是以有效长度界定每条序列的真实范围。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-build-batch"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-and-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一节衔接",
+        "markdown": "本点的流程可以压缩成一条链：**平行语料 → 规范化 → 单词级词元化 → 双语词表 → 截断/填充与有效长度 → 数据迭代器**。每一步都在为下一步准备结构：规范化保证切分稳定，词元化决定词表粒度，词表把词元变成索引，截断与填充让不同长度的句子对能组成同形状张量。\n\n这条链的产物是“源序列批量 + 源有效长度 + 目标序列批量 + 目标有效长度”。下一节要回答的问题是：有了这样的输入输出，模型该用什么结构把长度可变的源序列映射成长度可变的目标序列——这正是编码器-解码器架构的出发点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-definition",
+            "tb-build-batch"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "valid-length-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-batch-walkthrough",
+        "moduleId": "batch-loader",
+        "depth": "core",
+        "outcomeRefs": [
+          "load-nmt-batch"
+        ],
+        "learningPurpose": "检查学习者能否从批张量中区分真实词元与填充，并正确读出有效长度。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-build-batch",
+            "model-batch-walkthrough"
+          ]
+        },
+        "config": {
+          "prompt": "某目标序列张量为 [6, 7, 40, 4, 3, 1, 1, 1]，num_steps=8，<pad> 的索引为 1。该序列的有效长度是多少？后续损失计算应如何处理后三个位置？",
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请数出张量中不等于 `<pad>` 索引的位置数量作为有效长度，并说明这些填充位置在损失计算中应被屏蔽。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000071"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "机器翻译与数据集"
+      ],
+      "lineStart": 14906,
+      "lineEnd": 15231,
+      "assetRefs": [
+        "parts/part-0004/images/47b5e6ea04a21f9dc56eddc3d650ada6a64f9c6c9648138413d168633496b1fc.jpg",
+        "parts/part-0004/images/368c6a5155e9bddb986b96117068cdaf1126c14fcd3b399edfce3f2e0dea85f3.jpg"
+      ],
+      "excerptSha256": "0ec7969846cd753ceb631a2ae0ea8bec0620db2705a3746dfcebfc9f4c3fa9f8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    721,
+    1254
+  ],
+  "scale": 0.91
+}

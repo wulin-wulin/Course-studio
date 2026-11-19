@@ -1,0 +1,553 @@
+{
+  "id": "point-5-2",
+  "title": "参数管理",
+  "shortSummary": "介绍如何访问、初始化、共享和保存网络参数，以及参数命名与设备迁移的注意事项。",
+  "keyTerms": [
+    "参数",
+    "初始化",
+    "参数共享",
+    "设备迁移"
+  ],
+  "animationType": "weightMaskHistogram",
+  "animationSuggestion": "逐批显示权重抽样点落到数轴上的位置，再显示掩码把区间 (-5, 5) 的点压到 0，最后累积出三段分布的直方图；提供重播以复现同一种子的同一轨迹，并可切换显示“掩码前后”的对比。",
+  "difficulty": "中等",
+  "importance": 0.74,
+  "prerequisites": [
+    "point-5-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-checks",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的访问、初始化、绑定三条主线与示例数值，按操作流程重排讲解顺序，并在每个操作后补充作用范围、判别方法与检查表。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-parameter-object",
+          "text": "说明 Parameter 同时包含值、梯度与额外信息，并区分 .data 与 .grad 的用途。"
+        },
+        {
+          "id": "access-parameters",
+          "text": "通过索引、state_dict 和 named_parameters 访问单个或全部参数，并解释嵌套命名规则。"
+        },
+        {
+          "id": "init-parameters",
+          "text": "用内置与自定义初始化器设置参数，并判断 apply 的实际作用范围。"
+        },
+        {
+          "id": "share-and-gradient",
+          "text": "判断两层参数是否为同一张量，并解释参数绑定后反向传播中的梯度累加。"
+        }
+      ],
+      "misconceptions": [
+        "把 state_dict() 的返回值当作参数张量本身，忽略它只是名称到张量的映射，也不区分 .data 与 .grad。",
+        "认为参数绑定只是让两个层拥有相同的初始值，因此可以把它们当作两份独立参数分别训练。",
+        "认为调用 nn.init.uniform_(-10, 10) 就已经得到教材给出的分段分布，忽略后续按绝对值阈值置零的掩码步骤。"
+      ],
+      "modules": [
+        {
+          "id": "why-manage",
+          "title": "问题导入：训练之后参数还要做什么",
+          "role": "motivation",
+          "description": "从复用、部署和诊断三类需求说明参数管理的必要性。",
+          "outcomeRefs": [
+            "explain-parameter-object"
+          ],
+          "order": 0
+        },
+        {
+          "id": "access-and-naming",
+          "title": "访问参数与命名规则",
+          "role": "concept-and-worked-example",
+          "description": "以单隐藏层感知机为例，从索引访问到递归命名访问。",
+          "outcomeRefs": [
+            "explain-parameter-object",
+            "access-parameters"
+          ],
+          "order": 1
+        },
+        {
+          "id": "initialization",
+          "title": "默认、内置与自定义初始化",
+          "role": "procedure",
+          "description": "按默认初始化、内置初始化器、自定义初始化与直接赋值的顺序组织操作。",
+          "outcomeRefs": [
+            "init-parameters"
+          ],
+          "order": 2
+        },
+        {
+          "id": "parameter-tying",
+          "title": "参数绑定与梯度累加",
+          "role": "mechanism",
+          "description": "用共享层示例说明同一张量被两次使用时前向与反向的后果。",
+          "outcomeRefs": [
+            "share-and-gradient"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "检查与向延后初始化过渡",
+          "role": "summary-and-check",
+          "description": "汇总操作检查表、练习与下一节的衔接。",
+          "outcomeRefs": [
+            "access-parameters",
+            "init-parameters",
+            "share-and-gradient"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-parameter-object",
+          "access-parameters",
+          "init-parameters",
+          "share-and-gradient"
+        ],
+        "method": "完成参数命名、初始化分布与绑定判别的自测题，并说明每一步的依据。",
+        "successCriteria": [
+          "能写出嵌套网络中某一参数的全名并给出两种取值写法",
+          "能说明自定义初始化中掩码步骤对分布的作用",
+          "能用同步变化而非数值相等判断参数绑定"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "summaryBlockId": "model-checklist",
+        "nextPointId": "point-5-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-section-intro",
+        "moduleId": "why-manage",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材定位：训练之后参数仍然要做的事",
+        "markdown": "教材把参数管理放在“选定架构、设定超参数”之后：此时的目标是找到使损失函数最小的模型参数值，训练结束后还要用这些参数做出未来的预测。教材列出三类需求：提取参数以便在其他环境中复用、保存模型以便在其他软件中执行、以及为了获得科学理解而检查参数。\n\n因此本节聚焦三件事：访问参数（用于调试、诊断和可视化）、参数初始化、在不同模型组件间共享参数。贯穿示例是一个单隐藏层的多层感知机：`nn.Sequential(nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 1))`，输入 `X` 的形状为 `(2, 4)`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-manage",
+        "moduleId": "why-manage",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把三类需求对应到操作",
+        "markdown": "**模型补充。** 复用参数对应按名称取出张量，部署对应把参数与结构分开处理，诊断对应观察数值范围与梯度状态。这三件事都要求先能稳定地定位到某一个参数对象，所以讲解顺序是“先访问、再初始化、最后共享”，而不是按教材目录顺序机械排列。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-section-intro"
+          ]
+        }
+      },
+      {
+        "id": "tb-access-state-dict",
+        "moduleId": "access-and-naming",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：用 state_dict 查看一层里有什么",
+        "markdown": "通过 `Sequential` 定义模型后，可以像访问列表一样按索引访问任意层，每层的参数都在其属性中。调用 `net[2].state_dict()` 得到该全连接层的有序字典，其中只有 `weight` 与 `bias` 两项，形如 `('weight', tensor([[-0.0427, ...]]))`、`('bias', tensor([0.0887]))`，两者都存储为单精度浮点数 `float32`。\n\n教材强调：参数名称允许唯一标识每个参数，即使在包含数百个层的网络中也是如此。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-parameter-object",
+        "moduleId": "access-and-naming",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：Parameter 是包含值和梯度的复合对象",
+        "markdown": "每个参数都是 `torch.nn.parameter.Parameter` 的实例。打印 `net[2].bias` 得到 `Parameter containing: tensor([0.0887], requires_grad=True)`；要取底层数值需要进一步访问 `.data`，得到 `tensor([0.0887])`。教材由此说明：参数是复合对象，包含值、梯度和额外信息，这正是需要显式取出参数值的原因。\n\n除值之外还可以访问梯度：由于尚未调用反向传播，示例中 `net[2].weight.grad == None` 为 `True`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-data-and-grad",
+        "moduleId": "access-and-naming",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：.data 与 .grad 回答两个不同问题",
+        "markdown": "**模型补充。** `.data` 给出当前参数值，`.grad` 给出损失对该参数的梯度；两者形状相同，但一个用于检查或改写数值，一个用于诊断训练是否真的在更新、是否出现异常量级。因为 `Parameter` 把二者封装在同一对象里，直接拿参数对象做数值运算容易与自动微分混淆，教材示例统一先取 `.data` 再操作，就是在明确区分“改值”和“读梯度”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parameter-object"
+          ]
+        }
+      },
+      {
+        "id": "tb-access-all",
+        "moduleId": "access-and-naming",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：一次性访问全部参数与嵌套命名",
+        "markdown": "逐个访问在复杂块中会变得麻烦，因为需要递归整棵树来提取每个子块的参数。教材给出两组对比输出：\n\n- `net[0].named_parameters()` 只列出第一层：`('weight', torch.Size([8, 4]))`、`('bias', torch.Size([8]))`；\n- `net.named_parameters()` 递归列出全部层：`('0.weight', torch.Size([8, 4]))`、`('0.bias', torch.Size([8]))`、`('2.weight', torch.Size([1, 8]))`、`('2.bias', torch.Size([1]))`。\n\n因此也可以按名称取值，例如 `net.state_dict()['2.bias'].data` 返回 `tensor([0.0887])`。\n\n嵌套块会沿用同样的命名约定。教材先定义生成块的函数 `block1()`，再用 `block2()` 把四个块以 `net.add_module(f'block {i}', block1())` 添加到 `Sequential` 中，最后组合为 `rgnet = nn.Sequential(block2(), nn.Linear(4, 1))`。由于层是分层嵌套的，也可以像嵌套列表一样按下标访问：`rgnet[0][1][0].bias.data` 取到“第一个主要块中第二个子块的第一层”的偏置，输出 `tensor([0.1999, -0.4073, -0.1200, -0.2033, -0.1573, 0.3546, -0.2141, -0.2483])`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-naming-rule",
+        "moduleId": "access-and-naming",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：参数全名是怎么拼出来的",
+        "markdown": "**模型补充。** 参数全名等于从根模块到该参数的模块路径加参数名，各段用 `.` 连接：`Sequential` 中未命名的子模块用数字索引，`add_module` 显式给出的名字（如 `block 0`）会原样进入路径。这条规则解释了两个常见现象——同一层在单独 `named_parameters()` 中叫 `weight`，在整网中却叫 `0.weight`；以及先按下标找到模块再取它的 `state_dict()`，与直接按全名查表得到的是同一个参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-access-all"
+          ]
+        }
+      },
+      {
+        "id": "tb-init-default",
+        "moduleId": "initialization",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：默认初始化由输入输出维度决定",
+        "markdown": "知道如何访问参数后就可以讨论初始化。深度学习框架提供默认随机初始化，也允许创建满足其他规则的初始化方法。\n\n教材说明：默认情况下，PyTorch 会根据一个范围均匀地初始化权重和偏置矩阵，这个范围由输入和输出维度计算得到；同时 `torch.nn.init` 模块提供了多种预置初始化方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-init-builtin",
+        "moduleId": "initialization",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：内置初始化器的三种用法",
+        "markdown": "第一种是把所有权重初始化为标准差 0.01 的高斯随机变量、偏置置零：\n\n```python\ndef init_normal(m):\n    if type(m) == nn.Linear:\n        nn.init.normal_(m.weight, mean=0, std=0.01)\n        nn.init.zeros_(m.bias)\n\nnet.apply(init_normal)\n```\n\n执行后第一层权重首行约为 `tensor([-0.0214, -0.0015, -0.0100, -0.0058])`，偏置为 `tensor(0.)`。\n\n第二种是把所有权重初始化为给定常数：把上面的两行换成 `nn.init.constant_(m.weight, 1)` 与 `nn.init.zeros_(m.bias)`，第一层权重首行变为 `tensor([1., 1., 1., 1.])`。\n\n第三种是对不同的块应用不同方法：`net[0].apply(init_xavier)` 用 `nn.init.xavier_uniform_` 初始化第一层，`net[2].apply(init_42)` 把第三层权重设为常数 42，输出 `print(net[2].weight.data)` 为 `tensor([[42., 42., 42., 42., 42., 42., 42.]])`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-apply-semantics",
+        "moduleId": "initialization",
+        "depth": "support",
+        "kind": "mechanism",
+        "title": "模型补充：apply 的递归范围与匹配条件",
+        "markdown": "**模型补充。** `net.apply(fn)` 会对根模块及其所有子模块递归调用 `fn`，示例用 `if type(m) == nn.Linear` 把改动限制在全连接层，`ReLU` 等无参数模块因此被跳过。对子模块调用 `net[0].apply(...)` 只影响该子树，这正是“某些块使用不同初始化方法”能够成立的原因。另外这些函数名都以 `_` 结尾，表示原地修改已有张量，所以调用后不需要重新赋值给 `weight`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-init-builtin"
+          ]
+        }
+      },
+      {
+        "id": "tb-init-custom",
+        "moduleId": "initialization",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：自定义初始化与直接赋值",
+        "markdown": "当框架没有提供需要的初始化方法时，可以自行定义。教材用如下分段分布作为例子：\n\n$$w \\sim \\begin{cases} U(5,10) & \\text{概率 } \\frac{1}{4} \\\\ 0 & \\text{概率 } \\frac{1}{2} \\\\ U(-10,-5) & \\text{概率 } \\frac{1}{4} \\end{cases}$$\n\n对应的实现先用均匀分布覆盖 $[-10, 10]$，再按绝对值阈值把中间段置零：\n\n```python\ndef my_init(m):\n    if type(m) == nn.Linear:\n        nn.init.uniform_(m.weight, -10, 10)\n        m.weight.data *= m.weight.data.abs() >= 5\n\nnet.apply(my_init)\n```\n\n`net[0].weight[:2]` 的输出形如 `tensor([[5.4079, 9.3334, 5.0616, 8.3095], [0.0000, 7.2788, -0.0000, -0.0000]])`。教材最后提醒：始终可以直接设置参数，例如 `net[0].weight.data[:] += 1`，或 `net[0].weight.data[0, 0] = 42`，此时首行变为 `tensor([42.0000, 10.3334, 6.0616, 9.3095])`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-custom-verify",
+        "moduleId": "initialization",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：用区间比例验证自定义初始化",
+        "markdown": "**模型补充。** 先取 $u \\sim U(-10, 10)$，则 $u$ 落在 $(-5, 5)$ 的概率是 $\\frac{1}{2}$，落在 $(-10, -5)$ 与 $(5, 10)$ 的概率各为 $\\frac{1}{4}$。乘以 $|u| \\ge 5$ 的布尔掩码后，中间段被置零，剩下两段各占 $\\frac{1}{4}$，恰好就是教材给出的分布。\n\n因此检查时应分别统计 $w = 0$、$w \\ge 5$ 与 $w \\le -5$ 的比例，而不是只观察单个张量的几个数值；阈值改成别的值时分段概率会随之改变，这也是判断实现是否忠实于目标分布的直接依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-init-custom"
+          ]
+        }
+      },
+      {
+        "id": "tb-sharing",
+        "moduleId": "parameter-tying",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：参数绑定意味着同一个张量",
+        "markdown": "有时希望在多个层间共享参数：可以先定义一个稠密层，再用它的参数设置另一个层。\n\n```python\n# 我们需要给共享层一个名称，以便可以引用它的参数\nshared = nn.Linear(8, 8)\nnet = nn.Sequential(nn.Linear(4, 8), nn.ReLU(),\n    shared, nn.ReLU(),\n    shared, nn.ReLU(),\n    nn.Linear(8, 1))\nnet(X)\nprint(net[2].weight.data[0] == net[4].weight.data[0])\nnet[2].weight.data[0, 0] = 100\nprint(net[2].weight.data[0] == net[4].weight.data[0])\n```\n\n两次比较的输出都是 `tensor([True, True, True, True, True, True, True, True])`。教材由此说明：第三个和第五个神经网络层的参数是绑定的，它们不仅值相等，而且由相同的张量表示，因此修改其中一个，另一个也会改变。\n\n教材还回答了梯度的问题：由于模型参数包含梯度，在反向传播期间第二个隐藏层（第三个神经网络层）和第三个隐藏层（第五个神经网络层）的梯度会加在一起。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-share-diagnose",
+        "moduleId": "parameter-tying",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：如何判定绑定，以及绑定的代价",
+        "markdown": "**模型补充。** 只比较初始化后的数值无法区分“恰好相等”和“同一对象”；判据应是“改一处，看另一处是否同步变化”，或直接比较张量身份。绑定带来的不是两份参数，而是一份参数被两次使用：前向时两次复用同一权重，反向时两条路径的梯度累加在同一张量上。它既能减少参数量，也意味着这两个位置无法各自学习不同的权重，调试时不应把它们当作独立层分别检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sharing"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材在本节小结中给出两条结论：我们有几种方法可以访问、初始化和绑定模型参数；我们也可以使用自定义初始化方法。\n\n配套练习要求：使用 5.1 节定义的 `FancyMLP` 访问各个层的参数；查看初始化模块文档以了解不同的初始化方法；构建包含共享参数层的多层感知机并训练，观察各层的参数和梯度；并思考为什么共享参数是个好主意。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000038"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "参数管理"
+              ],
+              "lineStart": 7791,
+              "lineEnd": 8194,
+              "assetRefs": [],
+              "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checklist",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：参数管理操作检查表",
+        "markdown": "**模型补充。** 把本节的操作整理成可复核的清单：\n\n- 访问：先确定层级路径，再决定用下标（`net[2]`）、`named_parameters()` 还是 `state_dict()` 的全名；\n- 取值：读数值走 `.data`，看梯度走 `.grad`，两者不混用；\n- 初始化：用 `apply` 的递归范围配合 `type` 判断控制改动对象，需要只改某一子树时对子模块调用 `apply`；\n- 共享：用“改一处看另一处”确认绑定，并在训练日志中把绑定层当作一组参数观察。\n\n此时参数形状仍由框架在首次前向时推断，这正是下一节“延后初始化”要解释的机制。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：自测",
+        "markdown": "**模型补充。** 请在不运行代码的情况下作答，再回到前文核对：\n\n1. 对 `nn.Sequential(nn.Linear(4, 8), nn.ReLU(), nn.Linear(8, 1))`，写出第三层偏置的完整参数名，并给出按名称和按下标取到它的两种写法。\n2. 若把 `my_init` 中的 `uniform_` 区间由 `-10, 10` 改为 `-5, 5`，教材给出的分段分布会变成什么？\n3. 对两个共享 `shared` 层，反向传播后它们的梯度被累加。这意味着一次优化器更新后，两个层的权重是否仍然相同？为什么？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "model-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "parameter-name-and-tying-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "title": "参数命名与绑定判别",
+        "outcomeRefs": [
+          "access-parameters",
+          "share-and-gradient"
+        ],
+        "learningPurpose": "检查学习者能否把参数全名规则和“同一张量”判据迁移到新例子上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-access-all",
+            "tb-sharing",
+            "model-naming-rule"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "focus": [
+            "nested-parameter-name",
+            "tying-diagnosis"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出嵌套网络中某一参数的全名，并说明如何用一次修改实验判断两个层是否共享同一张量。"
+        }
+      }
+    ]
+  },
+  "subtitle": "深度学习计算",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000038"
+      ],
+      "headingPath": [
+        "深度学习计算",
+        "参数管理"
+      ],
+      "lineStart": 7791,
+      "lineEnd": 8194,
+      "assetRefs": [],
+      "excerptSha256": "b227f2aa68036ed9bdee4e78982f66b76bdb6c083f60f68b97c5eed933347b62"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3259,
+    1882
+  ],
+  "scale": 0.95
+}

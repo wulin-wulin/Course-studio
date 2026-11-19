@@ -1,0 +1,560 @@
+{
+  "id": "point-9-7",
+  "title": "序列到序列学习（seq2seq）",
+  "shortSummary": "介绍基于循环网络的 seq2seq 训练、教师强制与推理阶段的逐步解码过程。",
+  "keyTerms": [
+    "seq2seq",
+    "教师强制",
+    "解码",
+    "BLEU"
+  ],
+  "animationType": "seq2seqGreedyDecoding",
+  "animationSuggestion": "并排显示固定不动的编码器输出与逐步推进的解码器：每步高亮当前输入词元、箭头指向上一步选出的词元，隐状态节点按时间步依次更新，词元分布以条形展示被选中的最大概率项，生成到 <eos> 时停止并给出完整译文，重播回到 <bos> 初始状态。",
+  "difficulty": "进阶",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-9-1",
+    "point-9-5",
+    "point-9-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-with-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的符号、公式、实现顺序与数值结果，围绕五个学习目标补充形状核对、遮蔽作用、训练推理差异与 BLEU 手算，并压缩重复的代码细节。",
+      "estimatedMinutes": 40,
+      "outcomes": [
+        {
+          "id": "explain-architecture",
+          "text": "说明 seq2seq 中编码器、解码器与上下文变量各自承担的分工。"
+        },
+        {
+          "id": "derive-encoder-decoder",
+          "text": "写出编码器与解码器的隐状态更新式，并解释上下文变量的来源与作用。"
+        },
+        {
+          "id": "implement-training",
+          "text": "应用教师强制与遮蔽交叉熵损失组织一次 seq2seq 训练。"
+        },
+        {
+          "id": "compare-train-inference",
+          "text": "区分训练阶段的教师强制与推理阶段的逐步贪心解码。"
+        },
+        {
+          "id": "evaluate-with-bleu",
+          "text": "用 BLEU 的 n 元语法匹配与长度惩罚解释翻译质量的评估结果。"
+        }
+      ],
+      "misconceptions": [
+        "把训练损失直接当作翻译质量指标，忽略推理时解码器只能看到自己生成的词元。",
+        "认为填充词元参与损失计算无关紧要，实际上它会让梯度被无效目标主导。",
+        "把 BLEU 当作语义等价判断，它只统计预测序列与标签序列之间的 n 元语法匹配。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-architecture",
+          "title": "问题与架构分工",
+          "role": "concept-scaffold",
+          "description": "从长度可变的输入输出出发，说明两个循环网络的分工。",
+          "outcomeRefs": [
+            "explain-architecture"
+          ],
+          "order": 0
+        },
+        {
+          "id": "encoder-mechanism",
+          "title": "编码器与上下文变量",
+          "role": "quantitative-derivation",
+          "description": "用隐状态更新式与张量形状说明源序列如何被压缩为固定形状表示。",
+          "outcomeRefs": [
+            "derive-encoder-decoder"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decoder-mechanism",
+          "title": "解码器与条件概率",
+          "role": "quantitative-derivation",
+          "description": "说明解码器如何以真实前缀与上下文变量逐步给出词元分布。",
+          "outcomeRefs": [
+            "derive-encoder-decoder"
+          ],
+          "order": 2
+        },
+        {
+          "id": "masked-loss",
+          "title": "遮蔽损失与填充词元",
+          "role": "mechanism-detail",
+          "description": "解释填充位置为何必须从交叉熵损失中屏蔽。",
+          "outcomeRefs": [
+            "implement-training"
+          ],
+          "order": 3
+        },
+        {
+          "id": "training-and-inference",
+          "title": "训练与逐步解码",
+          "role": "procedure",
+          "description": "对照教师强制训练循环与推理阶段的贪心解码流程。",
+          "outcomeRefs": [
+            "implement-training",
+            "compare-train-inference"
+          ],
+          "order": 4
+        },
+        {
+          "id": "evaluation-and-summary",
+          "title": "BLEU 评估与小结",
+          "role": "evaluation",
+          "description": "用 n 元语法精确度与长度惩罚计算 BLEU，并收束全节流程。",
+          "outcomeRefs": [
+            "evaluate-with-bleu"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-architecture",
+          "derive-encoder-decoder",
+          "implement-training",
+          "compare-train-inference",
+          "evaluate-with-bleu"
+        ],
+        "method": "用一段源句走完全流程，分别写出训练与推理时解码器每一步的输入、停止条件和可用的评估指标。",
+        "successCriteria": [
+          "能正确写出编码器与解码器的更新式并说明上下文变量的形状",
+          "能指出训练与推理输入来源的差异并解释遮蔽的作用",
+          "能按公式手算一个短序列的 BLEU 并说明结果含义"
+        ],
+        "summaryBlockId": "model-synthesis",
+        "nextPointId": "point-9-8"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-architecture-overview",
+        "moduleId": "problem-and-architecture",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：两个循环网络的分工",
+        "markdown": "教材把序列到序列（sequence to sequence, seq2seq）任务交给两个循环神经网络分工完成。编码器读取长度可变的源序列 $x_1,\\ldots,x_T$，把其中的信息压缩成形状固定的隐状态；解码器从这个固定形状的表示出发，逐个词元生成目标序列。这样的分工使模型能处理输入与输出长度互不相同、且都不固定的翻译类问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-context-bottleneck",
+        "moduleId": "problem-and-architecture",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：固定宽度接口的代价",
+        "markdown": "无论源句多长，解码器看到的接口宽度都不变，这换来了统一的训练与推理流程；代价是上下文变量成为信息瓶颈，源句越长，细节越容易被压缩掉。教材在预测函数里已经预留了 `save_attention_weights` 参数，说明后续会引入注意力机制来缓解这一瓶颈，本节仍只用单一上下文变量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-encoder-recurrence",
+        "moduleId": "encoder-mechanism",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：编码器的隐状态与上下文变量",
+        "markdown": "编码器在第 $t$ 步把当前词元的特征向量 $\\mathbf{x}_t$ 与上一步隐状态 $\\mathbf{h}_{t-1}$ 送入循环层：\n\n$$\\mathbf{h}_t = f(\\mathbf{x}_t, \\mathbf{h}_{t-1}).$$\n\n再用函数 $q$ 把全部时间步的隐状态汇总为上下文变量：\n\n$$\\mathbf{c} = q(\\mathbf{h}_1, \\ldots, \\mathbf{h}_T).$$\n\n教材的实现取 $q(\\mathbf{h}_1,\\ldots,\\mathbf{h}_T)=\\mathbf{h}_T$，即直接用最后一个时间步的隐状态作为 $\\mathbf{c}$；若改用双向循环网络，隐状态就能同时编码源句前后两侧的信息。输入词元先经嵌入层得到特征向量，再用多层门控循环单元处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-encoder-tensor-shapes",
+        "moduleId": "encoder-mechanism",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：按张量形状核对编码器",
+        "markdown": "以教材示例超参数（词表 10、嵌入 8、隐藏单元 16、2 层 GRU、批量 4、时间步 7）为例，可以逐步核对编码器在做什么：\n\n| 张量 | 形状 | 含义 |\n|---|---|---|\n| 输入 `X` | 4×7 | 批量 4 条、每条 7 个词元索引 |\n| 嵌入后 | 4×7×8 | 每个词元变成 8 维向量 |\n| 转置后 | 7×4×8 | 时间步放到第一轴，交给循环层 |\n| `output` | 7×4×16 | 每个时间步的顶层隐状态 |\n| `state` | 2×4×16 | 2 层各自的最终隐状态 |\n\n解码器只需要 `state`，因为上下文变量取最后时间步的隐状态；`output` 保留下来供后续注意力机制使用。若把 GRU 换成 LSTM，`state` 还会额外携带记忆单元。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-encoder-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-decoder-recurrence",
+        "moduleId": "decoder-mechanism",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：解码器的条件概率与更新式",
+        "markdown": "解码器建模的是条件概率 $P(y_{t'}\\mid y_1,\\ldots,y_{t'-1},\\mathbf{c})$：在目标序列的第 $t'$ 步，它把上一步输出 $y_{t'-1}$、上下文变量 $\\mathbf{c}$ 与上一步隐状态 $\\mathbf{s}_{t'-1}$ 一起用于更新：\n\n$$\\mathbf{s}_{t'} = g(y_{t'-1}, \\mathbf{c}, \\mathbf{s}_{t'-1}).$$\n\n得到隐状态后再经输出层与 softmax 给出该步词元的概率分布。实现上有三个关键决定：用编码器最后时间步的隐状态初始化解码器隐状态，因此两者需要相同的层数与隐藏单元数；上下文变量在每个时间步与解码器输入拼接；最后一层循环输出经全连接层映射到词表大小。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-decoder-concat",
+        "moduleId": "decoder-mechanism",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：拼接改变的是输入宽度",
+        "markdown": "拼接上下文变量会直接改变循环层的输入宽度：嵌入维度 `embed_size` 与隐藏单元数 `num_hiddens` 相加，才是解码器 GRU 的输入维度，因此教材写的是 `nn.GRU(embed_size + num_hiddens, ...)`。输出经全连接层后形状为（批量大小，时间步数，词表大小）；批量 4、时间步 7、词表 10 时就是 4×7×10，可理解为 28 个位置各有一张 10 类概率表。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-decoder-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-masked-loss",
+        "moduleId": "masked-loss",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：遮蔽填充词元的交叉熵",
+        "markdown": "每个时间步都产生一个词元分布，可用 softmax 交叉熵优化；但小批量中的序列被填充到同一长度，填充词元不是真实标签，必须从损失中剔除。教材用 `sequence_mask` 把有效长度之后的项置零（也可替换为指定值），再在 `MaskedSoftmaxCELoss` 中先用掩码生成权重，把每个位置的交叉熵损失乘以权重，最后在时间维求平均。若三个序列的有效长度分别为 4、2、0，同一批预测下的损失为 2.3026、1.1513、0.0000：第一条是第二条的两倍，第三条为零。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loss-masking-effect",
+        "moduleId": "masked-loss",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：遮蔽保留形状而去掉梯度",
+        "markdown": "这个例子说明遮蔽不是把多余位置删掉，而是保留张量形状、让无效位置对梯度没有贡献。有效长度为 0 的序列损失恰为 0，因此不会把参数推向任何错误方向。求平均的维度也值得注意：教材先在时间维平均，再由训练循环按有效词元总数累计，使不同批量的平均损失可比。若忘记遮蔽，模型会把大量 `<pad>` 当成需要预测的目标，学到的分布会被填充符主导。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-masked-loss"
+          ]
+        }
+      },
+      {
+        "id": "textbook-teacher-forcing",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：教师强制的训练循环",
+        "markdown": "训练循环把目标序列右移一位作为解码器输入：每个批量先构造 `<bos>`，再与去掉最后一个词元的标签 `Y[:, :-1]` 拼接，得到 `dec_input`。这样解码器预测第 $t'$ 个词元时看到的是真实前缀，而不是自己上一步的预测，这种做法称为教师强制（teacher forcing）。教材的训练脚本使用 Adam、学习率 0.005、300 个 epoch、dropout 0.1，并在反向传播前把梯度裁剪到范数 1；损失按有效词元总数累计后输出平均损失与每秒词元数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-teacher-forcing-tradeoff",
+        "moduleId": "training-and-inference",
+        "depth": "advanced",
+        "kind": "explanation",
+        "title": "模型补充：稳定训练与输入分布差异",
+        "markdown": "教师强制让每个位置的监督信号都建立在正确前缀上，训练信号更稳定、收敛更快，也便于把小批量中所有时间步一次算完。代价是训练与推理的输入分布不一致：推理时解码器只能看到自己生成的词元，早期一旦出错，后续生成会沿着错误前缀继续。教材练习中追问“用上一步预测代替教师强制会怎样”，正是检验这一差异的入口。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-teacher-forcing"
+          ]
+        }
+      },
+      {
+        "id": "textbook-stepwise-decoding",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：预测阶段的逐步解码",
+        "markdown": "预测函数 `predict_seq2seq` 先把源句转成词元、补上 `<eos>` 并截断或填充到固定长度，编码后得到上下文变量，再用它初始化解码器。初始输入是 `<bos>`，此后每一步都把上一步输出中概率最高的词元作为当前输入（贪心选择），直到预测出 `<eos>` 或达到最大步数；若启用注意力记录，还会逐步保存注意力权重。整个过程不再有真实标签可用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-train-vs-inference",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "模型补充：训练与推理的对照",
+        "markdown": "| 维度 | 训练 | 推理 |\n|---|---|---|\n| 解码器输入 | 真实前缀（教师强制） | 模型自己上一步的预测 |\n| 停止条件 | 固定时间步，用有效长度掩码 | 遇 `<eos>` 或达最大步数 |\n| 计算方式 | 批量内所有时间步一次算完 | 逐词元串行 |\n| 监督信号 | 每个位置都有交叉熵损失 | 无标签，只能事后用 BLEU 等指标评估 |\n\n这张表提醒我们不要把训练损失误当成翻译质量：训练损失衡量的是“给定正确前缀时预测下一个词元”的能力，而推理面对的是模型自己生成的前缀。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-teacher-forcing",
+            "textbook-stepwise-decoding"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bleu-definition",
+        "moduleId": "evaluation-and-summary",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：BLEU 的定义",
+        "markdown": "BLEU 用预测序列与标签序列的 $n$ 元语法匹配程度评估输出质量，定义为\n\n$$\\mathrm{BLEU} = \\exp\\left(\\min\\left(0, 1 - \\frac{\\mathrm{len}_{\\mathrm{label}}}{\\mathrm{len}_{\\mathrm{pred}}}\\right)\\right)\\prod_{n=1}^{k} p_n^{1/2^n}.$$\n\n其中 $p_n$ 是 $n$ 元语法的精确度，即预测序列中能在标签序列里匹配到的 $n$ 元语法比例。以标签 A、B、C、D、E、F 和预测 A、B、B、C、D 为例，$p_1=4/5$、$p_2=3/4$、$p_3=1/3$、$p_4=0$。指数 $1/2^n$ 让更长的 $n$ 元语法获得更大权重；前面的指数因子惩罚过短的预测，例如 $k=2$ 时预测只有 A、B，惩罚因子 $\\exp(1-6/2)\\approx 0.14$。预测与标签完全一致时 BLEU 为 1。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000073"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "序列到序列学习（seq2seq）"
+              ],
+              "lineStart": 15336,
+              "lineEnd": 15848,
+              "assetRefs": [
+                "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+                "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+                "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+                "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+              ],
+              "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bleu-worked-example",
+        "moduleId": "evaluation-and-summary",
+        "depth": "advanced",
+        "kind": "worked-example",
+        "title": "模型补充：按公式手算一次 BLEU",
+        "markdown": "对上面的例子取 $k=4$，可以逐项计算：\n\n1. 长度惩罚：预测 5 个词元、标签 6 个词元，$\\exp(\\min(0,1-6/5))=\\exp(-0.2)\\approx 0.819$。\n2. 各阶贡献：$p_1^{1/2}=0.8^{0.5}\\approx 0.894$，$p_2^{1/4}=0.75^{0.25}\\approx 0.931$，$p_3^{1/8}=(1/3)^{0.125}\\approx 0.872$。\n3. 由于 $p_4=0$，整个连乘为 0，BLEU 也为 0。\n\n这说明 BLEU 对高阶匹配近似“一票否决”：前几阶再好，缺少四元匹配也会归零。教材的机器翻译实验取 $k=2$，四个句子的结果为 1.000、1.000、0.658、0.447，其中后两句正是译文偏离标签时的分数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bleu-definition"
+          ]
+        }
+      },
+      {
+        "id": "model-synthesis",
+        "moduleId": "evaluation-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：全节流程收束",
+        "markdown": "把全节串起来：编码器把源句压成上下文变量并初始化解码器隐状态；训练时用教师强制把真实前缀喂给解码器，用遮蔽交叉熵只在有效词元上计算损失；推理时改用逐步贪心解码，遇到 `<eos>` 停止；最后用 BLEU 的 n 元语法匹配与长度惩罚给出可比较的分数。\n\n需要记住的两条边界是：teacher forcing 改善的是训练稳定性，不是推理质量；BLEU 衡量的是词面匹配，不是语义等价。下一步将讨论推理阶段的选词策略——贪心逐步取最大概率并不能保证整句概率最大，束搜索因此保留多个候选序列。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture-overview",
+            "textbook-encoder-recurrence",
+            "textbook-decoder-recurrence",
+            "textbook-masked-loss",
+            "textbook-teacher-forcing",
+            "textbook-stepwise-decoding",
+            "textbook-bleu-definition"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "seq2seq-train-inference-check",
+        "type": "formative-check",
+        "title": "训练与推理各走一遍",
+        "anchorBlockId": "model-train-vs-inference",
+        "moduleId": "training-and-inference",
+        "depth": "core",
+        "outcomeRefs": [
+          "implement-training",
+          "compare-train-inference"
+        ],
+        "learningPurpose": "检查学习者能否分别写出训练与推理时解码器每一步的输入来源、停止条件，并说明为何训练损失不能直接当作翻译质量。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-teacher-forcing",
+            "textbook-stepwise-decoding"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定一个训练批次和一条待翻译的源句，分别写出解码器每一步的输入来源与停止条件，并解释为什么不能用训练损失直接比较两次翻译的好坏。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000073"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "序列到序列学习（seq2seq）"
+      ],
+      "lineStart": 15336,
+      "lineEnd": 15848,
+      "assetRefs": [
+        "parts/part-0004/images/d9a79e3d6f611979d48461883de2b40bbcf0fbd35224a7558afc91f036a7a3dd.jpg",
+        "parts/part-0004/images/0d22e835147b6be6ccf26007a53b9ea1a9ccaf6ab0954cef3d5ca7fe83f0596b.jpg",
+        "parts/part-0004/images/306511027770a72193576887c09bc439c27f37d99dca73142dad86ac1bc86e10.jpg",
+        "parts/part-0004/images/28f1999ef7a1c36ba19ab1720b69b9e2d78d6afc0efb9a46a30322f631e01fd4.jpg",
+        "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg"
+      ],
+      "excerptSha256": "ec41a3084c03291b27dea2f6613999fabccd1996efbcdd6351c66e6b3c9b27a7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    496,
+    1366
+  ],
+  "scale": 0.96
+}

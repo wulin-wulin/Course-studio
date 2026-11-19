@@ -1,0 +1,522 @@
+{
+  "id": "point-3-4",
+  "title": "参数学习",
+  "shortSummary": "介绍循环网络沿时间反向传播的梯度计算、目标函数选择与训练中的实际问题。",
+  "keyTerms": [
+    "随时间反向传播",
+    "梯度",
+    "目标函数",
+    "序列"
+  ],
+  "animationType": "bpttGradient",
+  "animationSuggestion": "按时间轴排列展开后的各时刻隐状态，用箭头显示误差从最右时刻逐格向左回传；每到一格高亮所乘的激活导数与权重转置因子，并在下方同步累加参数梯度，最后停在一次完整更新完成的状态。",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-1-2",
+    "point-3-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-derivation-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的目标函数、误差项定义与两种算法的结论，围绕推导与选型目标补充展开步骤、对比表和检查题。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-objective",
+          "text": "解释序列级损失为何是各时刻损失之和，以及参数共享如何导致梯度按时间累加。"
+        },
+        {
+          "id": "derive-bptt",
+          "text": "沿展开网络的链式法则写出序列损失对参数 $U$ 的梯度，并说明误差项的定义。"
+        },
+        {
+          "id": "trace-error-propagation",
+          "text": "说明误差项沿时间反向递推时每步乘上的传播矩阵及其两个因子的来源。"
+        },
+        {
+          "id": "compare-bptt-rtrl",
+          "text": "在计算量、空间开销与在线更新条件上比较 BPTT 与 RTRL 的取舍。"
+        },
+        {
+          "id": "identify-bottleneck",
+          "text": "指出把整段序列压缩为少数状态向量所带来的信息瓶颈及其后续影响。"
+        }
+      ],
+      "misconceptions": [
+        "把各时刻损失对共享参数的梯度取平均，而不是按时间求和。",
+        "认为 BPTT 是与前馈反向传播无关的另一套算法，而不是在展开网络上的直接应用。",
+        "把 RTRL 当成不需要梯度下降的算法，忽略它与 BPTT 只是链式法则计算方向不同。"
+      ],
+      "modules": [
+        {
+          "id": "objective-and-shared-params",
+          "title": "目标函数与共享参数",
+          "role": "problem-setup",
+          "description": "从逐时刻监督得到序列级损失，提出参数学习要回答的三个问题。",
+          "outcomeRefs": [
+            "explain-objective"
+          ],
+          "order": 0
+        },
+        {
+          "id": "bptt-derivation",
+          "title": "展开网络与误差反向递推",
+          "role": "derivation",
+          "description": "把循环网络展开为共享参数的多层前馈网络，定义误差项并完成梯度推导。",
+          "outcomeRefs": [
+            "derive-bptt",
+            "trace-error-propagation"
+          ],
+          "order": 1
+        },
+        {
+          "id": "rtrl-forward-mode",
+          "title": "实时循环学习与算法比较",
+          "role": "alternative-and-comparison",
+          "description": "沿前向传播递推状态对参数的偏导数，并与 BPTT 统一比较。",
+          "outcomeRefs": [
+            "compare-bptt-rtrl"
+          ],
+          "order": 2
+        },
+        {
+          "id": "bottleneck-and-consolidation",
+          "title": "信息瓶颈、总结与自检",
+          "role": "consolidation",
+          "description": "说明状态向量压缩带来的局限，并以总结和练习收束全点。",
+          "outcomeRefs": [
+            "explain-objective",
+            "identify-bottleneck"
+          ],
+          "order": 3
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-objective",
+          "derive-bptt",
+          "trace-error-propagation",
+          "compare-bptt-rtrl",
+          "identify-bottleneck"
+        ],
+        "method": "完成三道自检题，并说明每一步推导依据的是哪条链式法则路径。",
+        "successCriteria": [
+          "能写出误差项的递推式并指出两个矩阵因子的来源",
+          "能按计算量、存储与在线条件说明两种算法的适用情境",
+          "能指出信息瓶颈对应的教材结论"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-3-5"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-objective",
+        "moduleId": "objective-and-shared-params",
+        "depth": "core",
+        "kind": "definition",
+        "title": "序列级目标函数",
+        "markdown": "循环网络的参数同样通过梯度下降学习。给定一个训练样本 $(x_{1:T}, y_{1:T})$，其中 $x_{1:T}=(x_1,\\cdots,x_T)$ 是长度为 $T$ 的输入序列，$y_{1:T}=(y_1,\\cdots,y_T)$ 是对应的标签序列。每个时刻 $t$ 都有一个监督信息 $y_t$，于是可以定义该时刻的损失\n\n$$\\mathcal{L}_t=\\mathcal{L}(y_t,\\,g(h_t))$$\n\n其中 $g(h_t)$ 是第 $t$ 时刻的输出，$\\mathcal{L}$ 是可微的损失函数，例如交叉熵。整段序列的损失为各时刻损失之和，其关于参数 $\\theta$ 的梯度是各时刻偏导数之和：\n\n$$\\mathcal{L}=\\sum_{t=1}^{T}\\mathcal{L}_t,\\qquad \\frac{\\partial\\mathcal{L}}{\\partial\\theta}=\\sum_{t=1}^{T}\\frac{\\partial\\mathcal{L}_t}{\\partial\\theta}$$",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-three-questions",
+        "moduleId": "objective-and-shared-params",
+        "depth": "core",
+        "kind": "note",
+        "title": "参数学习的三个问题",
+        "markdown": "从直观上看，参数学习的关键在于回答三个问题：\n\n1. 每个时刻的误差如何得到；\n2. 这些误差如何沿时间反向传递到更早的时刻；\n3. 因为各时刻共享同一组参数，来自不同时间步的梯度应如何累加。\n\nBPTT 正是围绕这三个问题展开的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-question-map",
+        "moduleId": "objective-and-shared-params",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把三个问题对到公式上",
+        "markdown": "把三个问题对到公式上：\n\n- 第一问由损失 $\\mathcal{L}_t$ 对输出 $g(h_t)$ 求导得到；\n- 第二问依赖隐状态的递归关系 $h_k=f(Uh_{k-1}+Wx_k+b)$，误差要逐步穿过每个时刻的激活函数与权重矩阵；\n- 第三问的答案就是序列损失公式里的求和：参数共享使各时间步的梯度直接累加，不需要额外近似。\n\n第二问是循环网络与前馈网络的分水岭：前馈网络沿层反向走一次即可，循环网络必须沿时间从 $t$ 一路走到 $k$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-objective",
+            "textbook-three-questions"
+          ]
+        }
+      },
+      {
+        "id": "textbook-unroll",
+        "moduleId": "bptt-derivation",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "两种梯度计算方式与展开思想",
+        "markdown": "循环网络中存在递归调用的函数 $f(\\cdot)$，因此计算参数梯度的方式与前馈网络不太相同。教材给出两种主要方式：随时间反向传播（BPTT）与实时循环学习（RTRL）。\n\nBPTT 的主要思想是借用前馈网络的误差反向传播：把循环网络看作一个按时间展开的多层前馈网络，展开后的“每一层”对应循环网络的一个时刻。展开网络中所有层共享参数，因此参数的真实梯度是所有“展开层”参数梯度之和。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-unroll-example",
+        "moduleId": "bptt-derivation",
+        "depth": "support",
+        "kind": "example",
+        "title": "T=3 时的展开结构",
+        "markdown": "以 $T=3$ 的序列标注为例，展开后是一条三层链：$x_1\\to h_1\\to L_1$，$x_2\\to h_2\\to L_2$，$x_3\\to h_3\\to L_3$，而 $h_2$ 与 $h_3$ 还分别依赖前一个隐状态。计算 $\\mathcal{L}_3$ 对 $U$ 的梯度时，路径不止一条：$U$ 同时作用在 $z_1,z_2,z_3$ 上，三条路径的贡献都要相加。这正是“展开层梯度之和”的实际含义，也说明循环网络的梯度必须同时追踪当前时刻与更早时刻。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-unroll"
+          ]
+        }
+      },
+      {
+        "id": "textbook-direct-partial",
+        "moduleId": "bptt-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "净输入、直接偏导与误差项",
+        "markdown": "参数 $U$ 出现在每个时刻隐层的净输入中：对 $1\\le k\\le t$，有\n\n$$z_k=Uh_{k-1}+Wx_k+b$$\n\n因此第 $t$ 时刻的损失 $\\mathcal{L}_t$ 关于元素 $u_{ij}$ 的梯度，需要对 $k=1,\\dots,t$ 的每条路径应用链式法则求和。其中“直接”偏导数指保持 $h_{k-1}$ 不变、只对 $u_{ij}$ 求偏导：\n\n$$\\frac{\\partial^{+} z_k}{\\partial u_{ij}}=\\mathbb{I}_i(h_{k-1})^{\\top}$$\n\n其中 $[h_{k-1}]_j$ 是第 $k-1$ 时刻隐状态的第 $j$ 维，$\\mathbb{I}_i(x)^{\\top}$ 是第 $i$ 个元素为对应分量、其余为 0 的行向量。据此定义误差项\n\n$$\\delta_{t,k}=\\frac{\\partial\\mathcal{L}_t}{\\partial z_k}$$\n\n即第 $t$ 时刻的损失对第 $k$ 时刻隐层净输入的导数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-bptt-recursion",
+        "moduleId": "bptt-derivation",
+        "depth": "core",
+        "kind": "formula",
+        "title": "误差项的反向递推与参数梯度",
+        "markdown": "误差项可以沿时间反向递推。当 $1\\le k<t$ 时，$\\delta_{t,k}$ 由 $\\delta_{t,k+1}$ 得到，每经过一步都乘以传播矩阵：\n\n$$\\delta_{t,k}=\\mathrm{diag}(f'(z_k))\\,U^{\\top}\\,\\delta_{t,k+1}$$\n\n把各时刻的结果代回链式法则，得到参数梯度\n\n$$\\frac{\\partial\\mathcal{L}_t}{\\partial U}=\\sum_{k=1}^{t}\\delta_{t,k}\\,h_{k-1}^{\\top}$$\n\n$W$ 与 $b$ 的梯度同理，只是把 $h_{k-1}^{\\top}$ 换成 $x_k^{\\top}$，或直接把 $\\delta_{t,k}$ 求和。整段序列的 $\\partial\\mathcal{L}/\\partial U$ 再对所有时刻求和。\n\n在计算复杂度上，BPTT 必须先完成一次完整的“前向”计算和“反向”计算，才能得到梯度并更新参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-propagation-matrix",
+        "moduleId": "bptt-derivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "拆解传播矩阵的两个因子",
+        "markdown": "递推式里的两个因子各管一件事，理解来源比记住公式更重要：\n\n- $U^{\\top}$ 来自前向传播中 $z_{k+1}=Uh_k+\\cdots$ 对 $h_k$ 求导后的转置，负责把误差送回上一时刻的状态空间；\n- $\\mathrm{diag}(f'(z_k))$ 来自激活函数的逐元素导数，负责按当前净输入处的斜率缩放误差。\n\n因此误差每回溯一步，都是一次“经权重转置回传、再经激活斜率缩放”的操作。反向路径的长度等于序列长度 $t$，序列越长，连乘的矩阵越多。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bptt-recursion"
+          ]
+        }
+      },
+      {
+        "id": "model-cost-note",
+        "moduleId": "bptt-derivation",
+        "depth": "support",
+        "kind": "note",
+        "title": "一次前向、一次反向、一次更新",
+        "markdown": "“先完整前向、再完整反向”带来两点直接后果：\n\n- 一次参数更新之前，必须保留整段序列前向计算中的中间状态（各时刻的 $z_k$ 与 $h_k$），显存占用随序列长度增长；\n- 损失要等全部时刻的输出都得到后才统一计算，因此训练循环是整段序列一起处理，而不是每读入一个时刻就更新一次参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bptt-recursion"
+          ]
+        }
+      },
+      {
+        "id": "textbook-rtrl",
+        "moduleId": "rtrl-forward-mode",
+        "depth": "advanced",
+        "kind": "procedure",
+        "title": "实时循环学习的前向递推",
+        "markdown": "实时循环学习（Real-Time Recurrent Learning，RTRL）通过前向传播的方式计算梯度，可看作自动微分中的前向模式。设第 $t+1$ 时刻的状态为 $h_{t+1}$，其关于参数 $u_{ij}$ 的偏导数为\n\n$$\\frac{\\partial h_{t+1}}{\\partial u_{ij}}=\\mathrm{diag}(f'(z_{t+1}))\\left(U\\frac{\\partial h_t}{\\partial u_{ij}}+\\mathbb{I}_i(h_t)\\right)$$\n\n算法从第 1 个时刻开始，除了计算隐状态，还依次前向计算 $\\partial h_1/\\partial u_{ij},\\ \\partial h_2/\\partial u_{ij},\\ \\partial h_3/\\partial u_{ij},\\dots$。这样在第 $t$ 时刻存在监督信息、其损失为 $\\mathcal{L}_t$ 时，就可以同时计算 $\\partial\\mathcal{L}_t/\\partial u_{ij}$ 并实时更新参数；$W$ 和 $b$ 的梯度也可按同样方法实时计算。教材把这一小节定位为补充了解即可。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-compare",
+        "moduleId": "rtrl-forward-mode",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "两种算法的比较",
+        "markdown": "两种算法都是基于梯度下降的算法，分别通过前向模式和反向模式应用链式法则。它们的取舍是：\n\n- 循环网络中一般网络输出维度远低于输入维度，因此 BPTT 的计算量会更小，但 BPTT 需要保存前向计算中的中间状态，空间复杂度较高；\n- RTRL 不需要沿时间反向回传误差，形式上适合在线学习或无限序列任务；但完整 RTRL 需要维护状态对参数的偏导数，计算和存储开销很高，实际应用中往往需要近似或截断版本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-compare-table",
+        "moduleId": "rtrl-forward-mode",
+        "depth": "support",
+        "kind": "table",
+        "title": "统一维度上的对比",
+        "markdown": "把教材的比较整理成统一维度：\n\n| 维度 | BPTT | RTRL |\n|---|---|---|\n| 梯度计算方向 | 反向模式 | 前向模式 |\n| 参数更新时机 | 整段序列前向与反向之后 | 每到一个时刻即可更新 |\n| 计算量 | 较小（输出维度远低于输入维度） | 较大 |\n| 空间复杂度 | 较高（需保存中间状态） | 高（需维护状态对参数的偏导数） |\n| 在线/无限序列 | 需要截断或分块 | 形式天然契合 |\n| 常见实用形态 | 截断 BPTT | 近似或截断 RTRL |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-compare"
+          ]
+        }
+      },
+      {
+        "id": "model-decision",
+        "moduleId": "rtrl-forward-mode",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "怎样在两种算法之间选择",
+        "markdown": "落到选型上，可以用三个问题快速判断：序列能否整段获得、显存能否容纳整段激活、是否要求严格在线更新。绝大多数离线训练场景可以整段或按块获得序列，BPTT 计算量小，是默认选择，长序列再配合截断或分块；只有当数据以流的形式到达、又必须立即更新参数时，RTRL 的前向思路才有吸引力，而且通常只能使用其近似版本。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-compare",
+            "model-compare-table"
+          ]
+        }
+      },
+      {
+        "id": "textbook-bottleneck",
+        "moduleId": "bottleneck-and-consolidation",
+        "depth": "core",
+        "kind": "warning",
+        "title": "状态压缩带来的信息瓶颈",
+        "markdown": "这类模型通常要把整个输入序列压缩为一个或少数几个状态向量，因此当输入很长时容易形成信息瓶颈。这一局限进一步促使人们引入注意力机制，使解码器能够在生成过程中动态访问编码器不同位置的信息（参见第 8.2 节）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "循环神经网络：序列建模、长程依赖、门控网络",
+                "参数学习"
+              ],
+              "lineStart": 654,
+              "lineEnd": 691,
+              "assetRefs": [],
+              "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "bottleneck-and-consolidation",
+        "depth": "core",
+        "kind": "summary",
+        "title": "本点推导的一条链",
+        "markdown": "本点的推导可以压缩成一条链：\n\n1. 序列损失是各时刻损失之和，共享参数使梯度也按时间累加；\n2. BPTT 把循环网络展开成按时刻分层、参数共享的前馈网络，误差项 $\\delta_{t,k}$ 沿时间反向递推，每步乘以 $\\mathrm{diag}(f'(z_k))U^{\\top}$；\n3. RTRL 改用前向模式，在递推隐状态的同时递推状态对参数的偏导数，可在线更新但开销高；\n4. 实用中 BPTT 计算量小但占空间，RTRL 省去反向回传但存储昂贵；\n5. 无论用哪种算法，把整段序列压进少数状态向量都会带来信息瓶颈，这也是后续引入注意力机制的动因之一。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-objective",
+            "textbook-bptt-recursion",
+            "textbook-rtrl",
+            "textbook-compare",
+            "textbook-bottleneck"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "bottleneck-and-consolidation",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自检练习",
+        "markdown": "自检练习：\n\n1. 某序列长度为 $T=4$，损失只取自最后一个时刻 $\\mathcal{L}_4$。$\\partial\\mathcal{L}_4/\\partial U$ 一共包含几条路径的贡献？\n2. 如果把递推式中的 $\\mathrm{diag}(f'(z_k))$ 误写成 $\\mathrm{diag}(f'(z_{k+1}))$，梯度会错在哪里？\n3. 一个必须逐条处理无限长数据流、且要求每个样本到达后立刻更新参数的场景，更接近 BPTT 还是 RTRL？代价是什么？\n\n参考答案要点：（1）$k=1,2,3,4$ 共 4 条，每条对应一个 $\\delta_{4,k}h_{k-1}^{\\top}$；（2）激活导数的下标必须与误差所在时刻的净输入 $z_k$ 对齐，错位等于用错误的斜率缩放回溯误差；（3）更接近 RTRL，但需承担维护状态对参数偏导数带来的高计算与存储开销，通常只能近似实现。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-bottleneck",
+            "model-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "check-propagation-matrix",
+        "type": "formative-check",
+        "title": "传播矩阵的两个因子",
+        "anchorBlockId": "model-propagation-matrix",
+        "moduleId": "bptt-derivation",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-error-propagation"
+        ],
+        "learningPurpose": "检查学习者能否解释误差反向传播中每步所乘矩阵的两个来源，而不是只记住公式。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-bptt-recursion"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "误差项从 δ(t,k+1) 递推到 δ(t,k) 时乘的矩阵由哪两个因子组成？各自在前向计算中来自哪里？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出 $\\delta_{t,k}$ 的递推式，并分别说明 $U^{\\top}$ 与 $\\mathrm{diag}(f'(z_k))$ 在前向计算中的来源。"
+        }
+      }
+    ]
+  },
+  "subtitle": "循环神经网络：序列建模、长程依赖、门控网络",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [
+    "point-2-3"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-97f1fe376125afb2e4c552d6",
+      "blockIds": [
+        "block-000019"
+      ],
+      "headingPath": [
+        "循环神经网络：序列建模、长程依赖、门控网络",
+        "参数学习"
+      ],
+      "lineStart": 654,
+      "lineEnd": 691,
+      "assetRefs": [],
+      "excerptSha256": "14e89cce35b4dc574c49a0666e9952ade5c254b4b03b39d976494014ceee71c4"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2743,
+    1273
+  ],
+  "scale": 0.92
+}

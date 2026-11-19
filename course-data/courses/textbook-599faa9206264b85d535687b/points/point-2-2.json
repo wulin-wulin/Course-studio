@@ -1,0 +1,506 @@
+{
+  "id": "point-2-2",
+  "title": "大语言模型的预训练",
+  "shortSummary": "解释大语言模型预训练的目标与流程，说明大规模语料、下一 token 预测和缩放规律的作用。",
+  "keyTerms": [
+    "预训练",
+    "下一 token 预测",
+    "语料",
+    "缩放规律"
+  ],
+  "animationType": "pretrainingLoop",
+  "animationSuggestion": "用一条横向词元带展示滑动窗口：高亮当前位置的预测分布，标出它与真实下一词元的差异并累加为损失，再用参数更新动画和同步下降的损失曲线表现训练步推进；重播回到相同的初始参数与同一段语料。",
+  "difficulty": "中等",
+  "importance": 0.92,
+  "prerequisites": [
+    "point-1-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-with-quantitative-scaling",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于预训练范式、数据治理、分词与规模法则的定义、数值和适用边界，按学习目标重排为“范式→数据与分词→规模预算→中训练与涌现→任务适配”的顺序，并补充压缩直觉、BPE 手算与预算实验。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-pretraining-objective",
+          "text": "解释预训练的自监督目标，以及“足够大的数据上预测下一词元即可获得世界知识”这一关键假设。"
+        },
+        {
+          "id": "trace-pretraining-pipeline",
+          "text": "按语料、分词、嵌入、Transformer 到 logits 与下一词元分布的顺序，说明一次预训练前向计算的数据流。"
+        },
+        {
+          "id": "apply-scaling-budget",
+          "text": "用 $C \\approx 6ND$ 与约 20 倍词元配比估算固定计算预算下的参数与数据配置，并说明过度训练的取舍。"
+        },
+        {
+          "id": "compare-training-stages",
+          "text": "区分预训练、中训练与后训练的作用、数据组成和边界，说明中训练为何存在。"
+        },
+        {
+          "id": "distinguish-adaptation",
+          "text": "区分上下文适配与参数更新适配，判断什么情况下必须进入指令微调。"
+        }
+      ],
+      "misconceptions": [
+        "把预训练理解为需要人工标注的任务数据训练，忽略训练信号直接来自文本自身。",
+        "认为词表越大越好，忽略嵌入参数膨胀与罕见词元训练不足。",
+        "认为参数量越大一定越好，忽略固定计算预算下的数据配比与推理成本。",
+        "把评测指标造成的阶跃直接当作模型内部发生了严格意义上的相变。"
+      ],
+      "modules": [
+        {
+          "id": "pretraining-basics",
+          "title": "预训练范式与架构选择",
+          "role": "concept-and-contrast",
+          "outcomeRefs": [
+            "explain-pretraining-objective",
+            "trace-pretraining-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "data-and-tokens",
+          "title": "语料治理与词元化",
+          "role": "pipeline-walkthrough",
+          "outcomeRefs": [
+            "trace-pretraining-pipeline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "scaling-budget",
+          "title": "规模法则与预算分配",
+          "role": "quantitative-mechanism",
+          "outcomeRefs": [
+            "apply-scaling-budget"
+          ],
+          "order": 2
+        },
+        {
+          "id": "mid-training-and-emergence",
+          "title": "中训练与能力涌现",
+          "role": "stage-comparison",
+          "outcomeRefs": [
+            "compare-training-stages"
+          ],
+          "order": 3
+        },
+        {
+          "id": "from-pretraining-to-tasks",
+          "title": "从预训练到任务适配",
+          "role": "bridge-to-next-point",
+          "outcomeRefs": [
+            "distinguish-adaptation"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pretraining-objective",
+          "trace-pretraining-pipeline",
+          "apply-scaling-budget",
+          "compare-training-stages",
+          "distinguish-adaptation"
+        ],
+        "method": "先用自己的话说明预训练为何能在无标注语料上学到通用知识并复述数据流，再完成一次固定预算下的参数与数据量估算，最后区分预训练与中训练的作用，并针对一个具体任务判断应使用上下文适配还是参数更新适配。",
+        "successCriteria": [
+          "能说明下一词元预测目标与“预测即压缩”假设之间的关系",
+          "能按语料、分词、嵌入、Transformer、logits 的顺序复述端到端数据流",
+          "能用 $C \\approx 6ND$ 与约 20 倍词元配比给出量级正确的参数与数据估算",
+          "能说明“过度训练”换来更低推理成本的条件与代价",
+          "能说明中训练相对预训练改变了哪些数据与训练安排",
+          "能依据任务的稳定性和格式要求判断是否需要指令微调"
+        ],
+        "nextPointId": "point-2-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-pretraining-definition",
+        "moduleId": "pretraining-basics",
+        "depth": "core",
+        "kind": "definition",
+        "title": "预训练：大规模无标注语料上的自监督学习",
+        "markdown": "预训练（Pre-Training）是大语言模型的核心训练范式：在大规模、多样化的无标注文本语料上做自监督学习，训练信号直接来自文本本身，不需要人工标注，并以此训练模型的语言理解与生成能力。预训练得到的模型可以作为通用的语言表示基础，后续再通过微调或提示等方式适配到具体的下游任务。\n\n这一范式依赖一个关键假设：在足够大的数据上学习语言的统计规律，模型能够隐式地获取关于世界的广泛知识。从信息论角度看，要准确预测文本中的下一个词元，模型不仅需要掌握语法规则，还需要理解事实知识和常识推理，因此准确的语言建模能力隐含地要求模型压缩并存储大量关于世界的知识。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-prediction-as-compression",
+        "moduleId": "pretraining-basics",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么“预测”可以带来“压缩”",
+        "markdown": "教材把这一关系概括为“预测即压缩”：一个好的预测模型等价于一个好的数据压缩器。可以这样理解：模型对下一个词元的概率分布越接近真实文本分布，为一段文本编码所需的平均比特数就越少；降低交叉熵损失与提高压缩率在这里是同一件事。\n\n这也解释了为什么没有人工标注的任务数据，预训练仍能学到有用知识：标注只告诉模型“这个输入对应哪个标签”，而预测下一个词元要求模型解释输入中的语法、事实与指代关系。需要提醒的是，压缩能力强并不自动等于推理可靠，模型仍可能生成看似流畅却与事实不符的内容。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-pretraining-definition"
+          ]
+        }
+      },
+      {
+        "id": "textbook-architecture-families",
+        "moduleId": "pretraining-basics",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "三类预训练模型与自回归路线的胜出",
+        "markdown": "按所用的 Transformer 结构和训练目标，预训练模型可分为三类：仅编码器的掩码语言模型（如 BERT）、编码器–解码器模型（如 T5）和仅解码器的自回归语言模型（如 GPT）。\n\n大语言模型普遍采用自回归路线，因为它架构简单、易于扩展，并能统一建模各类任务：只使用因果注意力一种模式，训练和部署流程较为统一，且可以把所有任务统一为“给定前缀，预测后续”的格式。GPT 系列体现了这一范式随规模扩展的演进：GPT-1 展示了“预训练 + 微调”的有效性；GPT-2 将参数量扩展到 15 亿，探索零样本任务迁移；GPT-3 将参数量增加到 1750 亿，推动了上下文学习等能力的研究。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-autoregressive-rationale",
+        "moduleId": "pretraining-basics",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：自回归与掩码路线的取舍",
+        "markdown": "与掩码语言模型对照，可以看清这条路线付出的代价：掩码模型在训练时要人为挖空词元，而推断时并不挖空，训练与使用方式不一致，也不便于直接做开放式长文本生成；自回归模型训练和生成都用同一个“看前缀、猜下一个”的动作，所以上下文学习、思维链这类“续写式”能力可以自然长在同一套接口上。代价是每个词元只能看到左侧上下文，需要靠更长的上下文或专门的结构来弥补双向信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-architecture-families"
+          ]
+        }
+      },
+      {
+        "id": "textbook-corpus-and-governance",
+        "moduleId": "data-and-tokens",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "语料来源、预处理与数据治理",
+        "markdown": "预训练需要大规模、高质量、多样化的文本数据，常见来源包括互联网网页（如 Common Crawl）、书籍、学术论文、代码仓库（如 GitHub）和百科全书。预处理通常包括去重、质量过滤、隐私信息移除和有害内容过滤。\n\n数据的混合比例是重要的设计决策：网页数据量大但噪声多，书籍数据质量高但领域有限，代码数据有助于提升程序合成和计算相关能力。数据质量会直接影响预训练效率和下游可靠性，高质量数据上的较小模型，有时可以接近甚至超过低质量数据上的较大模型。\n\n数据治理还要关注数据污染和合成数据。如果评测题目或其答案已经出现在预训练语料中，模型在测试时的高分可能部分来自记忆而非泛化，因此需要在数据去重、时间切分和评测设计中尽量降低污染。合成数据可以补充稀缺领域、推理轨迹和代码样本，但也可能复制教师模型的错误或放大分布偏差，通常需要规则检查、去重和人工抽查后再加入训练混合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-tokenization-mechanism",
+        "moduleId": "data-and-tokens",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "词元化：从词级、字符级到子词",
+        "markdown": "在把文本输入模型之前需要进行词元化（Tokenization）：通过分词器（Tokenizer）把文本切分为离散的词元（Token）序列。词级分词以空格或词典为单位，词表大但仍难以覆盖所有词形，罕见词会成为未登录词（OOV）；字符级分词用单个字符作为词元，词表极小但序列极长，模型难以捕捉词级语义。现代大语言模型普遍采用子词分词折中：高频完整词保留为单个词元，低频词被拆分为若干子词（如 unhappiness → un + happiness），在有限词表下既保持语义粒度，又能覆盖任意字符串。\n\n字节对编码（BPE）是一类常用的分词方法：在训练语料上从字符级初始词表出发，反复统计相邻词元对的出现频次，选出频次最高的一对合并为新词元，直到词表达到预设大小（如 32K）；频次并列时合并先出现的词元对。字节级 BPE 先将文本编码为 UTF-8 字节流（初始词表仅 256 个字节），再在字节上执行合并，因此中文、表情和代码符号都不必为每个新字符设置未知词元，成为多语言和代码模型中的常见方案。BERT 采用的 WordPiece 与 BPE 类似，区别在于合并准则不是频次最高，而是最大化合并后语料的似然；SentencePiece 把空格也视为普通字符，可以直接处理没有空格分隔的语言，并同时支持 BPE 与基于一元语言模型的准则。不同方案虽然都输出词元序列，但词表、切分结果和词元编号通常与具体模型绑定，不能直接互换。\n\n词表大小需要权衡：过小会使序列过长、计算和显存代价上升；过大则嵌入矩阵参数膨胀、罕见词元训练不充分。早期大语言模型的词表多在 32K 左右，一些较新的模型将词表扩大到 10 万至 26 万量级。\n\n从端到端数据流看：分词器先把原始文本映射为词元 ID 序列；词元 ID 通过嵌入矩阵转换为向量表示；Transformer 逐层更新每个位置的隐藏状态；最后的语言模型头把隐藏状态投影到词表维度，得到每个候选词元的 logits，再经 softmax 得到下一个词元的分布；解码策略在这个分布上采样下一个词元。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bpe-worked-example",
+        "moduleId": "data-and-tokens",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：六次合并的手算过程",
+        "markdown": "用教材的小语料“low low low lower lower newer”手算一遍，可以看清合并顺序如何由频次决定（用下划线表示词尾）：\n\n1. 初始词表为 {l, o, w, e, r, n, _}，统计相邻词元对：(l, o) 出现 6 次，(o, w) 出现 5 次，先合并 (l, o) → “lo”。\n2. 合并后 (lo, w) 出现 5 次，合并为“low”；此时 (low, _)、(e, r)、(r, _) 同为 3 次，按“先出现者优先”，合并 (low, _) → “low_”。\n3. 此后 (e, r) 与 (r, _) 仍并列 3 次，(e, r) 先出现，合并为“er”，再合并 (er, _) → “er_”。\n4. 最后合并 (low, er_) → “lower_”。\n\n六次合并后，出现三次的 low 和出现两次的 lower 已成为整体词元，只出现一次的 newer 仍由更细的子词表示。这说明 BPE 的压缩效果取决于频次：高频片段被合并，罕见词则保留可组合的子词表示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-tokenization-mechanism"
+          ]
+        }
+      },
+      {
+        "id": "textbook-scaling-laws",
+        "moduleId": "scaling-budget",
+        "depth": "core",
+        "kind": "formula",
+        "title": "规模法则与 Chinchilla 配比",
+        "markdown": "模型性能与规模之间存在可预测的规模法则（Scaling Law）。通过在不同规模上系统训练语言模型，研究者发现交叉熵损失与模型参数量（不含嵌入层参数）、训练数据量和训练计算量之间分别存在幂律关系：\n\n$$L \\propto N^{-\\alpha_N}, \\quad L \\propto D^{-\\alpha_D}, \\quad L \\propto C^{-\\alpha_C}$$\n\n其中 $\\alpha_N \\approx 0.076$、$\\alpha_D \\approx 0.095$、$\\alpha_C \\approx 0.050$；当模型规模和数据规模同时变化时，损失也可以用统一公式描述。规模法则表明性能随规模增大而平滑提升，在对数–对数坐标下近似为直线。\n\n接下来的核心问题是：给定固定计算预算，如何在参数量 $N$ 和训练词元数 $D$ 之间分配？由于训练计算量近似为\n\n$$C \\approx 6ND$$\n\n即每个词元在前向和反向传播中约需 6 次浮点运算，增大 $N$ 必然减少可用的 $D$。通过拟合超过 400 个实验结果发现，最优的参数量和数据量应以近似相等的比例增长，最优训练词元数约为参数量的 20 倍：\n\n$$D_{\\text{opt}} \\approx 20N$$\n\n这意味着一个 100 亿参数的模型应使用约 2000 亿词元训练。Chinchilla 用与 Gopher 相同的计算量但更小的参数量和更多的数据，性能反而更好；其实际意义是：固定计算预算下，把计算量分配给更小的模型和更多的数据往往效果更好。实际部署中推理成本也是重要考量，Llama 等模型因此选择“过度训练”，即用高于 Chinchilla 比例的数据训练较小的模型，以降低推理成本。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-budget-experiment",
+        "moduleId": "scaling-budget",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：一次预算分配的数值实验",
+        "markdown": "把 $C \\approx 6ND$ 代入具体预算，可以检验配比的含义。设训练预算为 $10^{22}$ FLOPs 并希望按 $D = 20N$ 分配：由 $6N \\cdot 20N = 10^{22}$ 解得 $N^2 \\approx 8.3 \\times 10^{19}$，即 $N \\approx 9 \\times 10^{9}$，对应 $D \\approx 1.8 \\times 10^{11}$，约为 90 亿参数、1800 亿词元。\n\n若同一预算改训 300 亿参数模型，则 $D = 10^{22} / (6 \\times 3 \\times 10^{10}) \\approx 5.6 \\times 10^{10}$，只有约 560 亿词元，约为参数量的 1.9 倍，远低于 20 倍配比。此时模型处于“训练不足”状态，损失会明显高于同等预算下的最优配比。反过来，如果推理请求量极大，可以有意突破 20 倍比例去训练更小的模型，把成本从推断阶段省回来，这正是“过度训练”的取舍。\n\n这个估算把训练计算简化为 $6ND$，忽略了注意力中随序列长度增长的部分和训练效率损失，因此它给出的是量级判断，而不是精确的最优解。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-scaling-laws"
+          ]
+        }
+      },
+      {
+        "id": "textbook-mid-training",
+        "moduleId": "mid-training-and-emergence",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "中训练：预训练与后训练之间的过渡",
+        "markdown": "中训练（Mid-Training）是许多训练流程在预训练后期增加的过渡阶段，工程上也常称为继续预训练、退火阶段或长上下文扩展阶段。它常被视为预训练后期的一部分，与预训练的边界并不严格，也并非所有模型都会单独设置这一阶段。\n\n设置中训练的原因是：预训练语料以通用网页文本为主，高质量的数学推导、程序代码、科学文献和长文档所占比例有限。如果直接进入监督微调，模型可能还没有形成处理这些内容所需的稳定表示；如果只用少量领域样本微调，又容易过拟合或遗忘原有能力。\n\n中训练仍采用下一个词元预测目标，变化主要体现在数据组成和训练安排上。设中训练涉及 $k$ 个数据源，第 $k$ 个数据源的分布为 $p_k(x)$、混合权重为 $\\alpha_k$，则训练数据分布为\n\n$$p_{\\text{mid}} = \\sum_k \\alpha_k p_k$$\n\n与预训练相比，它提高了精选通用语料以及数学、代码、科学文本、多语言文本和经过验证的合成数据的权重。混合比例 $\\alpha_k$ 决定通用能力保持与专项能力强化之间的平衡：专项数据比例过低，目标能力提升不明显；比例过高，则可能造成通用能力退化，因此实践中会留出数据分别评估不同能力，并据此调整配比。\n\n常见的中训练安排有两类：退火在学习率衰减到零的最后阶段换用少量高质量数据继续训练，此时参数更新幅度减小，高质量数据对最终模型的影响更集中；长上下文扩展则在较短序列上预训练后逐步增大序列长度，并配合调整位置编码（如 RoPE 的插值和缩放），使模型适应更长的输入。中训练得到的检查点通常至少包含模型参数，也可以包含优化器状态、学习率调度器状态和训练步数，一般作为监督微调的初始化，并可以缩小预训练与后续适配阶段之间的数据分布差距。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-mid-training-decisions",
+        "moduleId": "mid-training-and-emergence",
+        "depth": "support",
+        "kind": "application",
+        "title": "模型补充：是否需要中训练的工程判断",
+        "markdown": "把教材的描述落到工程决策上，可以先问三个问题：目标能力在通用网页语料中是否稀缺？如果数学、代码或长文档本来就占足够比例，单独的中训练收益有限。只用少量领域样本微调是否会明显遗忘？如果会，中训练提供的“更合适的初始化”比直接微调更稳。是否需要更长的上下文？长上下文扩展不是只改配置，还要同步调整位置编码并重新训练。\n\n执行时的检查项包括：为每类能力留出独立评估集，避免只看总体平均分；监控专项数据比例升高后通用基准是否回退；用固定随机种子和小学习率对比退火前后的检查点，确认提升来自数据配比而不是训练步数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-mid-training"
+          ]
+        }
+      },
+      {
+        "id": "textbook-emergence",
+        "moduleId": "mid-training-and-emergence",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "能力涌现及其解释争议",
+        "markdown": "研究者用涌现能力（Emergent Ability）描述某种能力在小模型上不明显、但在大模型上变得突出的现象。涌现是复杂系统理论中的概念，指系统整体表现出其组成部分所不具有的性质。常被讨论的能力表现包括：少样本学习（仅通过提示中的少量示例完成新任务）、多步推理（在算术运算、逻辑推理等任务上进行多步推导）、代码生成（根据自然语言描述生成程序）和跨语言迁移（一种语言上学到的能力迁移到其他语言）。\n\n“突然出现”的特征引发了广泛讨论。一种直观类比是物理中的相变：模型规模越过某个临界点后系统表现出新的性质，但目前并无证据表明大语言模型内部存在严格意义上的相变。另一种解释从组合能力角度出发：复杂任务通常需要多种基础能力的组合（如语义理解 + 逻辑推理 + 知识检索），只有当所有必需的基础能力都达到阈值时，复杂任务的表现才会突然提升。\n\n也有研究指出，部分“涌现”可能是评估指标非线性导致的统计假象。例如使用精确匹配作为指标时，模型只有在输出完全正确时才得分，使性能曲线呈阶跃式跳变；如果使用更平滑的指标，性能增长可能是连续的。更稳妥的说法是：复杂能力的评估结果可能同时受到模型规模、任务构造和评价指标的影响，小规模实验的结论未必能直接外推到更大的模型。指令遵循和工具使用也常被列为大模型能力，但在实际系统中通常还依赖指令微调、工具接口和外部执行器。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-emergence-measurement",
+        "moduleId": "mid-training-and-emergence",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：读到“能力跃升”时的三项检查",
+        "markdown": "因此，读到“某能力在某个参数量突然出现”时，先检查三件事：指标是否只有全对才得分；任务提示格式和示例数量是否随模型一起变化；评测集是否可能已被预训练语料污染。把精确匹配换成部分得分、把提示固定为同一模板、再做一次去重与时间切分，往往能把“阶跃”还原成更平滑的曲线。\n\n这并不否定涌现现象，而是提醒我们把“能力跃升”与“测量方式造成的跃升”分开。对工程实践的含义是：不要把某个规模下的评测结论直接外推到更大或更小的模型，也不要把单次评测的陡升当作架构或训练目标发生了质变。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-emergence"
+          ]
+        }
+      },
+      {
+        "id": "textbook-context-adaptation",
+        "moduleId": "from-pretraining-to-tasks",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "任务适配：提示、上下文学习与思维链",
+        "markdown": "经过大规模自监督预训练之后，语言模型已经获得丰富的语言知识和世界知识，但它首先学到的是“给定前缀，继续生成文本”的统计规律，而不是某个具体任务的操作规程。若没有额外的任务说明，模型未必会把用户输入理解为“问题–回答”的交互。例如面对“中国的首都是哪里？”，模型可能把这句话当作待续写的片段，继续生成“这是一道常见的地理题……”。这不一定表示模型缺少相关知识，而是任务意图、输出格式和评价标准还没有被明确指定。\n\n在大语言模型中，提示（Prompt）是一次调用时送入模型的完整输入，通常包含任务说明、待处理材料、输出格式、约束条件以及必要的历史信息。模型在生成当前位置能够看到的全部条件信息称为上下文（Context）；提示通常是上下文的主要组成部分，也可以加入对话历史、检索结果和工具反馈。设计和组织提示的过程通常称为提示工程，它只改变当前输入，不直接更新模型参数。\n\n把预训练模型用于下游任务，按适配时是否更新模型参数可分为两类。上下文适配把任务说明、输出格式、示例、对话历史或工具结果放入输入上下文，模型在推断时据此生成，不更新参数，例如零样本提示与附带示例的提示式适配。参数更新适配则使用任务数据更新全部或部分模型参数，使目标行为保留在模型中，监督微调是常见方法，参数高效微调只更新少量附加参数或选定参数。上下文适配便于快速试验和处理一次性任务，但效果可能依赖上下文的选择、长度和排列；参数更新适配适合反复处理同类任务，但需要准备训练数据、进行训练，并承担过拟合或灾难性遗忘的风险。\n\n上下文学习（ICL）让模型利用提示中的任务示例，在不更新参数的情况下执行新任务；按示例数量分为零样本、单样本和少样本学习。它对示例的选择、排列顺序和格式都比较敏感：不同排列可能使性能在接近随机猜测与接近最优之间大幅波动；即使把示例中的标签随机替换为错误标签，性能下降也相对有限，表明模型还通过输入分布、标签空间和格式等信息来理解任务。思维链（CoT）提示则要求模型在给出最终答案之前生成中间推理步骤，把复杂问题分解为若干相互衔接的子问题，传递中间状态并核对阶段性结论。显式的中间步骤便于检查，但不一定忠实反映模型得出答案的真实依据；这类提示依赖模型规模、任务类型、示例质量和排列顺序，能够临时诱导推理行为，但不会把新能力写入模型参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000010"
+              ],
+              "headingPath": [
+                "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+                "大语言模型的预训练"
+              ],
+              "lineStart": 399,
+              "lineEnd": 481,
+              "assetRefs": [],
+              "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-to-instruction-tuning",
+        "moduleId": "from-pretraining-to-tasks",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：两类适配在同一条流程中的分工",
+        "markdown": "把两类适配放在同一条流程上看：预训练给出通用能力，上下文适配负责“当场说清楚要做什么”，参数更新适配负责“把稳定行为写进模型”。当任务是一次性的、可以由提示完整描述时，上下文适配成本最低；当需要稳定遵循复杂指令、多轮对话或固定输出格式时，仅靠提示往往不够，就需要用“指令–回答”数据做监督微调，这正是下一个知识点要展开的内容。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-context-adaptation"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "scaling-budget-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-budget-experiment",
+        "moduleId": "scaling-budget",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-scaling-budget"
+        ],
+        "learningPurpose": "检查学习者能否把 $C \\approx 6ND$ 与约 20 倍词元配比迁移到新的计算预算，并说明过度训练的条件。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-scaling-laws",
+            "model-budget-experiment"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "budgetFlops": "1e22"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定 $10^{22}$ FLOPs 的计算预算，用 $C \\approx 6ND$ 和 $D \\approx 20N$ 估算参数量与词元数，并说明在什么条件下应该改用“过度训练”的配比。"
+        }
+      }
+    ]
+  },
+  "subtitle": "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "trunk",
+  "related": [
+    "point-1-5"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-599faa9206264b85d535687b",
+      "blockIds": [
+        "block-000010"
+      ],
+      "headingPath": [
+        "大语言模型与智能体：预训练、指令微调、偏好对齐、推理增强与评估",
+        "大语言模型的预训练"
+      ],
+      "lineStart": 399,
+      "lineEnd": 481,
+      "assetRefs": [],
+      "excerptSha256": "0b8a7801865156f5dbe756ae9712f35c0d98ebb681a8274790bf20b4245d58f7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2287,
+    2032
+  ],
+  "scale": 1.22
+}

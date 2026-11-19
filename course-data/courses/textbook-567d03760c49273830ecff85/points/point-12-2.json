@@ -1,0 +1,492 @@
+{
+  "id": "point-12-2",
+  "title": "异步计算",
+  "shortSummary": "解释前端指令排队与后端设备执行的异步关系，说明同步点与性能测量的影响。",
+  "keyTerms": [
+    "异步计算",
+    "指令队列",
+    "同步",
+    "性能测量"
+  ],
+  "animationType": "asyncQueuePipeline",
+  "animationSuggestion": "以时间轴并排展示前端与后端两条泳道：前端不断把任务块放入队列，后端逐块取出并高亮执行，依赖未满足的任务在队列中标记等待；在同步点显示前端阻塞标记，直到后端清空队列才恢复，并允许调节单个任务的执行耗时代价以观察积压程度。",
+  "difficulty": "中等",
+  "importance": 0.68,
+  "prerequisites": [
+    "point-5-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-quantitative",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的前后端解耦模型、三阶段耗时公式和队列过载建议，按问题、机制、定量、实践、检查的顺序重组，并补充类比、数值算例与同步检查表。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-async-model",
+          "text": "解释前端排队与后端执行的异步模型，并说明为什么相互依赖的操作不能并行。"
+        },
+        {
+          "id": "reason-about-timing",
+          "text": "说明同步点如何影响性能测量，并用入队、执行、返回三阶段估算异步带来的耗时变化。"
+        },
+        {
+          "id": "apply-sync-policy",
+          "text": "在实际训练与基准测试中选择合理的同步位置，避免任务队列过度积压。"
+        }
+      ],
+      "misconceptions": [
+        "把异步执行理解为相互依赖的操作也能同时进行。",
+        "认为不调用同步函数也能测到 GPU 计算本身的真实耗时。"
+      ],
+      "modules": [
+        {
+          "id": "problem-motivation",
+          "title": "为什么需要异步",
+          "role": "motivation",
+          "description": "从并行硬件与单线程 Python 前端的矛盾引出异步编程模型。",
+          "outcomeRefs": [
+            "explain-async-model"
+          ],
+          "order": 0
+        },
+        {
+          "id": "frontend-backend-model",
+          "title": "前端指令与后端队列",
+          "role": "mechanism",
+          "description": "拆解前端入队、后端执行与依赖跟踪的机制。",
+          "outcomeRefs": [
+            "explain-async-model"
+          ],
+          "order": 1
+        },
+        {
+          "id": "timing-and-synchronization",
+          "title": "同步点与耗时估算",
+          "role": "quantitative-analysis",
+          "description": "解释基准测试为何需要同步，并推导三阶段耗时公式。",
+          "outcomeRefs": [
+            "reason-about-timing"
+          ],
+          "order": 2
+        },
+        {
+          "id": "practice-guideline",
+          "title": "同步策略与队列管理",
+          "role": "procedure",
+          "description": "给出选择同步位置、防止队列积压的操作要点。",
+          "outcomeRefs": [
+            "apply-sync-policy"
+          ],
+          "order": 3
+        },
+        {
+          "id": "checkpoint-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用计时题检验异步推理，并过渡到多设备自动并行。",
+          "outcomeRefs": [
+            "explain-async-model",
+            "reason-about-timing",
+            "apply-sync-policy"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-async-model",
+          "reason-about-timing",
+          "apply-sync-policy"
+        ],
+        "method": "完成一道计时估算题并写出训练中应放置同步点的理由。",
+        "successCriteria": [
+          "能正确区分入队时间与真实计算时间",
+          "能说明相互依赖的操作为何无法并行",
+          "能为训练循环给出可执行的同步策略"
+        ],
+        "exerciseBlockId": "model-timing-check",
+        "summaryBlockId": "model-next-parallelism",
+        "nextPointId": "point-12-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-parallel-background",
+        "moduleId": "problem-motivation",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材背景：并行硬件与单线程前端",
+        "markdown": "现代计算机本身高度并行：由多个 CPU 核、多块 GPU 和多个处理单元组成，每个 CPU 核可以有多个线程，每块 GPU 又包含大量处理单元。真正受限的往往是发起计算的 Python 前端——Python 是单线程的，在没有额外帮助时并不擅长编写并行和异步代码。\n\n深度学习框架因此把“下达指令”和“执行计算”拆开：MXNet、TensorFlow 等采用异步编程模型提高性能，PyTorch 则使用 Python 自己的调度器实现不同的性能权衡。对 PyTorch 来说，GPU 操作在默认情况下是异步的：调用一个使用 GPU 的函数时，操作会排队到特定设备上，但不一定等到执行完成才返回。\n\n这样做的收益是前端可以继续发起后续工作，包括在 CPU 或其他 GPU 上并行执行更多计算。理解异步如何工作，能帮助我们主动减少计算需求和相互依赖，从而减少内存开销并提高处理器利用率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "计算性能",
+                "异步计算"
+              ],
+              "lineStart": 21466,
+              "lineEnd": 21641,
+              "assetRefs": [
+                "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+                "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+                "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+              ],
+              "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-order-vs-cook",
+        "moduleId": "problem-motivation",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：点单不等于出菜",
+        "markdown": "可以把前端和后端想成餐厅的前台与后厨：前台收下单子就立刻去接待下一位客人，后厨按自己的节奏逐张做菜。顾客拿到小票并不代表菜已经做好，只是代表“订单已经进入队列”。\n\n这个类比的边界也很重要：如果第二道菜要用到第一道菜的半成品，后厨就必须等前一道完成，不能因为订单已经排上就同时开做。异步缩短的是“等待”的时间，不是“先后依赖”的约束。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-parallel-background"
+          ]
+        }
+      },
+      {
+        "id": "textbook-frontend-backend-queue",
+        "moduleId": "frontend-backend-model",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材机制：前端入队、后端执行",
+        "markdown": "PyTorch 有一个用于与用户直接交互的前端（例如 Python），还有一个由系统执行计算的后端。无论前端使用 Python 还是 C++，程序执行主要发生在 C++ 实现的后端：前端语言发出的操作被传递到后端，后端管理自己的线程，不断收集并执行排队的任务。\n\n要让这套机制正确工作，后端必须跟踪计算图中各个步骤之间的依赖关系，因此相互依赖的操作不可能并行化。教材的例子是：\n\n```python\nx = torch.ones((1, 2), device=device)\ny = torch.ones((1, 2), device=device)\nz = x * y + 2\nz\n```\n\n前端线程执行前三条语句时，只是把任务返回给后端队列；当需要打印最后一行结果时，前端线程会等待 C++ 后端线程完成变量 z 的计算。这个设计的好处是 Python 前端不必执行实际计算，因此 Python 的性能对程序整体性能几乎没有影响。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "计算性能",
+                "异步计算"
+              ],
+              "lineStart": 21466,
+              "lineEnd": 21641,
+              "assetRefs": [
+                "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+                "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+                "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+              ],
+              "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dependency-chain",
+        "moduleId": "frontend-backend-model",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：把 z = x * y + 2 拆成依赖链",
+        "markdown": "把上面的代码看成后端队列中的一串任务与依赖：创建 x 和创建 y 互不依赖；乘法任务同时依赖 x 和 y；加法任务依赖乘法的结果；打印 z 又依赖加法。后端只能在某个任务的前驱全部完成后才真正执行它。\n\n于是“队列里有四个任务”和“它们能同时跑”是两件事：队列保证了顺序提交，依赖关系决定了哪些阶段可以重叠。前端打印 z 时会停下来等待，这正是后面要讨论的同步点的雏形。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-frontend-backend-queue"
+          ]
+        }
+      },
+      {
+        "id": "textbook-benchmark-sync",
+        "moduleId": "timing-and-synchronization",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材实验：矩阵乘法基准与同步",
+        "markdown": "教材用一个热身实验对比 NumPy 与 PyTorch：在 CPU 上用 NumPy 生成随机矩阵并相乘，再在 GPU 上用 PyTorch 张量做同样的事，各自循环 10 次、矩阵大小为 $1000 \\times 1000$，测得的输出分别约为 `numpy: 1.0704 sec` 与 `torch: 0.0013 sec`。\n\nPyTorch 快几个数量级，一部分来自 GPU 本身更快，但巨大的时间差距说明还有别的原因：默认情况下 GPU 操作在 PyTorch 中是异步的，前端把任务排进队列后就返回了。\n\n只要在循环末尾加上 `torch.cuda.synchronize(device)` 强制 PyTorch 在返回之前完成所有计算，就能看到真实情况——开销变成了后端执行计算的时间，而不再只是前端“下单”的时间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "计算性能",
+                "异步计算"
+              ],
+              "lineStart": 21466,
+              "lineEnd": 21641,
+              "assetRefs": [
+                "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+                "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+                "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+              ],
+              "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-two-timings",
+        "moduleId": "timing-and-synchronization",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：两种计时口径",
+        "markdown": "同一个循环可以量出两种完全不同的时间。\n\n- **入队口径**：只计前端提交任务的时间，统计到的是 Python 循环本身的开销，GPU 还在后台忙碌。\n- **完成口径**：在循环结束后同步，等队列清空再停表，统计到的是整批计算的端到端时间。\n\n对照基准时，如果不说明用的是哪种口径，1.0704 秒与 0.0013 秒这样的数字就不可比较。异步不改变计算量，它改变的是“什么时候开始等”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-benchmark-sync"
+          ]
+        }
+      },
+      {
+        "id": "model-async-misconceptions",
+        "moduleId": "timing-and-synchronization",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：两个常见误解",
+        "markdown": "**误解一：异步就是并行执行所有任务。** 纠正：后端必须跟踪计算图的依赖关系，相互依赖的操作不能并行；异步只让前端不必逐个等待，能在依赖允许的范围内重叠执行。\n\n**误解二：不调用同步也能测出 GPU 的真实算力。** 纠正：不停表于同步点时，测到的主要是入队开销。教材的对比实验正是通过补充 `torch.cuda.synchronize(device)` 才暴露了“计算由后端执行、前端把控制权交回 Python”这一事实。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-frontend-backend-queue",
+            "textbook-benchmark-sync"
+          ]
+        }
+      },
+      {
+        "id": "textbook-three-stage-cost",
+        "moduleId": "timing-and-synchronization",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材模型：三阶段耗时对比",
+        "markdown": "教材把前端线程与后端线程的交互概括为三个阶段：\n\n1. 前端命令后端把计算任务 $y = x + 1$ 插入队列，耗时 $t_1$；\n2. 后端从队列接收任务并执行，耗时 $t_2$；\n3. 后端把计算结果返回前端，耗时 $t_3$。\n\n若计算 $n$ 次且每次都等待返回，总时间约为\n\n$$T_{\\text{serial}} \\approx n(t_1 + t_2 + t_3)$$\n\n若采用异步编程，前端不必等待每次返回，总时间可降到\n\n$$T_{\\text{async}} \\approx t_1 + n t_2 + t_3$$\n\n教材给出的成立条件是 $n t_2 > (n-1) t_1$，即后端执行足够慢，前端能持续把队列喂满。可节省的时间约为 $(n-1)(t_1 + t_3)$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "计算性能",
+                "异步计算"
+              ],
+              "lineStart": 21466,
+              "lineEnd": 21641,
+              "assetRefs": [
+                "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+                "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+                "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+              ],
+              "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-speedup-estimate",
+        "moduleId": "timing-and-synchronization",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：代入一组示例参数",
+        "markdown": "取一组仅为演示的示例值：$t_1 = 20\\,\\mu\\text{s}$，$t_2 = 400\\,\\mu\\text{s}$，$t_3 = 10\\,\\mu\\text{s}$，$n = 10000$。\n\n串行总时间约为 $10000 \\times 430\\,\\mu\\text{s} = 4.3\\,\\text{s}$；异步总时间约为 $20\\,\\mu\\text{s} + 10000 \\times 400\\,\\mu\\text{s} + 10\\,\\mu\\text{s} \\approx 4.0\\,\\text{s}$。省下的大约 $0.3\\,\\text{s}$ 恰好接近 $(n-1)(t_1 + t_3)$。\n\n这个算例的结论比数字更重要：异步节省的是每次往返的固定开销，而不是 $t_2$ 本身。若单次计算很小而往返开销很大，收益明显；若单次计算极大、往返几乎可以忽略，加速比就趋近于 1，此时更该关注计算本身与设备利用率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-stage-cost"
+          ]
+        }
+      },
+      {
+        "id": "textbook-queue-overfill",
+        "moduleId": "practice-guideline",
+        "depth": "core",
+        "kind": "warning",
+        "title": "教材提醒：队列过载与同步建议",
+        "markdown": "教材在小结中肯定异步带来的灵活前端，同时给出明确的警告：过度填充任务队列可能会导致内存消耗过多，建议对每个小批量进行同步，以保持前端和后端大致同步。\n\n此外，芯片供应商提供了复杂的性能分析工具，可以获得对深度学习效率更精确的洞察；需要精确定位瓶颈时应使用这些工具，而不是只看前端循环的墙钟时间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "计算性能",
+                "异步计算"
+              ],
+              "lineStart": 21466,
+              "lineEnd": 21641,
+              "assetRefs": [
+                "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+                "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+                "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+              ],
+              "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-synchronize-api",
+        "moduleId": "practice-guideline",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材说明：synchronize 的语义",
+        "markdown": "教材在自动并行的实验准备中提到：`torch.cuda.synchronize()` 会等待一个 CUDA 设备上所有流中的所有核心计算完成；它的 `device` 参数指定需要同步的设备，若为 `None`（默认值）则使用 `current_device()` 找到的当前设备。\n\n这说明同步是一个设备级的“清空并等待”动作，而不是只等某一条语句。放置同步点时要清楚它在等的是整个设备上的排队工作。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000097"
+              ],
+              "headingPath": [
+                "计算性能",
+                "异步计算"
+              ],
+              "lineStart": 21466,
+              "lineEnd": 21641,
+              "assetRefs": [
+                "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+                "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+                "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+              ],
+              "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sync-checklist",
+        "moduleId": "practice-guideline",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "模型补充：什么时候必须同步",
+        "markdown": "把上面的机制落到可执行的操作上，可以按下面的检查表决策：\n\n1. **需要读取结果时**：打印张量、转成 NumPy、写日志或做断言之前，先同步，否则可能拿到尚未算完的数据或只看到排队状态。\n2. **测量性能时**：在计时循环之外同步一次，并先预热设备，避免把首次初始化的开销算进结果。\n3. **训练循环中**：不要每个小操作都同步，否则前端退化为串行等待；按教材建议以每个小批量为粒度同步，作为队列的节流阀。\n4. **排查显存增长时**：检查是否长时间只入队不消费，导致排队任务与其中间结果不断堆积。\n\n判断标准只有一条：这次读取是否依赖后端尚未完成的结果。不依赖就不要付出同步的代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-queue-overfill",
+            "textbook-synchronize-api"
+          ]
+        }
+      },
+      {
+        "id": "model-timing-check",
+        "moduleId": "checkpoint-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：计时与同步练习",
+        "markdown": "某程序要在 GPU 上执行 $n = 5000$ 次小算子，测得每轮入队 $t_1 = 30\\,\\mu\\text{s}$、执行 $t_2 = 200\\,\\mu\\text{s}$、返回 $t_3 = 20\\,\\mu\\text{s}$。\n\n1. 用教材的三阶段公式估算串行与异步的总耗时，并说明可节省的时间来自哪一项。\n2. 如果把计时循环改为不调用同步函数，测得的数字更接近哪个阶段的时间？为什么它不能代表程序真正完成计算的时间？\n3. 训练脚本中连续 200 个批次都没有同步，显存持续上涨，最可能的原因是什么？应如何调整同步粒度？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-three-stage-cost",
+            "model-sync-checklist"
+          ]
+        }
+      },
+      {
+        "id": "model-next-parallelism",
+        "moduleId": "checkpoint-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：从异步走向自动并行",
+        "markdown": "本节的要点可以压缩成三句话：前端只负责把任务排进队列，后端按依赖执行；同步点是“等结果”的地方，它决定了你测到的是什么时间；队列不能无限堆积，需要按小批量节流。\n\n异步解决的是单条指令流上的时间重叠。当一个程序真正拥有多个设备、多个互不依赖的子图时，谁来根据计算图决定哪些任务可以同时放到不同设备上？这正是下一节“自动并行”要回答的问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-sync-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "timing-estimate-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-timing-check",
+        "moduleId": "checkpoint-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "reason-about-timing",
+          "apply-sync-policy"
+        ],
+        "learningPurpose": "检查学习者能否用三阶段公式解释计时结果，并把队列积压问题对应到具体的同步策略。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-three-stage-cost",
+            "model-speedup-estimate",
+            "textbook-queue-overfill",
+            "model-sync-checklist"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "n": 5000,
+          "t1Us": 30,
+          "t2Us": 200,
+          "t3Us": 20
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别用串行公式 $n(t_1+t_2+t_3)$ 与异步公式 $t_1+n t_2+t_3$ 估算总耗时，并写出为什么训练循环应以小批量为粒度同步。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算性能",
+  "clusterId": "chapter-12",
+  "clusterIds": [
+    "chapter-12"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000097"
+      ],
+      "headingPath": [
+        "计算性能",
+        "异步计算"
+      ],
+      "lineStart": 21466,
+      "lineEnd": 21641,
+      "assetRefs": [
+        "parts/part-0006/images/a6492811972dbd2dc85967577de2fe3f4ca0f85f995e877bb45813660cef8e0e.jpg",
+        "parts/part-0006/images/c12fa31313db22d32c07e6ec2e7083be8d8d5276debd6c94b52b4c1d4c2d732e.jpg",
+        "parts/part-0006/images/82cb23e5edd48d9396bbfdb96de05302837baece1c683494e7382d33e866f356.jpg"
+      ],
+      "excerptSha256": "e4348b0759583302c3126d7fe4c2303f71d5a93b435ba59135ab35ebd8ae8daf"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3342,
+    1030
+  ],
+  "scale": 0.93
+}

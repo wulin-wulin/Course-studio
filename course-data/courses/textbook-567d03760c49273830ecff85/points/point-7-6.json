@@ -1,0 +1,764 @@
+{
+  "id": "point-7-6",
+  "title": "残差网络（ResNet）",
+  "shortSummary": "介绍残差连接如何缓解深层网络的退化问题，使训练极深网络成为可能。",
+  "keyTerms": [
+    "ResNet",
+    "残差连接",
+    "退化问题",
+    "跳跃连接"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-7-2",
+    "point-7-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-architecture",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的函数类论证、残差块结构与 ResNet-18 配置，围绕可迁移目标补充梯度路径解释、形状推算规则与过拟合辨析。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-degradation",
+          "text": "解释深层网络的退化问题，并说明嵌套函数类为何能避免“加深反而更差”。"
+        },
+        {
+          "id": "explain-residual",
+          "text": "说明残差块如何用跨层相加学习残差映射 $f(\\mathbf{x}) - \\mathbf{x}$ 及其形状约束。"
+        },
+        {
+          "id": "apply-projection",
+          "text": "在通道数或分辨率变化时选择 $1\\times1$ 投影并推算残差块的输出形状。"
+        },
+        {
+          "id": "assemble-resnet",
+          "text": "描述 ResNet-18 的模块组成、通道翻倍与下采样规律，并复算总层数。"
+        },
+        {
+          "id": "evaluate-limits",
+          "text": "评估残差连接的收益与代价，区分退化问题与过拟合。"
+        }
+      ],
+      "misconceptions": [
+        "认为网络越深性能一定越好，忽略非嵌套函数类下更深模型可能更差。",
+        "把深层网络训练误差升高直接归因于过拟合，实际这是退化问题，过拟合对应的是验证误差回升。",
+        "认为跳跃连接本身带有可训练参数，恒等映射通路不含参数，只有 $1\\times1$ 投影才会引入卷积参数。",
+        "认为输入是加在最后一个 ReLU 之后，实际是加在最后一个 ReLU 之前。"
+      ],
+      "modules": [
+        {
+          "id": "why-deeper-degrades",
+          "title": "为什么加深会退化",
+          "role": "motivation",
+          "description": "从函数类嵌套关系说明加深不必然带来更好的近似，并澄清退化与过拟合的区别。",
+          "outcomeRefs": [
+            "explain-degradation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "residual-block",
+          "title": "残差块与残差映射",
+          "role": "mechanism",
+          "description": "拆解残差块的组成、跨层相加位置与残差映射的优化动机。",
+          "outcomeRefs": [
+            "explain-residual"
+          ],
+          "order": 1
+        },
+        {
+          "id": "residual-shape",
+          "title": "形状匹配与 1×1 投影",
+          "role": "worked-example",
+          "description": "用教材示例推导通道数与分辨率变化时的投影需求与输出形状。",
+          "outcomeRefs": [
+            "apply-projection"
+          ],
+          "order": 2
+        },
+        {
+          "id": "resnet-architecture",
+          "title": "ResNet 整体架构与层数",
+          "role": "architecture",
+          "description": "组装 ResNet-18 的主干、四个残差模块与分类头，并核对层数命名。",
+          "outcomeRefs": [
+            "assemble-resnet"
+          ],
+          "order": 3
+        },
+        {
+          "id": "shape-and-training",
+          "title": "特征形状变化与训练表现",
+          "role": "evaluation",
+          "description": "追踪前向形状变化，解读 Fashion-MNIST 训练结果并辨析可优化性与泛化。",
+          "outcomeRefs": [
+            "evaluate-limits"
+          ],
+          "order": 4
+        },
+        {
+          "id": "limits-and-transfer",
+          "title": "小结、边界与迁移",
+          "role": "transfer",
+          "description": "概括残差网络的核心结论，分析其代价与向 DenseNet 的过渡。",
+          "outcomeRefs": [
+            "evaluate-limits"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-degradation",
+          "explain-residual",
+          "apply-projection",
+          "assemble-resnet",
+          "evaluate-limits"
+        ],
+        "method": "完成一次 $1\\times1$ 投影的形状推算与一次 ResNet-18 层数统计，并说明残差连接改善的是可优化性而非泛化。",
+        "successCriteria": [
+          "能写出残差块的映射形式并说明残差项的含义",
+          "能对给定通道数与步幅推出残差块的输出形状",
+          "能区分退化问题与过拟合，并说明各自的观察指标"
+        ],
+        "summaryBlockId": "resnet-summary",
+        "nextPointId": "point-7-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "function-class-problem",
+        "kind": "explanation",
+        "title": "函数类与近似能力",
+        "moduleId": "why-deeper-degrades",
+        "depth": "core",
+        "markdown": "训练深层网络时，我们关心的不只是模型能表示多少函数，还要看它能多接近真正想要的函数。设某类网络架构记为 $\\mathcal{F}$，它包含网络结构和学习率等超参数设置，对每个 $f \\in \\mathcal{F}$ 都存在一组可通过训练得到的参数。若真实目标函数为 $f^*$，我们实际能做的是在 $\\mathcal{F}$ 内求最优近似：\n\n$$f_{\\mathcal{F}}^* := \\underset{f}{\\operatorname{argmin}} L(\\mathbf{X}, \\mathbf{y}, f) \\quad \\text{subject to } f \\in \\mathcal{F}.$$\n\n想让结果更接近 $f^*$，直觉是换一个更强大的架构 $\\mathcal{F}'$。但当 $\\mathcal{F}$ 不是 $\\mathcal{F}'$ 的子集，也就是面对非嵌套函数类时，没有任何保证：教材图 7.6.1 左侧显示，复杂度从 $\\mathcal{F}_1$ 递增到 $\\mathcal{F}_6$ 时，$\\mathcal{F}_3$ 已比 $\\mathcal{F}_1$ 更接近真函数，$\\mathcal{F}_6$ 却反而更远。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "degradation-not-overfit",
+        "kind": "misconception",
+        "title": "退化问题不等于过拟合",
+        "moduleId": "why-deeper-degrades",
+        "depth": "support",
+        "markdown": "这种“加深反而更差”的现象不适合用容量不足或过拟合来解释。退化问题指的是：在训练集上，更深的网络本应至少不劣于浅层网络，却报告了更高的训练误差——问题出在优化与架构包含关系上，而不是模型太大记住了训练集。判断时可以看训练误差曲线：过拟合表现为训练误差继续下降而验证误差回升，退化则表现为训练误差本身就比浅层模型更高。教材用函数类嵌套的论证正是为这种情况准备的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "function-class-problem"
+          ]
+        }
+      },
+      {
+        "id": "identity-layers",
+        "kind": "explanation",
+        "title": "嵌套函数类与恒等映射",
+        "moduleId": "why-deeper-degrades",
+        "depth": "core",
+        "markdown": "由此得到一条设计原则：只有当更复杂的函数类包含较小的函数类时，加深才有性能保证。对深度神经网络，一种可行做法是让新添加的层学成恒等映射 $f(\\mathbf{x}) = \\mathbf{x}$：这样新模型与原模型同样有效，而新模型还可能找到更优解来拟合训练集，于是添加层至少不会让训练误差变差。残差网络（ResNet）沿着这一思路提出（He et al., 2016）：核心思想是让每个附加层都更容易地把原始函数包含为自身元素之一，并据此设计了残差块（residual block）。该模型在 2015 年 ImageNet 大规模视觉识别挑战赛中夺冠，并深刻影响了后续深层网络的设计。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "residual-idea",
+        "kind": "explanation",
+        "title": "为什么学残差比学恒等映射容易",
+        "moduleId": "residual-block",
+        "depth": "support",
+        "markdown": "把“让新层学成恒等映射”翻译成优化问题，差别就很明显：若某一层要直接拟合 $f(\\mathbf{x})$，逼近恒等映射意味着卷积层的权重必须恰好学成一组使复合变换等于输入的值；若改为拟合残差 $f(\\mathbf{x}) - \\mathbf{x}$，逼近恒等映射只需让残差分支输出接近 $0$，把权重和偏置压到 $0$ 附近即可。后者是一个“什么都不做”的平凡解，优化器更容易达到，这正是教材说残差映射“往往更容易优化”的直观原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "identity-layers",
+            "function-class-problem"
+          ]
+        }
+      },
+      {
+        "id": "residual-mapping",
+        "kind": "mechanism",
+        "title": "普通块与残差块要拟合的对象",
+        "moduleId": "residual-block",
+        "depth": "core",
+        "markdown": "把视角收缩到一个局部：设输入为 $\\mathbf{x}$，希望学出的理想映射为 $f(\\mathbf{x})$，也就是图中上方激活函数的输入。普通块（教材图 7.6.2 左）要虚线框内的层直接拟合 $f(\\mathbf{x})$；残差块（右）则让虚线框内拟合残差映射 $f(\\mathbf{x}) - \\mathbf{x}$。教材指出，若理想映射就是恒等映射，只需把框内上方加权运算（如仿射）的权重和偏置设成 $0$，输出即为 $\\mathbf{x}$；当理想映射极接近恒等映射时，残差分支也更容易捕捉这点细微波动。这就是“残差”的含义：网络学的不是完整映射，而是相对输入的改变量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "residual-block-structure",
+        "kind": "mechanism",
+        "title": "残差块的组成",
+        "moduleId": "residual-block",
+        "depth": "core",
+        "markdown": "ResNet 沿用 VGG 完整的 $3\\times3$ 卷积层设计。一个残差块里首先有 2 个输出通道数相同的 $3\\times3$ 卷积层，每个卷积层后接一个批量规范化层和 ReLU 激活函数；随后通过跨层数据通路跳过这 2 个卷积运算，把输入直接加到最后一个 ReLU 之前。这个加法要求两个卷积层的输出与输入形状相同。若想改变通道数，就需要引入一个额外的 $1\\times1$ 卷积层，把输入变换成需要的形状后再相加。跨层通路的意义是让输入更快地向前传播。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "residual-add-formula",
+        "kind": "formula",
+        "title": "残差映射的相加形式",
+        "moduleId": "residual-block",
+        "depth": "core",
+        "markdown": "把残差块写成映射形式，ResNet 把目标函数分解为恒等项与残差项：\n\n$$f(\\mathbf{x}) = \\mathbf{x} + g(\\mathbf{x}).$$\n\n网络主体只需学习非线性项 $g(\\mathbf{x}) = f(\\mathbf{x}) - \\mathbf{x}$，线性的 $\\mathbf{x}$ 由跨层连接直接送入。教材在引出 DenseNet 时正是用这个分解对比两种跨层设计：ResNet 对跨层信息做相加，DenseNet 则对它们做连结。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "skip-gradient-path",
+        "kind": "explanation",
+        "title": "恒等项为梯度提供直通路径",
+        "moduleId": "residual-block",
+        "depth": "support",
+        "markdown": "这个相加形式也说明了为什么深网络更容易训练。对 $f(\\mathbf{x}) = \\mathbf{x} + g(\\mathbf{x})$ 求导得到\n\n$$\\frac{\\partial f}{\\partial \\mathbf{x}} = \\mathbf{I} + \\frac{\\partial g}{\\partial \\mathbf{x}}.$$\n\n反向传播时，误差信号除了经过残差分支的梯度项，还能沿恒等项直接回传。因此即使 $g$ 的梯度很小，来自深层的梯度也不会被连续相乘的权重完全压没，这与教材所说“输入可通过跨层数据线路更快地向前传播”是同一件事的两个角度。这里只是解释优化路径，并不改变前向计算的定义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "residual-add-formula",
+            "residual-block-structure"
+          ]
+        }
+      },
+      {
+        "id": "projection-shortcut",
+        "kind": "procedure",
+        "title": "用 1×1 卷积做投影",
+        "moduleId": "residual-shape",
+        "depth": "core",
+        "markdown": "当输入与输出形状不一致时，加法无法直接进行。教材给出的处理方式是用 $1\\times1$ 卷积做投影：`Residual` 块在 `use_1x1conv=False` 时不加投影，直接把输入加到卷积输出上；在 `use_1x1conv=True` 时先经过一个核为 $1\\times1$、步幅为 `strides` 的卷积，把输入变换到与主分支相同的通道数和分辨率，再执行相加。前向顺序是：第一个 $3\\times3$ 卷积接批量规范化与 ReLU，第二个 $3\\times3$ 卷积接批量规范化，完成投影后做 `Y += X`，最后再经过一次 ReLU。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "block-shape-walkthrough",
+        "kind": "worked-example",
+        "title": "两个形状示例",
+        "moduleId": "residual-shape",
+        "depth": "core",
+        "markdown": "教材用两个例子验证形状。输入 `X = torch.rand(4, 3, 6, 6)` 送入 `Residual(3, 3)`，输出仍是 `torch.Size([4, 3, 6, 6])`，此时输入可以直接相加。改用 `Residual(3, 6, use_1x1conv=True, strides=2)`，输出变成 `torch.Size([4, 6, 3, 3])`：通道数从 3 翻倍到 6，高宽各减半，这正是 $1\\times1$ 投影加步幅 2 的效果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "projection-shape-rule",
+        "kind": "note",
+        "title": "可套用的形状规则",
+        "moduleId": "residual-shape",
+        "depth": "support",
+        "markdown": "可以把上面两个例子压缩成三条可套用的规则：\n\n- 块内两个 $3\\times3$ 卷积使用填充 1，空间尺寸只由 `strides` 决定：`strides=1` 保持不变，`strides=2` 使高宽减半。\n- 输出通道数恒等于 `num_channels`，与输入通道数无关。\n- 只有输入与输出形状不一致时才需要 $1\\times1$ 投影，且它的步幅必须与主分支一致，否则 `Y += X` 会因形状不匹配报错。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "projection-shortcut",
+            "block-shape-walkthrough"
+          ]
+        }
+      },
+      {
+        "id": "resnet-backbone",
+        "kind": "procedure",
+        "title": "ResNet 主干与四个残差模块",
+        "moduleId": "resnet-architecture",
+        "depth": "core",
+        "markdown": "ResNet 的前两层跟 GoogLeNet 一样：在输出通道数为 64、步幅为 2 的 $7\\times7$ 卷积层后，接步幅为 2 的 $3\\times3$ 最大汇聚层；不同之处在于 ResNet 的每个卷积层后都增加了批量规范化层。之后不再使用 Inception 块，而是用 4 个由残差块组成的模块，每个模块包含若干个输出通道数相同的残差块。第一个模块的通道数同输入通道数一致，并且由于前面已经用过步幅 2 的最大汇聚层，无须再减小高宽；之后的每个模块都在第一个残差块里把上一模块的通道数翻倍，并将高宽减半。最后接全局平均汇聚层和全连接层输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "resnet18-layers",
+        "kind": "note",
+        "title": "ResNet-18 的层数",
+        "moduleId": "resnet-architecture",
+        "depth": "core",
+        "markdown": "按这种配置，每个模块有 4 个卷积层（不包括恒等映射的 $1\\times1$ 卷积层），加上第一个 $7\\times7$ 卷积层和最后一个全连接层，共 18 层，因此该模型通常被称为 ResNet-18。通过配置不同的通道数和模块里的残差块数可以得到不同深度的变体，例如含 152 层的 ResNet-152。教材指出，ResNet 的主体架构虽然与 GoogLeNet 类似，但更简单、修改也更方便，这些因素共同促成了它的快速流行。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "layer-count-recount",
+        "kind": "worked-example",
+        "title": "把 18 层拆开数一遍",
+        "moduleId": "resnet-architecture",
+        "depth": "support",
+        "markdown": "把 18 层拆开数一遍可以确认这个命名：$1$ 个 $7\\times7$ 卷积层 $+$ $4$ 个模块 $\\times$ 每模块 $4$ 个 $3\\times3$ 卷积层 $+$ $1$ 个全连接层 $= 1 + 16 + 1 = 18$。要注意 $1\\times1$ 投影卷积不计入这个层数，批量规范化和 ReLU 也不单独计层；这也解释了为什么想得到更深模型时，只需增加模块内的残差块数量，而不必改动块的基本结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "resnet18-layers",
+            "resnet-backbone"
+          ]
+        }
+      },
+      {
+        "id": "forward-shape-trace",
+        "kind": "table",
+        "title": "前向传播中的形状变化",
+        "moduleId": "shape-and-training",
+        "depth": "core",
+        "markdown": "教材用输入 `X = torch.rand(size=(1, 1, 224, 224))` 逐层观察形状变化，可以看出“分辨率降低、通道数增加”的整体规律：\n\n| 阶段 | 输出形状 |\n|---|---|\n| 第一个卷积模块 | (1, 64, 56, 56) |\n| 第一个残差模块 | (1, 64, 56, 56) |\n| 第二个残差模块 | (1, 128, 28, 28) |\n| 第三个残差模块 | (1, 256, 14, 14) |\n| 第四个残差模块 | (1, 512, 7, 7) |\n| 全局平均汇聚 | (1, 512, 1, 1) |\n| 展平与全连接 | (1, 512) 后接 (1, 10) |\n\n直到全局平均汇聚层把所有特征聚集起来，空间分辨率一路下降、通道数一路上升。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "fashion-mnist-run",
+        "kind": "example",
+        "title": "Fashion-MNIST 上的训练结果",
+        "moduleId": "shape-and-training",
+        "depth": "support",
+        "markdown": "教材在 Fashion-MNIST 上训练这个 ResNet：学习率 0.05、批大小 256、训练 10 个轮次，并把输入放大到 $96\\times96$。一次参考运行的输出是 loss 0.012、训练准确率 0.997、测试准确率 0.893，速度约每秒 5032.7 个样本（cuda:0）。这些数字只说明在该设置下模型能很好地拟合训练集，同时测试准确率明显低于训练准确率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "optimization-not-capacity",
+        "kind": "explanation",
+        "title": "残差连接改善的是可优化性",
+        "moduleId": "shape-and-training",
+        "depth": "support",
+        "markdown": "把训练结果和退化问题对照着看，才能分清两件事。残差连接首先改善的是可优化性：它让深层网络不至于在训练集上就先输给浅层网络；而训练准确率 0.997 与测试准确率 0.893 之间的差距说明模型已经在记忆训练集，这是过拟合，需要正则化、数据增广或更多数据来解决，并不是残差连接能消除的问题。换句话说，ResNet 解决“能不能训得动”，不解决“泛化好不好”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "fashion-mnist-run",
+            "forward-shape-trace"
+          ]
+        }
+      },
+      {
+        "id": "resnet-summary",
+        "kind": "summary",
+        "title": "教材小结",
+        "moduleId": "limits-and-transfer",
+        "depth": "core",
+        "markdown": "教材对残差网络的总结可以归纳为四点：学习嵌套函数是训练神经网络的理想情况，在深层网络中让新增层学成恒等映射相对容易；残差映射可以更容易地学习同一函数，例如把权重层中的参数近似为零；利用残差块可以训练出有效的深层神经网络，因为输入能通过层间的残余连接更快地向前传播；ResNet 对随后的深层神经网络设计产生了深远影响。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "残差网络（ResNet）"
+              ],
+              "lineStart": 11416,
+              "lineEnd": 11720,
+              "assetRefs": [
+                "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+                "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+                "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+                "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+                "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+                "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+                "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+              ],
+              "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "residual-limits",
+        "kind": "comparison",
+        "title": "残差连接的代价与后续演变",
+        "moduleId": "limits-and-transfer",
+        "depth": "advanced",
+        "markdown": "残差连接并不是没有代价。为了让 $\\mathbf{x}$ 与卷积输出相加，跨层通路需要保留输入激活，显存占用随深度增加；换通道或降分辨率时还要额外的 $1\\times1$ 投影参数。工程上常见的改进包括用 bottleneck 结构降低深层模型的计算量，以及把“卷积—批量规范化—激活”的顺序调整为“批量规范化—激活—卷积”。如果把相加换成连结，就得到下一个知识点要讲的 DenseNet：它让每一层复用前面所有层的特征，代价是特征通道快速膨胀。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "resnet-summary",
+            "residual-block-structure"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "projection-shape-check",
+        "type": "formative-check",
+        "title": "投影与步幅的形状推算",
+        "anchorBlockId": "projection-shape-rule",
+        "moduleId": "residual-shape",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-projection"
+        ],
+        "learningPurpose": "检查学习者能否把残差块的形状规则迁移到新的通道数与步幅组合。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "projection-shortcut",
+            "block-shape-walkthrough"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "输入为 (4, 3, 28, 28)，若目标输出通道为 6、步幅为 2，残差块需要哪些组件，输出形状是什么？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "输入 (4, 3, 28, 28) 经通道 6、步幅 2 的残差块后输出 (4, 6, 14, 14)；需要 $1\\times1$ 投影把输入通道 3 映射到 6 并同步步幅，否则无法相加。"
+        }
+      },
+      {
+        "id": "layer-count-check",
+        "type": "formative-check",
+        "title": "ResNet-18 层数核对",
+        "anchorBlockId": "layer-count-recount",
+        "moduleId": "resnet-architecture",
+        "depth": "support",
+        "outcomeRefs": [
+          "assemble-resnet"
+        ],
+        "learningPurpose": "确认学习者能按模块与残差块数复算网络总层数。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "resnet18-layers"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "若每个模块放 6 个残差块，按教材的计层方式总层数是多少？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "$1$ 个 $7\\times7$ 卷积 $+$ $4$ 个模块 $\\times$ $6$ 个 $3\\times3$ 卷积 $+$ $1$ 个全连接 $= 1 + 24 + 1 = 26$ 层。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代卷积神经网络",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000056"
+      ],
+      "headingPath": [
+        "现代卷积神经网络",
+        "残差网络（ResNet）"
+      ],
+      "lineStart": 11416,
+      "lineEnd": 11720,
+      "assetRefs": [
+        "parts/part-0003/images/fd02a40a6c350f069cae49bbd454ddfab8af0a38a35dd18b14b40065e4cab678.jpg",
+        "parts/part-0003/images/9805ab6f2b87ee9e90ae345262e817a895ec061ce6803cf4d225847f5f1f936c.jpg",
+        "parts/part-0003/images/ece820ad87fdf3b0520427bd76ca4c50514e9b38ef201fa79b71bdbb571f8bc1.jpg",
+        "parts/part-0003/images/d6e9177805a771b442ceb34eba28e38e9e713027020d41fc1fa7bf642dc36a1e.jpg",
+        "parts/part-0003/images/fc5cec56c147b587c5272ea8baab2220bf2337680f11a014e3df9fddcc8c96f9.jpg",
+        "parts/part-0003/images/e75128fde12c7c848291301e8525d12f3cff3ba25bed04961c28860469833e09.jpg",
+        "parts/part-0004/images/f7671257365cf07d32ef8efb044708f6f71784afd432e51136a7618c78f4b4c7.jpg"
+      ],
+      "excerptSha256": "6b60a9bdce92b6231c3b3d8a0972444816858ac74ac903fe477936a623f02df0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1449,
+    2221
+  ],
+  "scale": 0.98
+}

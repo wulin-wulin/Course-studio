@@ -1,0 +1,520 @@
+{
+  "id": "point-3-6",
+  "title": "softmax回归的从零开始实现",
+  "shortSummary": "手工实现多类分类的批量前向、交叉熵损失、梯度更新与准确率评估流程。",
+  "keyTerms": [
+    "交叉熵",
+    "准确率",
+    "批量",
+    "梯度更新"
+  ],
+  "animationType": "minibatchTrainingLoop",
+  "animationSuggestion": "按时间步展示一个批量的完整训练闭环：分数矩阵经 softmax 得到每行和为 1 的概率，交叉熵定位正确类并给出损失，梯度回传更新权重后损失下降；同时用一条随周期推进的损失与精度曲线显示收敛，并标出随机初始化时精度约 0.1 的起点。",
+  "difficulty": "中等",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-3-2",
+    "point-3-4",
+    "point-3-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "implementation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按教材的从零实现顺序保留代码与数值事实，补足每一步的形状、广播与数值风险说明，最后用检查表收束训练流程。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "trace-pipeline",
+          "text": "按数据读取、参数初始化、前向、损失、评估、参数更新的顺序复述从零实现的训练闭环。"
+        },
+        {
+          "id": "implement-core-ops",
+          "text": "手写 softmax、前向模型与交叉熵损失，并解释 keepdim、广播与索引取概率的作用。"
+        },
+        {
+          "id": "evaluate-training-signals",
+          "text": "用训练损失与训练/测试准确率判断训练是否正常，并说明随机初始化精度接近 0.1 的原因。"
+        }
+      ],
+      "misconceptions": [
+        "认为按定义直接写 exp 与 log 的 softmax 实现一定安全，忽略极大或极小输入造成的上溢与下溢。",
+        "认为可以像交叉熵那样直接对分类精度求梯度来训练模型。"
+      ],
+      "modules": [
+        {
+          "id": "data-and-params",
+          "title": "数据与参数初始化",
+          "role": "setup",
+          "description": "确定批量、展平方式与权重偏置的形状，为前向计算准备参数。",
+          "outcomeRefs": [
+            "trace-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "softmax-forward",
+          "title": "softmax 运算与前向模型",
+          "role": "core-mechanism",
+          "description": "按三步实现 softmax，并用矩阵乘法加偏置完成批量前向。",
+          "outcomeRefs": [
+            "implement-core-ops"
+          ],
+          "order": 1
+        },
+        {
+          "id": "loss-and-accuracy",
+          "title": "交叉熵损失与准确率评估",
+          "role": "core-mechanism",
+          "description": "用索引取出正确类概率计算交叉熵，再用 argmax 统计正确数量。",
+          "outcomeRefs": [
+            "implement-core-ops",
+            "evaluate-training-signals"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-loop",
+          "title": "训练循环与参数更新",
+          "role": "procedure",
+          "description": "把前向、损失、反向和更新组织成可复用的训练周期与训练函数。",
+          "outcomeRefs": [
+            "trace-pipeline",
+            "evaluate-training-signals"
+          ],
+          "order": 3
+        },
+        {
+          "id": "predict-and-check",
+          "title": "预测、检查与边界",
+          "role": "check",
+          "description": "用训练好的模型做硬预测，并用检查表和练习复核整条流程。",
+          "outcomeRefs": [
+            "evaluate-training-signals"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "trace-pipeline",
+          "implement-core-ops",
+          "evaluate-training-signals"
+        ],
+        "method": "完成检查练习：手算一组 softmax 与交叉熵，并说明训练早期精度与损失应出现的量级。",
+        "successCriteria": [
+          "能按顺序写出从零实现所需的六个步骤",
+          "能解释 keepdim 与广播为何让每行概率归一化",
+          "能指出直接实现的两个数值风险并说出对应后果"
+        ],
+        "exerciseBlockId": "model-check-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-3-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-data-params",
+        "moduleId": "data-and-params",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：读取数据并初始化参数",
+        "markdown": "本节沿用 Fashion-MNIST，把批量大小设为 256。每张 $28\\times 28$ 图像展平为长度 784 的向量；因为有 10 个类别，输出维度就是 10，因此权重构成 $784\\times 10$ 的矩阵，偏置构成长度为 10 的向量。权重用正态分布初始化，偏置初始化为 0，并为两者开启梯度。\n\n```python\nbatch_size = 256\ntrain_iter, test_iter = d2l.load_data_fashion_mnist(batch_size)\n\nnum_inputs = 784\nnum_outputs = 10\nW = torch.normal(0, 0.01, size=(num_inputs, num_outputs), requires_grad=True)\nb = torch.zeros(num_outputs, requires_grad=True)\n```\n\n教材同时说明：这里暂时把每个像素位置当作一个特征，图像的空间结构留到后面的章节处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-shapes",
+        "moduleId": "data-and-params",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么参数形状是 784×10",
+        "markdown": "把权重矩阵的每一列看成一个类别的线性打分器：第 $j$ 列与 784 维输入做点积，得到该类的分数；偏置的第 $j$ 项是这个类别自己的偏移。于是前向计算可以理解为“一次矩阵乘法同时算出 10 个类的分数”，而不是逐个类别循环。\n\n展平操作刻意丢弃了像素的二维邻接关系，这正好解释了为什么本节只是 softmax 回归的基线：它没有利用图像的空间结构，后续的卷积网络才会把这一信息重新引入。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-data-params"
+          ]
+        }
+      },
+      {
+        "id": "textbook-softmax-op",
+        "moduleId": "softmax-forward",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：softmax 的三步实现",
+        "markdown": "实现 softmax 分三步：对每个元素求幂；对每一行求和，得到该样本的规范化常数；再用每一行除以自己的常数，使每行概率之和为 1。\n\n$$\\operatorname{softmax}(\\mathbf{X})_{ij}=\\frac{\\exp(\\mathbf{X}_{ij})}{\\sum_k \\exp(\\mathbf{X}_{ik})}$$\n\n```python\ndef softmax(X):\n    X_exp = torch.exp(X)\n    partition = X_exp.sum(1, keepdim=True)\n    return X_exp / partition\n```\n\n教材点明这里的求和必须沿轴 1（同一行内）进行，并用 `keepdim=True` 保留维度以便与分子相除；同时提醒这个按定义写的版本没有防范数值上溢与下溢。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-broadcast-keepdim",
+        "moduleId": "softmax-forward",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：keepdim 与广播如何对齐每一行",
+        "markdown": "批量输入的形状是（样本数, 类别数）。`sum(1, keepdim=True)` 得到形状（样本数, 1），恰好和分子（样本数, 类别数）在列方向上对齐，广播时每一行都被自己的常数相除。若省略 `keepdim`，求和结果变成形状（样本数,），广播方向就不再沿列展开，归一化会作用到错误的轴上。\n\n可以先用一个 $2\\times 3$ 的小张量验证：`X.sum(1, keepdim=True)` 得到 $2\\times 1$ 的列向量，每行元素互不相同，这正是“每个样本一个配分函数”的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-softmax-op"
+          ]
+        }
+      },
+      {
+        "id": "model-numeric-risk",
+        "moduleId": "softmax-forward",
+        "depth": "advanced",
+        "kind": "warning",
+        "title": "模型补充：直接实现的数值风险",
+        "markdown": "教材练习提示算一算 $\\exp(50)$：它约为 $5.18\\times 10^{21}$，在浮点数中很快溢出为 `inf`，于是分子为 `inf`、配分函数也是 `inf`，相除得到 `nan`。相反，绝对值很大的负数求幂会下溢为 0，交叉熵里的 $\\log 0$ 又会变成 `-inf`。\n\n工程上通常先把每行减去该行最大值再求幂（等价于对数求和指数技巧），既不改变 softmax 的结果，又能把指数控制在安全范围；相应的损失函数也应改为数值稳定的写法，而不是独立地先算概率再取对数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-softmax-op"
+          ]
+        }
+      },
+      {
+        "id": "textbook-model-net",
+        "moduleId": "softmax-forward",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：定义前向模型",
+        "markdown": "定义 softmax 之后，模型就是“展平 → 矩阵乘法加偏置 → softmax”的复合：\n\n```python\ndef net(X):\n    return softmax(torch.matmul(X.reshape((-1, W.shape[0])), W) + b)\n```\n\n`reshape((-1, W.shape[0]))` 把一批图像按行展平成 784 维向量，批量大小由 -1 自动推断，因此同一个模型可以处理任意批量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-cross-entropy",
+        "moduleId": "loss-and-accuracy",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：用索引实现交叉熵损失",
+        "markdown": "交叉熵取真实类别预测概率的负对数似然。教材用一次索引取出每个样本正确类别的概率，避免低效的 Python 循环。对 $y=[0,2]$、$\\hat{y}$ 为两行三类概率的例子，索引得到第一个样本第 0 类与第二个样本第 2 类的概率：\n\n```python\ndef cross_entropy(y_hat, y):\n    return -torch.log(y_hat[range(len(y_hat)), y])\n```\n\n示例输出为 `tensor([2.3026, 0.6931])`，正好是 $-\\log 0.1$ 与 $-\\log 0.5$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cross-entropy-intuition",
+        "moduleId": "loss-and-accuracy",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么只惩罚正确类",
+        "markdown": "正确类概率为 1 时 $-\\log 1 = 0$，惩罚最小；概率越接近 0，$-\\log p$ 越迅速增大，于是模型被迫把概率质量集中到正确类别上。由于 softmax 让 10 个类的概率和为 1，压低正确类的代价会自动抬高其他类，因此不需要对错误类单独写惩罚项。\n\n这个损失对每个类别分数都光滑可导，梯度可以直接回传到权重与偏置，这正是它能和自动微分、优化器配合的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-cross-entropy",
+            "textbook-softmax-op"
+          ]
+        }
+      },
+      {
+        "id": "textbook-accuracy",
+        "moduleId": "loss-and-accuracy",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：分类精度与数据集评估",
+        "markdown": "需要硬预测时，取每行概率最大的类别：用 `argmax(axis=1)` 得到预测类别，与真实标签比较（先把数据类型对齐），求和即正确数量；正确数量除以总数就是分类精度。\n\n```python\ndef accuracy(y_hat, y):\n    if len(y_hat.shape) > 1 and y_hat.shape[1] > 1:\n        y_hat = y_hat.argmax(axis=1)\n    cmp = y_hat.type(y.dtype) == y\n    return float(cmp.type(y.dtype).sum())\n```\n\n在数据迭代器上评估时，用 `evaluate_accuracy` 遍历全部批次，借助 `Accumulator(2)` 分别累加正确预测数与预测总数，并在 `torch.no_grad()` 下关闭梯度记录。教材据此指出：随机初始化时精度应接近随机猜测，10 类情形约为 0.1；示例中某次评估得到 0.0625。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-accuracy-not-differentiable",
+        "moduleId": "loss-and-accuracy",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：精度为何只能当指标",
+        "markdown": "精度统计的是 argmax 结果是否相等，是一串 0/1 计数；类别分数稍作连续变化时，只要没有跨过最大值边界，精度完全不变，因此它的梯度几乎处处为 0，无法指导参数更新。\n\n所以训练时最小化交叉熵，评估时观察精度：前者可导、随预测改善而平滑下降，后者直接对应任务目标但不可优化。示例中 0.0625 与理论 0.1 的差距来自单次评估的随机波动，而不说明模型退化。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-accuracy",
+            "textbook-cross-entropy"
+          ]
+        }
+      },
+      {
+        "id": "textbook-training-loop",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：训练周期与训练函数",
+        "markdown": "教材把训练重构为可复用的两个层次。`train_epoch_ch3` 用一个迭代周期遍历全部批次，累积训练损失总和、正确数和样本数；若更新器是框架内置优化器，就走 `zero_grad()`、`l.mean().backward()`、`updater.step()` 分支，否则对求和后的损失反向传播，再把批量大小交给自定义更新器。\n\n```python\nlr = 0.1\ndef updater(batch_size):\n    return d2l.sgd([W, b], lr, batch_size)\n```\n\n外层 `train_ch3` 训练 `num_epochs` 个周期，每个周期后用测试集评估精度并记录曲线，同时用断言检查 `train_loss < 0.5`、训练精度与测试精度都大于 0.7；本节设置 10 个周期，学习率 0.1 与周期数都是可调超参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-updater-two-paths",
+        "moduleId": "training-loop",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：两条更新路径的缩放差异",
+        "markdown": "两条分支的差别在损失如何缩放。内置优化器约定接收按样本平均的损失，用 `l.mean().backward()` 得到平均梯度，批量大小已在内部处理；本节的 `d2l.sgd` 则自己接收 `batch_size` 并在更新时除以它，所以先用 `l.sum().backward()` 得到总梯度。\n\n混用两者会让有效学习率被放大或缩小一个批量的倍数，表现为损失剧烈震荡或几乎不动。切换到内置优化器时，应同时把损失改为 `mean()`，而不是只替换更新函数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-training-loop"
+          ]
+        }
+      },
+      {
+        "id": "textbook-predict",
+        "moduleId": "predict-and-check",
+        "depth": "core",
+        "kind": "application",
+        "title": "教材：用训练好的模型预测",
+        "markdown": "训练完成后，取测试迭代器的第一批图像，分别把真实标签和 `net(X).argmax(axis=1)` 的预测结果映射为文本，再以“真实标签 + 预测标签”为标题展示图像。教材示例中，预测结果与真实标签大多一致，说明模型已学到可用的分类能力。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000023"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的从零开始实现"
+              ],
+              "lineStart": 4414,
+              "lineEnd": 4808,
+              "assetRefs": [
+                "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+                "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+              ],
+              "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check-exercise",
+        "moduleId": "predict-and-check",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查练习：手算一组前向与损失",
+        "markdown": "给定一个 3 类的批量输出分数矩阵，先按行做 softmax，再对标签 $[0, 2]$ 计算交叉熵，最后用 argmax 判断这批样本的精度。\n\n完成后再回答三问：① 若某行分数整体加上同一个常数，softmax 结果是否改变，为什么；② 若正确类概率下溢为 0，交叉熵会得到什么值；③ 训练第 1 个周期时训练损失应接近什么量级（提示：10 类均匀猜测时交叉熵约为 $\\ln 10$）。把结论与教材中 `2.3026`、`0.0625` 两个数值对照，检查自己的理解。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-accuracy",
+            "textbook-training-loop",
+            "textbook-predict"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "predict-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "实现检查表",
+        "markdown": "从零实现 softmax 回归的固定顺序是：读取批量数据 → 展平并初始化 $784\\times 10$ 权重与长度 10 的偏置 → 实现按行归一化的 softmax → 组合前向模型 → 用索引取正确类概率算交叉熵 → 用 argmax 统计精度 → 每个批次前向、求损失、反向、更新参数 → 每个周期评估测试精度 → 用预测样例抽查结果。\n\n每一步都能用一个形状或数值自检：概率每行和为 1、随机初始化精度约 0.1、初始损失约 $\\ln 10$。若其中一项明显偏离，应优先检查归一化轴、损失缩放与更新器的批量约定，而不是先调学习率。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check-exercise",
+            "textbook-training-loop"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "hand-compute-formative-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check-exercise",
+        "moduleId": "predict-and-check",
+        "depth": "support",
+        "outcomeRefs": [
+          "implement-core-ops",
+          "evaluate-training-signals"
+        ],
+        "learningPurpose": "检查学习者能否独立完成一次 softmax、交叉熵与精度的手算，并用数值量级判断训练是否正常。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-softmax-op",
+            "textbook-cross-entropy",
+            "textbook-accuracy"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompts": [
+            "按行计算 3 类分数矩阵的 softmax，并验证每行和为 1",
+            "对标签 [0, 2] 计算交叉熵",
+            "用 argmax 判断该批样本的分类精度"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "取一个 $2\\times 3$ 的分数矩阵，先按行做 softmax，再对标签 $[0,2]$ 计算交叉熵与精度，并写出每一步使用的公式。"
+        }
+      }
+    ]
+  },
+  "subtitle": "线性神经网络",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000023"
+      ],
+      "headingPath": [
+        "线性神经网络",
+        "softmax回归的从零开始实现"
+      ],
+      "lineStart": 4414,
+      "lineEnd": 4808,
+      "assetRefs": [
+        "parts/part-0002/images/9b297925a94bf7b18b41b7384ef84dfef9741ed8f2e031ef3dfd3d0d692a605c.jpg",
+        "parts/part-0002/images/4e75bada45e2302c2b8fd5e788a74b5026cc9df55aa566c7061351f6ceabe4bc.jpg"
+      ],
+      "excerptSha256": "96c3e01d9694e80ab484a47981daf7786de37cd85742714d02a13126693e222d"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2408,
+    3011
+  ],
+  "scale": 0.89
+}

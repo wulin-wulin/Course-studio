@@ -1,0 +1,516 @@
+{
+  "id": "point-2-5",
+  "title": "其他卷积方式",
+  "shortSummary": "介绍转置卷积、空洞卷积、可分离卷积等变体及其适用场景与计算特点。",
+  "keyTerms": [
+    "转置卷积",
+    "空洞卷积",
+    "可分离卷积",
+    "感受野"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-2-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对转置卷积、空洞卷积、分组卷积与深度可分离卷积的定义、公式和边界，围绕统一比较维度和情境化取舍重排讲解顺序，并补充数值算例与练习。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-variant-motivation",
+          "text": "说明为什么在标准卷积之外还需要其他卷积方式。"
+        },
+        {
+          "id": "explain-transposed-conv",
+          "text": "解释转置卷积的构造及其与卷积的形式转置关系，并说明它不是逆运算。"
+        },
+        {
+          "id": "compute-dilated-receptive",
+          "text": "用膨胀率计算空洞卷积的有效卷积核大小，并判断等宽卷积所需的零填充。"
+        },
+        {
+          "id": "compare-efficient-convs",
+          "text": "比较标准卷积、分组卷积与深度可分离卷积的参数量与表示能力取舍。"
+        },
+        {
+          "id": "choose-variant",
+          "text": "针对上采样、语义分割、轻量部署等情境选择合适的卷积方式并说明理由。"
+        }
+      ],
+      "misconceptions": [
+        "把转置卷积当作卷积的逆运算，认为它能精确还原原始输入。",
+        "认为空洞卷积通过增加卷积核参数来扩大感受野，实际上参数量并未增加。",
+        "把深度可分离卷积简单理解为减少卷积核个数，忽略它是空间卷积与通道混合的结构化分解。",
+        "认为深度可分离卷积在任何场景都优于标准卷积，忽视其跨通道交互不足带来的表示能力限制。"
+      ],
+      "modules": [
+        {
+          "id": "why-variants",
+          "title": "标准卷积之外为什么还要变体",
+          "role": "问题导入",
+          "description": "从尺寸、感受野与通道混合三个环节说明变体的来源。",
+          "outcomeRefs": [
+            "explain-variant-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "transposed-conv",
+          "title": "转置卷积：把特征映射回高维",
+          "role": "概念解释",
+          "description": "理解转置卷积的构造、微步卷积实现及其伪影问题。",
+          "outcomeRefs": [
+            "explain-transposed-conv"
+          ],
+          "order": 1
+        },
+        {
+          "id": "dilated-conv",
+          "title": "空洞卷积：不增参数扩大感受野",
+          "role": "定量机理",
+          "description": "用膨胀率计算有效卷积核与等宽零填充。",
+          "outcomeRefs": [
+            "compute-dilated-receptive"
+          ],
+          "order": 2
+        },
+        {
+          "id": "efficient-convs",
+          "title": "分组卷积与深度可分离卷积",
+          "role": "效率分析",
+          "description": "分析通道连接方式与参数分解带来的开销变化。",
+          "outcomeRefs": [
+            "compare-efficient-convs"
+          ],
+          "order": 3
+        },
+        {
+          "id": "compare-and-choose",
+          "title": "统一比较与情境取舍",
+          "role": "比较决策",
+          "description": "在相同维度下比较四类变体并给出选择规则。",
+          "outcomeRefs": [
+            "compare-efficient-convs",
+            "choose-variant"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点衔接",
+          "role": "达成检查",
+          "description": "通过练习检查计算与取舍能力，并衔接到本章总结。",
+          "outcomeRefs": [
+            "compute-dilated-receptive",
+            "choose-variant"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-variant-motivation",
+          "explain-transposed-conv",
+          "compute-dilated-receptive",
+          "compare-efficient-convs",
+          "choose-variant"
+        ],
+        "method": "完成本点的计算与情境选择练习，并说明每个选择所依据的卷积性质。",
+        "successCriteria": [
+          "能算出空洞卷积的有效卷积核与等宽零填充",
+          "能算出标准卷积与深度可分离卷积的参数量之比",
+          "能为给定任务选择变体并指出其主要代价"
+        ],
+        "exerciseBlockId": "model-practice",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-2-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "why-variants",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材导引：为什么需要其他卷积方式",
+        "markdown": "教材在第 5.1.3 节用步长和零填充构造了不同的卷积操作，本节继续介绍现代卷积网络中常见的其他卷积方式。\n\n标准卷积同时承担三件事：改变特征图尺寸、扩大感受野、混合通道信息。一旦任务对其中某一项提出额外要求——例如把低维特征映射回高维、在保持分辨率的同时扩大感受野，或在有限算力下减少参数——就需要专门化的卷积变体。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-variant-map",
+        "moduleId": "why-variants",
+        "depth": "support",
+        "kind": "table",
+        "title": "四类变体各自改变了什么",
+        "markdown": "把后面的内容先放进一张地图：\n\n| 变体 | 主要改变 | 典型目的 |\n|---|---|---|\n| 转置卷积 | 输入输出尺寸的映射方向 | 上采样 |\n| 空洞卷积 | 卷积核元素之间的间距 | 扩大感受野 |\n| 分组卷积 | 通道之间的连接方式 | 降低参数与计算量 |\n| 深度可分离卷积 | 空间卷积与通道混合解耦 | 轻量化 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-transposed",
+        "moduleId": "transposed-conv",
+        "depth": "core",
+        "kind": "definition",
+        "title": "转置卷积的定义与边界",
+        "markdown": "转置卷积要解决的问题是：通常卷积把高维特征映射到低维特征，而有些任务需要把低维特征映射回高维，并且仍希望用“卷积型”的线性算子完成。\n\n教材从仿射变换说明这一构造：若矩阵 $W$ 把 $d$ 维向量映射为 $p$ 维向量（$p<d$），那么把 $W$ 转置就得到低维到高维的映射 $W^{T}$。卷积可以写成稀疏矩阵的仿射变换，其转置对应把卷积核旋转 180 度后的卷积，因此这种算子被称为转置卷积，也常被称为反卷积。\n\n教材特别强调：两个方向的映射只是形式上的转置关系，并不是互逆运算，因此把它叫作反卷积并不恰当。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-microstep",
+        "moduleId": "transposed-conv",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "微步卷积与棋盘伪影",
+        "markdown": "当普通卷积使用步长 $S>1$ 做下采样时，其对应的转置卷积相当于一种“分数步长”的上采样，因此也叫微步卷积。实现时并不会真的使用小于 1 的步长，而是在输入特征之间插入 $S-1$ 个零，再做步长为 1 的普通卷积。\n\n教材也提醒：转置卷积适合上采样，但在生成任务中可能产生棋盘状伪影，因此一些应用改用“先插值上采样，再普通卷积”。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-checkerboard",
+        "moduleId": "transposed-conv",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：伪影从何而来，如何规避",
+        "markdown": "棋盘伪影的来源是输出位置上卷积核覆盖次数不均匀：当卷积核大小不能被步长整除时，相邻输出点被覆盖的次数不同，叠加后形成明暗相间的网格。\n\n实践中有两条常见路线：一是选择能被步长整除的核大小以减轻覆盖不均；二是放弃转置卷积，改用插值（如最近邻或双线性）放大特征图后再接普通卷积，让每一步的空间关系更可控。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-microstep"
+          ]
+        }
+      },
+      {
+        "id": "tb-dilated",
+        "moduleId": "dilated-conv",
+        "depth": "core",
+        "kind": "definition",
+        "title": "空洞卷积：不增加参数地扩大感受野",
+        "markdown": "希望扩大感受野时，常见做法有三种：增大卷积核、堆叠更多层、或在卷积前做汇聚。前两种会增加参数，第三种会丢失信息。\n\n空洞卷积在卷积核每两个元素之间插入 $D-1$ 个空洞（$D$ 为膨胀率），在不增加参数的情况下扩大感受野，特别适合既需要较大感受野又要保持较高空间分辨率的任务，例如语义分割。$D=1$ 时它退化为普通卷积。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dilated-formula",
+        "moduleId": "dilated-conv",
+        "depth": "core",
+        "kind": "formula",
+        "title": "有效卷积核与等宽零填充",
+        "markdown": "设卷积核边长为 $K$、膨胀率为 $D$，有效卷积核边长为\n\n$$K' = K + (K-1)(D-1)$$\n\n例如 $K=3$、$D=2$ 时 $K'=5$。若希望步长为 1 时输出与输入同尺寸（等宽卷积），零填充应取 $(K'-1)/2$，上例为 2。\n\n参数量不随 $D$ 增加，但单个输出点看到的是稀疏采样的邻域，而不是连续的 $K'$ 邻域。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-dilated"
+          ]
+        }
+      },
+      {
+        "id": "tb-group",
+        "moduleId": "efficient-convs",
+        "depth": "core",
+        "kind": "definition",
+        "title": "分组卷积",
+        "markdown": "在标准卷积中，每个输出通道依赖全部输入通道。分组卷积把输入通道划分为若干组，每组只与对应的一部分输出通道相连，从而显著减少参数量和计算量。\n\n教材指出，AlexNet 因两块 GPU 分开计算，实际上已经包含了分组卷积的思想，后续高效网络进一步系统化地使用了它。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-depthwise",
+        "moduleId": "efficient-convs",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "深度可分离卷积的两步分解",
+        "markdown": "深度可分离卷积把标准卷积同时完成的两件事拆开：先做逐通道卷积，对每个输入通道各用一个 $K \\times K$ 卷积核提取通道内部的空间模式；再做逐点卷积，用 $1 \\times 1$ 卷积把各通道的中间特征线性组合成新的输出通道。\n\n设输入大小为 $M \\times N \\times D$、卷积核 $K \\times K$、输出通道数 $P$。标准卷积参数量为 $K^{2}DP$；深度可分离卷积为 $K^{2}D + DP$，两者之比约为 $\\frac{1}{P} + \\frac{1}{K^{2}}$。$K=3$ 且 $P$ 较大时，约降到标准卷积的 1/9 到 1/8。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-limits",
+        "moduleId": "efficient-convs",
+        "depth": "support",
+        "kind": "warning",
+        "title": "教材给出的适用边界",
+        "markdown": "这种分解也带来限制：逐通道阶段不进行跨通道信息交互，因此表示能力通常弱于同规模的标准卷积，更适合对效率要求高的轻量级网络；在算力充足、追求更高精度的场景下，标准卷积仍然常用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000013"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "其他卷积方式"
+              ],
+              "lineStart": 486,
+              "lineEnd": 536,
+              "assetRefs": [],
+              "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-param-example",
+        "moduleId": "efficient-convs",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：参数量之比",
+        "markdown": "取 $K=3$、$D=64$、$P=256$。标准卷积参数为 $9 \\times 64 \\times 256 = 147456$；深度可分离卷积为 $9 \\times 64 + 64 \\times 256 = 576 + 16384 = 16960$，比值约 $0.115$，接近 $1/9$。\n\n节省主要来自逐点卷积用 $DP$ 替代了 $K^{2}DP$ 中的空间维度；当 $P$ 很大时，$1/P$ 趋近于 0，比值下限是 $1/K^{2}$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-depthwise",
+            "tb-limits"
+          ]
+        }
+      },
+      {
+        "id": "model-compare-table",
+        "moduleId": "compare-and-choose",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "用同一组维度比较四类变体",
+        "markdown": "| 维度 | 转置卷积 | 空洞卷积 | 分组卷积 | 深度可分离卷积 |\n|---|---|---|---|---|\n| 改变的量 | 尺寸映射方向 | 核元素间距 | 通道连接 | 空间与通道解耦 |\n| 参数量 | 与普通卷积同量级 | 不增加 | 减少 | 大幅减少 |\n| 输出分辨率 | 升高 | 保持 | 不变 | 不变 |\n| 主要代价 | 可能出现棋盘伪影 | 邻域采样稀疏 | 组间信息不流通 | 表示能力可能下降 |\n| 典型场景 | 生成、上采样 | 语义分割 | 高效骨干 | 移动端轻量网络 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-transposed",
+            "tb-dilated",
+            "tb-group",
+            "tb-depthwise",
+            "tb-limits"
+          ]
+        }
+      },
+      {
+        "id": "model-choose",
+        "moduleId": "compare-and-choose",
+        "depth": "core",
+        "kind": "application",
+        "title": "按任务约束做取舍",
+        "markdown": "选择时先问清楚任务约束：\n\n- 需要把特征图放大（解码器、生成）→ 用转置卷积；若对伪影敏感，改用插值上采样再接普通卷积。\n- 需要大感受野但保持高分辨率（语义分割）→ 用空洞卷积，并通过膨胀率与层数控制实际覆盖范围。\n- 需要压缩通道方向的参数与计算（高效骨干）→ 用分组卷积。\n- 面向移动端或端侧部署的轻量网络 → 用深度可分离卷积，同时评估精度损失是否可接受。\n\n这些选择并不互斥：同一个网络可以同时使用深度可分离卷积与分组结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-compare-table"
+          ]
+        }
+      },
+      {
+        "id": "model-practice",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "1. $K=5$、$D=3$ 的空洞卷积，有效卷积核边长是多少？若步长为 1，等宽卷积需要多少零填充？\n2. 输入通道 $D=32$、输出通道 $P=128$、$K=3$，分别计算标准卷积与深度可分离卷积的参数量，并求比值。\n3. 一个生成任务的上采样层出现棋盘状伪影，请给出两种修改方案并说明理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-dilated-formula",
+            "model-param-example"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "本点的主线可以概括为“改变卷积的哪一个环节”：转置卷积改尺寸映射方向，空洞卷积改核元素间距，分组卷积改通道连接，深度可分离卷积把空间卷积与通道混合拆开。它们都没有脱离局部连接与参数共享的基本思想，只是在感受野、分辨率、参数量和表示能力之间重新分配代价。\n\n下一节将回到本章总结，把这些变体放回卷积网络整体设计的脉络中。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation",
+            "tb-transposed",
+            "tb-dilated",
+            "tb-depthwise",
+            "tb-limits"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "variant-decision-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-practice",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-dilated-receptive",
+          "choose-variant"
+        ],
+        "learningPurpose": "检查学习者能否把空洞卷积公式与变体取舍规则用于新的数值和任务情境。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-dilated-formula",
+            "model-param-example",
+            "model-choose"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "promptCount": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考要点：1）$K'=5+4 \\times 2=13$，等宽零填充为 6。2）标准卷积 $9 \\times 32 \\times 128=36864$；深度可分离卷积 $9 \\times 32 + 32 \\times 128=4384$，比值约 $0.119$。3）改用核大小能被步长整除的配置，或改为插值上采样后再接普通卷积。"
+        }
+      }
+    ]
+  },
+  "subtitle": "卷积神经网络：卷积、池化、经典架构及参数学习",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-97f1fe376125afb2e4c552d6",
+      "blockIds": [
+        "block-000013"
+      ],
+      "headingPath": [
+        "卷积神经网络：卷积、池化、经典架构及参数学习",
+        "其他卷积方式"
+      ],
+      "lineStart": 486,
+      "lineEnd": 536,
+      "assetRefs": [],
+      "excerptSha256": "4611efa2ce8fe209e7a0dea66f5917c93565894bb9845535270d6ce97f4fc0e8"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2451,
+    1751
+  ],
+  "scale": 0.9
+}

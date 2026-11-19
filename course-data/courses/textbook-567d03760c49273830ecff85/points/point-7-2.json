@@ -1,0 +1,490 @@
+{
+  "id": "point-7-2",
+  "title": "使用块的网络（VGG）",
+  "shortSummary": "说明 VGG 如何用重复的卷积块和汇聚块构造可配置的深层网络，并分析其计算代价。",
+  "keyTerms": [
+    "VGG",
+    "卷积块",
+    "网络深度",
+    "计算代价"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.76,
+  "prerequisites": [
+    "point-7-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-to-structure-derivation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于 VGG 块参数、conv_arch 配置与计算代价的原意，按「为什么用块 → 块是什么 → 如何组装 → 代价多大 → 如何检查」的顺序重排，并补充形状推导与误区澄清。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-block-motivation",
+          "text": "解释把重复的层模式封装成块的原因，以及块如何提高网络设计的抽象层次。"
+        },
+        {
+          "id": "describe-vgg-block",
+          "text": "描述 VGG 块的组成、卷积核大小、填充与汇聚设置。"
+        },
+        {
+          "id": "configure-vgg",
+          "text": "依据 conv_arch 说明 VGG-11 的五个卷积块配置，并推算每块后通道数与特征图尺寸的变化。"
+        },
+        {
+          "id": "analyze-cost",
+          "text": "分析 VGG 相对 AlexNet 计算与显存开销更大的原因，并说明实践中如何缩小规模。"
+        }
+      ],
+      "misconceptions": [
+        "认为每个 VGG 块的卷积层数量固定不变；实际由 conv_arch 逐块指定。",
+        "认为块只是代码封装、不影响设计；块把卷积层数与通道数变成可调超参数，才使同一段代码生成不同深度的 VGG。",
+        "认为 VGG 更慢只是因为全连接层参数多；高分辨率上堆叠的多个 3×3 卷积产生的大激活张量才是主要开销。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-and-block",
+          "title": "从层到块的设计抽象",
+          "role": "concept-introduction",
+          "description": "用教材的芯片设计类比说明为什么转向块，并指出块带来的复用与可配置性。",
+          "outcomeRefs": [
+            "explain-block-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "vgg-block-structure",
+          "title": "VGG 块的结构与形状",
+          "role": "definition-and-derivation",
+          "description": "拆解 VGG 块的卷积、激活与汇聚配置，并推导块内的形状变化。",
+          "outcomeRefs": [
+            "describe-vgg-block"
+          ],
+          "order": 1
+        },
+        {
+          "id": "network-assembly",
+          "title": "用 conv_arch 组装 VGG-11",
+          "role": "procedure",
+          "description": "按 conv_arch 逐块组装卷积部分并接分类头，核对每块的输出形状。",
+          "outcomeRefs": [
+            "configure-vgg"
+          ],
+          "order": 2
+        },
+        {
+          "id": "cost-and-practice",
+          "title": "计算代价与训练实践",
+          "role": "analysis",
+          "description": "分析 VGG 的计算与显存代价，并说明缩小通道数后的训练设置与结果。",
+          "outcomeRefs": [
+            "analyze-cost"
+          ],
+          "order": 3
+        },
+        {
+          "id": "consolidation",
+          "title": "小结、误区与检查",
+          "role": "consolidation",
+          "description": "归纳教材小结，澄清常见误解，并用两个检查题验证迁移。",
+          "outcomeRefs": [
+            "describe-vgg-block",
+            "configure-vgg",
+            "analyze-cost"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-block-motivation",
+          "describe-vgg-block",
+          "configure-vgg",
+          "analyze-cost"
+        ],
+        "method": "先准确写出 VGG 块的参数设置与 conv_arch 配置，再独立推算一个块的输出形状并说明计算代价来源，最后完成两道检查题。",
+        "successCriteria": [
+          "能写出 3×3 卷积、填充 1 与 2×2、步幅 2 最大汇聚的配置",
+          "能说明五个卷积块的卷积层数与输出通道数",
+          "能指出 VGG 计算代价主要来自高分辨率上的多卷积激活"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-7-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "motivation-and-block",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为什么从层走向块",
+        "markdown": "AlexNet 证明了深层神经网络有效，却没有提供通用模板来指导后续的网络设计。教材用芯片设计的类比说明这种抽象过程：工程师从放置晶体管，到组合成逻辑元件，再到复用逻辑块；神经网络架构设计也经历了从单个神经元，到整个层，再到重复出现的层模式即「块」的演进。\n\n使用块的想法最早出现在牛津大学视觉几何组（visual geometry group）的 VGG 网络中，这些重复的架构可以用循环和子程序在现代深度学习框架中轻松实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-block",
+        "moduleId": "motivation-and-block",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：块作为可复用的设计单元",
+        "markdown": "把块当作设计单元能带来两层收益。第一，块把「卷积 → 激活 → 汇聚」这一固定搭配封装起来，定义网络时只需给出块的清单，而不必逐层罗列。第二，块让设计空间可以用少量超参数描述——每个块放几个卷积层、输出多少通道——于是同一套代码可以生成不同深度的网络。\n\n这也解释了为什么本章后续会反复以块为单位比较不同架构：块的内部实现保持不变，架构差异主要体现在块的组合方式上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-vgg-block",
+        "moduleId": "vgg-block-structure",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：VGG 块的定义",
+        "markdown": "经典卷积神经网络的基本组成部分是一个序列：带填充以保持分辨率的卷积层、非线性激活函数（如 ReLU）、汇聚层（如最大汇聚层）。VGG 块沿用这个序列：先由一系列卷积层串联组成，后面再加上用于空间下采样的最大汇聚层。\n\n原始 VGG 论文中的设置是：卷积层使用 3×3 卷积核、填充为 1，因此卷积保持高度和宽度不变；最大汇聚层使用 2×2 汇聚窗口、步幅为 2，因此每个块结束后的分辨率减半。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-vgg-block-code",
+        "moduleId": "vgg-block-structure",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：vgg_block 函数的实现要点",
+        "markdown": "教材定义 `vgg_block(num_convs, in_channels, out_channels)`，三个参数分别对应卷积层数量、输入通道数量和输出通道数量。实现逻辑是一个循环加一次收尾：\n\n```python\nlayers = []\nfor _ in range(num_convs):\n    layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1))\n    layers.append(nn.ReLU())\n    in_channels = out_channels\nlayers.append(nn.MaxPool2d(kernel_size=2, stride=2))\nreturn nn.Sequential(*layers)\n```\n\n循环内每次追加一个 3×3、填充 1 的卷积和一个 ReLU，并把 `in_channels` 更新为 `out_channels`，使后续卷积的输入通道对齐；循环结束后追加一个 2×2、步幅 2 的最大汇聚层。所有层被放进 `nn.Sequential`，因此一个块对外就是一个可调用的模块。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-block-shape",
+        "moduleId": "vgg-block-structure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "补充：块内形状推导",
+        "markdown": "设块输入为通道数 C、高 H、宽 W。3×3、填充 1 的卷积在高宽方向各补一圈，输出仍是 H×W，但通道数变为 `out_channels`；块内第二个及以后的卷积因为输入通道已被改写为 `out_channels`，通道数不再变化；最后的 2×2、步幅 2 最大汇聚把高宽各减半，得到 `out_channels × (H/2) × (W/2)`。\n\n因此「卷积保尺寸、汇聚减半」是读 VGG 结构图时最有用的一条规则：块的深度只影响通道变换的层数，空间分辨率的下降只发生在块末的汇聚层。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-vgg-block",
+            "tb-vgg-block-code"
+          ]
+        }
+      },
+      {
+        "id": "tb-arch",
+        "moduleId": "network-assembly",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：VGG-11 的块配置",
+        "markdown": "与 AlexNet、LeNet 一样，VGG 网络可以分为两部分：第一部分主要由卷积层和汇聚层组成，第二部分由全连接层组成。超参数变量 `conv_arch` 指定每个 VGG 块里的卷积层个数和输出通道数，全连接模块则与 AlexNet 中的相同。\n\n原始 VGG 网络有 5 个卷积块，`conv_arch` 为 `((1, 64), (1, 128), (2, 256), (2, 512), (2, 512))`：前两个块各有一个卷积层，后三个块各包含两个卷积层；第一个块输出 64 通道，每个后续块把输出通道数翻倍，直到 512。该网络使用 8 个卷积层和 3 个全连接层，因此通常被称为 VGG-11。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-output-shapes",
+        "moduleId": "network-assembly",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：逐块输出形状",
+        "markdown": "教材用 1×1×224×224 的输入逐层打印形状，验证了「每个块高宽减半」的规律：\n\n| 阶段 | 输出形状 | 说明 |\n|---|---|---|\n| 块 1 | 64×112×112 | 1 个 3×3 卷积，2×2 汇聚减半 |\n| 块 2 | 128×56×56 | 通道翻倍，分辨率再减半 |\n| 块 3 | 256×28×28 | 2 个 3×3 卷积后汇聚 |\n| 块 4 | 512×14×14 | 2 个 3×3 卷积后汇聚 |\n| 块 5 | 512×7×7 | 输出 512 通道、7×7 |\n| Flatten | 25088 | 512×7×7 展平为一维 |\n| 全连接 | 4096 → 4096 → 10 | 每个全连接后接 ReLU，前两个再接 Dropout |\n\n最终高度和宽度都降到 7，再展平送入全连接层处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-assembly",
+        "moduleId": "network-assembly",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：组装网络的操作顺序",
+        "markdown": "组装 VGG 可以固定为四步。第一，按 `conv_arch` 的顺序遍历每个 `(num_convs, out_channels)` 对。第二，用当前 `in_channels` 与该块的 `out_channels` 调用 `vgg_block`，随后把 `in_channels` 更新为 `out_channels`。第三，把所有卷积块和一个 `nn.Flatten()` 依次放入 `nn.Sequential`。第四，接上与 AlexNet 相同的分类头：`nn.Linear(out_channels × 7 × 7, 4096)`、ReLU、Dropout(0.5)、`nn.Linear(4096, 4096)`、ReLU、Dropout(0.5)、`nn.Linear(4096, 10)`。\n\n注意分类头的第一层输入维度由最后一个块的通道数与 7×7 空间尺寸共同决定，所以改 `conv_arch` 时要同步检查这一维度。只要换一份 `conv_arch`，同一段代码就能生成 VGG-13、VGG-16 或 VGG-19，这就是「可配置」的实际含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-arch",
+            "tb-output-shapes"
+          ]
+        }
+      },
+      {
+        "id": "tb-cost",
+        "moduleId": "cost-and-practice",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：计算代价与缩小后的训练",
+        "markdown": "教材指出 VGG-11 比 AlexNet 计算量更大，因此为了让 Fashion-MNIST 训练可行，构建了一个通道数较少的网络：用 `ratio = 4` 把 `conv_arch` 中每个块的输出通道数除以 4，得到 `small_conv_arch` 后再实例化网络。\n\n训练设置是学习率 0.05、10 个 epoch、批量大小 128，图像放大到 224×224；最终结果 loss 为 0.178，训练准确率 0.935，测试准确率 0.920。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost",
+        "moduleId": "cost-and-practice",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：代价来自哪里",
+        "markdown": "VGG 更慢、更占显存的原因主要在激活张量的规模，而不只是参数总量。前几个块在 112×112、56×56 这样的高分辨率上就保留了 64、128 个通道，每个 3×3 卷积都要在这些大张量上做乘加，中间结果也需要保存以供反向传播；相比之下，AlexNet 在相近分辨率上使用的卷积层数与通道数更少。\n\n这解释了教材的两条实践做法：在小数据集上按比例缩减通道，或者按练习把输入从 224 改小，都会直接减少这一项开销。反过来，若只盯着全连接层参数量，就无法解释为什么卷积部分同样拖慢了训练。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cost",
+            "tb-output-shapes"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材小结给出三点。第一，VGG-11 使用可复用的卷积块构造网络，不同的 VGG 模型可通过每个块中卷积层数量和输出通道数量的差异来定义。第二，块的使用导致网络定义非常简洁，使用块可以有效地设计复杂的网络。第三，在 VGG 论文中，Simonyan 和 Zisserman 尝试了各种架构，特别发现深层且窄的 3×3 卷积比浅层且宽的卷积更有效。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000052"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "使用块的网络（VGG）"
+              ],
+              "lineStart": 10551,
+              "lineEnd": 10741,
+              "assetRefs": [
+                "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+                "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+              ],
+              "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "consolidation",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "补充：三个常见误解",
+        "markdown": "第一个误解是认为每个 VGG 块的卷积层数相同；实际由 `conv_arch` 逐块决定，原始配置是 1、1、2、2、2。第二个误解是认为块只是代码层面的封装、不影响设计；块把「几个卷积、多少通道」变成超参数，正是这一点让 VGG-11/16/19 能用同一段代码生成。第三个误解是认为 VGG 慢只是因为全连接层参数多；全连接层确实占参数，但拖慢前向并占用显存的是高分辨率上堆叠的多个 3×3 卷积所产生的激活。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary",
+            "tb-vgg-block",
+            "tb-cost"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：形状推算与嵌套结构",
+        "markdown": "请完成两个检查。\n\n1. 若把 `conv_arch` 中所有输出通道数减半，卷积部分的参数数量和激活张量大小分别会怎样变化？\n2. 教材练习提到，逐层打印时只看到少量结果，而不是把每个卷积层和 ReLU 都列出来。结合 `vgg` 函数返回的嵌套 `Sequential` 结构，说明这些层为什么没有出现在顶层。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "vgg-structure-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "consolidation",
+        "depth": "core",
+        "outcomeRefs": [
+          "configure-vgg",
+          "analyze-cost"
+        ],
+        "learningPurpose": "检查学习者能否依据块定义与 conv_arch 推算形状，并说明 VGG 计算代价的主要来源。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-vgg-block",
+            "tb-output-shapes",
+            "tb-cost"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "先写出一个 VGG 块的输入输出形状变化，再说明通道数减半会同时影响参数量与激活张量大小，最后解释嵌套 Sequential 为什么只暴露顶层模块。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代卷积神经网络",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000052"
+      ],
+      "headingPath": [
+        "现代卷积神经网络",
+        "使用块的网络（VGG）"
+      ],
+      "lineStart": 10551,
+      "lineEnd": 10741,
+      "assetRefs": [
+        "parts/part-0003/images/e9377316a44b210534b7e19be4e75c3b7a2ad7e49ae137f8752ae187c752ee2f.jpg",
+        "parts/part-0003/images/74fbf987d0d6004717dd5d026bf28a4781a9b7d3008af4df25c403215a25cc97.jpg"
+      ],
+      "excerptSha256": "db61b53e28eb41fed0e9d0551d9a7ff246b3639d4b266d4cc9584839fdba5f56"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1481,
+    1905
+  ],
+  "scale": 0.92
+}

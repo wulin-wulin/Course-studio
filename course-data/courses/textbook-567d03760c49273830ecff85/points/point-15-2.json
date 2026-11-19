@@ -1,0 +1,594 @@
+{
+  "id": "point-15-2",
+  "title": "情感分析：使用循环神经网络",
+  "shortSummary": "说明如何用循环网络编码文本序列并接分类头完成情感极性预测，并讨论序列表示与池化方式的选择。",
+  "keyTerms": [
+    "情感分析",
+    "循环神经网络",
+    "文本编码",
+    "分类头"
+  ],
+  "animationType": "bilstmSentenceEncoding",
+  "animationSuggestion": "逐步高亮当前词元并显示两个方向的隐状态更新，读完后把首末隐状态拼成句子向量并显示分类输出，用箭头标出反向读取方向。",
+  "difficulty": "中等",
+  "importance": 0.72,
+  "prerequisites": [
+    "point-9-4",
+    "point-15-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "architecture-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的 GloVe-双向LSTM-全连接三段架构、代码结构、训练配置与实验结果；按数据流重排讲解顺序，补充形状推导、表示方式取舍和预测边界。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-pipeline",
+          "text": "说明情感分析中「预训练词向量 + 双向循环编码器 + 分类头」三段流水线各自负责什么。"
+        },
+        {
+          "id": "trace-forward-shapes",
+          "text": "追踪一次前向计算的张量形状，并解释分类层输入维度 4H 的来源。"
+        },
+        {
+          "id": "justify-representation",
+          "text": "解释用首末时间步隐状态连结作为句子表示的理由及其局限。"
+        },
+        {
+          "id": "use-pretrained-embeddings",
+          "text": "说明如何加载 GloVe 词向量并冻结嵌入层，以及这样做的取舍。"
+        },
+        {
+          "id": "evaluate-and-predict",
+          "text": "读懂教材训练配置与准确率结果，执行情感预测并判断其适用边界。"
+        }
+      ],
+      "misconceptions": [
+        "认为双向 LSTM 的首末隐状态连结已经包含全部时间步的信息，忽略中间位置的表示瓶颈。",
+        "认为预训练词向量会在情感分析训练中被继续更新，实际上教材把嵌入层固定为不更新。",
+        "把分类头输出的两个数值当成概率解释，忽略教材只取 argmax 得到类别标签。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-pipeline",
+          "title": "任务动机与整体流水线",
+          "role": "overview",
+          "description": "先说明为什么用预训练表示，再把架构按数据流拆成三段。",
+          "outcomeRefs": [
+            "explain-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "text-encoding",
+          "title": "用双向循环网络表示单个文本",
+          "role": "core-mechanism",
+          "description": "从词元嵌入到句子向量的完整编码过程，含形状推导与表示方式取舍。",
+          "outcomeRefs": [
+            "trace-forward-shapes",
+            "justify-representation"
+          ],
+          "order": 1
+        },
+        {
+          "id": "pretrained-embeddings",
+          "title": "加载并固定预训练词向量",
+          "role": "preparation",
+          "description": "GloVe 嵌入的加载方式与冻结策略的权衡。",
+          "outcomeRefs": [
+            "use-pretrained-embeddings"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-and-prediction",
+          "title": "训练、评估与预测",
+          "role": "procedure",
+          "description": "教材的训练配置、结果解读、预测函数及其边界。",
+          "outcomeRefs": [
+            "evaluate-and-predict"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "达成检查与迁移",
+          "role": "assessment",
+          "description": "用教材练习与自查题检查理解，并桥接下一个架构选择。",
+          "outcomeRefs": [
+            "explain-pipeline",
+            "trace-forward-shapes",
+            "justify-representation",
+            "use-pretrained-embeddings",
+            "evaluate-and-predict"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-pipeline",
+          "trace-forward-shapes",
+          "justify-representation",
+          "use-pretrained-embeddings",
+          "evaluate-and-predict"
+        ],
+        "method": "完成三道自查题，并说明冻结嵌入与首末隐状态表示各自的理由与代价。",
+        "successCriteria": [
+          "能把三段流水线与各自输入输出对应起来",
+          "能由 2 个时间步、2 个方向和 H 维隐藏单元推出 4H",
+          "能指出首末隐状态表示丢失中间时间步信息的风险"
+        ],
+        "exerciseBlockId": "self-check-three-questions",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-15-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "why-pretrained",
+        "moduleId": "task-and-pipeline",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材动机：为什么借用预训练表示",
+        "markdown": "教材先给出动机：与词相似度和类比任务一样，预先训练的词向量也可以应用于情感分析。由于 IMDb 评论数据集不是很大，直接学习文本表示容易过拟合，而使用在大规模语料库上预训练的文本表示可以减少这一问题。\n\n教材的示例架构是：用预训练的 GloVe 模型表示每个词元，把这些词元表示送入多层双向循环神经网络以获得文本序列表示，再将该文本序列表示转换为情感分析输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "pipeline-overview",
+        "moduleId": "task-and-pipeline",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "把架构拆成三段数据流",
+        "markdown": "按数据流拆开，这个模型只有三段：\n\n1. **词元表示**：每个词从预训练词向量矩阵中取出一行固定维度的向量。\n2. **序列编码**：双向循环网络沿时间步读取这串向量，把可变长度的句子压缩成一条固定长度的向量。\n3. **分类头**：全连接层把句子向量映射到「积极 / 消极」两个输出。\n\n分工很清楚：词向量负责「每个词是什么意思」，循环网络负责「这些词连起来是什么意思」，分类头只负责「整体偏向哪一类」。直觉上像一个读者逐词读完影评，最后只回答一个态度问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "why-pretrained"
+          ]
+        }
+      },
+      {
+        "id": "birnn-text-representation",
+        "moduleId": "text-encoding",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "用双向循环网络表示单个文本",
+        "markdown": "教材指出，文本分类任务要把可变长度的文本序列转换为固定长度的类别。在 BiRNN 中，每个词元经由嵌入层 self.embedding 获得其单独的预训练 GloVe 表示，但整个序列由双向循环神经网络 self.encoder 编码。\n\n更具体地说，双向长短期记忆网络在初始和最终时间步（最后一层）的隐状态被连结起来，作为文本序列的表示。然后，一个具有两个输出（「积极」和「消极」）的全连接层 self.decoder 把这个单一文本表示转换为输出类别。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "first-last-state-pooling",
+        "moduleId": "text-encoding",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "首末隐状态为何能代表整句",
+        "markdown": "教材的句子表示只取两个位置：\n\n- outputs[0] 对应第一个时间步，携带反向循环从后往前读完整句后的隐状态；\n- outputs[-1] 对应最后一个时间步，携带正向循环从前往后读完整句后的隐状态。\n\n两者拼接，等于同时保留「读完整句」的两个方向总结。每个方向在每个时间步输出 num_hiddens 维，双向拼接为 2×num_hiddens 维；再连接两个时间步，就得到 4×num_hiddens 维的句子表示。\n\n这个做法的代价是：中间时间步的信息只能经隐状态间接传递。对长句或需要抓住句中某个关键词的判断，首末隐状态可能表达不足，所以它只是一种池化选择，而不是唯一正确做法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "birnn-text-representation"
+          ]
+        }
+      },
+      {
+        "id": "birnn-code",
+        "moduleId": "text-encoding",
+        "depth": "core",
+        "kind": "code",
+        "title": "BiRNN 的三段结构",
+        "markdown": "教材的模型类把三部分固定在构造函数里：\n\n- `self.embedding = nn.Embedding(vocab_size, embed_size)`\n- `self.encoder = nn.LSTM(embed_size, num_hiddens, num_layers=num_layers, bidirectional=True)`\n- `self.decoder = nn.Linear(4 * num_hiddens, 2)`\n\n前向计算先用 `self.embedding(inputs.T)` 把（批量大小，时间步数）转成（时间步数，批量大小，词向量维度），再由编码器得到（时间步数，批量大小，2*隐藏单元数）的输出，最后用 `torch.cat((outputs[0], outputs[-1]), dim=1)` 拼成（批量大小，4*隐藏单元数）送入全连接层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "forward-shape-trace",
+        "moduleId": "text-encoding",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "一次前向的形状追踪",
+        "markdown": "设批量大小为 B、时间步数为 T、词向量维度 100、隐藏单元数 H，逐段看形状：\n\n- 输入索引：B × T\n- 嵌入后：T × B × 100\n- 双向 LSTM 输出：T × B × 2H（每个时间步两个方向各 H 维并拼接）\n- 取首末两个时间步并拼接：B × 4H\n- 全连接层输出：B × 2\n\n关键在于 4H 的来源：2 个时间步 × 2 个方向 × H。若把 bidirectional 改为 False，decoder 的输入维度必须相应改成 2H，否则形状不匹配，这是读这类代码时最容易出错的地方。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "birnn-code"
+          ]
+        }
+      },
+      {
+        "id": "load-glove-embeddings",
+        "moduleId": "pretrained-embeddings",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "加载并固定预训练词向量",
+        "markdown": "教材用 `d2l.TokenEmbedding('glove.6b.100d')` 取 100 维 GloVe 嵌入，维度需要与 embed_size 一致。取出词表中所有词元的向量后，形状为 torch.Size([49346, 100])。\n\n接着把这份矩阵复制进嵌入层：`net.embedding.weight.data.copy_(embeds)`，并设置 `net.embedding.weight.requires_grad = False`。也就是说，训练期间这些词向量不被更新，只训练编码器与分类头。模型本身是两个隐藏层的双向循环网络，embed_size、num_hiddens、num_layers 取 100、100、2，Linear 与 LSTM 的权重使用 Xavier 均匀初始化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "freeze-embeddings-tradeoff",
+        "moduleId": "pretrained-embeddings",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "冻结嵌入层的取舍",
+        "markdown": "教材的做法是「用但不改」预训练词向量，理由可以拆成三点：\n\n1. **数据规模小**：IMDb 的评论量不足以重新学出高质量词向量，冻结能保留大规模语料学到的语义。\n2. **参数更少**：嵌入矩阵通常是全模型最大的参数块，冻结后优化器不必在它上面维护更新与动量状态。\n3. **过拟合风险更低**：可训练自由度减少，模型更多依赖序列编码器去适配任务。\n\n代价是模型无法针对影评领域调整词义，例如某些词在影评中的特殊用法。教材练习提出改用 300 维 GloVe 并观察精度，正是在这个权衡上做实验。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "load-glove-embeddings"
+          ]
+        }
+      },
+      {
+        "id": "training-setup-and-result",
+        "moduleId": "training-and-prediction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练配置与教材结果",
+        "markdown": "训练配置为：Adam 优化器、学习率 0.01、5 个迭代周期，损失函数为交叉熵 `nn.CrossEntropyLoss(reduction='none')`。\n\n教材在双 GPU 上训练后给出的结果是 loss 0.262、训练准确率 0.893、测试准确率 0.864。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "reading-metrics",
+        "moduleId": "training-and-prediction",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "怎样读这组指标",
+        "markdown": "三点值得注意：\n\n- 训练与测试准确率相差约 3 个百分点，说明泛化差距不大，这与「冻结词向量、只用较小模型适配任务」的策略一致。\n- `reduction='none'` 只是保留每个样本的损失，训练循环通常再对批量内损失求平均，所以 0.262 仍是平均交叉熵量级。\n- 这组数字是教材环境下的单次结果，不是该架构的性能上限；增加迭代轮数、更换词向量维度都属于可调空间。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "training-setup-and-result"
+          ]
+        }
+      },
+      {
+        "id": "predict-sentiment",
+        "moduleId": "training-and-prediction",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "预测函数与两个例子",
+        "markdown": "教材定义 `predict_sentiment(net, vocab, sequence)`：先把按空格切分的句子映射为词表索引张量，再用 `net(sequence.reshape(1, -1))` 得到两个类别的输出，取 argmax 后按 `label == 1` 返回 positive，否则返回 negative。\n\n用它预测两个短句：'this movie is so great' 得到 positive，'this movie is so bad' 得到 negative。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "prediction-boundaries",
+        "moduleId": "training-and-prediction",
+        "depth": "support",
+        "kind": "warning",
+        "title": "预测结果不能说明的事",
+        "markdown": "这两个例子只说明模型在极性明显的短句上工作，不能据此推断它在真实评论上的表现。至少有三处限制：\n\n- **否定与转折**：'not bad' 这类结构需要模型真正组合词义，而不是匹配单个词。\n- **分词一致性**：教材练习指出 GloVe 中的短语标记形如 new‐york，而 spaCy 分词得到 'new york'，词表不匹配会让部分词元落到未知词。\n- **领域与长度**：训练语料是影评，换到商品评论或长文本时，首末隐状态表示的瓶颈会更明显。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "predict-sentiment"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exercises",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "教材练习的三个方向",
+        "markdown": "教材给出三条练习：\n\n1. 增加迭代轮数能否提高训练与测试准确率？调优其他超参数会怎样？\n2. 换用更大的预训练词向量，例如 300 维 GloVe，是否提高分类精度？\n3. 用 spaCy 词元化能否提高精度？需要注意 GloVe 与 spaCy 对短语标记形式的差异，并安装 spacy 与英语语言包。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "self-check-three-questions",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "自查：三个问题",
+        "markdown": "先独立作答，再对照要点：\n\n1. 若把 bidirectional 改为 False，decoder 的输入维度应改成多少？为什么？\n2. 如果取消 `requires_grad = False`，训练准确率与测试准确率可能怎样变化？\n3. 教材用首末隐状态表示整句；若要保留句中某个关键词的信息，你会怎样修改表示方式？\n\n要点提示：第一题回到 4H = 2×2×H 的分解；第二题考虑小数据集上的过拟合与参数自由度；第三题没有唯一答案，但必须说明新表示如何聚合时间步信息（例如对全部时间步做池化），以及这样做的代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-exercises",
+            "training-setup-and-result",
+            "load-glove-embeddings"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材总结两点：预训练的词向量可以表示文本序列中的各个词元；双向循环神经网络可以表示文本序列，例如通过连结初始和最终时间步的隐状态，再用全连接层把这个单一文本表示转换为类别。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000131"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用循环神经网络"
+              ],
+              "lineStart": 30084,
+              "lineEnd": 30289,
+              "assetRefs": [
+                "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+                "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+              ],
+              "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bridge-to-textcnn",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "接续：只换中间那一段",
+        "markdown": "本点可以概括为「预训练词向量 + 序列编码器 + 分类头」，其中只有中间一段是架构选择。教材接下来把双向循环网络换成一维卷积网络（textCNN），首尾两段保持不变，因此下一个知识点可以直接复用本点的数据加载、词向量与预测流程。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary",
+            "textbook-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "birnn-shape-drill",
+        "type": "shape-drill",
+        "anchorBlockId": "forward-shape-trace",
+        "moduleId": "text-encoding",
+        "depth": "support",
+        "outcomeRefs": [
+          "trace-forward-shapes"
+        ],
+        "learningPurpose": "检查学习者能否把一次前向计算的各段形状与 4H 的来源对上。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "birnn-code",
+            "forward-shape-trace"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "fields": [
+            "嵌入后形状",
+            "双向输出形状",
+            "句子表示形状",
+            "分类输出形状"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出批量大小 B、时间步数 T、隐藏单元数 H 下，嵌入层、双向 LSTM、首末拼接和全连接层四处的输出形状，并说明 4H 由哪些维度相乘得到。"
+        }
+      },
+      {
+        "id": "frozen-embedding-check",
+        "type": "formative-check",
+        "anchorBlockId": "freeze-embeddings-tradeoff",
+        "moduleId": "pretrained-embeddings",
+        "depth": "core",
+        "outcomeRefs": [
+          "use-pretrained-embeddings"
+        ],
+        "learningPurpose": "检查学习者能否把冻结嵌入层的做法与数据集规模、参数自由度联系起来。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "load-glove-embeddings",
+            "freeze-embeddings-tradeoff"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "说明教材为什么在训练期间不更新 GloVe 词向量，并给出取消冻结可能带来的一个好处和一个风险。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：应用",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000131"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "情感分析：使用循环神经网络"
+      ],
+      "lineStart": 30084,
+      "lineEnd": 30289,
+      "assetRefs": [
+        "parts/part-0008/images/1fd1a3cc7f6b741ce8d48a5de36950513a10ecdd3a29156e9d498316e3e3bb68.jpg",
+        "parts/part-0008/images/ccd3a58a1453d7184b7aa773bb9e8afbe3b77ae83b5eb5f743b25276b024dea6.jpg",
+        "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg"
+      ],
+      "excerptSha256": "73e6a77c7dd569a2181c2d9a13d0482192b5010c2c11f750e722bf07ea4c7281"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1377,
+    457
+  ],
+  "scale": 0.91
+}

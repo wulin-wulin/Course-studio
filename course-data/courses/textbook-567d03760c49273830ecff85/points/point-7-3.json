@@ -1,0 +1,583 @@
+{
+  "id": "point-7-3",
+  "title": "网络中的网络（NiN）",
+  "shortSummary": "介绍用 1×1 卷积构成微型网络块替代全连接层的思路，以及全局平均汇聚的作用。",
+  "keyTerms": [
+    "NiN",
+    "1×1卷积",
+    "全局平均汇聚",
+    "微型网络"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.68,
+  "prerequisites": [
+    "point-6-4",
+    "point-7-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "concept-mechanism-tradeoff-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对 NiN 块、全局平均汇聚与参数优势的原始表述，按“为什么改—怎么改—代价是什么”的顺序重排，并补充逐像素全连接层的解释与形状追踪。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-nin-block",
+          "text": "解释 NiN 块为何用两个 1×1 卷积充当逐像素全连接层，并说明它如何保留空间结构。"
+        },
+        {
+          "id": "build-nin-head",
+          "text": "说明 NiN 如何取消全连接层，把通道数设为类别数并用全局平均汇聚生成对数几率。"
+        },
+        {
+          "id": "evaluate-tradeoffs",
+          "text": "评估取消全连接层带来的参数与过拟合优势，以及可能增加的训练时间代价。"
+        }
+      ],
+      "misconceptions": [
+        "认为 1×1 卷积不改变空间尺寸，所以等于对特征图什么都不做。",
+        "认为 NiN 只是把全连接层挪到网络更靠前的位置，仍然保留全连接分类头。",
+        "认为全局平均汇聚与最大汇聚只是窗口大小的差别，没有参数与结构上的意义。"
+      ],
+      "modules": [
+        {
+          "id": "architecture-problem",
+          "title": "问题：全连接层与空间结构",
+          "role": "motivation",
+          "description": "从 LeNet、AlexNet、VGG 的共同设计模式出发，说明过早使用全连接层会丢失空间结构。",
+          "outcomeRefs": [
+            "explain-nin-block"
+          ],
+          "order": 0
+        },
+        {
+          "id": "nin-block",
+          "title": "NiN 块：逐像素的微型网络",
+          "role": "mechanism",
+          "description": "拆解“普通卷积 + 两个 1×1 卷积 + ReLU”的块结构，解释其与逐像素全连接层的等价性。",
+          "outcomeRefs": [
+            "explain-nin-block"
+          ],
+          "order": 1
+        },
+        {
+          "id": "nin-model-layout",
+          "title": "完整的 NiN 网络与形状流",
+          "role": "worked-example",
+          "description": "沿教材代码追踪每个块与汇聚层的输出形状，观察空间尺寸收缩、通道数承载语义。",
+          "outcomeRefs": [
+            "explain-nin-block",
+            "build-nin-head"
+          ],
+          "order": 2
+        },
+        {
+          "id": "global-average-pooling",
+          "title": "全局平均汇聚替代分类头",
+          "role": "mechanism",
+          "description": "说明通道数等于类别数、空间平均得到每个类别一个标量的做法及其与全连接层的差别。",
+          "outcomeRefs": [
+            "build-nin-head"
+          ],
+          "order": 3
+        },
+        {
+          "id": "tradeoffs",
+          "title": "参数、过拟合与训练时间",
+          "role": "analysis",
+          "description": "结合教材的训练结果与小结，分析参数减少的收益和训练时间可能增加的代价。",
+          "outcomeRefs": [
+            "evaluate-tradeoffs"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-transfer",
+          "title": "检查与向后续网络迁移",
+          "role": "assessment",
+          "description": "用教材练习与形成性检查巩固块设计，并桥接到采用该思想的后续网络。",
+          "outcomeRefs": [
+            "explain-nin-block",
+            "build-nin-head",
+            "evaluate-tradeoffs"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-nin-block",
+          "build-nin-head",
+          "evaluate-tradeoffs"
+        ],
+        "method": "完成三道形成性检查题，并说明自己的判断依据来自块的哪一部分结构。",
+        "successCriteria": [
+          "能说清 1×1 卷积在通道维上做了什么、没有做什么",
+          "能指出 NiN 中真正决定输出类别数的是哪一层",
+          "能同时说出参数减少的收益与训练时间可能增加的代价"
+        ],
+        "exerciseBlockId": "model-check-questions",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-7-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-background",
+        "moduleId": "architecture-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：LeNet、AlexNet 与 VGG 的共同设计模式",
+        "markdown": "教材指出，LeNet、AlexNet 和 VGG 有一个共同的设计模式：通过一系列的卷积层与汇聚层来提取空间结构特征，然后通过全连接层对特征的表征进行处理。AlexNet 和 VGG 对 LeNet 的改进主要在于如何扩大和加深这两个模块。\n\n如果在这个过程的早期就使用全连接层，可能会完全放弃表征的空间结构。NiN 提供了一个非常简单的解决方案：在每个像素的通道上分别使用多层感知机。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-space-lost",
+        "moduleId": "architecture-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：全连接层为什么抹掉空间结构",
+        "markdown": "卷积层的输出是形状为（样本、通道、高度、宽度）的四维张量，而全连接层接收的是（样本、特征）的二维张量。一旦把特征图展平，高度与宽度上的位置就被压进一维向量，模型只能看到“某个特征出现了”，难以再利用“它在哪个位置出现”。\n\nNiN 的思路不是放弃分类决策，而是把分类决策也写成逐像素的卷积运算，让高度和宽度一直保留到最后一次全局汇聚。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-background"
+          ]
+        }
+      },
+      {
+        "id": "tb-nin-block",
+        "moduleId": "nin-block",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：NiN 块的结构",
+        "markdown": "卷积层的输入和输出由四维张量组成，张量的每个轴分别对应样本、通道、高度和宽度；全连接层的输入和输出通常是分别对应于样本和特征的二维张量。\n\nNiN 的想法是在每个像素位置（针对每个高度和宽度）应用一个全连接层。如果把权重连接到每个空间位置，可以将其视为 1×1 卷积层，或作为在每个像素位置上独立作用的全连接层。从另一个角度看，即把空间维度中的每个像素视为单个样本，把通道维度视为不同特征。\n\nNiN 块以一个普通卷积层开始，后面是两个 1×1 的卷积层。这两个 1×1 卷积层充当带有 ReLU 激活函数的逐像素全连接层。第一层的卷积窗口形状通常由用户设置，随后的卷积窗口形状固定为 1×1。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-1x1-layer",
+        "moduleId": "nin-block",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：1×1 卷积到底做了什么",
+        "markdown": "在每个空间位置上，1×1 卷积把该位置的 $C_{\\mathrm{in}}$ 个通道值线性组合成 $C_{\\mathrm{out}}$ 个通道值，权重在所有像素之间共享，随后逐元素接 ReLU。它不改变高度与宽度，但会改变通道数，并注入一次非线性。\n\n因此它等价于“在通道维上做全连接”——把每个像素当成一个样本，把通道当成特征。教材代码中的 `nin_block` 正是依次串起“普通卷积 + ReLU”“1×1 卷积 + ReLU”“1×1 卷积 + ReLU”，所以两个串联的 1×1 卷积相当于在逐像素意义上叠加了两层带 ReLU 的感知机。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-nin-block"
+          ]
+        }
+      },
+      {
+        "id": "tb-nin-model",
+        "moduleId": "nin-model-layout",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：NiN 模型如何组织这些块",
+        "markdown": "最初的 NiN 网络是在 AlexNet 后不久提出的。NiN 使用窗口形状为 11×11、5×5 和 3×3 的卷积层，输出通道数量与 AlexNet 中的相同。每个 NiN 块后有一个最大汇聚层，汇聚窗口形状为 3×3，步幅为 2。\n\nNiN 和 AlexNet 之间的一个显著区别是 NiN 完全取消了全连接层。相反，NiN 使用一个 NiN 块，其输出通道数等于标签类别的数量。最后放一个全局平均汇聚层（global average pooling layer），生成一个对数几率（logits）。这种设计的一个优点是显著减少了模型所需参数的数量，然而在实践中，这种设计有时会增加训练模型的时间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-vgg-compare",
+        "moduleId": "nin-model-layout",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：与 VGG 的分工差别",
+        "markdown": "VGG 把卷积与汇聚组织成可重复的块，但块只负责提特征，最后仍由全连接层完成分类；也就是说“提特征”和“做决策”是两段不同的结构。\n\nNiN 把这两段合并进同一个块：每个 NiN 块内部先用普通卷积提取空间特征，再用两个 1×1 卷积在逐像素层面做非线性变换；而分类所需的通道变换也由最后一个 NiN 块完成。这正是“网络中的网络”的含义——块内部嵌了一个微型网络。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-nin-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-shapes",
+        "moduleId": "nin-model-layout",
+        "depth": "core",
+        "kind": "table",
+        "title": "教材：逐层输出形状",
+        "markdown": "教材用形状为 (1, 1, 224, 224) 的输入逐层打印输出：\n\n| 层 | 输出形状 |\n|---|---|\n| NiN 块（11×11，步幅 4） | (1, 96, 54, 54) |\n| 最大汇聚（3×3，步幅 2） | (1, 96, 26, 26) |\n| NiN 块（5×5） | (1, 256, 26, 26) |\n| 最大汇聚（3×3，步幅 2） | (1, 256, 12, 12) |\n| NiN 块（3×3） | (1, 384, 12, 12) |\n| 最大汇聚（3×3，步幅 2） | (1, 384, 5, 5) |\n| Dropout(0.5) | (1, 384, 5, 5) |\n| NiN 块（输出通道 10） | (1, 10, 5, 5) |\n| 全局平均汇聚 | (1, 10, 1, 1) |\n| Flatten | (1, 10) |",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-walkthrough",
+        "moduleId": "nin-model-layout",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "模型补充：读一遍这张形状表",
+        "markdown": "前三个 NiN 块把通道数从 96 推到 256、384，同时高度与宽度由 224 一路缩到 5：空间细节被逐步汇总，语义信息被搬进通道维。\n\n第四个 NiN 块把通道数直接设成 10，也就是 Fashion-MNIST 的类别数，此时输出仍是 (1, 10, 5, 5)——10 个“类别得分图”各保留 5×5 个位置。全局平均汇聚把这 25 个位置平均成 1 个值，得到 (1, 10, 1, 1)，再 Flatten 成 (1, 10)。\n\n所以“输出通道数等于类别数”这一步发生在最后一个 NiN 块，而真正把空间位置消掉的是全局平均汇聚，不是块的卷积层。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-shapes",
+            "tb-nin-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-global-pool",
+        "moduleId": "global-average-pooling",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：全局平均汇聚承担分类头",
+        "markdown": "NiN 使用一个 NiN 块，其输出通道数等于标签类别的数量，最后放一个全局平均汇聚层生成一个对数几率。\n\n教材小结进一步说明：NiN 去除了容易造成过拟合的全连接层，将它们替换为全局平均汇聚层（即在所有位置上进行求和）；该汇聚层的通道数量为所需的输出数量（例如 Fashion-MNIST 的输出为 10）。移除全连接层可减少过拟合，同时显著减少 NiN 的参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gap-formula",
+        "moduleId": "global-average-pooling",
+        "depth": "core",
+        "kind": "formula",
+        "title": "模型补充：全局平均汇聚的写法",
+        "markdown": "把最后一个 NiN 块的输出记为 $x$，其形状为 $C \\times H \\times W$，其中 $C$ 等于类别数。全局平均汇聚对每个通道在全部空间位置上取平均：\n\n$$y_c = \\frac{1}{H \\times W} \\sum_{i=1}^{H} \\sum_{j=1}^{W} x_{c,i,j}$$\n\n得到的 $y_c$ 就是第 $c$ 类的对数几率，代码中由 `nn.AdaptiveAvgPool2d((1, 1))` 完成，随后 `nn.Flatten()` 把 (1, 10, 1, 1) 变成 (1, 10)。这一步没有需要学习的权重，只有求和与除法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-global-pool"
+          ]
+        }
+      },
+      {
+        "id": "model-fc-vs-gap",
+        "moduleId": "global-average-pooling",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：全局平均汇聚与全连接层的三点差别",
+        "markdown": "| 维度 | 全连接分类头 | 全局平均汇聚 |\n|---|---|---|\n| 可学习参数 | 需要把展平特征映射到类别数，参数量随特征维度和类别数增长 | 只做空间平均，没有可学习参数 |\n| 输入尺寸 | 展平后维度固定，输入分辨率变化会破坏形状匹配 | 对每个通道在任意 $H \\times W$ 上求平均，输出恒为每通道一个值 |\n| 与空间位置的关系 | 每个位置各自拥有一组权重，容易记忆位置模式 | 对所有位置一视同仁，位置差异被平均掉 |\n\n代价是空间平均也丢掉了“得分在图上出现在哪里”的信息；当任务需要定位时，这一层就不再够用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-global-pool",
+            "model-gap-formula"
+          ]
+        }
+      },
+      {
+        "id": "tb-results",
+        "moduleId": "tradeoffs",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：训练结果与小结",
+        "markdown": "教材用 Fashion-MNIST 训练 NiN，学习率 0.1、10 个 epoch、批量大小 128，并把图像调整为 224，得到 loss 0.563、train acc 0.786、test acc 0.790。\n\n小结给出的结论是：使用由一个卷积层和多个 1×1 卷积层组成的块，可以在卷积神经网络中使用，以允许更多的每像素非线性；NiN 去除了容易造成过拟合的全连接层，将它们替换为全局平均汇聚层；移除全连接层可减少过拟合，同时显著减少 NiN 的参数；NiN 的设计影响了许多后续卷积神经网络的设计。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tradeoff",
+        "moduleId": "tradeoffs",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：参数少不等于训练快",
+        "markdown": "教材同时给出两个方向的判断：取消全连接层显著减少参数、降低过拟合风险；但这种设计有时会增加训练模型的时间。两者并不矛盾——参数量衡量的是模型容量与显存占用，训练时间还取决于层数、每层的计算密度和设备利用效率。\n\nNiN 用多个 1×1 卷积替代一个大矩阵乘法，单层计算量变小但层数与访存次数变多，在硬件上未必更快。评价这类设计时要分开问：参数是否更少、显存是否更省、单次迭代是否更快、收敛所需轮数是否更多。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-results",
+            "tb-nin-model"
+          ]
+        }
+      },
+      {
+        "id": "tb-exercises",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "教材：与块设计相关的练习",
+        "markdown": "教材给出的练习中，与本节结构直接相关的有三项：\n\n1. 为什么 NiN 块中有两个 1×1 卷积层？删除其中一个，然后观察和分析实验现象。\n2. 计算 NiN 的资源使用情况：参数的数量是多少、计算量是多少、训练期间需要多少显存、预测期间需要多少显存。\n3. 一次性直接将 384×5×5 的表示缩减为 10×5×5 的表示，会存在哪些问题？",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check-questions",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：三道形成性检查",
+        "markdown": "**检查 1**：有人说“1×1 卷积不改变高度和宽度，所以只是把特征图原样传下去”。这句话错在哪里？\n\n要点：它仍然在通道维上做线性组合并接 ReLU，能改变通道数并引入非线性，只是不聚合邻域空间信息。\n\n**检查 2**：把 Fashion-MNIST 换成 100 类数据集，NiN 中哪一处结构必须改变？\n\n要点：最后一个 NiN 块的输出通道数要改为 100；全局平均汇聚与 Flatten 不必改动，输出自然变成 (1, 100)。\n\n**检查 3**：如果删掉全局平均汇聚、改回全连接层，参数量会怎样变化？\n\n要点：会增加一个从 (类别数 × 空间位置数) 到类别数的权重矩阵，参数量上升，同时重新引入对固定输入尺寸的依赖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-exercises",
+            "tb-global-pool",
+            "model-gap-formula"
+          ]
+        }
+      },
+      {
+        "id": "tb-next-section",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材：对后续网络的影响",
+        "markdown": "教材在下一节开头说明，GoogLeNet 吸收了 NiN 中串联网络的思想，并在此基础上做了改进。这说明 NiN 的价值不只是一个具体模型，而是“在块内部串联微型网络”这一设计思路。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000053"
+              ],
+              "headingPath": [
+                "现代卷积神经网络",
+                "网络中的网络（NiN）"
+              ],
+              "lineStart": 10742,
+              "lineEnd": 10906,
+              "assetRefs": [
+                "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+                "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+                "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+              ],
+              "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "check-and-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：本点收束",
+        "markdown": "把 NiN 概括成三句话：块内用普通卷积提取空间特征，再用两个 1×1 卷积做逐像素非线性变换；整网取消全连接层，用“通道数等于类别数 + 全局平均汇聚”直接产生对数几率；由此换来更少的参数与更低的过拟合风险，代价是训练时间可能增加、空间定位信息被平均掉。\n\n接下来学习 GoogLeNet 时，可以留意它如何把这种“块内串联”的思想与并行多尺度路径结合起来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-next-section",
+            "tb-results"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "nin-block-check",
+        "type": "formative-check",
+        "title": "NiN 结构与取舍检查",
+        "anchorBlockId": "model-check-questions",
+        "moduleId": "check-and-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "explain-nin-block",
+          "build-nin-head",
+          "evaluate-tradeoffs"
+        ],
+        "learningPurpose": "检查学习者能否区分 1×1 卷积的作用、定位决定类别数的结构，并说清参数与训练时间的取舍。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-nin-block",
+            "tb-global-pool",
+            "tb-results"
+          ]
+        },
+        "config": {
+          "questions": 3,
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用三句话分别回答：1×1 卷积在通道维上做了什么；NiN 中哪一处决定输出类别数；取消全连接层换来什么、付出什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代卷积神经网络",
+  "clusterId": "chapter-7",
+  "clusterIds": [
+    "chapter-7"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000053"
+      ],
+      "headingPath": [
+        "现代卷积神经网络",
+        "网络中的网络（NiN）"
+      ],
+      "lineStart": 10742,
+      "lineEnd": 10906,
+      "assetRefs": [
+        "parts/part-0003/images/4238370683b3323dde5d802fce04d4b8c003895fecdcd8c6904925a692b6d872.jpg",
+        "parts/part-0003/images/685a14f1ad3b1ad6d8b220a7f74b8aa16315a082804b740cb20168e128451b2a.jpg",
+        "parts/part-0003/images/911d3cb8920206fc2e464b5989b47ffd81590c987096bca54abda613fd1c5dbd.jpg"
+      ],
+      "excerptSha256": "375d370a5287fbcc1130ed1825fc72ffb239a8c3fad5b7c030e60a3f688f0c6f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1363,
+    1934
+  ],
+  "scale": 0.88
+}

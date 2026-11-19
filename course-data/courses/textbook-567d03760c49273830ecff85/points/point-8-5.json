@@ -1,0 +1,636 @@
+{
+  "id": "point-8-5",
+  "title": "循环神经网络的从零开始实现",
+  "shortSummary": "手工实现循环单元、时间步前向、困惑度评估与基于时间的反向传播训练。",
+  "keyTerms": [
+    "循环单元",
+    "困惑度",
+    "时间步",
+    "反向传播"
+  ],
+  "animationType": "rnnForwardRecurrence",
+  "animationSuggestion": "以时间轴横向展开 T 个时间步，高亮当前步的输入向量与上一时刻隐状态如何汇入同一个循环单元，实时显示隐状态数值条和该步输出分布的变化；走完后展示拼接后的输出矩阵与损失位置，并提供重播按钮回到相同初始条件。",
+  "difficulty": "中等",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-8-3",
+    "point-8-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "implementation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的从零实现顺序与全部关键代码逻辑，按“输入编码—循环单元—预测—稳定训练—训练循环”重排讲解，只在教师容易跳过的地方补充直觉、形状追踪与排错清单。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-shapes",
+          "text": "解释为何要把词元索引做独热编码，并说明输入张量从（批量，时间步）到（时间步，批量，词表大小）的转换理由。"
+        },
+        {
+          "id": "implement-rnn-step",
+          "text": "写出单时间步的隐状态与输出计算公式，说明各参数形状、参数共享方式以及输出张量的拼接结果。"
+        },
+        {
+          "id": "run-warmup-predict",
+          "text": "说明预热期在预测中的作用，并能描述按前缀逐字符生成后续文本的流程。"
+        },
+        {
+          "id": "apply-grad-clipping",
+          "text": "用全局范数裁剪公式约束梯度，并说明它针对梯度爆炸而非梯度消失。"
+        },
+        {
+          "id": "train-with-sampling",
+          "text": "比较顺序分区与随机抽样下的隐状态初始化与梯度分离策略，并用困惑度解释训练结果。"
+        }
+      ],
+      "misconceptions": [
+        "把预热期理解成用前缀继续训练模型；预热只做前向计算并更新隐状态，不计算梯度也不更新参数。",
+        "认为梯度裁剪能同时解决梯度消失；教材明确指出它只快速缓解梯度爆炸。",
+        "把困惑度当成词元数量或准确率；它是平均交叉熵的指数，越小越好且可跨序列长度比较。",
+        "在顺序分区训练时对上一个批量的隐状态忘记 detach，导致梯度跨批量回传、计算量和显存异常增长。"
+      ],
+      "modules": [
+        {
+          "id": "import-and-encoding",
+          "title": "任务设定与输入编码",
+          "role": "motivation-and-definition",
+          "outcomeRefs": [
+            "explain-shapes"
+          ],
+          "order": 0
+        },
+        {
+          "id": "parameters-and-cell",
+          "title": "参数初始化与循环单元",
+          "role": "mechanism",
+          "outcomeRefs": [
+            "implement-rnn-step"
+          ],
+          "order": 1
+        },
+        {
+          "id": "warmup-and-predict",
+          "title": "预热期与文本生成",
+          "role": "procedure",
+          "outcomeRefs": [
+            "run-warmup-predict"
+          ],
+          "order": 2
+        },
+        {
+          "id": "gradient-clipping",
+          "title": "梯度裁剪",
+          "role": "stability",
+          "outcomeRefs": [
+            "apply-grad-clipping"
+          ],
+          "order": 3
+        },
+        {
+          "id": "training-and-sampling",
+          "title": "训练循环与采样策略",
+          "role": "procedure-and-comparison",
+          "outcomeRefs": [
+            "train-with-sampling"
+          ],
+          "order": 4
+        },
+        {
+          "id": "results-and-audit",
+          "title": "训练结果与实现检查",
+          "role": "evidence-and-checklist",
+          "outcomeRefs": [
+            "implement-rnn-step",
+            "apply-grad-clipping",
+            "train-with-sampling"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-shapes",
+          "implement-rnn-step",
+          "run-warmup-predict",
+          "apply-grad-clipping",
+          "train-with-sampling"
+        ],
+        "method": "独立写出单时间步前向与一个训练批量的更新流程，并用检查表自查形状、梯度分离与裁剪位置。",
+        "successCriteria": [
+          "能写出隐状态与输出公式，并给出各张量形状",
+          "能指出预热期不做参数更新",
+          "能用全局范数说明裁剪后梯度不超过阈值",
+          "能说明顺序分区与随机抽样在状态初始化上的差别"
+        ],
+        "exerciseBlockId": "model-audit-checklist",
+        "summaryBlockId": "model-takeaways",
+        "nextPointId": "point-8-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-task-setup",
+        "moduleId": "import-and-encoding",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：本节要搭什么",
+        "markdown": "本节按 8.4 节给出的循环神经网络设计，从零实现一个字符级语言模型，并在 H. G. Wells 的《时光机器》数据集上训练。数据由 `d2l.load_data_time_machine` 读入，超参数取批量大小 32、时间步数 35，得到小批量 `train_iter` 和词表 `vocab`。此时每个词元只是一个 0 到 N−1 的数字索引，模型需要先把索引变成向量才能送进线性层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-index-input",
+        "moduleId": "import-and-encoding",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：索引为什么不能直接输入",
+        "markdown": "索引只是词表里的编号，数值大小没有语义。若直接把 0、1、2 当作特征，线性层会把“2 比 1 大”当成有意义的间距，从而引入与文本无关的偏置。独热向量把每个词元放到 N 维空间的一组正交基上：不同词元的向量内积为 0，长度都为 1，模型于是只从“是哪个词”出发学习权重。代价是独热本身不携带任何相似性，词义关系完全靠后续训练得到。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-setup"
+          ]
+        }
+      },
+      {
+        "id": "tb-onehot",
+        "moduleId": "import-and-encoding",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：独热编码与维度重排",
+        "markdown": "设词表中不同词元的数目为 $N$（即 `len(vocab)`），索引取值 $0$ 到 $N-1$。索引为 $i$ 的词元被表示成长度为 $N$ 的全零向量，仅第 $i$ 个位置置 1，这就是独热向量。\n\n一个批量原本是 (批量大小, 时间步数) 的二维张量，`one_hot` 之后最后一维等于词表大小，得到 (批量大小, 时间步数, N)。实现中还会把输入转置成 (时间步数, 批量大小, N)，因为循环要对最外层的时间维逐层迭代，这样每一步取出的 `X` 形状是 (批量大小, N)。教材的验证例子里，把 10 个索引排成 (2, 5) 再转置做 one-hot，得到 `torch.Size([5, 2, 28])`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-onehot-embedding-view",
+        "moduleId": "import-and-encoding",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充：独热编码其实是固定嵌入表",
+        "markdown": "独热向量乘权重矩阵 $\\mathbf{X}\\mathbf{W}_{xh}$ 时，结果只等于 $\\mathbf{W}_{xh}$ 中第 $i$ 行，其余行乘 0 被丢弃。因此“独热 + 线性层”在数学上等价于一次查表，只不过这张嵌入表固定为单位矩阵、不可训练。把这个单位矩阵换成可学习矩阵，就是后面章节的词嵌入。教材练习也提示：独热编码等价于为每个对象选择不同的嵌入表示。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-onehot",
+            "model-index-input"
+          ]
+        }
+      },
+      {
+        "id": "tb-params",
+        "moduleId": "parameters-and-cell",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：初始化模型参数",
+        "markdown": "隐藏单元数 `num_hiddens` 是可调超参数。训练语言模型时输入和输出来自同一词表，所以输入维度和输出维度都等于词表大小 `vocab_size`。需要初始化的参数共五组：输入到隐藏的 $\\mathbf{W}_{xh}$、隐藏到隐藏的 $\\mathbf{W}_{hh}$、隐藏偏置 $\\mathbf{b}_h$、隐藏到输出的 $\\mathbf{W}_{hq}$、输出偏置 $\\mathbf{b}_q$。权重用标准差 0.01 的正态分布随机初始化，偏置置零，最后对每个参数调用 `requires_grad_(True)` 以纳入自动微分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-param-table",
+        "moduleId": "parameters-and-cell",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：参数形状速查",
+        "markdown": "| 参数 | 形状 | 作用 |\n| --- | --- | --- |\n| $\\mathbf{W}_{xh}$ | $N \\times h$ | 当前词元输入到隐藏状态 |\n| $\\mathbf{W}_{hh}$ | $h \\times h$ | 上一时刻隐状态到当前隐状态 |\n| $\\mathbf{b}_h$ | $h$ | 隐藏层偏置 |\n| $\\mathbf{W}_{hq}$ | $h \\times N$ | 隐状态到输出 logits |\n| $\\mathbf{b}_q$ | $N$ | 输出偏置 |\n\n其中 $N$ 为词表大小、$h$ 为隐藏单元数，参数量合计 $2Nh + h^2 + h + N$。教材用 $N=28$、$h=512$，算出约 29 万个参数，相比词表规模并不大，说明循环网络的参数在时间步之间完全共享。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-params"
+          ]
+        }
+      },
+      {
+        "id": "tb-recurrence",
+        "moduleId": "parameters-and-cell",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：单时间步的隐状态与输出",
+        "markdown": "`init_rnn_state` 返回形状为 (批量大小, 隐藏单元数) 的全零张量，并用元组包裹，以便将来兼容多变量隐状态。单步计算在 `rnn` 函数里完成：\n\n$$\\mathbf{H}_t = \\tanh(\\mathbf{X}_t \\mathbf{W}_{xh} + \\mathbf{H}_{t-1} \\mathbf{W}_{hh} + \\mathbf{b}_h)$$\n\n$$\\mathbf{Y}_t = \\mathbf{H}_t \\mathbf{W}_{hq} + \\mathbf{b}_q$$\n\n循环沿 `inputs` 最外层的时间维推进，每个时间步把 $\\mathbf{Y}_t$ 追加到列表，最后在维度 0 上 `torch.cat` 拼接。激活函数选 tanh，教材指出在对称分布输入下其均值为 0，避免隐状态整体偏移。`RNNModelScratch` 类把参数、初始状态函数和前向函数封装起来，调用时先做 `F.one_hot(X.T, vocab_size)` 并转成浮点。以 $h=512$、批量 2、时间步 5 检查，输出形状是 (时间步数×批量大小, 词表大小) 即 (10, 28)，隐状态仍是 (2, 512)。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cell-trace",
+        "moduleId": "parameters-and-cell",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：手算一个时间步",
+        "markdown": "取一个小例子建立形状直觉：词表 $N=4$、隐藏单元 $h=2$、批量 1。当前词元索引为 1，独热输入 $\\mathbf{X}_t = [0,1,0,0]$；上一隐状态 $\\mathbf{H}_{t-1} = [0,0]$；取 $\\mathbf{W}_{xh}$ 的前两行为单位阵、后两行为零，$\\mathbf{W}_{hh}$ 为单位阵，$\\mathbf{b}_h=\\mathbf{0}$。于是\n\n$$\\mathbf{X}_t\\mathbf{W}_{xh} + \\mathbf{H}_{t-1}\\mathbf{W}_{hh} + \\mathbf{b}_h = [0,1]$$\n\n$$\\mathbf{H}_t = \\tanh([0,1]) = [0,\\ 0.7616]$$\n\n若 $\\mathbf{W}_{hq}$ 的第 3 行对应第 2 个隐藏单元、其余行为零，则 $\\mathbf{Y}_t = [0,\\ 0.7616,\\ 0,\\ 0]$，取 argmax 得到下一个词元索引 2。可以看到：输出维度由词表决定，隐状态维度由隐藏单元数决定，两者互不相等。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-recurrence",
+            "tb-params"
+          ]
+        }
+      },
+      {
+        "id": "tb-warmup-predict",
+        "moduleId": "warmup-and-predict",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：预热期与按前缀生成",
+        "markdown": "`predict_ch8` 在用户给出的前缀后面生成新字符。流程是：先以批量 1 初始化隐状态，把前缀第一个字符作为初始输入；然后逐字符遍历前缀剩余部分，每步只把字符喂给网络并更新隐状态，不产生任何预测，这段过程叫预热期；预热结束后再执行 `num_preds` 步，每步取输出 logits 的 argmax 作为新字符，并把它作为下一步输入。最后按索引映射回字符拼成字符串。\n\n教材强调预热期的作用是让模型自我更新：期间隐状态不断吸收前缀信息，其值通常比初始零状态更适合预测。未训练的模型只会输出荒谬结果，例如前缀 `time traveller` 后面接上一长串 `a`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-warmup-why",
+        "moduleId": "warmup-and-predict",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：预热为什么改善条件概率",
+        "markdown": "隐状态是历史信息的压缩表示，全零初始值不含任何文本信息。若直接让模型预测第一个字符，它只能在“没有上下文”的条件下猜；预热把前缀的真实字符逐步写进 $\\mathbf{H}$，到需要生成的时刻，隐状态已经编码了这段前缀，输出才接近 $P(x_t \\mid x_{t-1}, \\ldots, x_1)$。\n\n两个容易混淆的点：预热是纯前向过程，不计算损失、不调用反向传播、不更新参数；预热长度等于前缀长度，前缀越长隐状态携带的信息越多，但每多一个字符就多一次前向计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-warmup-predict",
+            "tb-recurrence"
+          ]
+        }
+      },
+      {
+        "id": "tb-clipping",
+        "moduleId": "gradient-clipping",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：梯度裁剪",
+        "markdown": "长度为 $T$ 的序列要在 $T$ 个时间步上累计梯度，反向传播形成长度为 $\\mathcal{O}(T)$ 的矩阵乘法链；$T$ 较大时会出现数值不稳定，例如梯度爆炸或梯度消失，因此循环网络往往需要额外的稳定手段。\n\n设目标函数 $f$ 在常数 $L$ 下利普希茨连续，则按 $\\eta\\mathbf{g}$ 更新后有 $|f(\\mathbf{x}) - f(\\mathbf{x}-\\eta\\mathbf{g})| \\leq L\\eta\\|\\mathbf{g}\\|$：这既限制了每次更新的进展速度，也限制了走错方向时的破坏程度。当梯度偶尔过大时，与其整体调小学习率，更常用的做法是把梯度投影回半径 $\\theta$ 的球：\n\n$$\\mathbf{g} \\leftarrow \\min\\left(1, \\frac{\\theta}{\\|\\mathbf{g}\\|}\\right)\\mathbf{g}$$\n\n裁剪后梯度范数永不超过 $\\theta$，方向与原梯度完全一致，同时限制了任一小批量（乃至其中任一样本）对参数的影响。教材明确它的定位：快速缓解梯度爆炸的有效技术之一，但不能完全解决问题，也不能应对梯度消失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-clipping-example",
+        "moduleId": "gradient-clipping",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：裁剪算例与实现细节",
+        "markdown": "设所有参数梯度拼成的向量为 $\\mathbf{g}=(3,4)$，范数为 5。取阈值 $\\theta=1$：缩放因子 $\\min(1, 1/5)=0.2$，裁剪后为 $(0.6, 0.8)$，范数恰为 1。若取 $\\theta=10$，因子为 1，梯度原样保留。这解释了为什么阈值太小会让训练变慢：每一步被压得极小。\n\n`grad_clipping` 计算的是**所有可训练参数**梯度平方和再开方得到的全局范数，而不是逐参数裁剪，因此它保持的是整体更新方向。调用位置也很关键：必须在 `backward()` 之后、`updater.step()` 或手工 SGD 更新之前执行；教材在训练循环里固定取 $\\theta=1$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-clipping"
+          ]
+        }
+      },
+      {
+        "id": "tb-training",
+        "moduleId": "training-and-sampling",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：训练循环的三处特殊处理",
+        "markdown": "一个迭代周期的训练函数与普通模型有三点不同。第一，序列数据的采样方式会改变隐状态初始化：顺序分区只在每个迭代周期开始处初始化隐状态，并把当前小批量最后一个样本的隐状态交给下一个小批量，使历史信息在相邻子序列间流动；随机抽样因为样本位置随机，需要每个迭代周期重新初始化。第二，更新参数之前先裁剪梯度，即使某处发生梯度爆炸也不至于发散。第三，用困惑度评价模型，保证不同长度序列可比。\n\n顺序分区还带来一个计算问题：任一点的隐状态都依赖本周期前面所有小批量，梯度会越滚越长。为降低计算量，教材在处理每个小批量之前先对隐状态做 `detach_()`，把梯度计算限制在该小批量的时间步内。训练函数最后返回 $\\exp(\\text{累计损失}/\\text{词元数})$ 作为困惑度，以及每秒处理的词元数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sampling-compare",
+        "moduleId": "training-and-sampling",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：两种采样策略对照",
+        "markdown": "| 维度 | 顺序分区 | 随机抽样 |\n| --- | --- | --- |\n| 隐状态初始化 | 每个迭代周期开始处一次 | 每个迭代周期重新初始化 |\n| 跨小批量传递 | 传递上一批最后一个隐状态 | 不传递 |\n| 梯度范围 | 每批前 detach，限制在本批时间步 | 天然只在本批内 |\n| 教材实测困惑度 | 1.0 | 1.5 |\n| 适合场景 | 长文本连贯建模 | 打散局部相关性、实现更简单 |\n\n顺序分区的困惑度更低，因为它让模型在相邻子序列之间保留了上下文；代价是实现更复杂，且必须正确 detach，否则梯度图会跨批量累积。随机抽样实现简单、样本更独立，但每个周期都从零状态起步，损失了一部分跨段信息。两者都不是“更正确”的选择，而是连贯性与独立性之间的取舍。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training"
+          ]
+        }
+      },
+      {
+        "id": "tb-results",
+        "moduleId": "results-and-audit",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材：训练配置与实测结果",
+        "markdown": "数据集只用了 10000 个词元，因此教材把迭代周期设为 500、学习率设为 1，隐藏单元数 512。顺序分区训练后困惑度达到 1.0，模型能续写出连贯片段；改用随机抽样后困惑度为 1.5，文本仍然通顺但略差。\n\n小结给出的要点是：可以训练一个基于循环网络的字符级语言模型，按用户给出的前缀生成后续文本；一个简单的循环网络语言模型由输入编码、循环网络模型和输出生成三部分组成；训练前需要初始化状态，而随机抽样与顺序划分的初始化方式不同；顺序划分要分离梯度以减少计算量；预测前要通过预热期自我更新；梯度裁剪可以防止梯度爆炸，但不能应对梯度消失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000063"
+              ],
+              "headingPath": [
+                "循环神经网络",
+                "循环神经网络的从零开始实现"
+              ],
+              "lineStart": 13224,
+              "lineEnd": 13620,
+              "assetRefs": [
+                "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+                "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+              ],
+              "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-audit-checklist",
+        "moduleId": "results-and-audit",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "补充：实现检查表与故障定位",
+        "markdown": "写完代码后按顺序自查：\n\n1. 输入是否已转置成 (时间步, 批量, 词表)，one-hot 结果是否转成浮点型；\n2. 每个时间步的隐状态形状是否保持 (批量, 隐藏单元数)；\n3. 输出拼接后是否为 (时间步×批量, 词表)，并与标签 `Y.T.reshape(-1)` 对齐；\n4. 顺序分区时是否在每批前 detach，随机抽样时是否每周期重新初始化状态；\n5. 裁剪是否在 `backward()` 之后、参数更新之前；\n6. 困惑度是否由平均交叉熵取指数得到。\n\n常见故障对应关系：损失长期不降，先查 one-hot 是否漏做转置、标签是否错位；出现 `nan`，先查是否忘记裁剪或学习率过大；预测结果反复输出同一字符，通常是训练轮数不足或状态没有正确传递。未训练的模型输出乱码属于正常现象，不是实现错误。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-recurrence",
+            "tb-training",
+            "tb-results"
+          ]
+        }
+      },
+      {
+        "id": "model-takeaways",
+        "moduleId": "results-and-audit",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "把这节压缩成五句话：独热编码把索引变成 N 维单位向量，转置后按时间步迭代；五组参数在时间步之间共享，单步计算是 tanh 隐状态加线性输出；预测前必须预热，预热只更新隐状态不更新参数；梯度裁剪按全局范数缩放、保住方向，只治爆炸不治消失；顺序分区要跨批传递隐状态并 detach，随机抽样每周期重置，困惑度用指数化的平均交叉熵衡量。\n\n这套从零实现虽然清楚展示了每一步，但代码冗长、运行也慢。下一节会用框架的高级接口重写同一个语言模型，并在相同的评价方式下比较两者的差异。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-results",
+            "model-audit-checklist"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "rnn-shape-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-cell-trace",
+        "moduleId": "parameters-and-cell",
+        "depth": "core",
+        "outcomeRefs": [
+          "implement-rnn-step"
+        ],
+        "learningPurpose": "检查学习者能否根据参数形状推出输出与隐状态的维度，而不是死记数字。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-recurrence",
+            "tb-params"
+          ]
+        },
+        "config": {
+          "questions": [
+            {
+              "prompt": "词表大小 N=28、隐藏单元 h=512、批量 2、时间步 5，输出张量的形状是什么？",
+              "options": [
+                "(2, 5, 28)",
+                "(10, 28)",
+                "(5, 2, 512)"
+              ],
+              "answerIndex": 1
+            },
+            {
+              "prompt": "同一配置下，一个时间步之后的隐状态形状是什么？",
+              "options": [
+                "(2, 512)",
+                "(10, 28)",
+                "(512, 28)"
+              ],
+              "answerIndex": 0
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请写出输出张量与隐状态的形状，并说明它们分别由词表大小和隐藏单元数决定。"
+        }
+      },
+      {
+        "id": "clipping-decision-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-clipping-example",
+        "moduleId": "gradient-clipping",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-grad-clipping"
+        ],
+        "learningPurpose": "检查学习者能否按全局范数判断是否裁剪，并说明裁剪的适用边界。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-clipping"
+          ]
+        },
+        "config": {
+          "questions": [
+            {
+              "prompt": "梯度向量 (3, 4)、阈值 θ=1 时，裁剪后的梯度是什么？",
+              "options": [
+                "(0.6, 0.8)",
+                "(1, 1)",
+                "(3, 4)"
+              ],
+              "answerIndex": 0
+            },
+            {
+              "prompt": "梯度裁剪主要缓解哪类问题？",
+              "options": [
+                "梯度消失",
+                "梯度爆炸",
+                "过拟合"
+              ],
+              "answerIndex": 1
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请按 $\\min(1, \\theta/\\|\\mathbf{g}\\|)$ 计算裁剪结果，并说明梯度裁剪能缓解和不能缓解的问题。"
+        }
+      }
+    ]
+  },
+  "subtitle": "循环神经网络",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000063"
+      ],
+      "headingPath": [
+        "循环神经网络",
+        "循环神经网络的从零开始实现"
+      ],
+      "lineStart": 13224,
+      "lineEnd": 13620,
+      "assetRefs": [
+        "parts/part-0004/images/416758bd64e1de8c7c7c4bb0a55006b12a5f859184d5b1e07b32b0474d706626.jpg",
+        "parts/part-0004/images/78070bde42f7cc73d1f06daaf9f525733d39cfc55687e3de10a65c2fd7583fb3.jpg"
+      ],
+      "excerptSha256": "ad14733ac9b86b6650e751adc7e454fbe214e586f798a91cf1226b337ff3d1ab"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    925,
+    1970
+  ],
+  "scale": 0.93
+}

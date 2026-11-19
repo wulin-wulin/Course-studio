@@ -1,0 +1,391 @@
+{
+  "id": "point-10-5",
+  "title": "多头注意力",
+  "shortSummary": "说明多个注意力头如何并行学习不同子空间关系，再拼接并线性变换为统一表示。",
+  "keyTerms": [
+    "多头注意力",
+    "子空间",
+    "拼接",
+    "线性变换"
+  ],
+  "animationType": "multiHeadAttention",
+  "animationSuggestion": "分阶段显示：同一组输入被 h 组投影分派到不同子空间，h 个注意力汇聚并行推进，最后汇聚到拼接与 W_o 输出；允许单步查看某一头的投影与汇聚结果，以及拼接后的向量组成。",
+  "difficulty": "进阶",
+  "importance": 0.88,
+  "prerequisites": [
+    "point-10-3"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism-with-implementation",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的多头公式、参数形状与并行实现结论，围绕“为什么多头、每个头算什么、如何拼回统一表示”重排讲解，并补充形状走查与达成检查。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-motivation",
+          "text": "解释为什么在相同的查询、键和值上使用多个注意力头。"
+        },
+        {
+          "id": "compute-head-output",
+          "text": "写出单个头的投影与注意力汇聚公式，并说明各组参数的作用。"
+        },
+        {
+          "id": "explain-concat-output",
+          "text": "说明拼接各头输出后如何用输出投影得到最终表示。"
+        },
+        {
+          "id": "explain-parallel-implementation",
+          "text": "说明如何通过张量变形在批量维上并行计算多个头。"
+        }
+      ],
+      "misconceptions": [
+        "把多头注意力理解成多个独立模型，忽略各头共用输入且必须经输出投影融合。",
+        "认为头数越多效果一定越好，忽略总维度固定时每头维度会随之缩小。"
+      ],
+      "modules": [
+        {
+          "id": "why-multi-head",
+          "title": "为什么需要多个头",
+          "role": "motivation",
+          "description": "从同一组输入需要捕获不同范围依赖出发，引入子空间表示与多头设计。",
+          "outcomeRefs": [
+            "explain-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "head-mechanism",
+          "title": "单个头的计算",
+          "role": "core-mechanism",
+          "description": "给定投影矩阵与汇聚函数，形式化第 i 个头的输出。",
+          "outcomeRefs": [
+            "compute-head-output"
+          ],
+          "order": 1
+        },
+        {
+          "id": "concat-and-project",
+          "title": "拼接与输出投影",
+          "role": "core-mechanism",
+          "description": "把 h 个头的结果拼接并乘以输出投影，得到统一表示。",
+          "outcomeRefs": [
+            "explain-concat-output"
+          ],
+          "order": 2
+        },
+        {
+          "id": "parallel-implementation",
+          "title": "并行实现与形状走查",
+          "role": "worked-example",
+          "description": "用 p_q=p_k=p_v=p_o/h 与张量变形让 h 个头并行计算，并跟踪输出形状。",
+          "outcomeRefs": [
+            "explain-parallel-implementation"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与衔接",
+          "role": "formative-check",
+          "description": "通过参数形状、退化情形与头重要性判断检查理解，并衔接自注意力。",
+          "outcomeRefs": [
+            "explain-motivation",
+            "compute-head-output",
+            "explain-concat-output",
+            "explain-parallel-implementation"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-motivation",
+          "compute-head-output",
+          "explain-concat-output",
+          "explain-parallel-implementation"
+        ],
+        "method": "完成三道检查题并说明依据的公式或形状。",
+        "successCriteria": [
+          "能写出式 10.5.1 与式 10.5.2 并解释各符号",
+          "能说明并行实现中每个头的形状与最终输出形状",
+          "能指出多头注意力成立所依赖的关键条件"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-10-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-motivation",
+        "moduleId": "why-multi-head",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "同一组查询、键和值，希望学到不同行为",
+        "markdown": "当查询、键和值的集合固定时，我们希望模型可以基于相同的注意力机制学习到不同的行为，再把不同行为作为知识组合起来，捕获序列内各种范围的依赖，例如短距离依赖与长距离依赖。单个注意力汇聚只产生一种加权平均，因此教材提出：允许注意力机制组合使用查询、键和值的不同子空间表示（representation subspaces）。\n\n为此，模型用独立学习得到的 $h$ 组线性投影分别变换查询、键和值，把这 $h$ 组变换结果并行送入注意力汇聚，再将 $h$ 个输出拼接并经过另一个可学习的线性投影得到最终输出。这种设计称为多头注意力（multihead attention），其中每个注意力汇聚称为一个头（head）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000080"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "多头注意力"
+              ],
+              "lineStart": 16964,
+              "lineEnd": 17189,
+              "assetRefs": [
+                "parts/part-0005/images/0d159bd107e6bc1ecbcb63d22670b4021a7aed58329122f8b2e64472741be281.jpg"
+              ],
+              "excerptSha256": "23c2ebd1467f860da20e765180393e96a5cfadd325092c52b5ebeb671ee7f5f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-analogy",
+        "moduleId": "why-multi-head",
+        "depth": "support",
+        "kind": "example",
+        "title": "模型补充：同一批数据的多个投影视角",
+        "markdown": "可以把它想成对同一批数据从不同角度取景：每个头先把 $\\mathbf{q}$、$\\mathbf{k}$、$\\mathbf{v}$ 投影到自己的子空间，在那里单独做一次注意力汇聚，得到一份侧重不同的描述。多份描述合并之后，模型不必让单一加权方式同时承载所有关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-motivation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-head-computation",
+        "moduleId": "head-mechanism",
+        "depth": "core",
+        "kind": "formula",
+        "title": "单个头的计算（式 10.5.1）",
+        "markdown": "给定查询 $\\mathbf{q}\\in\\mathbb{R}^{d_q}$、键 $\\mathbf{k}\\in\\mathbb{R}^{d_k}$ 和值 $\\mathbf{v}\\in\\mathbb{R}^{d_v}$，第 $i$ 个头（$i=1,\\dots,h$）先用自己的一组投影变换三者，再做注意力汇聚：\n\n$$\\mathbf{h}_i = f\\left(\\mathbf{W}_i^{(q)}\\mathbf{q}, \\mathbf{W}_i^{(k)}\\mathbf{k}, \\mathbf{W}_i^{(v)}\\mathbf{v}\\right) \\in \\mathbb{R}^{p_v}$$\n\n其中可学习参数为 $\\mathbf{W}_i^{(q)}\\in\\mathbb{R}^{p_q\\times d_q}$、$\\mathbf{W}_i^{(k)}\\in\\mathbb{R}^{p_k\\times d_k}$ 和 $\\mathbf{W}_i^{(v)}\\in\\mathbb{R}^{p_v\\times d_v}$，而 $f$ 是注意力汇聚函数，可以是 10.3 节中的加性注意力或缩放点积注意力。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000080"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "多头注意力"
+              ],
+              "lineStart": 16964,
+              "lineEnd": 17189,
+              "assetRefs": [
+                "parts/part-0005/images/0d159bd107e6bc1ecbcb63d22670b4021a7aed58329122f8b2e64472741be281.jpg"
+              ],
+              "excerptSha256": "23c2ebd1467f860da20e765180393e96a5cfadd325092c52b5ebeb671ee7f5f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-head-meaning",
+        "moduleId": "head-mechanism",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：头的差异完全来自各自的投影",
+        "markdown": "$h$ 个头面对的是同一份输入 $\\mathbf{q},\\mathbf{k},\\mathbf{v}$，区别只在各自的 $\\mathbf{W}_i^{(q)},\\mathbf{W}_i^{(k)},\\mathbf{W}_i^{(v)}$。如果把这些投影取成相同值，各头输出就完全一致，多头注意力退化成同一个注意力汇聚的重复。因此“头”的多样性不是结构自带的性质，而是训练出来的。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-head-computation"
+          ]
+        }
+      },
+      {
+        "id": "textbook-concat-transform",
+        "moduleId": "concat-and-project",
+        "depth": "core",
+        "kind": "formula",
+        "title": "拼接后再做输出投影（式 10.5.2）",
+        "markdown": "多头注意力的输出还要经过一次线性转换，它作用于 $h$ 个头连接后的结果，其可学习参数为 $\\mathbf{W}_o\\in\\mathbb{R}^{p_o\\times hp_v}$：\n\n$$\\mathbf{W}_o\\begin{bmatrix}\\mathbf{h}_1\\\\ \\vdots \\\\ \\mathbf{h}_h\\end{bmatrix}\\in\\mathbb{R}^{p_o}$$\n\n教材据此指出：基于这种设计，每个头都可能关注输入的不同部分，因此可以表示比简单加权平均值更复杂的函数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000080"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "多头注意力"
+              ],
+              "lineStart": 16964,
+              "lineEnd": 17189,
+              "assetRefs": [
+                "parts/part-0005/images/0d159bd107e6bc1ecbcb63d22670b4021a7aed58329122f8b2e64472741be281.jpg"
+              ],
+              "excerptSha256": "23c2ebd1467f860da20e765180393e96a5cfadd325092c52b5ebeb671ee7f5f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-misconception",
+        "moduleId": "concat-and-project",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：三个常见误解",
+        "markdown": "1. **多头不是多个独立模型**：所有头共用同一组输入，只是投影不同，最后还必须经 $\\mathbf{W}_o$ 融合成一个表示。\n2. **拼接结果不能直接当输出**：省掉 $\\mathbf{W}_o$ 时，各头的结果只是被并排放置，模型无法按任务需要重新组合它们的权重与子空间。\n3. **头数越多不一定越好**：在 $p_o$ 固定时，$h$ 增大会让每个头的维度 $p_o/h$ 变小，单个头能表达的细节随之减少，需要实验权衡。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-head-computation",
+            "textbook-concat-transform"
+          ]
+        }
+      },
+      {
+        "id": "textbook-parallel-implementation",
+        "moduleId": "parallel-implementation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "并行实现：把 $h$ 个头摊进批量维",
+        "markdown": "实现时通常选择缩放点积注意力作为每个头的汇聚函数，并设定 $p_q=p_k=p_v=p_o/h$，以避免计算代价和参数代价随头数大幅增长。若把查询、键、值线性变换的输出数量设置为 $p_qh=p_kh=p_vh=p_o$，就可以并行计算 $h$ 个头；教材实现中 $p_o$ 由参数 `num_hiddens` 指定。\n\n并行化体现在张量形状变换上：`transpose_qkv` 先把形状 `(batch_size, 查询或“键-值”对的个数, num_hiddens)` 变形为 `(batch_size, ..., num_heads, num_hiddens/num_heads)`，再调换轴，得到 `(batch_size*num_heads, ..., num_hiddens/num_heads)`，于是每个头都成为批量中的一员；`transpose_output` 逆转这一操作，把各头结果合并回 `(batch_size, 查询的个数, num_hiddens)`，最后再送入 `W_o`。多头注意力的输出形状因此是 `(batch_size, num_queries, num_hiddens)`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000080"
+              ],
+              "headingPath": [
+                "注意力机制",
+                "多头注意力"
+              ],
+              "lineStart": 16964,
+              "lineEnd": 17189,
+              "assetRefs": [
+                "parts/part-0005/images/0d159bd107e6bc1ecbcb63d22670b4021a7aed58329122f8b2e64472741be281.jpg"
+              ],
+              "excerptSha256": "23c2ebd1467f860da20e765180393e96a5cfadd325092c52b5ebeb671ee7f5f6"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-walkthrough",
+        "moduleId": "parallel-implementation",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：把形状走一遍",
+        "markdown": "设 `num_hiddens = 100`、`num_heads = 5`，批大小为 2、查询数为 4、键值对数为 6，则每个头的维度为 $100/5=20$。`transpose_qkv` 之后，注意力在形状 `(10, 4, 20)` 上并行计算（$10=2\\times5$），`transpose_output` 合并回 `(2, 4, 100)`，`W_o` 不改变最后一维。教材示例的输出正是 `torch.Size([2, 4, 100])`，即 `(batch_size, num_queries, num_hiddens)`。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-parallel-implementation"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：达成检查",
+        "markdown": "1. 若 $h=8$、$p_o=512$，通常取 $p_q=p_k=p_v$ 为多少？与单头 $p_o=512$ 的注意力相比，参数总量会大幅增加吗？\n2. 若把 $\\mathbf{W}_i^{(q)}$、$\\mathbf{W}_i^{(k)}$、$\\mathbf{W}_i^{(v)}$ 对全部头都取相同值，多头注意力的输出会变成什么？\n3. 一个训练好的多头注意力模型中想剪掉最不重要的头以提速，你会用什么指标衡量某个头的重要性？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-concat-transform",
+            "textbook-parallel-implementation"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：与下一节的衔接",
+        "markdown": "多头注意力回答的是“如何用同一组查询、键和值同时关注多种关系，并把它们合成一个表示”。下一节把查询、键和值都取自同一组输入，得到自注意力，并说明如何用位置编码补回序列的顺序信息。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-check"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "multi-head-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "compute-head-output",
+          "explain-concat-output",
+          "explain-parallel-implementation"
+        ],
+        "learningPurpose": "检查学习者能否根据投影参数与张量形状判断多头注意力的行为与代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-head-computation",
+            "textbook-parallel-implementation"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "questions": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "分别回答：$h=8$、$p_o=512$ 时每头维度是多少；各头投影取相同值会得到什么输出；如何衡量单个头的重要性。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制",
+  "clusterId": "chapter-10",
+  "clusterIds": [
+    "chapter-10"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000080"
+      ],
+      "headingPath": [
+        "注意力机制",
+        "多头注意力"
+      ],
+      "lineStart": 16964,
+      "lineEnd": 17189,
+      "assetRefs": [
+        "parts/part-0005/images/0d159bd107e6bc1ecbcb63d22670b4021a7aed58329122f8b2e64472741be281.jpg"
+      ],
+      "excerptSha256": "23c2ebd1467f860da20e765180393e96a5cfadd325092c52b5ebeb671ee7f5f6"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1302,
+    1090
+  ],
+  "scale": 0.92
+}

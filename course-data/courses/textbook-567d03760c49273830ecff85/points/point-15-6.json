@@ -1,0 +1,524 @@
+{
+  "id": "point-15-6",
+  "title": "针对序列级和词元级应用微调BERT",
+  "shortSummary": "说明 BERT 在句子分类与词元标注任务上的输出头设计与微调方式。",
+  "keyTerms": [
+    "BERT",
+    "微调",
+    "序列级任务",
+    "词元级任务"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.8,
+  "prerequisites": [
+    "point-14-8"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "task-to-head-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的任务分类、输入标记约定与微调参数规则，围绕“任务粒度决定读取位置与输出头”重排讲解，补充对照表与判定练习。",
+      "estimatedMinutes": 16,
+      "outcomes": [
+        {
+          "id": "explain-minimal-change",
+          "text": "解释 BERT 微调为何只需添加额外全连接层，并说明新增层与预训练参数在学习过程中的差别。"
+        },
+        {
+          "id": "explain-sequence-heads",
+          "text": "说明单文本分类与文本对分类或回归如何从 BERT 表示得到输出标签或连续值。"
+        },
+        {
+          "id": "explain-token-heads",
+          "text": "说明文本标注与问答如何在词元级复用额外全连接层并产生输出。"
+        },
+        {
+          "id": "apply-choose-head",
+          "text": "给定一个自然语言处理任务，判断它属于序列级还是词元级，并说明输入组织方式与输出头设计。"
+        }
+      ],
+      "misconceptions": [
+        "以为微调只训练新增的全连接层、冻结预训练参数，而教材明确说明预训练 BERT 的所有参数都要微调。",
+        "以为问答的起止位置预测共享同一组全连接层参数，实际上两者的额外层参数相互独立。",
+        "以为词元级任务也读取分类标记位置的表示，实际上每个词元位置都要读取自己的表示。",
+        "以为问答模型生成答案文本，实际上它是在段落中选出连续片段，输出起止位置。"
+      ],
+      "modules": [
+        {
+          "id": "adaptation-problem",
+          "title": "为何微调与最小架构改动",
+          "role": "concept-motivation",
+          "description": "从任务多样性引出微调动机，明确新增层与预训练参数的学习方式。",
+          "outcomeRefs": [
+            "explain-minimal-change"
+          ],
+          "order": 0
+        },
+        {
+          "id": "sequence-level-heads",
+          "title": "序列级任务的输出头",
+          "role": "mechanism-with-comparison",
+          "description": "单文本分类与文本对分类或回归的输入表示、读取位置与输出形式。",
+          "outcomeRefs": [
+            "explain-sequence-heads"
+          ],
+          "order": 1
+        },
+        {
+          "id": "token-level-heads",
+          "title": "词元级任务的输出头",
+          "role": "mechanism-with-worked-example",
+          "description": "文本标注的位置共享输出头，以及问答的起止位置打分与片段选择。",
+          "outcomeRefs": [
+            "explain-token-heads"
+          ],
+          "order": 2
+        },
+        {
+          "id": "fine-tuning-procedure",
+          "title": "微调流程与参数更新",
+          "role": "procedure",
+          "description": "把任务粒度、输入组装、输出头、损失与端到端训练串成可执行流程。",
+          "outcomeRefs": [
+            "explain-minimal-change",
+            "apply-choose-head"
+          ],
+          "order": 3
+        },
+        {
+          "id": "task-comparison-check",
+          "title": "任务对照与达成检查",
+          "role": "comparison-and-check",
+          "description": "用统一维度比较四类任务，并通过情境判定检验迁移能力。",
+          "outcomeRefs": [
+            "apply-choose-head"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-minimal-change",
+          "explain-sequence-heads",
+          "explain-token-heads",
+          "apply-choose-head"
+        ],
+        "method": "完成四类任务的对照梳理，并对新的任务情境判定粒度、输入组织与输出头。",
+        "successCriteria": [
+          "能指出序列级任务读取分类标记位置的表示，词元级任务读取每个词元位置的表示",
+          "能说明新增全连接层从零学、预训练参数全部微调",
+          "能区分问答的起止两组独立参数与片段打分方式"
+        ],
+        "exerciseBlockId": "model-task-check",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-15-7"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-overview",
+        "moduleId": "adaptation-problem",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：为什么可以微调 BERT",
+        "markdown": "本章前几节为自然语言处理应用设计了不同的模型，例如基于循环神经网络、卷积神经网络、注意力和多层感知机的模型。这些专用模型在有空间或时间限制时是有帮助的，但为每个自然语言处理任务都精心设计一个特定模型实际上不可行。BERT 可以对广泛的自然语言处理任务进行最少的架构更改，原始版本的两个模型分别带有 1.1 亿和 3.4 亿个参数，因此有足够计算资源时可以微调 BERT 来服务下游应用。\n\n教材把自然语言处理应用的一个子集概括为序列级和词元级。在序列层次上讨论单文本分类与文本对分类（或回归）如何把文本输入的 BERT 表示转换为输出标签；在词元层次上讨论文本标注与问答如何表示输入并转换为输出标签。微调期间不同应用之间的“最小架构更改”是额外的全连接层：在下游应用的监督学习期间，额外层的参数从零开始学习，而预训练模型中的所有参数都是微调的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "针对序列级和词元级应用微调BERT"
+              ],
+              "lineStart": 31187,
+              "lineEnd": 31276,
+              "assetRefs": [
+                "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+                "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+                "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+                "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+              ],
+              "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-minimal",
+        "moduleId": "adaptation-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：改动小不等于冻结编码器",
+        "markdown": "可以把预训练 BERT 看成一台已经学会通用语言表示的编码器，微调只是给它换一个“读数器”。能只加一个全连接头，是因为 BERT 已经为每个位置和特殊位置产出了上下文相关的向量；不同任务真正的差别在于**读哪个位置的向量**以及**输出什么形式**，而不需要重新设计编码器。\n\n但“改动小”不等于“只训练新层”。教材明确：新增层从零开始学，预训练参数也全部微调。从优化角度看，任务数据会推动编码器把通用表示调整到对该任务更有判别力的方向；若冻结编码器，只靠一个从不完整监督信号学起的输出头去适配固定表示，可调容量就被限制在最后一个线性变换上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-single-text",
+        "moduleId": "sequence-level-heads",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：单文本分类",
+        "markdown": "单文本分类把单个文本序列作为输入，输出其分类结果。除情感分析外，语言可接受性语料库（COLA）也是单文本分类数据集，它要求判断给定句子在语法上是否可接受：\"I should study.\" 是可以接受的，而 \"I should studying.\" 是不可接受的。\n\nBERT 的输入序列明确表示单个文本和文本对，其中特殊分类标记 `<cls>` 用于序列分类，特殊标记 `<sep>` 标记单个文本的结束或分隔成对文本。在单文本分类应用中，`<cls>` 的 BERT 表示对整个输入文本序列的信息进行编码；作为单个文本的表示，它被送入由全连接（稠密）层组成的小多层感知机，以输出所有离散标签值的分布。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "针对序列级和词元级应用微调BERT"
+              ],
+              "lineStart": 31187,
+              "lineEnd": 31276,
+              "assetRefs": [
+                "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+                "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+                "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+                "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+              ],
+              "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cls-role",
+        "moduleId": "sequence-level-heads",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么序列级任务只读一个位置",
+        "markdown": "BERT 的编码器让每个位置都能同时看到左右上下文，因此 `<cls>` 位置的输出已经是对整句的聚合表示；它的位置固定在最前，读取它就不必关心输入长度。于是同一套“读 `<cls>` → 全连接 → 标签分布”的输出头，既能用于情感分析，也能用于语法可接受性判断，差别只在训练标签与数据。\n\n这也解释了为何序列级任务的输出头很小：需要学习的新参数只存在于从定长向量到标签空间的那几层，而句子表示完全交给已经预训练的编码器。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-single-text"
+          ]
+        }
+      },
+      {
+        "id": "textbook-text-pair",
+        "moduleId": "sequence-level-heads",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：文本对分类或回归",
+        "markdown": "自然语言推断属于文本对分类，这类应用以一对文本作为输入并对文本分类。以一对文本作为输入但输出连续值的代表是语义文本相似度，它评估句子的语义相似程度：语义文本相似度基准数据集中的相似度得分是 0（无语义重叠）到 5（语义等价）的分数区间，目标是预测这些分数。样本由（句子 1，句子 2，相似性得分）组成，例如：\n\n- \"A plane is taking off.\" 与 \"An airplane is taking off.\"，5.000 分；\n- \"A woman is eating something.\" 与 \"A woman is eating meat.\"，3.000 分；\n- \"A woman is dancing.\" 与 \"A man is talking.\"，0.000 分。\n\n与单文本分类相比，文本对分类的 BERT 微调在输入表示上有所不同：两个文本分别作为第一和第二个序列，由 `<sep>` 分隔。对于文本对回归任务，可以应用细微的更改，例如输出连续的标签值和使用均方损失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "针对序列级和词元级应用微调BERT"
+              ],
+              "lineStart": 31187,
+              "lineEnd": 31276,
+              "assetRefs": [
+                "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+                "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+                "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+                "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+              ],
+              "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sequence-compare",
+        "moduleId": "sequence-level-heads",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：序列级三类输出头对照",
+        "markdown": "把教材中的两个图例放在同一张表里，差异就非常清楚：\n\n| 任务 | 输入表示 | 读取的表示 | 输出头 | 适用损失 |\n|---|---|---|---|---|\n| 单文本分类 | `<cls>` + 词元 + `<sep>` | `<cls>` 位置 | 小多层感知机 → 离散标签分布 | 分类损失 |\n| 文本对分类 | `<cls>` + 文本 1 + `<sep>` + 文本 2 | `<cls>` 位置 | 小多层感知机 → 离散标签分布 | 分类损失 |\n| 文本对回归 | 同上 | `<cls>` 位置 | 全连接层 → 连续值 | 均方损失 |\n\n三者共享“读定长向量再分类或回归”的骨架，差别只在输入的组装方式与输出标签的类型。因此换任务时真正需要重做的是数据构造和输出头的输出维度，而不是编码器结构。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-single-text",
+            "textbook-text-pair"
+          ]
+        }
+      },
+      {
+        "id": "textbook-tagging",
+        "moduleId": "token-level-heads",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：文本标注",
+        "markdown": "文本标注是词元级任务，其中每个词元都被分配一个标签。在文本标注任务中，词性标注为每个单词分配词性标记（例如形容词和限定词），依据该单词在句子中的作用。例如在 Penn Treebank II 标注集中，句子 \"John Smith's car is new\" 应该被标记为 NNP（名词，专有单数）、NNP、POS（所有格结尾）、NN（名词，单数或质量）、VB（动词，基本形式）、JJ（形容词）。\n\n与单文本分类相比，唯一的区别在于：在文本标注中，输入文本的每个词元的 BERT 表示都被送到相同的额外全连接层中，以输出该词元的标签，例如词性标签。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "针对序列级和词元级应用微调BERT"
+              ],
+              "lineStart": 31187,
+              "lineEnd": 31276,
+              "assetRefs": [
+                "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+                "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+                "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+                "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+              ],
+              "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tagging-shared-head",
+        "moduleId": "token-level-heads",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：“相同的层”意味着参数共享",
+        "markdown": "“相同的额外全连接层”是关键：它不是为每个位置各准备一个头，而是所有位置共享同一组参数。这样模型的新增参数量与序列长度无关，训练时不同位置的监督信号会共同更新这一组参数；推理时序列变长也只是对同一变换多调用几次。\n\n与序列级任务相比，变化有两处：读取位置从单个 `<cls>` 变成全部词元位置；输出从“一句一个标签”变成“一个位置一个标签”。编码器本身和输出头结构都不需要改变，这正是教材所说“最小架构更改”的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-tagging"
+          ]
+        }
+      },
+      {
+        "id": "textbook-qa",
+        "moduleId": "token-level-heads",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：问答",
+        "markdown": "问答是另一个词元级应用，反映阅读理解能力。斯坦福问答数据集（SQuAD v1.1）由阅读段落和问题组成，每个问题的答案只是段落中的一段文本（片段）。例如段落 \"Some experts report that a mask's efficacy is inconclusive. However, mask makers insist that their products, such as N95 respirator masks, can guard against the virus.\"，问题 \"Who say that N95 respirator masks can guard against the virus?\"，答案应是段落中的片段 \"mask makers\"。因此 SQuAD v1.1 的目标是在给定问题和段落的情况下预测段落中文本片段的开始和结束。\n\n为了微调 BERT 进行问答，问题和段落分别作为 BERT 输入的第一个和第二个文本序列。为了预测文本片段开始的位置，相同的额外全连接层把来自位置 i 的任何词元的 BERT 表示转换成标量分数 $s_i$；段落中所有词元的分数再通过 softmax 转换成概率分布，从而为段落中每个词元位置 i 分配作为文本片段开始的概率 $p_i$。预测文本片段的结束与上面相同，只是其额外全连接层中的参数与用于预测开始位置的参数无关：预测结束时位置 i 的词元由相同的全连接层变换成标量分数 $e_i$。\n\n对于问答，监督学习的训练目标就是最大化真实值的开始和结束位置的对数似然。预测片段时可以计算从位置 i 到位置 j 的有效片段分数 $s_i + e_j$（要求 i 不晚于 j），并输出分数最高的跨度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "针对序列级和词元级应用微调BERT"
+              ],
+              "lineStart": 31187,
+              "lineEnd": 31276,
+              "assetRefs": [
+                "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+                "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+                "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+                "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+              ],
+              "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-qa-span-scoring",
+        "moduleId": "token-level-heads",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：起止打分与片段选择的算例",
+        "markdown": "把开始和结束看成同一个分类问题的两次独立求解，就很容易理解为什么需要两套参数：同一个位置既可能是开始也可能是结束，两种角色需要不同的证据，因此教材强调两个额外层的参数相互独立。\n\n预测阶段先得到两组分数，再给候选片段打分：\n\n$$s_i + e_j$$\n\n只在 i 不晚于 j 的合法片段中取分数最高者。假设段落有三个词元，开始分数为 2.0、0.5、0.1，结束分数为 0.2、0.3、2.4，则片段（第 1 个词元到第 3 个词元）的得分为 2.0 + 2.4 = 4.4，高于其他候选，于是输出第 1 到第 3 个词元作为答案片段。\n\n注意两个细节：softmax 分别作用在开始分数和结束分数上，得到的是每个位置作为开始或结束的概率；片段分数把两个标量相加而不是相乘，因此两个高概率位置未必构成最高分片段，需要真正枚举合法组合。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-qa"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "fine-tuning-procedure",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：本节小结",
+        "markdown": "对于序列级和词元级自然语言处理应用，BERT 只需要最小的架构改变（额外的全连接层），例如单个文本分类（情感分析和测试语言可接受性）、文本对分类或回归（自然语言推断和语义文本相似性）、文本标记（词性标记）和问答。\n\n在下游应用的监督学习期间，额外层的参数是从零开始学习的，而预训练 BERT 模型中的所有参数都是微调的。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000135"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "针对序列级和词元级应用微调BERT"
+              ],
+              "lineStart": 31187,
+              "lineEnd": 31276,
+              "assetRefs": [
+                "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+                "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+                "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+                "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+              ],
+              "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-finetune-recipe",
+        "moduleId": "fine-tuning-procedure",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：微调一份 BERT 的操作清单",
+        "markdown": "把前面的机制串成可执行步骤：\n\n1. **判定任务粒度**：整段文本只有一个判断或一个连续值，属于序列级；要对每个位置下结论，或要定位连续片段，属于词元级。\n2. **组装输入**：单文本用 `<cls>` 加词元加 `<sep>`；文本对和问答把两段文本依次放入，用 `<sep>` 分隔。\n3. **添加输出头**：序列级读取 `<cls>` 位置并接小多层感知机；文本标注对每个词元位置施加同一全连接层；问答添加两个参数独立的头，分别给出开始与结束分数。\n4. **选择损失**：离散标签用分类损失，语义相似度这类连续值用均方损失，问答用真实起止位置的对数似然。\n5. **端到端训练**：新增层从零开始学习，同时微调预训练 BERT 的全部参数。\n\n常见错误与恢复：若词元级任务却只读 `<cls>`，输出维度与监督信号对不上，应改为读取全部词元位置；若文本对输入忘记 `<sep>` 分隔，模型无法区分两段文本，应回到输入组装步骤检查。检查表：输入位置选择、输出头粒度、损失类型三者必须与任务粒度一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview",
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-task-comparison",
+        "moduleId": "task-comparison-check",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：四类任务的统一对照与取舍",
+        "markdown": "用统一维度横向比较教材中的任务，可以把“改哪里”变成查表：\n\n| 任务 | 教材实例 | 粒度 | 读取位置 | 输出头 | 损失 |\n|---|---|---|---|---|---|\n| 单文本分类 | 情感分析、COLA | 序列级 | `<cls>` | 一个小多层感知机 | 分类损失 |\n| 文本对分类 | 自然语言推断 | 序列级 | `<cls>` | 一个小多层感知机 | 分类损失 |\n| 文本对回归 | 语义文本相似度 | 序列级 | `<cls>` | 全连接层输出连续值 | 均方损失 |\n| 文本标注 | 词性标注 | 词元级 | 每个词元位置 | 一个参数共享的全连接层 | 分类损失 |\n| 问答 | SQuAD v1.1 | 词元级（起与止） | 每个词元位置 | 两个参数独立的头 | 起止位置的对数似然 |\n\n取舍规则：先看监督信号是“整段一个结论”还是“每个位置一个结论”。前者只需一个定长向量，输出头最小；后者必须保留位置维度，问答还要额外区分开始与结束两种角色，因此需要两组参数。数据集不同只改变标签空间和损失，不改变这套读取方式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-single-text",
+            "textbook-text-pair",
+            "textbook-tagging",
+            "textbook-qa",
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-task-check",
+        "moduleId": "task-comparison-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查：判定任务粒度与输出头",
+        "markdown": "对下面四个情境，先判定属于序列级还是词元级，再写出输入组织、读取位置与输出头，最后说明该用哪种损失。\n\n1. 判断一条商品评论是好评还是差评。\n2. 判断两个句子是否语义矛盾。\n3. 给句子中每个词标出词性。\n4. 从一段新闻中找出回答某问题的那一小段原文。\n\n参考思路：1 与 2 输出的是整段的一个结论，读取 `<cls>` 位置，接小多层感知机输出标签分布，用分类损失；区别在于 2 的输入是两个由 `<sep>` 分隔的序列。3 与 4 都要对每个位置下结论：3 对每个词元使用同一全连接层输出标签；4 需要两个参数独立的头分别预测开始与结束，用真实起止位置的对数似然训练，再按起止分数之和选出片段。若你的答案读的是 `<cls>` 却要输出每个位置的标签，说明粒度判定错了。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-single-text",
+            "textbook-text-pair",
+            "textbook-tagging",
+            "textbook-qa",
+            "model-task-comparison"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "task-granularity-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-task-check",
+        "moduleId": "task-comparison-check",
+        "depth": "core",
+        "title": "任务粒度与输出头自测",
+        "outcomeRefs": [
+          "apply-choose-head"
+        ],
+        "learningPurpose": "检查学习者能否把“整段一个结论”与“每个位置一个结论”的区分迁移到新任务，并据此选择读取位置与输出头。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-task-comparison"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "prompt": "判断一条商品评论是好评还是差评。",
+              "expected": "sequence-level"
+            },
+            {
+              "prompt": "判断两个句子是否语义矛盾。",
+              "expected": "sequence-level"
+            },
+            {
+              "prompt": "给句子中每个词标出词性。",
+              "expected": "token-level"
+            },
+            {
+              "prompt": "从段落中找出回答问题的原文片段。",
+              "expected": "token-level-span"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "用一句话写出判定规则：若监督信号是整段文本的一个结论，读取 `<cls>` 位置；若要对每个位置下结论，读取每个词元位置；若要在段落中定位连续片段，使用参数独立的开始与结束两个输出头。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：应用",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [
+    "point-14-10"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000135"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "针对序列级和词元级应用微调BERT"
+      ],
+      "lineStart": 31187,
+      "lineEnd": 31276,
+      "assetRefs": [
+        "parts/part-0008/images/05ff2d374a702966e866be0dee0a788ed2a84254784325fff865e63bf4862c34.jpg",
+        "parts/part-0008/images/ae1246f695e3ac5ed3ca31da81a9ad32130c981fd9f73191b00adefaffa2274a.jpg",
+        "parts/part-0008/images/77ef78c8841133cf7743c43eb42b2a855f030362c90ba3cb94eda0f8632d4f90.jpg",
+        "parts/part-0008/images/b8683447da8f0d8b253a3757bbcb068583ec4b1d45824246dc9188f240217bc6.jpg"
+      ],
+      "excerptSha256": "4ca015b1ff27c1cc9ad0e44ba4c1a8d445dc176e528cb517083d83a4f3fd1405"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1182,
+    211
+  ],
+  "scale": 0.9
+}

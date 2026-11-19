@@ -1,0 +1,478 @@
+{
+  "id": "point-2-3",
+  "title": "参数学习",
+  "shortSummary": "介绍卷积神经网络中卷积核与全连接层参数的梯度计算和反向传播学习过程。",
+  "keyTerms": [
+    "卷积核",
+    "反向传播",
+    "梯度",
+    "参数学习"
+  ],
+  "animationType": "convErrorBackprop",
+  "animationSuggestion": "从输出层误差出发逐层向前推进，高亮当前层误差矩阵如何分回前一层的具体位置，并同步显示卷积核梯度累加器的数值随输出位置增加而增长；提供最大汇聚与平均汇聚的切换对照，重播时回到同一初始条件。",
+  "difficulty": "中等",
+  "importance": 0.9,
+  "prerequisites": [
+    "point-1-2",
+    "point-2-1",
+    "point-2-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材关于参数共享、误差项回传与汇聚层梯度分配的结论和记号，按“总体思路—梯度公式—误差项—汇聚层—卷积层—整体流程”重排讲解，并补充展开式、数值核对与常见误区。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-conv-grad-origin",
+          "text": "解释卷积网络参数梯度的来源，说明链式法则、参数共享与空间位置累加之间的关系。"
+        },
+        {
+          "id": "compute-param-grad",
+          "text": "说明卷积核权重与偏置梯度的计算方式，并正确对应误差矩阵与参数的形状。"
+        },
+        {
+          "id": "trace-error-backprop",
+          "text": "区分汇聚层与卷积层的误差项回传规则，描述上采样与旋转卷积核在反向传播中的作用。"
+        }
+      ],
+      "misconceptions": [
+        "认为卷积核在不同空间位置上各有独立参数，因此每个位置的梯度可以单独更新而不必累加。",
+        "认为汇聚层没有可学习参数，所以它的误差项不需要计算，也不参与反向传播。",
+        "把误差项与参数梯度当成同一个量，忽略误差项还要乘以参数对净输入的局部导数。"
+      ],
+      "modules": [
+        {
+          "id": "overview-and-chain-rule",
+          "title": "参数与总体思路",
+          "role": "orientation",
+          "description": "明确卷积网络中哪些层带参数，以及反向传播与链式法则的整体框架。",
+          "outcomeRefs": [
+            "explain-conv-grad-origin"
+          ],
+          "order": 0
+        },
+        {
+          "id": "conv-kernel-gradient",
+          "title": "卷积核与偏置的梯度",
+          "role": "derivation",
+          "description": "由参数共享推出梯度累加，并给出可逐项核对的展开式与自测。",
+          "outcomeRefs": [
+            "compute-param-grad",
+            "explain-conv-grad-origin"
+          ],
+          "order": 1
+        },
+        {
+          "id": "error-term-dependency",
+          "title": "误差项的层间依赖",
+          "role": "concept-clarification",
+          "description": "区分误差项与参数梯度，说明卷积层误差项同样由后一层回传。",
+          "outcomeRefs": [
+            "trace-error-backprop",
+            "explain-conv-grad-origin"
+          ],
+          "order": 2
+        },
+        {
+          "id": "pooling-backprop",
+          "title": "汇聚层的误差回传",
+          "role": "procedure",
+          "description": "说明最大汇聚与平均汇聚如何把误差分回前一层，以及重叠区域的处理。",
+          "outcomeRefs": [
+            "trace-error-backprop"
+          ],
+          "order": 3
+        },
+        {
+          "id": "conv-backprop-and-summary",
+          "title": "卷积层回传与整体流程",
+          "role": "synthesis",
+          "description": "给出卷积层误差项的累加规则，并把两类层合成为完整的反向传播流程。",
+          "outcomeRefs": [
+            "trace-error-backprop",
+            "compute-param-grad"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-conv-grad-origin",
+          "compute-param-grad",
+          "trace-error-backprop"
+        ],
+        "method": "完成卷积核梯度累加的自测题，并用一句话说明汇聚层与卷积层在反向传播中的差异。",
+        "successCriteria": [
+          "能说明卷积核梯度为何要对所有输出位置求和",
+          "能指出误差项与参数梯度是两个不同的量",
+          "能分别说出最大汇聚与平均汇聚的误差分配规则"
+        ],
+        "exerciseBlockId": "model-exercise-gradient-accumulate",
+        "summaryBlockId": "tb-summary-flow",
+        "nextPointId": "point-2-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-param-learning-overview",
+        "moduleId": "overview-and-chain-rule",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：卷积网络如何学习参数",
+        "markdown": "在卷积网络中，可学习参数主要是卷积核中的权重以及偏置。与全连接前馈网络一样，卷积网络也通过误差反向传播算法进行参数学习，两者的核心思想都是用链式法则计算损失函数对参数的偏导数。\n\n区别在于：全连接前馈网络中梯度主要通过每一层的误差项进行反向传播，并进一步计算每层参数的梯度；卷积网络则同时包含卷积层和汇聚层这两种功能不同的神经层，需要分别处理它们的误差项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-chain-rule-recap",
+        "moduleId": "overview-and-chain-rule",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把链式法则拆成三步",
+        "markdown": "把上述思路拆成三步，后面代入具体层时就不容易混淆：\n\n1. 前向计算得到各层净输入 $\\mathbf{Z}^{(l)}$，经过损失函数 $\\mathcal{L}$ 得到一个标量误差；\n2. 对净输入求偏导，得到误差项 $\\Delta^{(l,p)} = \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{Z}^{(l,p)}}$，它与第 $p$ 个特征图的净输入同形状；\n3. 用链式法则把误差项与“参数对净输入的局部导数”相乘，得到该参数的梯度。\n\n因此误差项是层与层之间的传递量，参数梯度是本层真正用于更新的量。后文所有推导都在回答两个问题：误差项怎样从后一层传回来，以及参数梯度怎样由误差项算出。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-param-learning-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-conv-kernel-shared",
+        "moduleId": "conv-kernel-gradient",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：参数共享导致梯度累加",
+        "markdown": "卷积层包含参数，而汇聚层通常不包含参数（这里假设汇聚层中没有参数），因此只需要重点计算卷积层中参数的梯度。卷积层和全连接层的一个重要差别在于：卷积核参数在不同空间位置上是共享的，因此一个卷积核参数的梯度需要累加所有空间位置对它的贡献。\n\n设第 $l$ 层为卷积层，第 $l-1$ 层的输入特征图为 $\\mathcal{X}^{(l-1)} \\in \\mathbb{R}^{M \\times N \\times D}$，通过卷积计算得到第 $l$ 层的特征图净输入 $\\mathcal{Z}^{(l)} \\in \\mathbb{R}^{M' \\times N' \\times P}$。第 $l$ 层中共有 $P \\times D$ 个卷积核 $W^{(l,p,d)}$ 和 $P$ 个偏置 $b^{(l,p)}$，可以分别使用链式法则计算它们的梯度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shared-gradient-intuition",
+        "moduleId": "conv-kernel-gradient",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充：用“同一枚印章多处盖章”理解累加",
+        "markdown": "可以借“同一枚印章在多处盖章”理解参数共享带来的梯度累加：印章只有一个图案（相当于一个卷积核元素），但它在 $M' \\times N'$ 个输出位置上各用了一次；评价这枚印章该怎样修改时，必须把每次使用造成的误差都算进来，再合成为一次更新。\n\n与全连接层对比会更清楚：全连接层的每个权重只连接一个输入和一个输出，它的梯度只涉及一处误差；卷积核的同一个权重被所有空间位置复用，所以它的梯度天然是多个位置贡献之和。这正是卷积网络能用远少于全连接的参数完成同样特征提取的原因，代价是梯度计算要多一遍按位置的求和。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-conv-kernel-shared"
+          ]
+        }
+      },
+      {
+        "id": "tb-gradient-formulas",
+        "moduleId": "conv-kernel-gradient",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：卷积核与偏置的偏导数",
+        "markdown": "对第 $l$ 层第 $p$ 个特征图（$1 \\le p \\le P$），教材把误差矩阵记为\n\n$$\\Delta^{(l,p)} = \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{Z}^{(l,p)}} \\in \\mathbb{R}^{M' \\times N'}$$\n\n它是损失函数关于第 $l$ 层第 $p$ 个特征图净输入 $\\mathbf{Z}^{(l,p)}$ 的偏导数，形状与该特征图相同。教材据此给出损失函数关于第 $l$ 层卷积核 $W^{(l,p,d)}$ 的偏导数，以及关于第 $l$ 层第 $p$ 个偏置 $b^{(l,p)}$ 的偏导数；二者都由链式法则、以同一个误差矩阵 $\\Delta^{(l,p)}$ 为基础求出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gradient-worked-example",
+        "moduleId": "conv-kernel-gradient",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充：把偏导数展开成可核对的求和式",
+        "markdown": "把教材的偏导数展开成可以逐项核对的式子。设步长为 1、卷积核大小为 $U \\times V$，并记 $\\mathcal{X}^{(l-1,d)}_{\\text{patch}(i,j)}$ 为该核在输出位置 $(i,j)$ 处覆盖的输入局部片段，则\n\n$$\\frac{\\partial \\mathcal{L}}{\\partial W^{(l,p,d)}} = \\sum_{i=1}^{M'} \\sum_{j=1}^{N'} \\Delta^{(l,p)}_{i,j} \\, \\mathcal{X}^{(l-1,d)}_{\\text{patch}(i,j)}, \\qquad \\frac{\\partial \\mathcal{L}}{\\partial b^{(l,p)}} = \\sum_{i=1}^{M'} \\sum_{j=1}^{N'} \\Delta^{(l,p)}_{i,j}.$$\n\n两式的求和都跑遍全部输出位置：卷积核某个元素的梯度，把所有位置上的误差项与它当时覆盖的输入片段的乘积相加；偏置对每个输出位置都加同一个常数，所以它的梯度是误差矩阵全部元素之和。求和的存在正是参数共享的直接后果，而不是额外的技巧。\n\n用极端情况核对：若 $\\Delta^{(l,p)}$ 只有一个位置为 1、其余为 0，则卷积核梯度恰好等于该位置覆盖的输入局部片段，偏置梯度为 1，与“只有一处误差需要归因”的直觉一致。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-gradient-formulas",
+            "tb-conv-kernel-shared"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise-gradient-accumulate",
+        "moduleId": "conv-kernel-gradient",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "自测：累加发生在哪里",
+        "markdown": "设某卷积层的输入为单通道 $4 \\times 4$ 特征图，卷积核大小为 $3 \\times 3$、步长为 1，输出为 $2 \\times 2$。请回答：\n\n1. 该卷积核的梯度表达式中一共有多少个求和项？每一项对应什么？\n2. 若把步长改为 2，输出位置数量和求和项数会怎样变化？这如何影响同一个核元素被复用的次数？\n3. 若误差矩阵中所有元素都等于常数 $c$，偏置的梯度等于多少？\n\n参考要点：求和项数等于输出位置数 $M' \\times N'$，在本例中为 4；步长变大后覆盖的输出位置变少，同一核元素的复用次数随之减少；偏置梯度为 $M' \\times N' \\times c$，本例的 $2 \\times 2$ 输出对应 $4c$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-gradient-worked-example",
+            "tb-conv-kernel-shared"
+          ]
+        }
+      },
+      {
+        "id": "tb-error-term-dependency",
+        "moduleId": "error-term-dependency",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：参数梯度依赖本层误差项",
+        "markdown": "在卷积网络中，每层参数的梯度依赖其所在层的误差项 $\\Delta^{(l,p)}$。和全连接层类似，卷积层的误差项也需要由后一层的误差项反向传播得到。\n\n由于卷积层和汇聚层中误差项的计算有所不同，因此需要分别计算这两类层的误差项：一层向前回传时，究竟走的是“上采样”还是“旋转卷积核”，取决于紧跟在它后面的是汇聚层还是卷积层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-misconception-clarify",
+        "moduleId": "error-term-dependency",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "澄清：三个容易混淆的地方",
+        "markdown": "**误区一：卷积核在每个位置有各自的参数。** 卷积核参数是共享的，全层只有 $P \\times D$ 个卷积核和 $P$ 个偏置；位置上的差异体现在输入片段和误差项上，而不是体现在参数个数上。\n\n**误区二：汇聚层没有参数，所以不参与反向传播。** 汇聚层确实没有可学习参数，但它仍然要计算误差项并向前一层回传，否则更前面的卷积层拿不到梯度。\n\n**误区三：误差项就是参数梯度。** 误差项是本层净输入的偏导数，形状与特征图相同；参数梯度还要再乘上“参数对净输入的局部导数”，并（对卷积核而言）在所有输出位置上求和。两者形状不同、用途不同，混用会直接算错更新量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-error-term-dependency",
+            "tb-conv-kernel-shared"
+          ]
+        }
+      },
+      {
+        "id": "tb-pooling-backprop",
+        "moduleId": "pooling-backprop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：汇聚层如何回传误差",
+        "markdown": "当第 $l+1$ 层为汇聚层时，第 $l+1$ 层每个神经元的误差项对应于第 $l$ 层相应特征图的一个区域。第 $l$ 层第 $p$ 个特征图中的每个神经元，与所有覆盖其位置的汇聚区域所对应的输出神经元相连。\n\n按链式法则，先把第 $l+1$ 层对应特征图的误差项 $\\Delta^{(l+1,p)}$ 传回第 $l$ 层的各个位置，再与第 $l$ 层激活函数的导数 $f_l'(\\cdot)$ 逐元素相乘，即得到误差矩阵 $\\Delta^{(l,p)}$。其中 up 表示汇聚操作的梯度回传，其输出大小与第 $l$ 层特征图相同。具体分配规则分两种：\n\n- 若下采样是最大汇聚，对每个汇聚区域，仅把该区域传回的误差加到前向计算时选定的最大值位置，其余位置从该区域接收的贡献为 0；\n- 若下采样是平均汇聚，误差项 $\\Delta^{(l+1,p)}$ 中每个值会被平均分配到前一层对应区域中的所有神经元上。\n\n若汇聚区域之间存在重叠，则某个位置可能同时接收到多个区域传回的误差，其总误差为这些贡献的累加。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pooling-contrast",
+        "moduleId": "pooling-backprop",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：两种汇聚的误差分配对照",
+        "markdown": "两种汇聚函数在前向都会压缩分辨率，但反向的误差去向完全不同：\n\n| 对照维度 | 最大汇聚 | 平均汇聚 |\n|---|---|---|\n| 前向保留的信息 | 区域内的最大值及其位置 | 区域内的平均值 |\n| 反向分配规则 | 误差全部给到前向选中的最大值位置 | 误差平均分给区域内每个位置 |\n| 其余位置的贡献 | 0 | 各得一份均分 |\n| 区域重叠时 | 各区域的贡献分别加到对应位置 | 各区域的均分贡献相加 |\n\n由此可以提炼出一条检查顺序：先确认下采样类型，再确认区域是否重叠，最后才与激活函数导数逐元素相乘。若跳过第一步，就会把梯度“撒错位置”——最大汇聚下把误差平均摊开，等价于假设前向是对整个区域取平均，与前向的实际计算不符。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pooling-backprop"
+          ]
+        }
+      },
+      {
+        "id": "tb-conv-backprop",
+        "moduleId": "conv-backprop-and-summary",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：卷积层如何回传误差",
+        "markdown": "当第 $l+1$ 层为卷积层时，假设其特征图净输入为 $\\mathcal{Z}^{(l+1)} \\in \\mathbb{R}^{M' \\times N' \\times P}$，第 $p$ 个特征图的净输入由卷积核 $W^{(l+1,p,d)}$ 与偏置 $b^{(l+1,p)}$ 得到，第 $l+1$ 层中共有 $P \\times D$ 个卷积核。\n\n第 $l$ 层第 $d$ 个特征图的误差项 $\\Delta^{(l,d)}$ 来自后一层中所有依赖该输入通道的输出通道：需要对所有相关卷积核带来的误差贡献进行累加，最后再与当前层激活函数的导数逐元素相乘，才得到该层的误差项。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-summary-flow",
+        "moduleId": "conv-backprop-and-summary",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：整体反向传播流程与两处差异",
+        "markdown": "总的来说，卷积网络中的反向传播流程与前馈网络类似：先计算输出层误差，再逐层向前传播。不同之处在于：汇聚层需要做与下采样相反的上采样操作，而卷积层则需要利用旋转后的卷积核进行宽互相关来传播误差。\n\n把三类层放在一起看，卷积网络的参数学习可以概括为：前向得到各层净输入和损失；反向先求输出层误差，再逐层得到各层误差项；最后由误差项计算卷积核与偏置的梯度，并对共享参数按位置累加。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-97f1fe376125afb2e4c552d6",
+              "blockIds": [
+                "block-000011"
+              ],
+              "headingPath": [
+                "卷积神经网络：卷积、池化、经典架构及参数学习",
+                "参数学习"
+              ],
+              "lineStart": 387,
+              "lineEnd": 419,
+              "assetRefs": [],
+              "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-bridge-next-point",
+        "moduleId": "conv-backprop-and-summary",
+        "depth": "support",
+        "kind": "note",
+        "title": "衔接：从梯度规则到网络结构",
+        "markdown": "到这里，卷积网络的参数学习已经闭合：结构决定前向计算，前向计算产生净输入，误差项沿反向逐层回传，参数梯度再由误差项与输入片段算出。\n\n这条链条也解释了为什么网络结构的选择会直接影响训练：卷积核大小、步长和汇聚方式决定了误差回传的路径形状，而参数是否共享决定了梯度是否需要累加。后续讨论典型卷积网络时，同样的规则会被用来比较不同架构的参数规模与训练代价。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary-flow",
+            "tb-conv-backprop"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "conv-gradient-accumulate-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercise-gradient-accumulate",
+        "moduleId": "conv-kernel-gradient",
+        "depth": "support",
+        "outcomeRefs": [
+          "compute-param-grad"
+        ],
+        "learningPurpose": "检查学习者能否把参数共享与梯度累加对应起来，并在改变步长或误差矩阵时正确调整求和范围。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-gradient-formulas",
+            "tb-conv-kernel-shared"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出卷积核梯度的求和式，标出求和跑遍哪些输出位置，并说明步长变大时求和项数如何变化。"
+        }
+      }
+    ]
+  },
+  "subtitle": "卷积神经网络：卷积、池化、经典架构及参数学习",
+  "clusterId": "chapter-2",
+  "clusterIds": [
+    "chapter-2"
+  ],
+  "role": "branch",
+  "related": [
+    "point-3-4"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-97f1fe376125afb2e4c552d6",
+      "blockIds": [
+        "block-000011"
+      ],
+      "headingPath": [
+        "卷积神经网络：卷积、池化、经典架构及参数学习",
+        "参数学习"
+      ],
+      "lineStart": 387,
+      "lineEnd": 419,
+      "assetRefs": [],
+      "excerptSha256": "3d870527772f6a22d9710f2178caf5d8b500fd6fe14d6f6e03a4ef9332923a94"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2676,
+    1801
+  ],
+  "scale": 0.93
+}

@@ -1,0 +1,502 @@
+{
+  "id": "point-3-7",
+  "title": "softmax回归的简洁实现",
+  "shortSummary": "借助框架高层接口实现 softmax 回归训练，并对比手工版本在代码结构与数值行为上的差异。",
+  "keyTerms": [
+    "softmax",
+    "高层接口",
+    "训练循环",
+    "数值稳定性"
+  ],
+  "animationType": "none",
+  "difficulty": "中等",
+  "importance": 0.66,
+  "prerequisites": [
+    "point-3-6"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-with-numeric-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材的代码顺序、超参数取值与数值稳定性结论，围绕“从手工实现迁移到高层 API”的教学目标补充组件对照、溢出算例和检查表。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-high-level-model",
+          "text": "解释高层 API 版如何用 Flatten 与全连接层组合出 softmax 回归模型，并说明模型输出的是 logits 而非概率。"
+        },
+        {
+          "id": "explain-logsumexp",
+          "text": "说明 softmax 直接指数运算的上溢、下溢与 log(0) 风险，以及合并 softmax 与交叉熵的稳定计算理由。"
+        },
+        {
+          "id": "implement-high-level-training",
+          "text": "按数据、模型、损失、优化器、训练循环的顺序组织并跑通高层 API 训练流程。"
+        },
+        {
+          "id": "compare-from-scratch",
+          "text": "比较手工实现与高层实现在代码结构、数值稳定性和工程细节上的差异。"
+        }
+      ],
+      "misconceptions": [
+        "认为必须在模型末尾手动加 softmax 再送入交叉熵损失。",
+        "认为减去最大值改变了 softmax 的数学结果，因此高层实现只是近似。",
+        "把训练后期测试精度下降直接归因于数值不稳定。"
+      ],
+      "modules": [
+        {
+          "id": "data-and-model",
+          "title": "数据加载与模型装配",
+          "role": "worked-example",
+          "description": "从数据集与批量大小出发，用 Flatten 加全连接层搭出输出 10 个 logits 的模型。",
+          "outcomeRefs": [
+            "explain-high-level-model",
+            "implement-high-level-training"
+          ],
+          "order": 0
+        },
+        {
+          "id": "stable-cross-entropy",
+          "title": "数值稳定性与交叉熵",
+          "role": "mechanism",
+          "description": "分析指数运算的溢出风险，理解减去最大值与 LogSumExp 技巧为何能稳定计算损失。",
+          "outcomeRefs": [
+            "explain-logsumexp",
+            "implement-high-level-training"
+          ],
+          "order": 1
+        },
+        {
+          "id": "optimizer-and-training",
+          "title": "优化器与训练循环",
+          "role": "procedure",
+          "description": "选择 SGD 与学习率，复用训练函数完成 10 个迭代周期，并整理可复现的步骤检查表。",
+          "outcomeRefs": [
+            "implement-high-level-training"
+          ],
+          "order": 2
+        },
+        {
+          "id": "from-scratch-comparison",
+          "title": "与从零实现的对照",
+          "role": "comparison",
+          "description": "按前向、损失、梯度、更新和数值稳定性逐项对照两个版本，澄清常见误解。",
+          "outcomeRefs": [
+            "compare-from-scratch",
+            "explain-logsumexp"
+          ],
+          "order": 3
+        },
+        {
+          "id": "practice-and-check",
+          "title": "练习与达成检查",
+          "role": "formative-check",
+          "description": "用教材练习与三道自检题验证对代码组织、数值稳定性和过拟合现象的区分能力。",
+          "outcomeRefs": [
+            "explain-high-level-model",
+            "explain-logsumexp",
+            "implement-high-level-training",
+            "compare-from-scratch"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-high-level-model",
+          "explain-logsumexp",
+          "implement-high-level-training",
+          "compare-from-scratch"
+        ],
+        "method": "完成三道自检题，并写出本节的六项训练流程检查表。",
+        "successCriteria": [
+          "能说明模型输出 logits 且损失无需手动 softmax",
+          "能解释减去最大值不改变 softmax 结果并消除上溢",
+          "能按正确顺序说出数据、模型、损失、优化器与训练循环的取值"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-bridge",
+        "nextPointId": "point-4-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-overview",
+        "moduleId": "data-and-model",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材开篇：沿用数据集与批量大小",
+        "markdown": "本节沿用 3.3 节的做法：既然深度学习框架的高级 API 能让线性回归的实现更容易，同样也能更方便地实现 softmax 回归模型。教材继续使用 3.6 节的 Fashion-MNIST 数据集，并保持批量大小为 256。\n\n```python\nimport torch\nfrom torch import nn\nfrom d2l import torch as d2l\n```\n\n```python\nbatch_size = 256\ntrain_iter, test_iter = d2l.load_data_fashion_mnist(batch_size)\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的简洁实现"
+              ],
+              "lineStart": 4809,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+              ],
+              "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-high-level",
+        "moduleId": "data-and-model",
+        "depth": "support",
+        "kind": "note",
+        "title": "高层 API 接管了什么",
+        "markdown": "高层 API 并没有改变 softmax 回归的数学，只是把重复的工程劳动交给框架：数据迭代由 `DataLoader` 完成，参数注册与初始化由 `nn.Module` 管理，梯度由自动微分记录，优化器负责参数更新。相对于 3.6 节的手工实现，本节需要自己决定的只剩四件事：**用什么模型、用什么损失、用什么优化器、跑多少轮**。可以把这一节理解为把手工实现的每一步“对号入座”到框架提供的组件上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview"
+          ]
+        }
+      },
+      {
+        "id": "textbook-model-init",
+        "moduleId": "data-and-model",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材 3.7.1：初始化模型参数",
+        "markdown": "教材指出，softmax 回归的输出层是一个全连接层，因此只需在 `Sequential` 中添加一个带有 10 个输出的全连接层。`Sequential` 在这里并不是必需的，但它是实现深度模型的基础。权重仍以均值 0、标准差 0.01 随机初始化：\n\n```python\n# PyTorch不会隐式地调整输入的形状。因此，\n# 我们在线性层前定义了展平层（flatten），来调整网络输入的形状\nnet = nn.Sequential(nn.Flatten(), nn.Linear(784, 10))\n\ndef init_weights(m):\n    if type(m) == nn.Linear:\n        nn.init.normal_(m.weight, std=0.01)\n\nnet.apply(init_weights);\n```\n\n注意 PyTorch 不会隐式调整输入形状，所以 `Flatten()` 把 $28 \\times 28$ 的图像展平成 784 维向量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的简洁实现"
+              ],
+              "lineStart": 4809,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+              ],
+              "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-flatten-linear",
+        "moduleId": "data-and-model",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "两层各自负责什么",
+        "markdown": "逐层看这个两行模型：`Flatten()` 只做形状变换，把每个样本的 $1 \\times 28 \\times 28$ 图像拉平成 784 维向量，不引入任何参数；`Linear(784, 10)` 是真正的分类层，为 10 个类别各输出一个分数。它的输出是**未规范化的预测（logits）**，不是概率——模型本身并不包含显式 softmax，这一点正是后面能与 `CrossEntropyLoss` 稳定配合的前提。权重标准差 0.01 让初始 logits 接近 0，softmax 初始接近均匀分布，避免一开始就给出过度自信的预测。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-model-init"
+          ]
+        }
+      },
+      {
+        "id": "textbook-softmax-overflow",
+        "moduleId": "stable-cross-entropy",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材 3.7.2：指数运算的数值风险",
+        "markdown": "教材回顾 softmax 函数的定义，其中 $\\hat{y}_j$ 是预测的概率分布，$o_j$ 是未规范化的预测 $\\mathbf{o}$ 的第 $j$ 个元素：\n\n$$\n\\hat{y}_j = \\frac{\\exp(o_j)}{\\sum_k \\exp(o_k)}.\n$$\n\n如果 $o_k$ 中的一些数值非常大，那么 $\\exp(o_k)$ 可能大于数据类型容许的最大数字，即上溢（overflow）。这将使分母或分子变为 inf，最后得到 0、inf 或 nan 的 $\\hat{y}_j$，此时无法得到明确定义的交叉熵值。\n\n教材给出的技巧是：在继续 softmax 计算之前，先从所有 $o_k$ 中减去 $\\max(o_k)$。按常数进行的移动不会改变 softmax 的返回值：\n\n$$\n\\hat{y}_j = \\frac{\\exp(o_j - \\max(o_k))}{\\sum_k \\exp(o_k - \\max(o_k))}.\n$$",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的简洁实现"
+              ],
+              "lineStart": 4809,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+              ],
+              "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-overflow-example",
+        "moduleId": "stable-cross-entropy",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充算例：从溢出到下溢",
+        "markdown": "用一个具体数字感受问题。设某个样本的 logits 为 $o = [1000, 0]$。直接计算时 $e^{1000}$ 在 float32 中上溢为 inf，softmax 得到 inf/inf 形式的 nan；若用 float16，连 $e^{50}$ 都会上溢，这正是教材练习提示“尝试计算 exp(50)”的用意。减去最大值后，指数变成 $[e^{0}, e^{-1000}] = [1, 0]$，分母至少包含 1，结果为 $[1, 0]$，仍然是正确答案。\n\n但减法只解决了上溢：当 $o_j - \\max(o_k)$ 很负时，$\\exp(\\cdot)$ 下溢为 0，$\\log(0) = -\\infty$，若再单独取对数仍会得到 nan。教材因此把 softmax 与交叉熵合并，直接使用 $o_j - \\max(o_k)$ 而不算出中间的指数值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-softmax-overflow"
+          ]
+        }
+      },
+      {
+        "id": "textbook-log-sum-exp",
+        "moduleId": "stable-cross-entropy",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材 3.7.2：合并 softmax 与交叉熵",
+        "markdown": "教材进一步把 softmax 与交叉熵结合起来。对上式的 $\\hat{y}_j$ 取对数：\n\n$$\n\\log(\\hat{y}_j) = o_j - \\max(o_k) - \\log\\left(\\sum_k \\exp(o_k - \\max(o_k))\\right).\n$$\n\n于是不需要真正算出 $\\exp(o_j - \\max(o_k))$ 再取对数，$\\log(\\exp(\\cdot))$ 被抵消，可以直接使用 $o_j - \\max(o_k)$。教材把这种“同时计算 softmax 及其对数”的做法称为类似 LogSumExp 技巧的聪明方式，并保留传统 softmax 函数，以备需要评估通过模型输出的概率时使用。对应代码为：\n\n```python\nloss = nn.CrossEntropyLoss(reduction='none')\n```\n\n即把未规范化的预测直接传给交叉熵损失。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的简洁实现"
+              ],
+              "lineStart": 4809,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+              ],
+              "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-no-double-softmax",
+        "moduleId": "stable-cross-entropy",
+        "depth": "core",
+        "kind": "warning",
+        "title": "不要重复 softmax",
+        "markdown": "实践中最容易犯的错误是“怕不够 softmax”而在模型末尾再加一层 `nn.Softmax()`。`nn.CrossEntropyLoss` 的输入约定是**未规范化的 logits**，它内部已经把 log-softmax 与负对数似然合并计算；再传概率进去等于做了两次归一化，梯度会被错误缩放，训练效果变差甚至不收敛。判断标准很简单：模型输出 logits，损失用 `CrossEntropyLoss`，不要手动 softmax；只有需要展示或评估概率时，才单独调用 softmax。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-log-sum-exp"
+          ]
+        }
+      },
+      {
+        "id": "textbook-optimizer-training",
+        "moduleId": "optimizer-and-training",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材 3.7.3–3.7.4：优化算法与训练",
+        "markdown": "教材使用学习率为 0.1 的小批量随机梯度下降作为优化算法，这与线性回归例子中的相同，说明优化器的普适性。随后调用 3.6 节定义的训练函数训练 10 个迭代周期：\n\n```python\ntrainer = torch.optim.SGD(net.parameters(), lr=0.1)\n```\n\n```python\nnum_epochs = 10\nd2l.train_ch3(net, train_iter, test_iter, loss, num_epochs, trainer)\n```\n\n教材给出的结果是：算法收敛到一个相当高的精度，而且代码比之前更精简。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的简洁实现"
+              ],
+              "lineStart": 4809,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+              ],
+              "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pipeline-checklist",
+        "moduleId": "optimizer-and-training",
+        "depth": "core",
+        "kind": "table",
+        "title": "六项训练流程检查表",
+        "markdown": "把本节代码压缩成一张检查表，按顺序核对即可复现：\n\n| 步骤 | 本节取值 | 作用 |\n|---|---|---|\n| 数据 | `batch_size=256` 的 Fashion-MNIST | 提供 $28\\times28$ 图像与 10 类标签 |\n| 模型 | `Sequential(Flatten(), Linear(784, 10))` | 展平后输出 10 个 logits |\n| 初始化 | 权重正态分布，标准差 0.01 | 初始预测接近均匀 |\n| 损失 | `CrossEntropyLoss(reduction='none')` | 输入 logits，内部稳定地计算 log-softmax 与负对数似然 |\n| 优化器 | `SGD(lr=0.1)` | 小批量随机梯度下降更新参数 |\n| 训练 | `train_ch3(..., num_epochs=10)` | 复用 3.6 节的训练与评估循环 |\n\n只要其中任意一项错位，例如损失收到概率、优化器拿到错误的参数集合，训练就会失败或效果异常。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-overview",
+            "textbook-model-init",
+            "textbook-log-sum-exp",
+            "textbook-optimizer-training"
+          ]
+        }
+      },
+      {
+        "id": "model-vs-scratch",
+        "moduleId": "from-scratch-comparison",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "与 3.6 节从零实现逐项对照",
+        "markdown": "| 环节 | 从零实现（3.6 节） | 简洁实现（本节） |\n|---|---|---|\n| 前向 | 手写 `softmax(X @ W + b)` | `Sequential(Flatten(), Linear(784, 10))` 输出 logits |\n| 损失 | 手写 `cross_entropy`，先 softmax 再取 log | `nn.CrossEntropyLoss` 合并计算 |\n| 梯度 | 依赖自动微分得到 `param.grad` | 同样依赖自动微分 |\n| 更新 | 手写 `param -= lr * param.grad` | `torch.optim.SGD` 完成 |\n| 数值稳定性 | 需要自己处理上溢、下溢与 log(0) | 框架内部采用 LogSumExp 等稳定实现 |\n\n结论：两者求解的是同一个优化问题，高层版减少的是样板代码，不是数学步骤；真正的差异集中在数值稳定性和工程细节上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-model-init",
+            "textbook-log-sum-exp",
+            "textbook-optimizer-training"
+          ]
+        }
+      },
+      {
+        "id": "model-misconceptions",
+        "moduleId": "from-scratch-comparison",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "三个需要纠正的直觉",
+        "markdown": "- **“减最大值改变了 softmax 结果”**：不，分子分母同乘同一个 $\\exp(\\max(o_k))$，数学上完全等价，改变的只是浮点计算的中间量。\n- **“高层实现是近似或偷懒”**：`CrossEntropyLoss` 计算的就是同一个交叉熵目标，只是用数值更稳的等价形式。\n- **“测试精度下降说明数值不稳定”**：教材练习中增加迭代周期后测试精度降低，更常见的原因是模型开始过拟合训练集；数值不稳定通常表现为 loss 变成 nan 或训练直接崩溃，二者现象不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-vs-scratch",
+            "model-no-double-softmax"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary-exercises",
+        "moduleId": "practice-and-check",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结与练习",
+        "markdown": "教材小结强调：使用深度学习框架的高级 API 可以更简洁地实现 softmax 回归；但从计算角度看，实现 softmax 回归仍然复杂，框架在 LogSumExp 这类著名技巧之外还采取了额外的预防措施来保证数值稳定性，这使学习者避免从零开始编写模型时可能遇到的陷阱。\n\n教材练习要求：调整批量大小、迭代周期数和学习率并观察结果；增加迭代周期的数量后，思考为什么测试精度会在一段时间后降低，以及怎样解决这个问题。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000024"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "softmax回归的简洁实现"
+              ],
+              "lineStart": 4809,
+              "lineEnd": 4946,
+              "assetRefs": [
+                "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+              ],
+              "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "practice-and-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "三道自检题",
+        "markdown": "1. 若把损失换成 `nn.NLLLoss`，模型和损失需要怎样配套修改？\n2. 在 float16 下计算 $o=[50, 0, \\ldots]$ 的 softmax 会发生什么？减去最大值后呢？为什么分母不会变成 0？\n3. 训练 loss 持续下降而测试精度先升后降，更可能是数值下溢还是过拟合？你会用什么手段验证和缓解？\n\n参考要点：第 1 题需要在模型输出后补上 `nn.LogSoftmax`；第 2 题的关键是减去最大值后分母含 $\\exp(0)=1$；第 3 题应回到验证集与正则化手段，而不是修改 softmax。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary-exercises",
+            "model-pipeline-checklist"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "practice-and-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "下一点桥接",
+        "markdown": "本节把 3.6 节手工搭起的多类分类训练闭环压缩成框架调用：模型、损失、优化器各归其位，数值稳定性交给框架。下一节 4.1 会在这个“层 + 损失 + 优化器”的骨架上继续加料——引入隐藏层与非线性激活，得到第一个真正的深度网络：多层感知机。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-summary-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "training-pipeline-check",
+        "type": "formative-check",
+        "title": "训练流程排序检查",
+        "anchorBlockId": "model-pipeline-checklist",
+        "moduleId": "optimizer-and-training",
+        "depth": "core",
+        "outcomeRefs": [
+          "implement-high-level-training",
+          "explain-logsumexp"
+        ],
+        "learningPurpose": "检查学习者能否把本节的六项组件按正确顺序与正确取值组装成可运行的训练流程。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-model-init",
+            "textbook-log-sum-exp",
+            "textbook-optimizer-training"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "不看检查表，按顺序写出数据、模型、初始化、损失、优化器与训练循环各自的取值，并说明损失为什么接收 logits 而不是概率。"
+        }
+      }
+    ]
+  },
+  "subtitle": "线性神经网络",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000024"
+      ],
+      "headingPath": [
+        "线性神经网络",
+        "softmax回归的简洁实现"
+      ],
+      "lineStart": 4809,
+      "lineEnd": 4946,
+      "assetRefs": [
+        "parts/part-0002/images/4c17b0578ad63031cb98981e3c9d166448761fa42f68d9fa42cfa1b2d153eb90.jpg"
+      ],
+      "excerptSha256": "31457f2b309164d378c291390f85be262f7935c7b080a5573b284d0a808ae185"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2300,
+    2947
+  ],
+  "scale": 0.93
+}

@@ -1,0 +1,594 @@
+{
+  "id": "point-13-14",
+  "title": "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）",
+  "shortSummary": "以细粒度犬种识别为例，说明预训练微调、图像增广与比赛提交策略。",
+  "keyTerms": [
+    "细粒度分类",
+    "ImageNet Dogs",
+    "微调",
+    "Kaggle"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.6,
+  "prerequisites": [
+    "point-13-1",
+    "point-13-2",
+    "point-13-13"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "case-analysis",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按比赛的真实决策顺序重组教材流程，保留数据组织、增广、微调与提交的原始参数，在决策点补充取舍理由和迁移提示。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "describe-dog-task",
+          "text": "说明狗品种识别任务的数据规模、类别数与细粒度难点。"
+        },
+        {
+          "id": "explain-finetune-strategy",
+          "text": "解释为何复用 ImageNet 预训练 ResNet-34 并只训练小型输出网络。"
+        },
+        {
+          "id": "compare-augmentation",
+          "text": "对比训练与测试阶段图像增广的差异及其原因。"
+        },
+        {
+          "id": "execute-submission",
+          "text": "描述从数据组织、训练验证到生成 Kaggle 提交文件的完整流程。"
+        }
+      ],
+      "misconceptions": [
+        "以为在 1 万张图像上必须从零训练整个卷积网络，忽略冻结预训练特征可以大幅节省算力。",
+        "以为测试阶段也应使用随机裁剪等随机增广，导致同一张测试图像的预测不可复现。",
+        "以为标准化参数可以随手设定，忽略预训练模型要求与 ImageNet 统计量一致的输入分布。",
+        "以为验证集要一直独立保留，忽略比赛最后可以用包含验证集的全部标注数据重新训练。"
+      ],
+      "modules": [
+        {
+          "id": "task-and-data",
+          "title": "比赛情境与数据组织",
+          "role": "case-context",
+          "description": "先明确任务难点，再把原始图像整理成按类别分组的可训练数据集。",
+          "outcomeRefs": [
+            "describe-dog-task"
+          ],
+          "order": 0
+        },
+        {
+          "id": "augmentation",
+          "title": "训练与测试的图像增广",
+          "role": "comparison",
+          "description": "对照训练阶段的随机增广与测试阶段的确定性预处理，理解各自目的。",
+          "outcomeRefs": [
+            "compare-augmentation"
+          ],
+          "order": 1
+        },
+        {
+          "id": "finetune",
+          "title": "复用预训练模型",
+          "role": "decision",
+          "description": "在冻结特征与替换输出层之间做出取舍，并说明损失计算方式。",
+          "outcomeRefs": [
+            "explain-finetune-strategy"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-loop",
+          "title": "训练与验证",
+          "role": "procedure",
+          "description": "只优化可训练参数，用验证损失选择模型并调整超参数。",
+          "outcomeRefs": [
+            "execute-submission"
+          ],
+          "order": 3
+        },
+        {
+          "id": "submission",
+          "title": "测试推断与提交",
+          "role": "procedure",
+          "description": "用全部标注数据重训，按类别顺序生成概率矩阵与提交文件。",
+          "outcomeRefs": [
+            "execute-submission"
+          ],
+          "order": 4
+        },
+        {
+          "id": "reflection",
+          "title": "结果反思与迁移",
+          "role": "reflection",
+          "description": "复盘成绩来源与改进方向，并把策略迁移到其他细粒度识别任务。",
+          "outcomeRefs": [
+            "describe-dog-task",
+            "explain-finetune-strategy",
+            "compare-augmentation",
+            "execute-submission"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-dog-task",
+          "explain-finetune-strategy",
+          "compare-augmentation",
+          "execute-submission"
+        ],
+        "method": "完成一次形成性检查：给定预训练模型与小规模细粒度数据集，选出正确的增广、冻结与提交做法并说明理由。",
+        "successCriteria": [
+          "能区分训练增广与测试预处理的随机性差异",
+          "能说明冻结预训练特征与替换输出层各自的作用",
+          "能写出提交文件的列顺序与概率含义"
+        ],
+        "summaryBlockId": "model-case-takeaways"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-task-setting",
+        "moduleId": "task-and-data",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材情境：120 类犬种的细粒度识别",
+        "markdown": "本节在 Kaggle 上的狗品种识别比赛中识别 120 类不同品种的狗。该数据集是著名 ImageNet 数据集的子集：与 CIFAR-10 的图像不同，ImageNet 图像更高更宽，且尺寸并不统一。\n\n比赛数据分为训练集和测试集，分别包含 RGB 通道的 10222 张和 10357 张 JPEG 图像。训练集覆盖拉布拉多、贵宾、腊肠、萨摩耶、哈士奇、吉娃娃和约克夏等犬类；提交结果需要 Kaggle 账户。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-fine-grained",
+        "moduleId": "task-and-data",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：细粒度分类难在哪里",
+        "markdown": "与猫狗二分类不同，这里的类别全部属于犬类，属于细粒度分类：类间差异集中在耳朵形状、口鼻比例、毛色纹理等局部细节，而类内差异可能来自姿态、背景、光照和拍摄距离。\n\n这解释了两个设计选择：一是需要足够强的预训练特征，二是需要随机裁剪、翻转和颜色扰动来让模型不过度依赖背景与构图。教材据此在训练阶段使用随机增广，而不是只做缩放。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-setting"
+          ]
+        }
+      },
+      {
+        "id": "tb-reorg-data",
+        "moduleId": "task-and-data",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材流程：下载并整理数据集",
+        "markdown": "下载解压后，数据目录包含 `labels.csv`、`sample_submission.csv` 以及 `train/`、`test/` 两个图像文件夹，结构与 CIFAR-10 一节的格式类似：`train/` 和 `test/` 分别存放训练和测试狗图像，`labels.csv` 保存训练图像的标签。\n\n为便于入门，教材提供小规模样本 `train_valid_test_tiny.zip`；若在比赛中使用完整数据集，需把 `demo` 变量改为 `False`。整理时调用 `reorg_dog_data`：读取标签、按 `valid_ratio = 0.1` 从原始训练集拆出验证集，再把图像移动到按标签分组的子文件夹中，最终形成 `train`、`train_valid`、`valid`、`test` 四个目录。批大小在演示数据下取 32，完整数据下取 128。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-reorg-rationale",
+        "moduleId": "task-and-data",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么要按标签建子文件夹",
+        "markdown": "`ImageFolder` 依靠子目录名推断类别标签，因此把图像移动到以品种命名的子文件夹，是把原始表格标签转成可批量读取数据集的关键一步。\n\n拆出 10% 验证集的目的不是提升训练数据量，而是在训练过程中提供一份模型没见过的样本，用于观察验证损失、选择模型和调整超参数。最后提交前才把验证集合并回训练集，这时已经不再需要用它做选择。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-reorg-data"
+          ]
+        }
+      },
+      {
+        "id": "tb-train-augmentation",
+        "moduleId": "augmentation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材增广：训练阶段的随机变换",
+        "markdown": "由于图像大于 CIFAR-10 图像，训练阶段的增广需要同时完成尺寸统一与分布扩充，教材使用如下组合：\n\n1. `RandomResizedCrop(224, scale=(0.08, 1.0), ratio=(3/4, 4/3))`：随机裁剪出原始面积 0.08 到 1 倍、高宽比在 3/4 与 4/3 之间的区域，再缩放成 224×224。\n2. `RandomHorizontalFlip()`：随机水平翻转。\n3. `ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4)`：随机改变亮度、对比度和饱和度。\n4. `ToTensor()` 转为张量，并用 ImageNet 的均值 `[0.485, 0.456, 0.406]` 与标准差 `[0.229, 0.224, 0.225]` 做逐通道标准化。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-test-preprocessing",
+        "moduleId": "augmentation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材预处理：测试阶段的确定性操作",
+        "markdown": "测试时教材只使用确定性的图像预处理：先用 `Resize(256)` 把短边缩放到 256，再用 `CenterCrop(224)` 从图像中心裁出 224×224 区域，随后 `ToTensor()` 并采用与训练阶段完全相同的均值与标准差做标准化。\n\n测试流程不包含随机裁剪、翻转或颜色扰动。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-augmentation-tradeoff",
+        "moduleId": "augmentation",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：随机与确定的取舍",
+        "markdown": "两个阶段的目标不同，因此变换的随机性也不同：训练增广让同一个样本每次出现时呈现不同的裁剪、朝向和色调，相当于扩充了训练分布并抑制对背景的依赖；测试与提交需要可复现的预测，所以只保留缩放、中心裁剪和标准化。\n\n标准化参数不是随意设定：预训练 ResNet-34 是在 ImageNet 上用这组统计量训练的，输入分布保持一致，预训练特征才继续有效。若换成其他预训练模型，应沿用它对应的标准化参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-train-augmentation",
+            "tb-test-preprocessing"
+          ]
+        }
+      },
+      {
+        "id": "tb-finetune-network",
+        "moduleId": "finetune",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材结构：ResNet-34 加自定义输出网络",
+        "markdown": "因为比赛数据集是 ImageNet 的子集，教材直接在完整 ImageNet 上选择预训练模型：加载 `resnet34(pretrained=True)` 作为特征提取器，再用一个可训练的小型输出网络替换原来的输出层，即 `Linear(1000, 256)`、`ReLU()`、`Linear(256, 120)`，把 1000 维特征映射为 120 个犬种类别。\n\n模型整体被放到可用设备上，然后遍历 `features` 的全部参数并设置 `requires_grad = False`。也就是说，特征提取部分只做前向计算，梯度下降只更新新加的两层。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-finetune-loss",
+        "moduleId": "finetune",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材细节：先取特征再算损失",
+        "markdown": "训练前先获取预训练模型输出层的输入，也就是提取到的特征，再把这个特征作为小型自定义输出网络的输入来计算损失。损失使用 `nn.CrossEntropyLoss(reduction='none')`，`evaluate_loss` 在验证或测试迭代器上累计每个样本的损失之和并除以样本总数，返回平均损失。\n\n教材特别指出，与微调一节的实验不同，这里不重新训练用于特征提取的预训练模型，因此节省了梯度下降的时间和内存空间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-freeze-rationale",
+        "moduleId": "finetune",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：冻结特征为什么仍然有效",
+        "markdown": "ImageNet 的 1000 类中包含大量犬类品种，预训练网络已经学到区分毛色、耳形、口鼻轮廓等通用视觉特征；把输出从 1000 类换成 120 类，本质上是在已有特征上重新学习一个分类边界，而不是从头学习如何看图。\n\n这样做有三点实际收益：需要更新的参数量大幅减少，训练更快且显存占用更低；在约一万张训练图像上过拟合风险更低；可以复用第 13.2 节的迁移思路而不必重训整个网络。代价是特征本身不再适应本任务，若数据与 ImageNet 差异很大，解冻部分层做微调通常更好。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-finetune-network",
+            "tb-finetune-loss"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-function",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材训练函数：只优化可训练参数",
+        "markdown": "训练函数 `train` 用 `nn.DataParallel` 包装模型，优化器为 SGD，只传入 `requires_grad` 为真的参数，并设置 `momentum = 0.9` 与权重衰减 `wd`；学习率调度使用 `StepLR(trainer, lr_period, lr_decay)`。\n\n每个迭代轮次中执行清零梯度、前向计算、求和交叉熵损失、反向传播与参数更新，并累计损失。训练过程中每完成约五分之一批次数就记录一次训练损失，每个轮次结束时在验证集上调用 `evaluate_loss` 记录验证损失，最后调用 `scheduler.step()` 推进学习率。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-hyperparameters",
+        "moduleId": "training-loop",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材超参数与训练结果",
+        "markdown": "教材把设备设为全部可用 GPU，并取 `num_epochs = 10`、`lr = 1e-4`、`wd = 1e-4`、`lr_period = 2`、`lr_decay = 0.9`，即学习率每 2 个迭代轮次乘以 0.9。这些超参数都是可调的，例如可以增加迭代轮数。\n\n在这一设置下，训练结束时记录到训练损失 1.237、验证损失 1.503，速度约为 442.6 examples/sec（双 GPU）。验证损失用于选择模型与调整超参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-validate-not-train",
+        "moduleId": "training-loop",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：验证损失高说明什么",
+        "markdown": "训练损失低于验证损失是正常现象，因为训练阶段带有随机增广且模型见过这些样本；但两者差距过大就意味着过拟合开始出现。此时可考虑更强增广、增大权重衰减或减少迭代轮数，而不是继续提高训练精度。\n\n反过来，如果验证损失与训练损失都偏高，说明容量或特征不足，可以考虑更深的预训练模型、解冻部分层或提高学习率。教材把验证集留在训练循环里，正是为了提供这个判断依据。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training-function",
+            "tb-hyperparameters"
+          ]
+        }
+      },
+      {
+        "id": "tb-submission",
+        "moduleId": "submission",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材收尾：全量重训并生成 submission.csv",
+        "markdown": "提交前，最终所有带标签的数据（包括验证集）都用于训练模型并对测试集分类：重新调用 `get_net`，用 `train_valid_iter` 训练且不传验证集，然后遍历测试迭代器，对模型输出做 `softmax` 得到 120 类概率。\n\n写文件时先写表头 `id` 加全部类别名，类别顺序取自 `train_valid_ds.classes`；随后逐行写入去掉扩展名的图像文件名和 120 个概率值，生成 `submission.csv` 后在 Kaggle 上提交。教材记录的重训结果为训练损失 1.273，速度约 710.0 examples/sec。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000117"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+              ],
+              "lineStart": 26794,
+              "lineEnd": 27140,
+              "assetRefs": [
+                "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+                "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+                "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+              ],
+              "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-submission-checklist",
+        "moduleId": "submission",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：提交文件最容易错的两处",
+        "markdown": "第一是列顺序：表头类别顺序、模型输出的类别顺序必须来自同一份 `classes` 列表，否则概率会被记到错误的品种上，本地看不出报错但分数会骤降。第二是行对齐：图像 id 按排序后的文件名顺序写出，概率也要按同一次遍历的顺序追加，中间不能过滤或重排。\n\n另外要接受一个事实：验证集并入训练后就没有独立评估集了，最终成绩只能由 Kaggle 排行榜反馈，因此超参数与增广方案应在合并之前确定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-submission"
+          ]
+        }
+      },
+      {
+        "id": "model-case-takeaways",
+        "moduleId": "reflection",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：这个案例可迁移的决策链",
+        "markdown": "把整个比赛压缩成一条决策链：先判断数据与预训练数据的亲缘关系，若同源就复用特征并冻结；再按图像尺寸设计训练增广与测试预处理；然后用验证损失定超参数；最后用全部标注数据重训并严格对齐提交格式。\n\n教材练习给出两个改进方向：使用完整数据集并增大批大小与迭代轮数，或换用更深的预训练模型。两者都只改变这条链上的参数与模型选择，不改变流程。迁移到花、鸟、车型等其他细粒度识别任务时，需要替换类别数与输出层维度，保留增广、标准化与验证驱动的选择方式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-task-setting",
+            "tb-train-augmentation",
+            "tb-finetune-network",
+            "tb-submission"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "submission-format-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-submission-checklist",
+        "moduleId": "submission",
+        "depth": "core",
+        "outcomeRefs": [
+          "execute-submission"
+        ],
+        "learningPurpose": "检查学习者能否发现提交文件在列顺序与行对齐上的错误。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-submission",
+            "model-submission-checklist"
+          ]
+        },
+        "config": {
+          "question": "某队生成的 submission.csv 表头按字母顺序排列类别，而预测概率按 classes 原始顺序排列，会发生什么？",
+          "options": [
+            "不影响，Kaggle 会自行匹配",
+            "每列概率被解释成字母序对应的品种，分数严重下降",
+            "文件无法上传",
+            "只影响第一行"
+          ],
+          "answerIndex": 1
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请说明表头类别顺序、模型输出顺序与概率列之间的对应关系，并写出检查方法。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000117"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "实战Kaggle比赛：狗的品种识别（ImageNet Dogs）"
+      ],
+      "lineStart": 26794,
+      "lineEnd": 27140,
+      "assetRefs": [
+        "parts/part-0007/images/677cb1873b7ad01e205946875fe89cd2a3c2058b816e1b1492ff0b42dd18bdfc.jpg",
+        "parts/part-0007/images/f7d85182d5437e78a97163debd6b432706d7f677dd9138c2cf5fe5091816386d.jpg",
+        "parts/part-0007/images/10bea723f8f70e35da5b010ae81d18fc7858eb17e1205b5b0e2fa1eafc06d1e0.jpg"
+      ],
+      "excerptSha256": "24756c30957f313b0841ff1546934860d30b88bb10026b10cff76b9af66f5afc"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3548,
+    199
+  ],
+  "scale": 0.9
+}

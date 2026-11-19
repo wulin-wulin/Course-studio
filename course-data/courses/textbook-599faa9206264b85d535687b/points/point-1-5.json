@@ -1,0 +1,661 @@
+{
+  "id": "point-1-5",
+  "title": "现代 Transformer 的常见优化",
+  "shortSummary": "汇总现代 Transformer 的常见优化，包括位置编码、归一化位置、稀疏与高效注意力等改进方向。",
+  "keyTerms": [
+    "位置编码",
+    "归一化",
+    "稀疏注意力",
+    "高效注意力",
+    "长上下文"
+  ],
+  "animationType": "kvCacheDecoding",
+  "animationSuggestion": "逐帧显示缓存行向右追加一格、当前查询在缓存上扫描并按权重聚合值，同时用并排对照显示不缓存时需要重算整段前缀的重复计算量。",
+  "difficulty": "进阶",
+  "importance": 0.85,
+  "prerequisites": [
+    "point-1-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "taxonomy-comparison",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材对四类优化的划分、术语与关键公式，围绕选择与取舍目标补充对比维度、算例和练习，不引入教材之外的数值结论。",
+      "estimatedMinutes": 24,
+      "outcomes": [
+        {
+          "id": "explain-modern-block-changes",
+          "text": "说明 Pre-Norm、RMSNorm 与门控前馈等块内改动分别改善什么，并指出它们不改变自注意力的渐近复杂度。"
+        },
+        {
+          "id": "explain-inference-optimizations",
+          "text": "解释 KV 缓存、增量解码与 GQA/MLA 如何降低自回归解码中的重复计算与显存占用。"
+        },
+        {
+          "id": "compare-efficiency-attentions",
+          "text": "在统一维度下比较长度外推、FlashAttention、稀疏注意力与线性注意力各自改变什么、保留什么。"
+        },
+        {
+          "id": "apply-selection",
+          "text": "针对训练稳定性、高并发解码、长上下文或容量扩展等场景，选择优化组合并说明代价。"
+        }
+      ],
+      "misconceptions": [
+        "把 FlashAttention 当作稀疏或近似注意力，误以为它减少了乘加次数。",
+        "认为上下文窗口越大，模型就一定越能有效利用其中的长距离信息。",
+        "把 GQA 或 MLA 的缓存压缩理解为对注意力数学定义的改变。"
+      ],
+      "modules": [
+        {
+          "id": "optimization-map",
+          "title": "优化全景与问题导入",
+          "role": "orientation",
+          "description": "先建立四类优化的分类框架与统一对比维度，再进入各部分细节。",
+          "outcomeRefs": [
+            "explain-modern-block-changes",
+            "explain-inference-optimizations",
+            "compare-efficiency-attentions",
+            "apply-selection"
+          ],
+          "order": 0
+        },
+        {
+          "id": "block-upgrades",
+          "title": "块内结构：规范化与门控前馈",
+          "role": "mechanism",
+          "description": "说明 Pre-Norm、RMSNorm 与门控前馈如何改善深层训练稳定性。",
+          "outcomeRefs": [
+            "explain-modern-block-changes"
+          ],
+          "order": 1
+        },
+        {
+          "id": "inference-cost",
+          "title": "推断系统：KV 缓存与键值头共享",
+          "role": "cost-analysis",
+          "description": "从前缀填充与解码的瓶颈差异出发，分析 KV 缓存、GQA 与 MLA 的收益和代价。",
+          "outcomeRefs": [
+            "explain-inference-optimizations"
+          ],
+          "order": 2
+        },
+        {
+          "id": "long-context",
+          "title": "长上下文：位置、访存与连接模式",
+          "role": "comparison",
+          "description": "在统一维度下比较长度外推、FlashAttention、稀疏注意力与线性注意力。",
+          "outcomeRefs": [
+            "compare-efficiency-attentions"
+          ],
+          "order": 3
+        },
+        {
+          "id": "capacity-and-choice",
+          "title": "容量扩展与方案取舍",
+          "role": "decision",
+          "description": "理解 MoE 的容量扩展方式，并把各类优化映射到具体场景的选择上。",
+          "outcomeRefs": [
+            "apply-selection"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-modern-block-changes",
+          "explain-inference-optimizations",
+          "compare-efficiency-attentions",
+          "apply-selection"
+        ],
+        "method": "完成场景判断题并写出所选优化针对的瓶颈与需要接受的代价。",
+        "successCriteria": [
+          "能为每个瓶颈匹配正确的优化方向",
+          "能说明所选方法改变的计算路径与保持不变的部分",
+          "能指出至少一项该方法的代价或适用边界"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-1-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-overview",
+        "moduleId": "optimization-map",
+        "depth": "core",
+        "kind": "note",
+        "title": "教材对四类优化方向的划分",
+        "markdown": "教材把现代 Transformer 的优化归纳为四个方向：块内结构优化（规范化、残差路径与前馈层）、推断系统优化（KV 缓存以及键值头的共享与压缩）、长上下文优化（长度外推、精确注意力的高效实现、稀疏注意力与线性注意力），以及以混合专家为代表的容量扩展。\n\n四类改动分别对应不同的压力来源：深层训练稳定性、单步延迟与显存占用、长序列下的计算与存储瓶颈，以及在计算预算相对可控的前提下扩大参数规模。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scope-lens",
+        "moduleId": "optimization-map",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：统一对比维度",
+        "markdown": "补充一张对比表，用同一组维度审视四类优化，避免把它们混为一谈。\n\n| 优化方向 | 主要瓶颈 | 改变的部分 | 保持不变 |\n|---|---|---|---|\n| 块内结构 | 深层训练稳定性 | 规范化位置、残差路径、前馈结构 | 自注意力的渐近复杂度 |\n| 推断系统 | 解码的显存占用与访存带宽 | 历史键值的保存与共享方式 | 注意力的数学定义 |\n| 长上下文 | 交互代价 $O(T^2)$ 与中间结果存储 | 位置表示、计算顺序或连接模式 | 因方法而异：是否保留精确全连接访问 |\n| 容量扩展 | 单次前向的计算预算 | 前馈层替换为多专家网络 | 注意力计算本身 |",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview"
+          ]
+        }
+      },
+      {
+        "id": "tb-pre-norm",
+        "moduleId": "block-upgrades",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：前规范化与 RMSNorm",
+        "markdown": "层规范化按与其他层的相对位置分为前规范化（Pre-Norm）与后规范化（Post-Norm）。原始 Transformer 采用残差连接后再做层规范化的后规范化结构；大语言模型通常先规范化再进入子层，形成前规范化结构。规范化位于子层输入侧，通常有助于改善深层网络中的梯度传播与优化稳定性，因此更容易训练。\n\n层规范化还常被替换为更简洁的均方根规范化（RMSNorm）：与层规范化相比，RMSNorm 去掉均值中心化步骤，只用各分量的均方根对输入进行缩放，形式更简单，也更适合大规模实现。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-pre-norm",
+        "moduleId": "block-upgrades",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充理解：为什么先规范化更容易训练",
+        "markdown": "可以把前规范化理解成“每次变换前先把输入重新缩放到稳定尺度”：残差主干上的数值不会在深层堆叠中被反复放大或缩小，梯度沿残差路径回传时也更平稳。\n\n需要强调的是，这条经验针对的是训练稳定性与优化难度，并不改变注意力子层本身的表达能力，也不改变它的计算复杂度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pre-norm"
+          ]
+        }
+      },
+      {
+        "id": "tb-gated-ffn",
+        "moduleId": "block-upgrades",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：激活函数与门控前馈网络",
+        "markdown": "前馈层可以通过更换激活函数来改进。例如 GELU 用标准正态分布的累积分布函数 $\\Phi$ 对输入加权，即 $\\mathrm{GELU}(x) = x\\Phi(x)$。\n\n现代模型中一类常见改进是门控前馈网络（Gated FFN）。以门分支采用 Swish 的 SwiGLU 为例，$\\mathrm{swish}(x) = x\\sigma(x)$，其中 $\\sigma$ 为 Logistic 函数，$\\odot$ 表示按元素乘法。与普通两层前馈网络相比，这类门控结构通过额外的门分支调制信息流；在控制中间层宽度、使参数量和计算量大致可比的设定下，部分门控变体在实验中效果更好。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-block-invariant",
+        "moduleId": "block-upgrades",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：块内改造解决的是什么问题",
+        "markdown": "Pre-Norm、RMSNorm 与门控前馈都只调整单个 Transformer 块内部的计算路径，目标是让相近的计算预算更容易训练、表示更有效。\n\n教材明确指出，这些改动通常不改变标准自注意力的渐近复杂度。也就是说，它们缓解的是深层训练的稳定性问题，而不是长序列的平方代价，后者需要本点后面的另一类方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pre-norm",
+            "tb-gated-ffn"
+          ]
+        }
+      },
+      {
+        "id": "tb-kv-cache",
+        "moduleId": "inference-cost",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：KV 缓存、前缀填充与增量解码",
+        "markdown": "训练与推断的瓶颈并不相同。训练时目标序列已知，通常用教师强制并行送入整段序列，主要瓶颈是长序列激活存储、注意力矩阵计算与反向传播开销；推断时按自回归方式逐词元生成，不再反向传播，但会重复执行大量小步前向计算，因此更关注单步延迟、显存占用与访存带宽。为避免重复计算，推断时把历史词元在各层的键和值保存下来，称为 KV 缓存；训练时整段序列并行计算，一般不需要 KV 缓存。\n\n推断通常分为两个阶段：前缀填充（Prefill）把用户输入的整段上下文送入模型，算出各层历史键值并写入缓存，序列较长、并行度较高；逐词元解码（Decode）每生成一个新词元，只用当前查询与历史缓存交互，单步计算量小，但高度依赖缓存的读取效率。\n\n增量解码只需计算新词元对应的 $q_t^{(l)}$、$k_t^{(l)}$、$v_t^{(l)}$ 并追加到缓存，因此第 $t$ 步的注意力只需在当前查询与已缓存键值之间计算。代价是缓存随上下文长度线性增长：对 $L$ 层、每层 $M$ 个头的模型，缓存 $T$ 个词元需要保存 $LTM(D_k + D_v)$ 个数值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-kv-ledger",
+        "moduleId": "inference-cost",
+        "depth": "support",
+        "kind": "example",
+        "title": "补充算例：缓存到底有多大",
+        "markdown": "按 $LTM(D_k + D_v)$ 估算：取 $L = 32$ 层、$M = 32$ 头、$D_k = D_v = 128$、$T = 8192$，缓存量约为 $32 \\times 8192 \\times 32 \\times 256 \\approx 2.1 \\times 10^{9}$ 个数值；若以 16 位浮点保存，单条序列的 KV 缓存就接近 4 GB。\n\n这说明解码阶段的显存压力主要来自随 $T$ 线性增长的缓存，而不是单步矩阵乘法的计算量，也解释了为什么后续方法都在想办法减少需要保存的键值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-kv-cache"
+          ]
+        }
+      },
+      {
+        "id": "tb-gqa-mla",
+        "moduleId": "inference-cost",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：分组查询注意力与多头潜在注意力",
+        "markdown": "在标准多头注意力中，每个查询头都对应独立的键头和值头，推断时需要缓存大量历史键值。分组查询注意力（GQA）把 $M$ 个查询头划分为 $G$ 组，其中 $G \\le M$ 且通常要求整除，同组查询头共享同一组键和值，因此只需为 $G$ 组而不是 $M$ 个查询头保存键值。当 $G = M$ 时 GQA 退化为标准多头注意力；当 $G = 1$ 时所有查询头共享一组键和值，即多查询注意力（MQA）。这类方法特别适合解码器式模型，因为它们能在尽量保持生成质量的同时显著降低 KV 缓存的显存占用和访存带宽需求。\n\n降低缓存开销的另一条思路是压缩键和值的表示。多头潜在注意力（MLA）从隐状态得到一个各头共享的低维潜在向量，并通过升维的线性投影生成各头的键和值；推断时只需缓存压缩表示，不必显式恢复全部历史键和值。结合 RoPE 时，MLA 采用解耦的位置分量，并单独缓存相应的位置键。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-gqa-tradeoff",
+        "moduleId": "inference-cost",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充比较：共享与压缩的两种取舍",
+        "markdown": "GQA 的收益来自“共享”：组数 $G$ 越小，需要保存的键值越少，但多个查询头的表达被迫合并，生成质量可能受影响；$G = M$ 时质量与标准多头注意力一致，缓存也回到最大。\n\nMLA 走的是“压缩再还原”路线：缓存的是低维潜在表示，而不是完整的历史键值。两者都不改变注意力的计算形式，只改变历史信息在显存中的保存方式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-gqa-mla"
+          ]
+        }
+      },
+      {
+        "id": "tb-length-extrapolation",
+        "moduleId": "long-context",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：长度外推与位置机制",
+        "markdown": "长度外推指模型在超过训练序列长度的输入上仍能保持有效建模的能力。自注意力本身可以处理不同长度的序列，但位置表示未必能泛化：超出可学习绝对位置编码表的范围后就没有对应的位置向量可用；RoPE 虽然能为任意位置计算旋转矩阵，也不保证模型能有效利用这些位置。改善外推的代表性思路，一是设计具有外推能力的位置机制，二是调整已有模型的位置表示，后者往往还配合继续训练。\n\n线性偏置注意力（ALiBi）不使用任何位置向量，只在每个注意力头的打分中加入一个与距离成正比的惩罚项，是相对位置偏置的一个特例：对第 $h$ 个头，偏置为 $-m_h (t - j)$，其中 $t - j$ 为查询与键之间的距离，$m_h > 0$ 为斜率；头数为 2 的整数次幂时取几何数列，斜率大的头更偏向近处。由于偏置对任意距离都按同一线性规则给出，ALiBi 不受固定位置编码表的长度限制。\n\n位置插值（PI）对已用 RoPE 训练的模型不改结构，而是把更长的位置线性压缩回训练时见过的范围：设训练长度为 $L$、目标长度为 $L' = \\kappa L$（$\\kappa > 1$），把位置 $t$ 处的旋转矩阵 $R_t$ 换成 $R_{t/\\kappa}$。这样 $t/\\kappa$ 始终落在原训练位置区间内，但相邻两个位置的相位差从 $\\theta_i$ 缩小为 $\\theta_i/\\kappa$，模型通常需要微调来适应。\n\nYaRN 认为各频率分量对位置变化的响应不同：低频分量只经历少量旋转，应压缩频率以限制扩展后的相位范围；高频分量已在训练区间内经历多次旋转，可以保留原频率以维持局部位置分辨率；介于两者之间的分量采用部分插值。它用两个阈值控制原频率的保留比例，并对注意力分数做温度修正，以补偿长上下文中注意力权重的稀释。分频段插值和温度修正本身不引入新的可学习参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-extrapolation-caveat",
+        "moduleId": "long-context",
+        "depth": "support",
+        "kind": "warning",
+        "title": "补充提醒：可访问范围不等于有效利用",
+        "markdown": "更大的上下文窗口首先提供的是“可访问范围”，模型能否有效利用其中的长距离信息，还取决于训练数据、目标任务以及注意力模式本身。\n\nYaRN 的温度系数来自困惑度实验的经验取值，并不能保证模型一定关注到正确的位置；若要获得更稳定的长上下文能力，通常仍需用长序列数据继续训练，使模型适应新的位置尺度与注意力分布。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-length-extrapolation"
+          ]
+        }
+      },
+      {
+        "id": "tb-flash-attention",
+        "moduleId": "long-context",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：FlashAttention 与在线 Softmax",
+        "markdown": "现代加速器采用多级存储层次：计算核心附近的寄存器与片上 SRAM 容量很小，但访问延迟低、带宽高；片外 HBM 容量较大，参数和大部分中间结果存放在其中，但访问代价更高。注意力计算的效率不仅取决于乘加次数，也取决于数据在这些层级之间搬运的次数。\n\n朴素实现通常先显式构造 $S = K^{\\top}Q/\\sqrt{D_k}$ 这个 $T \\times T$ 的相关性矩阵，再按列做 Softmax，最后与 $V$ 相乘；处理长序列时，中间结果需要在 HBM 与 SRAM 之间反复读写，访存开销可能成为主要瓶颈。\n\nFlashAttention 是 IO 感知的精确注意力算法：把查询、键、值分成小块，在片上 SRAM 中完成注意力的全部计算，只把输出和必要的统计量写回 HBM。为避免保存完整权重，它采用在线 Softmax，对每个查询维护已扫描部分的最大分数 $m$、指数和 $\\ell$ 以及未归一化输出 $\\tilde{h}$；读入新键值块时，先用新的最大分数整体重缩放旧累积量，再加上新块的贡献，扫描完全部键值块后 $\\tilde{h}/\\ell$ 就是完整输出。\n\nFlashAttention 只改变计算顺序和存储方式，不改变全连接注意力的数学定义：它没有减少精确注意力的乘加次数，但分块、在线 Softmax 和算子融合减少了 HBM 访问以及中间结果的读写等待。除输入输出外，前向传播只需为每个查询保存 Softmax 统计量，额外中间状态由 $O(T^2)$ 大幅下降。若把片上 SRAM 容量记为 $M_{\\mathrm{SRAM}}$，标准实现的 HBM 访问量为 $\\Theta(TD + T^2)$，而 FlashAttention 的访问量为 $\\Theta(T^2 D^2 / M_{\\mathrm{SRAM}})$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-flash-vs-sparse",
+        "moduleId": "long-context",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充辨析：省访存、省计算与换形式",
+        "markdown": "把三类“高效注意力”放在一起对比，可以避免常见混淆：\n\n- **FlashAttention** 仍是稠密的全连接精确注意力，乘加量随 $T^2$ 增长，节省的是 HBM 访问与中间结果读写。\n- **稀疏注意力** 减少每个查询可访问的位置数量，把计算降到 $O(Tn)$，节省的是计算量。\n- **线性注意力** 改变权重形式，使中间结果从 $T \\times T$ 变为 $D_v \\times D_k$，得到 $O(TD_kD_v)$，节省的是计算量并让状态与序列长度无关。\n\n因此 FlashAttention 不能与稀疏或近似注意力互换使用，它们的适用瓶颈不同。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-flash-attention"
+          ]
+        }
+      },
+      {
+        "id": "tb-sparse-attention",
+        "moduleId": "long-context",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：稀疏注意力与连接模式",
+        "markdown": "全连接注意力让每个查询与全部键交互。稀疏注意力为第 $t$ 个查询只保留一个位置子集 $\\mathcal{N}_t$，其余位置的注意力权重直接置为 0；在保留的位置上仍按标准 Softmax 注意力计算。若每个查询最多保留 $n$ 个位置且 $n \\ll T$，在表示维度固定时，计算量就从 $O(T^2)$ 降为 $O(Tn)$。\n\n不同方法的区别在于如何确定 $\\mathcal{N}_t$。一类按位置事先规定连接模式：滑动窗口注意力只保留最近 $w$ 个位置，单层感受野至多为 $w$，但堆叠层后信息最远可以传播约 $w$ 乘以层数那么远，该层的 KV 缓存只需保存最近 $w$ 个位置，远距离信息由少数全局层负责；大语言模型中常见把滑动窗口层与全注意力层交替堆叠。\n\n另一类根据内容动态选择：先用一个轻量的打分模块（索引器）估计哪些位置与当前查询相关，再只在选出的位置上计算注意力，使主注意力的计算量从 $O(T^2)$ 降为 $O(Tn)$。索引器本身仍随平方增长，但结构轻量，计算量远小于主注意力；这类方法通常仍需保存全部 KV 缓存以供挑选，节省的主要是计算量和读取量。\n\n稀疏注意力的代价是被跳过的位置完全不可见，效果取决于连接模式或打分模块能否覆盖真正重要的位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-linear-core",
+        "moduleId": "long-context",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：线性注意力的权重与递推形式",
+        "markdown": "标准自注意力的平方代价来自 Softmax：指数函数作用在点积 $k_j^{\\top} q_t$ 上，查询和键无法拆开计算，$T$ 个查询合起来就是一个 $T \\times T$ 的权重矩阵。\n\n线性注意力去掉指数函数和归一化分母，直接用点积作为权重。利用 $k_j^{\\top} q_t$ 是标量、可与 $v_j$ 交换次序，并把与 $j$ 无关的 $q_t$ 提到求和号外，得到\n\n$$o_t = \\sum_j (k_j^{\\top} q_t)\\, v_j = \\left(\\sum_j v_j k_j^{\\top}\\right) q_t$$\n\n每个外积 $v_j k_j^{\\top}$ 都是一个 $D_v \\times D_k$ 矩阵，而 $\\sum_j v_j k_j^{\\top}$ 由所有查询共享。于是中间结果从 $T \\times T$ 变为 $D_v \\times D_k$，计算量为 $O(T D_k D_v)$；在 $D_k$、$D_v$ 与序列长度无关时，它随序列长度线性增长，“线性注意力”由此得名。\n\n在自回归模型中，第 $t$ 个位置只能看到前 $t$ 个键值对，记 $S_t = \\sum_{j=1}^{t} v_j k_j^{\\top}$，则因果线性注意力可以写成递推形式：$S_t = S_{t-1} + v_t k_t^{\\top}$，$o_t = S_t q_t$，其中 $S_0 = 0$。每读入一个词元，模型用外积把当前键值对写入状态，再用当前查询从状态中读出输出；状态大小固定为 $D_v \\times D_k$，因此它可以看作以矩阵为隐状态的循环网络。训练时整段序列已知，常用分块并行算法：块内按并行形式计算，块间按递推形式传递状态，总计算量仍随 $T$ 线性增长。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-linear-evolution",
+        "moduleId": "long-context",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：固定状态的代价与带门控的更新规则",
+        "markdown": "把历史压缩进固定大小的状态换来线性复杂度，也带来 Softmax 注意力没有的局限：\n\n- **容量有限**：用第 $i$ 个键读取时 $S_t k_i = \\sum_{j \\le t} (k_j^{\\top} k_i) v_j$。若各键是两两正交的单位向量，读出恰好是 $v_i$；否则其他值向量会按 $k_j^{\\top} k_i$ 的比例混入。而 $\\mathbb{R}^{D_k}$ 中至多有 $D_k$ 个两两正交的向量，序列较长时键之间必然相互串扰，形成记忆碰撞。\n- **只写不擦**：递推中只有加法，旧关联一直保留在状态中，既不会随时间淡出，也不能被有针对性地改写。\n- **权重平缓**：去掉指数函数后，注意力权重通常更平缓，难以集中到少数位置。\n\n后续改进保留“固定状态加查询读取”的框架，只修改写入和擦除规则。给状态加衰减是最直接的做法：RetNet 在写入新关联前把旧状态乘以固定衰减因子 $\\gamma \\in (0, 1)$；Mamba-2 改用由当前输入计算的标量 $\\alpha_t \\in (0,1)$，某一步 $\\alpha_t$ 接近 0 时此前历史几乎被清空；门控线性注意力（GLA）把衰减细化到键的每个通道，使不同通道可以有不同的保留速度。\n\n另一方向是用 Delta 规则定向改写。把状态看作一张联想记忆表，写入前先用当前键“读取”旧记忆 $\\hat{v}_t = S_{t-1} k_t$，它与当前值 $v_t$ 之差就是记忆中缺失或记错的部分，再把误差写回：\n\n$$S_t = S_{t-1} + \\beta_t (v_t - S_{t-1} k_t) k_t^{\\top}$$\n\n其中 $\\beta_t \\in (0,1)$ 控制沿当前键方向的写入强度。这相当于以 $\\beta_t$ 为学习率，对损失 $\\tfrac{1}{2}\\lVert S k_t - v_t \\rVert^2$ 做一步梯度下降。假设 $k_t$ 已做 L2 归一化，取 $\\beta_t = 1$ 时 $S_t k_t = v_t$，当前键的旧值被新值替换，而与 $k_t$ 正交的键读出不受影响，因此它更接近对一条已有记录的定向替换。门控 Delta 网络（Gated DeltaNet）把 Mamba-2 的标量衰减与 Delta 规则结合：$\\alpha_t$ 较小时可以快速清理旧状态，接近 1 时保留更多历史并主要依靠 Delta 项定向更新；KDA 则进一步改用逐通道衰减。忽略归一化和实现细节，这些线性注意力可以统一写成 $S_t = G_t S_{t-1} + \\beta_t v_t k_t^{\\top}$，区别在状态转移矩阵 $G_t$ 与写入强度 $\\beta_t$ 的选择。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-linear-capacity",
+        "moduleId": "long-context",
+        "depth": "advanced",
+        "kind": "note",
+        "title": "补充理解：压缩历史与精确访问的分工",
+        "markdown": "线性注意力用固定大小的状态换线性复杂度，压缩的是历史而不是无损保存全部历史；容量、擦除能力和权重分布都受状态大小限制，因此它不能视为与全局注意力等价。\n\n实际模型通常把线性注意力层与少数注意力层交替堆叠：递推状态负责压缩历史，注意力层补充精确读取能力。是否可接受这种近似，取决于任务对长距离精确检索、复制与回忆的要求。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-linear-core",
+            "tb-linear-evolution"
+          ]
+        }
+      },
+      {
+        "id": "tb-moe",
+        "moduleId": "capacity-and-choice",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：混合专家的容量扩展",
+        "markdown": "混合专家（MoE）提供了一种容量扩展方式：在前馈层位置准备多个专家网络，再由路由器根据当前输入选择其中少数几个专家参与计算。若把某个位置的输入表示记为 $h$，路由器产生门控分数 $g(h)$ 并选择其中得分最高的 $k$ 个专家，则 MoE 层的输出是这些专家输出的门控加权和，归一化后的门控权重记为 $\\alpha_e(h)$。\n\nMoE 可以具有较大的总参数规模，每个位置却只激活少数几个专家，因此单次前向的计算量不必与总参数量同比增长，使模型能在计算预算相对可控的前提下提高容量。它主要通过改造前馈层实现容量扩展，注意力计算本身保持不变。\n\nMoE 也会带来专家负载不均衡、路由不稳定以及多设备通信开销等问题：路由器如果总偏向少数专家，这些专家会过载，其余专家则得不到充分训练。常见做法是在训练目标中加入负载均衡损失，鼓励各专家分到的词元数和路由概率趋于均匀；DeepSeekMoE 把专家切分得很细，并设置少数始终参与计算的共享专家承载通用知识，让路由专家更专注于各自擅长的输入。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000006"
+              ],
+              "headingPath": [
+                "注意力机制与 Transformer：自注意力、结构及常见优化",
+                "现代 Transformer 的常见优化"
+              ],
+              "lineStart": 151,
+              "lineEnd": 320,
+              "assetRefs": [],
+              "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-selection-guide",
+        "moduleId": "capacity-and-choice",
+        "depth": "advanced",
+        "kind": "comparison",
+        "title": "补充：按瓶颈选择优化组合",
+        "markdown": "把前文的机制放回工程场景，可以按“先定位瓶颈，再选方法，最后写出代价”的顺序决策：\n\n| 场景 | 优先考虑 | 主要收益 | 需要接受的代价 |\n|---|---|---|---|\n| 深层训练不稳定 | Pre-Norm、RMSNorm、门控前馈 | 梯度传播与优化更稳定 | 只改块内路径，平方复杂度不变 |\n| 高并发解码、显存吃紧 | KV 缓存 + GQA 或 MLA | 降低缓存显存与访存带宽 | 键值共享或压缩表示可能影响生成质量 |\n| 长上下文且需精确注意力 | FlashAttention | 减少 HBM 访问与中间结果读写 | 乘加量仍随 $T^2$ 增长 |\n| 超长序列、可接受近似 | 滑动窗口或动态稀疏、线性注意力 | 计算降到 $O(Tn)$ 或 $O(TD_kD_v)$ | 被跳过或被压缩的位置不能精确访问 |\n| 计算预算受限下扩大容量 | MoE | 总参数增大而单次计算量可控 | 负载均衡、路由稳定与通信开销 |\n\n表中的方法并不互斥：例如长上下文模型可以同时使用 FlashAttention、少量全局注意力层和线性注意力层，各自的职责分别是省访存、保留精确读取和压缩历史。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-kv-cache",
+            "tb-flash-attention",
+            "tb-linear-core",
+            "tb-moe"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "capacity-and-choice",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "练习：为场景选择优化组合",
+        "markdown": "某在线问答服务需要以 32K 上下文高并发解码，显存是首要瓶颈，同时要求回答中的长距离引用尽量精确。\n\n1. 你会选择哪两项以上的优化？\n2. 每一项分别针对哪个瓶颈？\n3. 每项需要接受什么代价？\n\n可从 KV 缓存、GQA/MLA、FlashAttention、稀疏注意力、线性注意力与 MoE 中选取，并说明为什么没有选择其余方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-selection-guide"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "capacity-and-choice",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结：四条优化线索",
+        "markdown": "现代 Transformer 的优化可以按四条线索组织：块内改造让深层训练更稳定；KV 缓存、GQA 与 MLA 压缩推断时的历史保存；长度外推、FlashAttention、稀疏注意力与线性注意力分别从位置表示、访存、连接模式和权重形式缓解长上下文代价；MoE 则在控制单次计算量的前提下扩大参数规模。\n\n判断一个方法是否适用，关键是看它改变的是计算量、访存、位置表示还是状态保存方式，以及为此放弃了什么。下一点将回顾本章结论并给出扩展阅读方向。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-pre-norm",
+            "tb-kv-cache",
+            "tb-length-extrapolation",
+            "tb-sparse-attention",
+            "tb-linear-evolution",
+            "tb-moe"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "selection-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-selection-guide",
+        "moduleId": "capacity-and-choice",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-selection"
+        ],
+        "learningPurpose": "检查学习者能否把四类优化映射到具体的工程瓶颈，并说明所付代价。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-overview",
+            "tb-kv-cache",
+            "tb-flash-attention",
+            "tb-linear-core"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "format": "open-response"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请为“32K 上下文、高并发解码、显存吃紧”的在线问答服务选出两项优化，并分别写出它们针对的瓶颈与需要接受的代价。"
+        }
+      }
+    ]
+  },
+  "subtitle": "注意力机制与 Transformer：自注意力、结构及常见优化",
+  "clusterId": "chapter-1",
+  "clusterIds": [
+    "chapter-1"
+  ],
+  "role": "branch",
+  "related": [
+    "point-2-2"
+  ],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-599faa9206264b85d535687b",
+      "blockIds": [
+        "block-000006"
+      ],
+      "headingPath": [
+        "注意力机制与 Transformer：自注意力、结构及常见优化",
+        "现代 Transformer 的常见优化"
+      ],
+      "lineStart": 151,
+      "lineEnd": 320,
+      "assetRefs": [],
+      "excerptSha256": "ddb9fdf5ab609d6955663f8ac348094f0259aba13a73bf6cb2e3e9f7f4089f1e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1375,
+    1914
+  ],
+  "scale": 0.96
+}

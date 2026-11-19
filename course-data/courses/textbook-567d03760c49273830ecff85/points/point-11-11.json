@@ -1,0 +1,614 @@
+{
+  "id": "point-11-11",
+  "title": "学习率调度器",
+  "shortSummary": "说明分段衰减、余弦退火等学习率调度策略如何随训练进程调整步长。",
+  "keyTerms": [
+    "学习率调度",
+    "分段衰减",
+    "余弦退火",
+    "训练进程"
+  ],
+  "animationType": "lrScheduleCurve",
+  "animationSuggestion": "用同一条时间轴绘制学习率曲线并标记当前步取值，可切换平方根衰减、多步分段、余弦与带预热余弦，并高亮里程碑与预热结束点。",
+  "difficulty": "中等",
+  "importance": 0.7,
+  "prerequisites": [
+    "point-11-5"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-parameter-experiment",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的调度公式、参数取值与实验结论，按“为何调、怎么算、如何选”重排，补充数值算例、误区纠正与设计检查表。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-motivation",
+          "text": "解释学习率大小、衰减速率与初始化方式各自如何影响训练，并说明何时需要调度器。"
+        },
+        {
+          "id": "compute-schedule",
+          "text": "按给定参数计算平方根、乘法、多步分段与余弦调度的学习率取值。"
+        },
+        {
+          "id": "choose-schedule",
+          "text": "针对具体训练情境选择衰减、余弦或预热组合，并说明理由与适用边界。"
+        }
+      ],
+      "misconceptions": [
+        "把学习率调度等同于“越小越稳”，忽视过小的学习率会让训练耗时过长或停在次优解。",
+        "认为余弦调度在 $t>T$ 之后还会继续振荡，实际应把学习率固定在 $\\eta_T$ 不再增加。",
+        "把预热当成可有可无的装饰，忽视它在随机初始化下防止早期发散的作用。",
+        "认为衰减越快收敛越好，忽略教材指出的“衰减但慢于 $O(t^{-1/2})$”才是凸问题上的稳妥选择。"
+      ],
+      "modules": [
+        {
+          "id": "why-schedule",
+          "title": "为什么学习率需要调度",
+          "role": "motivation",
+          "description": "从学习率大小、衰减速率与初始化三方面建立调度需求。",
+          "outcomeRefs": [
+            "explain-motivation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "baseline-and-sqrt",
+          "title": "从固定学习率到平方根调度",
+          "role": "worked-example",
+          "description": "用 Fashion-MNIST 基线实验和平方根调度建立第一个可计算策略。",
+          "outcomeRefs": [
+            "explain-motivation",
+            "compute-schedule"
+          ],
+          "order": 1
+        },
+        {
+          "id": "decay-mechanisms",
+          "title": "乘性衰减与多步分段",
+          "role": "formula-and-comparison",
+          "description": "掌握带下界的乘法衰减与按里程碑触发的分段常数策略。",
+          "outcomeRefs": [
+            "compute-schedule"
+          ],
+          "order": 2
+        },
+        {
+          "id": "cosine-and-warmup",
+          "title": "余弦调度与预热",
+          "role": "formula-and-procedure",
+          "description": "推导余弦曲线取值，并用预热处理随机初始化带来的早期不稳定。",
+          "outcomeRefs": [
+            "compute-schedule",
+            "choose-schedule"
+          ],
+          "order": 3
+        },
+        {
+          "id": "practice-and-bridge",
+          "title": "练习、边界与下一站",
+          "role": "practice",
+          "description": "用计算题与现象配对巩固选择能力，并桥接到计算性能主题。",
+          "outcomeRefs": [
+            "choose-schedule"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-motivation",
+          "compute-schedule",
+          "choose-schedule"
+        ],
+        "method": "完成三道自测题，并对给定训练现象写出调度选择与依据。",
+        "successCriteria": [
+          "平方根、乘法、多步分段与余弦调度的取值计算正确",
+          "能用“早期发散、后期震荡、长时间平台”等信号匹配对应策略",
+          "能说明衰减、预热与过拟合缓解之间的边界，不夸大调度器的作用"
+        ],
+        "summaryBlockId": "tb-summary",
+        "exerciseBlockId": "model-practice",
+        "nextPointId": "point-12-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-why-schedule",
+        "moduleId": "why-schedule",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：学习率需要处理的四个问题",
+        "markdown": "教材把学习率的调整与优化算法本身并列看待，并列出四个需要处理的问题：\n\n- **学习率大小**：太大使优化发散，太小使训练耗时过长，甚至只能得到次优结果。\n- **衰减速率**：学习率持续过大会在最小值附近弹跳而难以到达最优；对凸问题，希望学习率衰减但慢于 $O(t^{-1/2})$。\n- **初始化与预热**：初始参数随机，一开始的大步和更新方向可能没有意义，因此要控制起步阶段推进多快。\n- **周期性调整**：还存在周期性改变学习率的优化变体，超出本章范围。\n\n正因为管理学习率牵涉很多细节，主流深度学习框架都提供学习率调度器来自动处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-lr-tradeoff",
+        "moduleId": "why-schedule",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：把学习率想成步长",
+        "markdown": "把学习率想象成每步迈出的距离：条件数大时，不同方向对同一步长的敏感程度差别很大，因此“一个固定步长走到底”很难同时满足快与稳。教材强调衰减不是提前停止——训练仍在继续，只是把步长放轻；实验里曲线更平滑、过拟合更小。作者也提醒，较小的步长使参数更接近零这一解释并不能完全说明现象，具体收益仍要看问题。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-why-schedule"
+          ]
+        }
+      },
+      {
+        "id": "tb-baseline-training",
+        "moduleId": "baseline-and-sqrt",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材：固定学习率的基线实验",
+        "markdown": "教材用一个便于计算的问题展示调度的影响：把 LeNet 换成 ReLU 激活与最大汇聚的现代版本，在 Fashion-MNIST 上训练，学习率取 $0.3$、训练 $30$ 个迭代轮数。固定学习率时，测试准确率在某个点后停滞，而训练准确率继续提高，两条曲线之间的间隙就是过拟合。训练函数把 `scheduler` 作为额外参数：每个 epoch 结束后，若调度器来自 `torch.optim.lr_scheduler` 就调用 `scheduler.step()`，否则按自定义函数用 epoch 计算学习率并写回参数组。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-sqrt-scheduler",
+        "moduleId": "baseline-and-sqrt",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：平方根调度",
+        "markdown": "调度器的定义是：给定当前更新次数，返回学习率应有的值。教材给的第一个例子是平方根调度\n\n$$\n\\eta = \\eta_0 (t+1)^{-1/2}\n$$\n\n其中 $\\eta_0$ 是初始学习率、$t$ 是已完成的更新次数；`SquareRootScheduler(lr=0.1)` 的 `__call__` 直接返回 `lr * pow(num_update + 1.0, -0.5)`。把它传给同一个训练函数后，Fashion-MNIST 上得到 train loss 0.270、train acc 0.901、test acc 0.876，曲线比固定学习率更平滑，过拟合也更小。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sqrt-check",
+        "moduleId": "baseline-and-sqrt",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：平方根调度的数值核对",
+        "markdown": "用 $\\eta_0=0.1$ 代入可以快速核对这条曲线：$t=0$ 时学习率为 $0.1$，$t=3$ 时为 $0.1/2=0.05$，$t=99$ 时降到 $0.01$。衰减由指数决定：指数越大衰减越快。教材提醒对凸问题，学习率应衰减但慢于 $O(t^{-1/2})$ 才是不错的选择，而平方根调度正好处在 $O(t^{-1/2})$ 这一量级，是说明衰减效果的最小例子。注意调度器只改步长，梯度估计仍由原来的优化器和小批量决定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sqrt-scheduler"
+          ]
+        }
+      },
+      {
+        "id": "tb-factor-scheduler",
+        "moduleId": "decay-mechanisms",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：带下界的乘法衰减",
+        "markdown": "多项式衰减之外，教材给出乘法衰减：每一步把学习率乘以因子 $\\alpha \\in (0,1)$。为了防止学习率衰减到合理下界之下，更新式通常写成\n\n$$\n\\eta_{t+1} \\gets \\max(\\eta_{\\min},\\ \\eta_t \\cdot \\alpha)\n$$\n\n`FactorScheduler(factor=0.9, stop_factor_lr=1e-2, base_lr=2.0)` 把当前学习率与下界比较后取较大者，并在 50 步上画出曲线。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-factor-check",
+        "moduleId": "decay-mechanisms",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：乘法衰减的手算过程",
+        "markdown": "按 `factor=0.9`、`base_lr=2.0` 手算前几步：$2.0 \\to 1.8 \\to 1.62 \\to 1.458$。下界在 $2.0 \\times 0.9^{50} \\approx 0.0103$ 时还未触及，第 51 次乘积约为 $0.0093$，被 $\\max(\\eta_{\\min},\\cdot)$ 截断为 $0.01$，曲线此后成为水平线。因子的含义很直接：越接近 $1$ 衰减越慢、训练更久；越远离 $1$ 衰减越快，后期步长可能过早变得太小。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-factor-scheduler"
+          ]
+        }
+      },
+      {
+        "id": "tb-multistep",
+        "moduleId": "decay-mechanisms",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：多步分段常数策略",
+        "markdown": "训练深度网络的常见策略是分段常数：在一段时间内保持学习率不变，到预先给定的时刻再乘以一个因子。教材的直觉是：先让优化持续进行，直到权重向量的分布到达驻点，此时再降低学习率，以便在局部最小值附近得到更高质量的代理。实现上用内置的 `MultiStepLR(milestones=[15, 30], gamma=0.5)` 配 `lr=0.5`，学习率在里程碑 $15$ 与 $30$ 处各乘一次 $0.5$，呈现台阶形状。用这个调度器训练同样得到 train loss 0.191、train acc 0.928、test acc 0.889。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-multistep-reading",
+        "moduleId": "decay-mechanisms",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "补充：如何读两种衰减曲线",
+        "markdown": "把两条曲线并排看：乘性衰减每次调用都乘因子，学习率是平滑的指数下坡；多步分段只在里程碑处下降，形状是台阶。台阶高度由 `gamma` 决定，台阶位置由 `milestones` 决定。选择里程碑的经验依据是训练或验证曲线何时进入平台，而不是把固定步数当成通用常数；教材也用它说明“进展趋于稳定时降低学习率”这一做法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-factor-scheduler",
+            "tb-multistep"
+          ]
+        }
+      },
+      {
+        "id": "tb-cosine",
+        "moduleId": "cosine-and-warmup",
+        "depth": "core",
+        "kind": "formula",
+        "title": "教材：余弦调度曲线",
+        "markdown": "余弦调度来自 Loshchilov 与 Hutter（2016）的启发式：一开始不希望把学习率降得太多，最后又希望用非常小的学习率精修解。由此得到在 $t \\in [0,T]$ 上的余弦形状\n\n$$\n\\eta_t = \\eta_T + \\frac{\\eta_0 - \\eta_T}{2}\\left(1 + \\cos\\frac{\\pi t}{T}\\right)\n$$\n\n其中 $\\eta_0$ 是初始学习率、$\\eta_T$ 是 $T$ 时的目标学习率；对 $t>T$ 只需把值固定在 $\\eta_T$ 而不再增加。教材示例用 `CosineScheduler(max_update=20, base_lr=0.3, final_lr=0.01)`，得到 train loss 0.207、train acc 0.923、test acc 0.892，并明确提醒：在计算机视觉中这种调度可能带来改进，但并不保证。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cosine-check",
+        "moduleId": "cosine-and-warmup",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "补充：余弦调度的数值核对",
+        "markdown": "代入 $\\eta_0=0.3$、$\\eta_T=0.01$、$T=20$：$t=0$ 时 $\\eta=0.3$；$t=10$ 时 $\\cos(\\pi/2)=0$，$\\eta=0.01+0.145=0.155$；$t=20$ 时 $\\cos\\pi=-1$，$\\eta=0.01$；$t>20$ 保持 $0.01$。与台阶型分段衰减相比，余弦曲线没有跳变，且两端斜率为零：起步缓慢下降、末段平滑逼近目标学习率，适合最后阶段的精修。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-cosine"
+          ]
+        }
+      },
+      {
+        "id": "tb-warmup",
+        "moduleId": "cosine-and-warmup",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：用预热避开初始化困境",
+        "markdown": "当初始化参数不足以得到好的解时，会出现两难：学习率足够小才不发散，但进展太慢；学习率较大又会在最初就发散，这在某些较深的网络设计中尤其棘手。教材的解决办法是设置预热期：学习率从较小的起点线性增加到初始最大值，然后再冷却直到优化结束。示例 `CosineScheduler(20, warmup_steps=5, base_lr=0.3, final_lr=0.01)` 就是 5 步线性预热接余弦冷却；训练得到 train loss 0.261、train acc 0.904、test acc 0.878。预热可以用于任何调度器，而不仅是余弦；Gotmare 等人的实验指出，预热阶段限制了极深网络中参数的发散程度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-warmup-design",
+        "moduleId": "cosine-and-warmup",
+        "depth": "support",
+        "kind": "procedure",
+        "title": "补充：预热与调度的设计检查表",
+        "markdown": "线性预热段可以写成 $\\eta_t = \\eta_{\\text{begin}} + (\\eta_0 - \\eta_{\\text{begin}})\\,\\frac{t}{T_{\\text{warm}}}$，其中 $t<T_{\\text{warm}}$。选策略前先看训练信号：\n\n1. 最初几十步损失剧烈跳动或溢出，先加预热或降低最大学习率。\n2. 后期损失在最优点附近来回震荡，说明步长过大，应衰减或换余弦。\n3. 长时间停在平台而训练准确率仍在上升，考虑在平台出现处设置里程碑式下降。\n4. 预热只是前缀，预热结束后应接回原调度器；预热长度与总步数共同改变曲线形状，需要实验确定。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-warmup"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "practice-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材：本节小结",
+        "markdown": "教材小结了本节要点：\n\n- 训练期间逐步降低学习率可以提高准确性并减少过拟合。\n- 每当进展趋于稳定时就降低学习率在实践中很有效，本质上是保证有效收敛到合适的解，再通过降低学习率减小参数的固有方差。\n- 余弦调度器在某些计算机视觉问题上很受欢迎。\n- 优化之前的预热期可以防止发散。\n- 对同样的训练误差，不同的优化算法与学习率调度不仅影响训练时间，也会影响测试集上的泛化与过拟合程度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000094"
+              ],
+              "headingPath": [
+                "优化算法",
+                "学习率调度器"
+              ],
+              "lineStart": 20861,
+              "lineEnd": 21241,
+              "assetRefs": [
+                "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+                "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+                "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+                "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+                "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+                "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+                "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+                "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+                "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+                "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+              ],
+              "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-practice",
+        "moduleId": "practice-and-bridge",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "补充：计算与现象配对自测",
+        "markdown": "用三道小题自测本节的计算与判断（括号内是核对值）：\n\n1. 取 $\\eta_0=0.2$、平方根调度，求 $t=0$ 与 $t=24$ 的学习率。（$0.2$ 与 $0.2/5=0.04$）\n2. 取 $\\eta_0=0.1$、$\\eta_T=0$、$T=10$ 的余弦调度，求 $t=5$ 的学习率。（$\\cos(\\pi/2)=0$，故 $\\eta=0.05$）\n3. 把现象与策略配对：早期损失剧烈跳动或发散用预热；后期在最优点附近震荡用衰减或余弦；训练准确率继续上升而测试准确率停滞说明已过拟合，调度只能部分缓解，需要配合正则化或早停。\n\n教材练习还建议：比较固定学习率能取得的最佳模型、改变衰减指数、把余弦调度用于 ImageNet 规模的问题、思考预热应持续多久，以及把优化与采样联系起来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "practice-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：调度器在训练系统中的位置",
+        "markdown": "调度器只回答“每一步走多远”，梯度方向与批量估计仍由优化器和数据决定；因此实际调参要把优化器、批量大小与调度策略放在一起看。下一个知识点转向“编译器和解释器”，关注同一段训练代码如何被框架执行得更快。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "schedule-choice-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-warmup-design",
+        "moduleId": "cosine-and-warmup",
+        "depth": "core",
+        "outcomeRefs": [
+          "choose-schedule"
+        ],
+        "learningPurpose": "检查学习者能否根据早期发散、后期震荡等训练信号选择合适的衰减与预热组合。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-factor-scheduler",
+            "tb-cosine",
+            "tb-warmup"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "feedbackMode": "immediate"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给定三条训练曲线（早期发散、后期震荡、长时间平台），分别写出应采用的调度策略，并引用本节公式或检查表说明依据。"
+        }
+      }
+    ]
+  },
+  "subtitle": "优化算法",
+  "clusterId": "chapter-11",
+  "clusterIds": [
+    "chapter-11"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000094"
+      ],
+      "headingPath": [
+        "优化算法",
+        "学习率调度器"
+      ],
+      "lineStart": 20861,
+      "lineEnd": 21241,
+      "assetRefs": [
+        "parts/part-0006/images/5b0c9401268061033c11b63831cb0775c5f76d4897a42d85d1e19877a500f3fb.jpg",
+        "parts/part-0006/images/eefd0719bd6650e8ab5b3aa9962cc3c4272eb05ecd128a0f4595e0804fa729c8.jpg",
+        "parts/part-0006/images/b06dab992b1c8e49f309a8596a1b732605a5c6992e851ecd0cc61b2a5d581fcd.jpg",
+        "parts/part-0006/images/87a675f196dc0af74868a6193155fdb28e7123d640ab593bac898c1fd4a250f0.jpg",
+        "parts/part-0006/images/e3d7f925f248f9690ac2838a111d440d47521dc23cb27ba8941287ba6326c410.jpg",
+        "parts/part-0006/images/9fc1fc5835b80fcc0848030fd437cab90b218b44c88a072f59c82f4fe1a12c9f.jpg",
+        "parts/part-0006/images/4d820a2a7112461334b5e24e09cf3174664d4056c3e31d56cad9f018a2e9e16c.jpg",
+        "parts/part-0006/images/d740c5f9646aa3054ff81a6ca022e992b3ceb6b789c3a81204d2773adfa09f54.jpg",
+        "parts/part-0006/images/098d32e02ca116bbc869af66c8d1ec6c828f64a599c7a92c847a2f0e0e55a7e7.jpg",
+        "parts/part-0006/images/1bdeab7b0389f8f2ac87e1d6160cda7baa226584404f1ab09a21aa0b8246f60c.jpg"
+      ],
+      "excerptSha256": "afe985e88c2076fcf043757b0c503eea8f270a72c872aafc6e6a9199e21d6cf9"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2475,
+    950
+  ],
+  "scale": 0.88
+}

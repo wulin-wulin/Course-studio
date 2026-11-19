@@ -1,0 +1,532 @@
+{
+  "id": "point-15-3",
+  "title": "情感分析：使用卷积神经网络",
+  "shortSummary": "说明用一维卷积提取文本局部 n 元特征并池化为句子表示的分类方法。",
+  "keyTerms": [
+    "一维卷积",
+    "文本分类",
+    "池化",
+    "n元特征"
+  ],
+  "animationType": "textCnnMaxPool",
+  "animationSuggestion": "以短句的词元向量为输入，逐步显示卷积窗口滑动、逐位相乘求和得到响应曲线，并在每个通道上高亮当前最大值，最后展示汇聚后连结成的定长向量。",
+  "difficulty": "中等",
+  "importance": 0.68,
+  "prerequisites": [
+    "point-6-2",
+    "point-14-5",
+    "point-15-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "mechanism-worked-example-check",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的互相关、汇聚与 textCNN 结构定义及全部数值例子，按“动机—算子—汇聚—架构—训练边界”重排讲解，并补充形状推导、直觉与检查题。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-1d-conv",
+          "text": "解释为什么可以把单句文本当作一维输入，并用一维卷积提取局部 n 元特征。"
+        },
+        {
+          "id": "compute-corr1d",
+          "text": "手算并实现一维互相关，包括多输入通道的情形，并正确给出输出长度。"
+        },
+        {
+          "id": "apply-max-time-pool",
+          "text": "说明最大时间汇聚如何把不同宽度的通道压缩为固定长度向量。"
+        },
+        {
+          "id": "design-textcnn",
+          "text": "按教材三步设计 textCNN，并推导例子中各张量的形状。"
+        },
+        {
+          "id": "evaluate-boundary",
+          "text": "解读教材的训练配置与结果，说明该架构相对循环网络的取舍与适用边界。"
+        }
+      ],
+      "misconceptions": [
+        "把一维卷积理解为只能在时间轴上做加权求和，忽略它是多输入通道逐通道互相关后相加。",
+        "以为最大时间汇聚需要所有通道的输出宽度相同，或以为它会保留词序信息。",
+        "把教材中预测 'this movie is so great' 为 positive 当成模型理解了语义，而忽略它只是判别局部短语模式的分类器。"
+      ],
+      "modules": [
+        {
+          "id": "motivation-and-context",
+          "title": "为什么文本可以用卷积",
+          "role": "motivation",
+          "description": "从文本的一维结构与 n 元语法引出 textCNN 的建模动机。",
+          "outcomeRefs": [
+            "explain-1d-conv"
+          ],
+          "order": 0
+        },
+        {
+          "id": "correlation-mechanics",
+          "title": "一维互相关与多输入通道",
+          "role": "mechanism",
+          "description": "推导滑动窗口互相关的计算规则与输出长度。",
+          "outcomeRefs": [
+            "compute-corr1d"
+          ],
+          "order": 1
+        },
+        {
+          "id": "pooling-and-channels",
+          "title": "最大时间汇聚与通道组织",
+          "role": "mechanism",
+          "description": "说明按通道取最大值如何得到定长表示。",
+          "outcomeRefs": [
+            "apply-max-time-pool"
+          ],
+          "order": 2
+        },
+        {
+          "id": "textcnn-design",
+          "title": "textCNN 结构与形状推导",
+          "role": "worked-example",
+          "description": "按教材三步搭建模型并核对每一层形状。",
+          "outcomeRefs": [
+            "design-textcnn"
+          ],
+          "order": 3
+        },
+        {
+          "id": "train-and-boundary",
+          "title": "训练配置、结果与边界",
+          "role": "analysis",
+          "description": "解读嵌入层设置、训练结果与架构取舍。",
+          "outcomeRefs": [
+            "evaluate-boundary"
+          ],
+          "order": 4
+        },
+        {
+          "id": "transfer-check",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用检查题确认能否独立完成形状推导与边界判断。",
+          "outcomeRefs": [
+            "design-textcnn",
+            "evaluate-boundary"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-1d-conv",
+          "compute-corr1d",
+          "apply-max-time-pool",
+          "design-textcnn",
+          "evaluate-boundary"
+        ],
+        "method": "完成互相关手算与 textCNN 形状推导，并说明一个不适用的边界情形。",
+        "successCriteria": [
+          "一维互相关输出长度与数值计算正确",
+          "能说明最大时间汇聚为什么得到固定长度向量",
+          "能解释 textCNN 的局部特征假设及其局限"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-15-4"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "motivation-and-context",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：文本作为一维输入",
+        "markdown": "教材在回顾二维卷积处理图像局部特征之后指出：卷积神经网络虽然最初为计算机视觉设计，但也被广泛用于自然语言处理；只要把任何文本序列想象成一维图像即可，一维卷积网络因此能处理文本中的局部特征，例如 $n$ 元语法。\n\n本节使用 textCNN（Kim, 2014）演示如何设计表示单个文本的卷积架构。与 15.2 节用 GloVe 预训练词向量的循环网络架构相比，图 15.3.1 中唯一的区别在于序列编码架构的选择。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用卷积神经网络"
+              ],
+              "lineStart": 30290,
+              "lineEnd": 30592,
+              "assetRefs": [
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+                "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+                "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+                "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+                "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+              ],
+              "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-conv",
+        "moduleId": "motivation-and-context",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：局部模式检测器",
+        "markdown": "把文本当作一维序列后，每个卷积核就是一个可学习的“局部短语检测器”：它只观察连续 $k$ 个词元的向量，命中某种组合（如 “so great”）时给出较高响应。\n\n这解释了 textCNN 与循环网络的分工差异：循环网络按时间递推，把整句逐步压缩进隐藏状态；textCNN 则在所有位置并行地滑动匹配，不显式保存长程顺序。对于情感极性主要由若干局部短语决定的任务，这种归纳偏置往往足够，且卷积可以并行计算。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-corr1d",
+        "moduleId": "correlation-mechanics",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：一维互相关",
+        "markdown": "一维卷积只是基于互相关运算的二维卷积的特例。卷积窗口在输入张量上从左向右滑动；滑动期间窗口内的输入子张量与核张量按元素相乘，乘积累加后在输出张量的相应位置给出一个标量。\n\n以输入 $[0,1,2,3,4,5,6]$ 和核 $[1,2]$ 为例，第一个输出元素是 $0\\times 1 + 1\\times 2 = 2$，完整输出为 $[2,5,8,11,14,17]$。教材的 `corr1d` 函数按核宽度 $w$ 循环计算每个位置：$y_i = \\sum_{j=0}^{w-1} x_{i+j}\\,k_j$，输出长度为 $L_{out} = L_{in} - w + 1$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用卷积神经网络"
+              ],
+              "lineStart": 30290,
+              "lineEnd": 30592,
+              "assetRefs": [
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+                "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+                "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+                "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+                "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+              ],
+              "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-corr1d-worked",
+        "moduleId": "correlation-mechanics",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充演算：三个位置的互相关",
+        "markdown": "用同一组输入 $[0,1,2,3,4,5,6]$ 与核 $[1,2]$ 逐位核对：\n\n| 输出位置 | 窗口输入 | 计算 | 结果 |\n|---|---|---|---|\n| 0 | $[0,1]$ | $0\\times 1+1\\times 2$ | 2 |\n| 1 | $[1,2]$ | $1\\times 1+2\\times 2$ | 5 |\n| 2 | $[2,3]$ | $2\\times 1+3\\times 2$ | 8 |\n\n输入长度 7、核宽 2 时输出长度为 $7-2+1=6$，与教材的 `tensor([2., 5., 8., 11., 14., 17.])` 一致。若换成长度 11 的句子嵌入，核宽 3、4、5 分别得到 $11-3+1=9$、$11-4+1=8$、$11-5+1=7$ 个位置。\n\n注意窗口宽度不能超过序列长度，否则输出长度为 0，这一约束在长文本任务中通常不成问题，但对极短句或过大的核需要显式检查。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-corr1d"
+          ]
+        }
+      },
+      {
+        "id": "tb-multi-channel",
+        "moduleId": "correlation-mechanics",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：多输入通道的一维互相关",
+        "markdown": "对具有多个通道的一维输入，卷积核必须具有相同数量的输入通道。对每个通道分别执行一维互相关，再把所有通道的结果相加，得到一个一维输出张量。\n\n教材给出的三通道例子是：输入通道分别为 $[0,1,2,3,4,5,6]$、$[1,2,3,4,5,6,7]$、$[2,3,4,5,6,7,8]$，对应核为 $[1,2]$、$[3,4]$、$[-1,-3]$；`corr1d_multi_in` 得到 $[2,8,14,20,26,32]$。教材同时强调：多输入通道的一维互相关等价于单输入通道的二维互相关，其中二维核的高度必须等于输入张量的高度。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用卷积神经网络"
+              ],
+              "lineStart": 30290,
+              "lineEnd": 30592,
+              "assetRefs": [
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+                "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+                "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+                "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+                "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+              ],
+              "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-channel-shapes",
+        "moduleId": "correlation-mechanics",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：通道维与张量重排",
+        "markdown": "教材实现用 `sum(corr1d(x, k) for x, k in zip(X, K))` 表达“逐通道计算再相加”，因此核张量的第 0 维（通道维）必须与输入一致。\n\n到了 textCNN 中，两个嵌入层在向量维连结后形状是（批量大小，词元数量，向量维度），而 `nn.Conv1d` 期望通道在第 1 维，所以代码用 `permute(0, 2, 1)` 重排。此时卷积的输入通道数等于 $2\\times$ 嵌入维度，这也是 `Conv1d(2 * embed_size, c, k)` 的由来。\n\n与二维卷积一样，也可以为一维卷积指定多个输出通道：每个输出通道拥有自己的一组核，从而在同一位置产出多种局部特征响应。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-multi-channel"
+          ]
+        }
+      },
+      {
+        "id": "tb-max-time-pool",
+        "moduleId": "pooling-and-channels",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：最大时间汇聚层",
+        "markdown": "最大时间汇聚层从序列表示中按通道提取最大值，作为跨时间步最重要的特征。textCNN 使用的最大时间汇聚层工作原理类似于一维全局汇聚（Collobert et al., 2011）：对于每个通道在不同时间步存储值的多通道输入，每个通道的输出就是该通道的最大值。\n\n教材特别指出，最大时间汇聚允许在不同通道上使用不同数量的时间步。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用卷积神经网络"
+              ],
+              "lineStart": 30290,
+              "lineEnd": 30592,
+              "assetRefs": [
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+                "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+                "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+                "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+                "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+              ],
+              "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-pool-role",
+        "moduleId": "pooling-and-channels",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：为什么取最大值而不是展平",
+        "markdown": "卷积输出在每个通道上仍是一个长度随句子变化的向量。若直接展平再接全连接层，参数量会随句长变化，句子一长就无法复用同一套权重；最大时间汇聚把每个通道压缩成一个标量，于是无论句子多长，连结后的编码向量长度都等于通道总数。\n\n取最大值还带来一种位置上的宽容：只要某个局部短语在句中出现过，它的强响应就会被保留，而不在乎它出现在第几个词。这与“情感由关键短语决定”的假设一致。代价是词序和出现次数被丢弃，像否定词与情感词相对位置这类信息只能靠卷积窗口内的局部顺序部分保留。若改用平均汇聚，表示会更平滑、对噪声更稳健，但强特征可能被大量弱响应稀释。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-max-time-pool"
+          ]
+        }
+      },
+      {
+        "id": "tb-textcnn-steps",
+        "moduleId": "textcnn-design",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：textCNN 的三步结构",
+        "markdown": "对于具有由 $d$ 维向量表示的 $n$ 个词元的单个文本序列，输入张量的宽度、高度和通道数分别为 $n$、1 和 $d$。textCNN 按以下三步把输入转换为输出：\n\n1. 定义多个一维卷积核，并分别对输入执行卷积运算；具有不同宽度的卷积核可以捕获不同数目的相邻词元之间的局部特征。\n2. 在所有输出通道上执行最大时间汇聚层，然后将所有标量汇聚输出连结为向量。\n3. 使用全连接层将连结后的向量转换为输出类别，Dropout 可用于减少过拟合。\n\n教材的例子是：11 个词元、每个 6 维，因此输入是宽度 11 的 6 通道张量；定义宽度 2 与 4 的一维卷积核，分别有 4 个和 5 个输出通道，产生 4 个宽度 $11-2+1=10$ 的通道和 5 个宽度 $11-4+1=8$ 的通道；汇聚后得到连结的 9 维向量，最终转换为二元情感预测的 2 维输出。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用卷积神经网络"
+              ],
+              "lineStart": 30290,
+              "lineEnd": 30592,
+              "assetRefs": [
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+                "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+                "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+                "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+                "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+              ],
+              "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-shape-trace",
+        "moduleId": "textcnn-design",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "补充推导：教材实例的逐层形状",
+        "markdown": "把教材例子改写为形状清单，便于实现时逐项核对：\n\n| 阶段 | 形状 | 说明 |\n|---|---|---|\n| 输入 | (11, 6) | 11 个词元，每个 6 维 |\n| Conv1d，核宽 2，4 通道 | (4, 10) | $11-2+1=10$ |\n| Conv1d，核宽 4，5 通道 | (5, 8) | $11-4+1=8$ |\n| 最大时间汇聚 | (4,), (5,) | 每通道取一个最大值 |\n| 连结 | (9,) | $4+5=9$ |\n| 全连接 | (2,) | 二分类情感极性 |\n\n两个通道组的宽度 10 与 8 不同，但汇聚后都变成标量，所以可以直接沿通道维拼接。换成教材代码的配置（核宽 3、4、5，各 100 通道）时，编码向量长度为 300，而输入通道数等于双嵌入连结后的 $2\\times 100=200$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-textcnn-steps"
+          ]
+        }
+      },
+      {
+        "id": "tb-model-code",
+        "moduleId": "textcnn-design",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：TextCNN 实现与训练配置",
+        "markdown": "教材的 `TextCNN` 类比 15.2 节的双向循环网络多了两个嵌入层：`embedding` 使用可训练权重，`constant_embedding` 使用固定权重。二者沿向量维 `cat`，再 `permute(0, 2, 1)` 使通道位于第 2 维；每个 `Conv1d` 的输出经 ReLU 与最大时间汇聚后被 `squeeze`，沿通道维拼成 `encoding`，最后经 Dropout 与 `decoder` 输出 2 类。\n\n实例配置为 `embed_size=100`、`kernel_sizes=[3,4,5]`、`nums_channels=[100,100,100]`，权重用 Xavier 均匀初始化。两个嵌入层都从 `glove.6b.100d` 载入预训练向量，其中 `constant_embedding` 设置 `requires_grad = False`。训练使用 Adam、学习率 0.001、5 个 epoch 与交叉熵损失，输出为 `loss 0.066, train acc 0.978, test acc 0.861`。训练后模型把 'this movie is so great' 预测为 'positive'，把 'this movie is so bad' 预测为 'negative'。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000132"
+              ],
+              "headingPath": [
+                "自然语言处理：应用",
+                "情感分析：使用卷积神经网络"
+              ],
+              "lineStart": 30290,
+              "lineEnd": 30592,
+              "assetRefs": [
+                "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+                "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+                "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+                "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+                "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+              ],
+              "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-reading",
+        "moduleId": "train-and-boundary",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "补充：如何解读双嵌入层与结果差距",
+        "markdown": "同时保留一个可训练嵌入与一个固定嵌入，相当于让模型在微调词向量之外，始终保留一份不被任务数据改写的预训练语义。当训练集较小或任务词汇与预训练语料差异较大时，固定分支提供稳定输入；可训练分支则允许词向量向情感判别方向调整。\n\n教材报告训练准确率 0.978、测试准确率 0.861，两者相差约 12 个百分点。这说明模型在训练集上已接近拟合，测试表现要靠正则化（Dropout 0.5、固定嵌入）与预训练语义支撑；继续增大模型容量或训练轮数未必提高泛化。评估时应以测试集或独立验证集为准，而不是训练准确率。\n\n与 15.2 节的循环网络相比，textCNN 的编码可以完全并行，训练吞吐更高；但它只通过有限宽度的卷积窗口看局部上下文，无法像循环网络那样逐步累积整句信息。教材练习也提示可从分类精度与计算效率两方面比较两种架构，而不是假定某一方全面更优。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-code"
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "检查：形状推导与边界判断",
+        "markdown": "1. 输入为 20 个词元、每个 50 维，使用核宽 2、3、5 各 64 个输出通道。写出每个卷积层的输出宽度、最大时间汇聚后的向量长度，以及接入全连接层前的编码维度。\n2. 若把最大时间汇聚换成沿时间步求平均，编码向量长度是否改变？会失去什么信息、又会获得什么稳健性？\n3. 给出一个 textCNN 可能明显弱于循环网络的情感分析情形，并说明理由。\n\n参考要点：(1) 宽度分别为 19、18、16，汇聚后 192 维；(2) 长度不变，仍为通道总数，但强局部响应会被平均稀释，位置无关性更强；(3) 需要跨长距离组合的否定或转折句，例如情感词与否定词相隔很远，有限窗口无法覆盖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-textcnn-steps",
+            "tb-max-time-pool",
+            "model-training-reading"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "transfer-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点",
+        "markdown": "教材小结给出四条结论：一维卷积网络可以处理文本中的局部特征，例如 $n$ 元语法；多输入通道的一维互相关等价于单输入通道的二维互相关；最大时间汇聚层允许不同通道使用不同数量的时间步；textCNN 用一维卷积层和最大时间汇聚层把单个词元表示转换为下游应用输出。\n\n至此处理的是单个文本序列的分类。下一点转向自然语言推断：任务输入变成前提与假设两个文本序列，需要判断它们之间的蕴涵、矛盾或中性关系。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-textcnn-steps",
+            "tb-model-code"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "textcnn-shape-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-check",
+        "moduleId": "transfer-check",
+        "depth": "core",
+        "title": "textCNN 形状推导自测",
+        "outcomeRefs": [
+          "design-textcnn",
+          "apply-max-time-pool"
+        ],
+        "learningPurpose": "检查学习者能否独立完成卷积输出宽度与汇聚后编码维度的推导。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-textcnn-steps",
+            "model-shape-trace",
+            "tb-max-time-pool"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": [
+            {
+              "prompt": "20 个词元、核宽 3、64 个输出通道时，卷积输出宽度是多少？"
+            },
+            {
+              "prompt": "核宽 2、3、5 各 64 通道，最大时间汇聚后编码向量多长？"
+            }
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "按 $L_{out} = L_{in} - w + 1$ 计算每个卷积层的宽度，再把各通道组的汇聚标量相加得到编码维度；答案分别为 18 和 192。"
+        }
+      }
+    ]
+  },
+  "subtitle": "自然语言处理：应用",
+  "clusterId": "chapter-15",
+  "clusterIds": [
+    "chapter-15"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000132"
+      ],
+      "headingPath": [
+        "自然语言处理：应用",
+        "情感分析：使用卷积神经网络"
+      ],
+      "lineStart": 30290,
+      "lineEnd": 30592,
+      "assetRefs": [
+        "parts/part-0008/images/9a5eddc282b1c31b5c355316e993e4e9976e747baa8a82993a8e5a0eaebbe6fe.jpg",
+        "parts/part-0008/images/16592bc751a9aa44e6a092711d4df3d4c8b13e4d46ef05098e20d568fcb2a99d.jpg",
+        "parts/part-0008/images/3c6b808c9e72e911b8413ab40ae17f59f2cd3460ba33e8392a3476cd6cfc89c3.jpg",
+        "parts/part-0008/images/4688edebc3ed9e7bdc3e3268c857e6657d9d81b693cd3233c5c42e38b94baefa.jpg",
+        "parts/part-0008/images/41d4781006adbc18e2c82ecb1c7a55cd265f53d642b72e37d4943bb0e547eb91.jpg"
+      ],
+      "excerptSha256": "1a0596aedb6b826cd20b25c4151a81a6fac37149f761aed2b02bf63b5983e2a7"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1258,
+    478
+  ],
+  "scale": 0.88
+}

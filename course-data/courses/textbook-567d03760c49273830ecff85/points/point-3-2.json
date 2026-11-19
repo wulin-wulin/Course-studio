@@ -1,0 +1,640 @@
+{
+  "id": "point-3-2",
+  "title": "线性回归的从零开始实现",
+  "shortSummary": "用张量和自动微分手工实现数据迭代、模型前向、损失计算与参数更新，理解训练闭环。",
+  "keyTerms": [
+    "小批量",
+    "参数更新",
+    "自动微分",
+    "训练循环"
+  ],
+  "animationType": "minibatchTrainingLoop",
+  "animationSuggestion": "按批量逐步演示：高亮当前小批量的样本点，画出线性预测线与残差，显示这批损失、梯度方向箭头以及参数更新前后的位置，同时用一条曲线累积记录每个 epoch 的整体损失；提供重播，并允许切换较小或较大的学习率，让学生看到下降缓慢与震荡发散两种失效形态。",
+  "difficulty": "中等",
+  "importance": 0.82,
+  "prerequisites": [
+    "point-2-5",
+    "point-3-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按教材实现顺序展开五个部件，用数据流串成训练闭环，再补足按批归一化、梯度清零与超参数诊断等易错点。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-training-loop",
+          "text": "说明从零实现线性回归的五个部件及其在训练闭环中的分工与数据流。"
+        },
+        {
+          "id": "implement-batch-iteration",
+          "text": "用张量索引与随机打乱实现逐批遍历数据集的小批量迭代器，并处理尾批。"
+        },
+        {
+          "id": "apply-autograd-update",
+          "text": "用自动微分求梯度并按小批量随机梯度下降规则更新参数，解释按批量大小归一化的必要性。"
+        },
+        {
+          "id": "diagnose-training-hyperparams",
+          "text": "根据损失曲线与参数误差，诊断学习率、批量大小和迭代周期设置引起的问题。"
+        }
+      ],
+      "misconceptions": [
+        "把随机打乱后的逐批遍历当成有放回抽样，误以为同一轮里可能重复取到同一样本。",
+        "以为损失张量求和后直接反向传播就能得到平均损失的梯度，忽略除以批量大小这一步。",
+        "忘记每步更新后清空梯度，结果旧批量的梯度累积进下一步的参数更新。",
+        "把恢复真实参数当作训练成功的判据，忽略了参数不唯一、目标其实是预测准确。"
+      ],
+      "modules": [
+        {
+          "id": "problem-and-pipeline",
+          "title": "从数据到闭环：五个部件",
+          "role": "frame",
+          "description": "说明从零实现要覆盖的部件，并用合成数据集给出可观察的起点。",
+          "outcomeRefs": [
+            "explain-training-loop"
+          ],
+          "order": 0
+        },
+        {
+          "id": "batch-iteration",
+          "title": "小批量读取数据",
+          "role": "procedure",
+          "description": "拆解随机打乱与按批量切片的迭代器实现及其边界情况。",
+          "outcomeRefs": [
+            "implement-batch-iteration"
+          ],
+          "order": 1
+        },
+        {
+          "id": "model-loss-update",
+          "title": "模型、损失与参数更新",
+          "role": "procedure",
+          "description": "依次实现前向计算、平方损失和 SGD 更新，并解释梯度尺度与清梯度。",
+          "outcomeRefs": [
+            "apply-autograd-update",
+            "explain-training-loop"
+          ],
+          "order": 2
+        },
+        {
+          "id": "train-and-evaluate",
+          "title": "训练循环与误差评估",
+          "role": "worked-example",
+          "description": "把五个部件串成 epoch 循环，并用合成数据的已知真参数评估结果。",
+          "outcomeRefs": [
+            "explain-training-loop",
+            "apply-autograd-update"
+          ],
+          "order": 3
+        },
+        {
+          "id": "diagnose-hyperparams",
+          "title": "超参数与常见故障",
+          "role": "diagnostic",
+          "description": "按症状、原因与检查项定位学习率、批量和归一化问题。",
+          "outcomeRefs": [
+            "diagnose-training-hyperparams"
+          ],
+          "order": 4
+        },
+        {
+          "id": "summary-and-next",
+          "title": "小结与下一节衔接",
+          "role": "summary",
+          "description": "归纳本节边界，并衔接使用框架组件的简洁实现。",
+          "outcomeRefs": [
+            "explain-training-loop",
+            "diagnose-training-hyperparams"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-training-loop",
+          "implement-batch-iteration",
+          "apply-autograd-update",
+          "diagnose-training-hyperparams"
+        ],
+        "method": "不看代码复述训练闭环的数据流，并针对一段损失异常的配置指出最可能的故障环节与检查步骤。",
+        "successCriteria": [
+          "能按顺序说清迭代器、模型、损失、反向传播与参数更新各自的输入输出",
+          "能解释 sgd 中除以 batch_size 与清零梯度的作用",
+          "能对给定症状给出至少一项可执行的检查或调整"
+        ],
+        "summaryBlockId": "tb-summary",
+        "nextPointId": "point-3-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-pipeline-map",
+        "moduleId": "problem-and-pipeline",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材给出的五个部件",
+        "markdown": "教材把线性回归的实现拆成五个部件并依次搭建：以小批量方式读取数据的迭代器、把输入映射为预测的模型、度量误差的平方损失、按梯度更新参数的小批量随机梯度下降，以及把它们串起来的训练循环。整节只使用张量和自动求导，不定义层，也不调用现成的优化器。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-why-from-scratch",
+        "moduleId": "problem-and-pipeline",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：为什么要从零实现",
+        "markdown": "框架几乎能自动完成上述全部工作，但手工实现的价值在于知道自己真正在做什么：哪些状态被保存、梯度从哪来、参数在什么时候变化。这份理解是后面自定义模型、自定义层和自定义损失函数的前提；而框架实现可以看作把这些部件换成了更高效的等价物。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-pipeline-map"
+          ]
+        }
+      },
+      {
+        "id": "tb-synthetic-data",
+        "moduleId": "problem-and-pipeline",
+        "depth": "core",
+        "kind": "code",
+        "title": "合成数据集与真实参数",
+        "markdown": "为了能观察训练是否成功，教材根据带噪声的线性模型构造人造数据集：\n\n$$\\mathbf{y} = \\mathbf{X}\\mathbf{w} + b + \\epsilon$$\n\n其中真实参数 $\\mathbf{w} = [2, -3.4]^\\top$、$b = 4.2$，噪声 $\\epsilon$ 服从均值为 0、标准差为 0.01 的正态分布。数据集含 1000 个样本，每个样本有 2 个特征。噪声可以理解为预测与标签之间的观测误差，它让任务变成在有限样本上尽量还原生成过程，而不是记住每一条样本。\n\n```python\ndef synthetic_data(w, b, num_examples):\n    \"\"\"生成 y = Xw + b + 噪声\"\"\"\n    X = torch.normal(0, 1, (num_examples, len(w)))\n    y = torch.matmul(X, w) + b\n    y += torch.normal(0, 0.01, y.shape)\n    return X, y.reshape((-1, 1))\n```\n\n`features` 的每一行是一个二维样本，`labels` 的每一行是一个标量标签；把第二个特征与标签画成散点图，可以直接看到近似线性的趋势。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-data-iter",
+        "moduleId": "batch-iteration",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "随机打乱并按批量切片",
+        "markdown": "训练要反复遍历数据集，每次抽取一小批量。教材的 `data_iter` 先把全部下标随机打乱，再按 `batch_size` 顺序切片，用生成器逐批交出特征与标签：\n\n```python\ndef data_iter(batch_size, features, labels):\n    num_examples = len(features)\n    indices = list(range(num_examples))\n    random.shuffle(indices)\n    for i in range(0, num_examples, batch_size):\n        batch_indices = torch.tensor(\n            indices[i: min(i + batch_size, num_examples)])\n        yield features[batch_indices], labels[batch_indices]\n```\n\n取 `batch_size = 10` 时，一个批量的特征形状是 $10 \\times 2$，标签形状是 $10 \\times 1$。这种写法便于教学，但把全部数据留在内存并做随机访问的效率不高；框架内置的迭代器能处理文件中的数据与数据流。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-batch-parallel",
+        "moduleId": "batch-iteration",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：为什么不一次只喂一个样本",
+        "markdown": "同一批样本的前向计算以及各自损失对参数的梯度可以并行完成，GPU 处理几百个样本的耗时通常只比处理一个样本略多，因此合理大小的批量能显著提高吞吐。批量的随机性又让每步梯度只是整体梯度的估计，这正是随机梯度下降名称的来源，也是它与全量梯度下降的区别所在。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-data-iter"
+          ]
+        }
+      },
+      {
+        "id": "model-last-batch",
+        "moduleId": "batch-iteration",
+        "depth": "core",
+        "kind": "warning",
+        "title": "模型补充：打乱范围与尾批",
+        "markdown": "打乱只发生在每次进入迭代器时的下标顺序上，遍历一轮后每个样本恰好被使用一次，属于无放回遍历而不是有放回抽样。当样本数不能被 `batch_size` 整除时，最后一个批量会小于 `batch_size`，`min(i + batch_size, num_examples)` 正是为此兜底。因此训练代码不能假定每个批量都恰好等大，也不能把每轮批量个数写死。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-data-iter"
+          ]
+        }
+      },
+      {
+        "id": "tb-param-init",
+        "moduleId": "model-loss-update",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "初始化模型参数",
+        "markdown": "更新之前必须先有一组参数。教材从均值为 0、标准差为 0.01 的正态分布采样权重，并把偏置初始化为 0，两者都设置 `requires_grad=True`，让自动微分记录对它们的操作：\n\n```python\nw = torch.normal(0, 0.01, size=(2, 1), requires_grad=True)\nb = torch.zeros(1, requires_grad=True)\n```\n\n此后每次更新都需要损失对这些参数的梯度。手算梯度既枯燥又容易出错，所以这里直接依赖自动微分。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-linreg",
+        "moduleId": "model-loss-update",
+        "depth": "core",
+        "kind": "definition",
+        "title": "定义模型：矩阵乘法加偏置",
+        "markdown": "线性模型只需计算输入特征与权重的矩阵-向量乘法，再加上偏置：$\\hat{\\mathbf{y}} = \\mathbf{X}\\mathbf{w} + b$。此时 $\\mathbf{X}\\mathbf{w}$ 是长度为批量大小的向量，而 $b$ 是标量，依靠广播机制被加到每个分量上。\n\n```python\ndef linreg(X, w, b):\n    \"\"\"线性回归模型\"\"\"\n    return torch.matmul(X, w) + b\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-squared-loss",
+        "moduleId": "model-loss-update",
+        "depth": "core",
+        "kind": "formula",
+        "title": "定义平方损失",
+        "markdown": "损失采用平方损失。实现时先把真实标签 reshape 成与预测相同的形状，再逐元素相减、平方并除以 2：\n\n$$l(\\hat{y}, y) = \\frac{1}{2}(\\hat{y} - y)^2$$\n\n```python\ndef squared_loss(y_hat, y):\n    \"\"\"均方损失\"\"\"\n    return (y_hat - y.reshape(y_hat.shape)) ** 2 / 2\n```\n\n除以 2 让求导后的常数因子变成 1，不改变最优解的位置。返回结果是形状为 `(batch_size, 1)` 的张量，还不是一个标量，所以后续要先把元素加总再反向传播。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-sgd",
+        "moduleId": "model-loss-update",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "定义小批量随机梯度下降",
+        "markdown": "优化算法使用小批量随机梯度下降：每一步用当前小批量算出损失对参数的梯度，沿负梯度方向更新，并按批量大小归一化步长，最后清空梯度：\n\n```python\ndef sgd(params, lr, batch_size):\n    \"\"\"小批量随机梯度下降\"\"\"\n    with torch.no_grad():\n        for param in params:\n            param -= lr * param.grad / batch_size\n            param.grad.zero_()\n```\n\n更新规则可写作 $(\\mathbf{w}, b) \\leftarrow (\\mathbf{w}, b) - \\eta \\mathbf{g}$，其中 $\\eta$ 是学习率、$\\mathbf{g}$ 是本批损失的梯度。`torch.no_grad()` 保证更新这一动作本身不被记录进计算图。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-sgd-normalize",
+        "moduleId": "model-loss-update",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "模型补充：为什么更新时要除以批量大小",
+        "markdown": "训练循环先把形状为 `(batch_size, 1)` 的逐样本损失加总成标量再反向传播，因此 `param.grad` 是这一批损失之和的梯度，量级会随批量大小线性增长。更新时除以 `batch_size`，等效于使用平均损失的梯度，换批量时不必重新调整学习率——教材正是用这一点保证步长不取决于批量的选择。平方损失里的 $\\frac{1}{2}$ 与这里的归一化共同决定了梯度的尺度，两者都不能随手改动。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-squared-loss",
+            "tb-sgd"
+          ]
+        }
+      },
+      {
+        "id": "model-grad-clear",
+        "moduleId": "model-loss-update",
+        "depth": "support",
+        "kind": "warning",
+        "title": "模型补充：梯度是累加的",
+        "markdown": "PyTorch 的 `.grad` 缓冲区会累积梯度：一次 `backward()` 之后梯度仍然保留，下一次反向传播会继续往同一缓冲区相加。所以每步更新后必须调用 `param.grad.zero_()`，否则旧批量的梯度会污染当前步的方向，表现为损失下降异常或参数乱跳。反过来，需要跨多个小批量累积梯度再更新时，可以故意暂不清零——是否清零取决于你想表达哪一种更新语义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sgd"
+          ]
+        }
+      },
+      {
+        "id": "tb-training-loop",
+        "moduleId": "train-and-evaluate",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练循环",
+        "markdown": "训练循环把前面的部件串起来：每个 epoch 用 `data_iter` 遍历一次数据集，对每个小批量计算损失、反向传播、更新参数；epoch 结束后在整个数据集上评估当前损失并打印：\n\n```python\nlr = 0.03\nnum_epochs = 3\nfor epoch in range(num_epochs):\n    for X, y in data_iter(batch_size, features, labels):\n        l = loss(net(X, w, b), y)\n        l.sum().backward()\n        sgd([w, b], lr, batch_size)\n    with torch.no_grad():\n        train_l = loss(net(features, w, b), labels)\n    print(f'epoch {epoch + 1}, loss {float(train_l.mean()):f}')\n```\n\n其中 `net = linreg`、`loss = squared_loss`。迭代周期数 `num_epochs` 与学习率 `lr` 都是超参数，需要反复试验调整；教材把二者分别设为 3 和 0.03。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-loop-flow",
+        "moduleId": "train-and-evaluate",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "模型补充：闭环的数据流",
+        "markdown": "把闭环按数据流再排一遍：小批量 $\\mathcal{B}$ → 前向 $\\hat{\\mathbf{y}} = \\mathbf{X}\\mathbf{w} + b$ → 损失 $l$ → `l.sum().backward()` 得到 $\\mathbf{g} = \\partial_{(\\mathbf{w}, b)} \\frac{1}{|\\mathcal{B}|} \\sum_{i \\in \\mathcal{B}} l^{(i)}$ → 参数按 $-\\eta \\mathbf{g}$ 更新并清零梯度 → 取下一批量。三个环节各自回答不同问题：迭代器决定“用哪些样本”，损失决定“错了多少”，优化器决定“往哪走、走多远”。排错时先定位出问题的是哪一环，比盲目调学习率更快。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-training-loop",
+            "model-sgd-normalize"
+          ]
+        }
+      },
+      {
+        "id": "tb-eval",
+        "moduleId": "train-and-evaluate",
+        "depth": "core",
+        "kind": "example",
+        "title": "用已知真参数评估训练结果",
+        "markdown": "因为数据集是合成的，真实参数已知，可以直接比较学到的参数与真值：\n\n```python\nprint(f'w的估计误差：{true_w - w.reshape(true_w.shape)}')\nprint(f'b的估计误差：{true_b - b}')\n```\n\n三轮训练后损失由约 0.043 降到约 0.000051，$\\mathbf{w}$ 的估计误差在 $10^{-4}$ 量级，$b$ 的误差约为 0.0006，参数已经非常接近真实值。教材同时提醒：不应想当然地假设总能完美求解参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-not-recover",
+        "moduleId": "train-and-evaluate",
+        "depth": "support",
+        "kind": "misconception",
+        "title": "模型补充：训练目标不是恢复真参数",
+        "markdown": "在真实任务中我们并不知道真实参数，也不以恢复真参数为目标，关心的是模型对新数据的预测是否准确。深层网络里往往存在许多组参数都能给出同样好的预测，因此参数不唯一、真值不可得都是常态。这份合成数据只是让误差变得可观察，不能把“接近真参数”当成判断训练成功的普遍标准。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-eval"
+          ]
+        }
+      },
+      {
+        "id": "model-hyperparam-diagnose",
+        "moduleId": "diagnose-hyperparams",
+        "depth": "advanced",
+        "kind": "table",
+        "title": "模型补充：按症状定位超参数问题",
+        "markdown": "训练结束后看到的损失与参数误差，是判断前面每个部件是否正常的入口。把常见症状与需要回查的代码位置对应起来：\n\n| 症状 | 可能原因 | 优先检查 |\n|---|---|---|\n| 损失几乎不下降 | 学习率过小；或参数根本没被更新 | 确认 `sgd` 在 `torch.no_grad()` 中被调用，`lr` 是否太小 |\n| 损失剧烈震荡或出现 nan | 学习率过大 | 减小 `lr`，检查特征是否已缩放 |\n| 损失下降而预测仍有系统偏差 | 模型表达能力不足 | 与解析解或下一节的框架实现对比 |\n| 多轮之后继续训练几乎无改进 | 已接近该模型在数据上的下限 | 增加数据量或改用更合适的模型 |\n| 换个批量大小就要重调学习率 | 更新时未按 `batch_size` 归一化 | 检查 `sgd` 中的除法是否保留 |\n| 损失忽大忽小且与批量无关 | 梯度未清零或重复反向传播 | 检查 `param.grad.zero_()` 的调用位置 |\n\n学习率控制每步的尺度，批量大小控制梯度噪声与吞吐，epoch 数控制遍历数据的遍数。三者相互牵连，需要固定其余变量逐项试验，而不是同时乱改。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-sgd",
+            "tb-eval"
+          ]
+        }
+      },
+      {
+        "id": "tb-summary",
+        "moduleId": "summary-and-next",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "教材小结强调两点：这一章只用张量和自动微分就完成了深度网络的实现与优化，不需要定义层或复杂优化器；本节只触及表面，后续会在这些概念上介绍其他模型，并给出更简洁的实现。下一节正是用数据加载器、网络层、损失函数与优化器重写同样的流程，可以逐项对照本节手工部件的作用。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000019"
+              ],
+              "headingPath": [
+                "线性神经网络",
+                "线性回归的从零开始实现"
+              ],
+              "lineStart": 3366,
+              "lineEnd": 3679,
+              "assetRefs": [
+                "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+              ],
+              "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+            }
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "sgd-normalize-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-sgd-normalize",
+        "moduleId": "model-loss-update",
+        "depth": "core",
+        "outcomeRefs": [
+          "apply-autograd-update"
+        ],
+        "learningPurpose": "检查学习者能否独立解释按批量大小归一化与清除梯度的作用。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-squared-loss",
+            "tb-sgd"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompt": "若把 sgd 中的 / batch_size 删掉，学习率不变时会发生什么？",
+          "options": [
+            "每步步长随批量线性放大，等效学习率变大",
+            "训练完全不受影响",
+            "梯度会变成二阶导数",
+            "损失函数会自动归一化"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "在纸上写出 `param.grad` 与批量大小的关系，并说明删除除法后等效学习率如何变化；再用自己的话解释 `param.grad.zero_()` 缺少时会出什么问题。"
+        }
+      },
+      {
+        "id": "hyperparam-diagnosis-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-hyperparam-diagnose",
+        "moduleId": "diagnose-hyperparams",
+        "outcomeRefs": [
+          "diagnose-training-hyperparams"
+        ],
+        "learningPurpose": "训练学习者把损失曲线症状映射到具体代码位置的诊断能力。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-training-loop",
+            "tb-sgd"
+          ]
+        },
+        "config": {
+          "attempts": 1,
+          "prompt": "损失在前几个批量后突然变成 nan，最应该先检查哪两处？"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "写出你遇到 nan 时会依次检查的三项：学习率、数据尺度、梯度是否清零，并说明每一项对应的修改方式。"
+        }
+      }
+    ]
+  },
+  "subtitle": "线性神经网络",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000019"
+      ],
+      "headingPath": [
+        "线性神经网络",
+        "线性回归的从零开始实现"
+      ],
+      "lineStart": 3366,
+      "lineEnd": 3679,
+      "assetRefs": [
+        "parts/part-0002/images/6a688cf13be625bf41b95795354af9df57d0390752deaed1dc51c5b0b06c54fc.jpg"
+      ],
+      "excerptSha256": "d534cf6ddaee96531fc6ffba4b1141638d10b07408b51667b36fc393830c008e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    2584,
+    2783
+  ],
+  "scale": 0.96
+}

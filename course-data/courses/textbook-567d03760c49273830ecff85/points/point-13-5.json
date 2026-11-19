@@ -1,0 +1,487 @@
+{
+  "id": "point-13-5",
+  "title": "多尺度目标检测",
+  "shortSummary": "说明在不同特征图尺度上生成锚框，以同时检测大小不同的目标，并解释尺度选择对小目标召回的影响。",
+  "keyTerms": [
+    "多尺度",
+    "特征图",
+    "锚框",
+    "目标尺寸"
+  ],
+  "animationType": "none",
+  "difficulty": "进阶",
+  "importance": 0.66,
+  "prerequisites": [
+    "point-6-2",
+    "point-13-4"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的逐像素锚框数量估算、三组尺度设置与感受野论证，围绕锚框规模与尺度的定量关系补足算例和检查题。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-anchor-cost",
+          "text": "解释逐像素生成锚框为何导致计算量爆炸，并能用特征图高宽和每中心锚框数估算总量。"
+        },
+        {
+          "id": "explain-scale-tradeoff",
+          "text": "说明小目标需要更密采样、大目标可以用稀疏采样与更大锚框的理由。"
+        },
+        {
+          "id": "apply-feature-map-anchors",
+          "text": "给定特征图形状、锚框尺度与宽高比，推导锚框中心数量、锚框总数与相对坐标范围。"
+        },
+        {
+          "id": "explain-receptive-field",
+          "text": "解释不同层特征图的感受野差异如何决定该层负责检测多大的目标。"
+        }
+      ],
+      "misconceptions": [
+        "认为特征图分辨率越高越适合检测大目标；实际上分辨率高、感受野小的层更适合小目标，深层低分辨率特征图才对应大目标。",
+        "把多尺度理解成只在同一张特征图上更换锚框大小；教材的多尺度还包含不同层特征图的采样密度与感受野差异。"
+      ],
+      "modules": [
+        {
+          "id": "problem-import",
+          "title": "问题导入：锚框为什么会爆炸",
+          "role": "motivation",
+          "description": "用教材的 561×728 图像估算逐像素锚框规模，明确本知识点要解决的计算量问题。",
+          "outcomeRefs": [
+            "explain-anchor-cost"
+          ],
+          "order": 0
+        },
+        {
+          "id": "scale-and-density",
+          "title": "尺度与采样密度的取舍",
+          "role": "concept",
+          "description": "说明小目标位置更不确定，因此需要更密的采样与更小的锚框。",
+          "outcomeRefs": [
+            "explain-scale-tradeoff"
+          ],
+          "order": 1
+        },
+        {
+          "id": "generation-procedure",
+          "title": "按特征图生成多尺度锚框",
+          "role": "worked-example",
+          "description": "从特征图形状推出中心分布，并用教材的三组设置逐步计算锚框数量。",
+          "outcomeRefs": [
+            "apply-feature-map-anchors"
+          ],
+          "order": 2
+        },
+        {
+          "id": "detection-mapping",
+          "title": "感受野与多尺度检测",
+          "role": "mechanism",
+          "description": "解释同一空间位置的通道单元如何映射到锚框预测，以及层级感受野如何分工。",
+          "outcomeRefs": [
+            "explain-receptive-field"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "check",
+          "description": "用小算例检验锚框数量与尺度选择的推理，并过渡到检测数据集。",
+          "outcomeRefs": [
+            "explain-anchor-cost",
+            "explain-scale-tradeoff",
+            "apply-feature-map-anchors",
+            "explain-receptive-field"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-anchor-cost",
+          "explain-scale-tradeoff",
+          "apply-feature-map-anchors",
+          "explain-receptive-field"
+        ],
+        "method": "完成锚框数量的两问计算，并说明特征图减半后为何要增大锚框尺度。",
+        "successCriteria": [
+          "锚框总数按 $h \\times w \\times a$ 正确计算",
+          "能说明中心数随特征图边长减半而按平方下降",
+          "能指出深层特征图感受野更大，应承担大目标"
+        ],
+        "exerciseBlockId": "model-check",
+        "summaryBlockId": "tb-section-summary",
+        "nextPointId": "point-13-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-anchor-density-problem",
+        "moduleId": "problem-import",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "逐像素锚框的数量代价",
+        "markdown": "在 13.4 节的做法中，锚框以输入图像的每个像素为中心生成。这样做的直接后果是锚框数量随图像分辨率线性放大：一张 $561 \\times 728$ 的输入图像，如果以每个像素为中心生成 5 个形状不同的锚框，就需要在图像上标记和预测超过 200 万个锚框（$561 \\times 728 \\times 5$）。每个锚框都要参与类别与偏移量的预测，因此这构成了检测模型的主要计算负担。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-anchor-count-formula",
+        "moduleId": "problem-import",
+        "depth": "core",
+        "kind": "formula",
+        "title": "用变量估算锚框规模",
+        "markdown": "把上面的算术写成通用形式。设特征图高宽为 $h$ 与 $w$，即采样中心共有 $h \\times w$ 组；每个中心生成 $a$ 个宽高比不同的锚框，则\n\n$$\\text{锚框总数} = h \\times w \\times a$$\n\n代入教材的数字：$h=561$、$w=728$、$a=5$，得到 $2\\,041\\,640$ 个锚框，约 204 万个。公式也说明了两条降量路径：减少采样中心（降低 $h \\times w$），或在保持中心的前提下减少每个中心的框数 $a$。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-anchor-density-problem"
+          ]
+        }
+      },
+      {
+        "id": "tb-small-object-sampling",
+        "moduleId": "scale-and-density",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "小目标为何需要更密的采样",
+        "markdown": "减少锚框并不困难：可以在输入图像中均匀采样一小部分像素作为中心，并在不同尺度下生成不同数量和不同大小的锚框。教材给出的依据是，较小目标在图像上出现的方式比大目标更多样：在 $2 \\times 2$ 图像上，$1 \\times 1$、$1 \\times 2$ 与 $2 \\times 2$ 的目标分别有 4、2、1 种可能的出现方式。因此，用较小锚框检测小物体时应当采样更多区域，而检测较大物体时可以采样较少区域。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-density-intuition",
+        "moduleId": "scale-and-density",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充直觉：位置不确定性决定采样密度",
+        "markdown": "可以把采样中心看成一张搜索网格。目标越小，它相对网格的偏移越容易被整个格子错过；网格越密，漏检风险越低，但参与预测的锚框也越多。大目标通常覆盖多个格子，某个格子错过它的概率较低，因此可以用稀疏网格配合大锚框。多尺度设计本质上是在“覆盖率”与“计算量”之间分配预算，而不是单纯把所有尺度的锚框都堆到同一个分辨率上。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-small-object-sampling"
+          ]
+        }
+      },
+      {
+        "id": "tb-feature-map-centers",
+        "moduleId": "generation-procedure",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "由特征图形状决定锚框中心",
+        "markdown": "卷积层的二维输出称为特征图。给定特征图高宽 $fmap_h$ 与 $fmap_w$，在特征图的每个单位（像素）上取中心，再把中心按其相对空间位置映射回任意输入图像，就能在任意图像上均匀采样 $fmap_h$ 行、$fmap_w$ 列的中心。以这些中心为基础生成尺度为 $s$、宽高比不同的锚框；锚框的 $(x, y)$ 坐标已除以特征图的宽高，取值介于 0 与 1 之间，表示锚框在特征图中的相对位置。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-three-scale-example",
+        "moduleId": "generation-procedure",
+        "depth": "core",
+        "kind": "example",
+        "title": "教材中的三级尺度设置",
+        "markdown": "教材用同一张 $561 \\times 728$ 图像演示三级尺度：\n\n- $fmap_w=4$、$fmap_h=4$、$s=[0.15]$：得到 4 行 4 列共 16 个均匀分布的中心，锚框较小且互不重叠，用于探测小目标；\n- $fmap_w=2$、$fmap_h=2$、$s=[0.4]$：特征图高宽减半，中心减为 4 个，锚框变大并开始彼此重叠；\n- 特征图再减半到 $1 \\times 1$、$s=0.8$：唯一的中心就是图像中心，锚框覆盖很大范围。\n\n这三组实验每组都按宽高比 $1$、$2$、$0.5$ 生成 3 个中心相同的锚框。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-anchor-count-by-scale",
+        "moduleId": "generation-procedure",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：逐级统计锚框数量",
+        "markdown": "按每中心 3 个锚框，把教材的三组设置换算成数量：\n\n| 特征图 | 中心数 | 锚框数 | 尺度 |\n|---|---|---|---|\n| $4 \\times 4$ | 16 | $16 \\times 3 = 48$ | 0.15 |\n| $2 \\times 2$ | 4 | $4 \\times 3 = 12$ | 0.4 |\n| $1 \\times 1$ | 1 | $1 \\times 3 = 3$ | 0.8 |\n\n特征图边长减半时，中心数按平方下降到四分之一，而锚框尺度逐级增大。也就是说，较粗的层级用更少的框覆盖更大的区域，较细的层级用更多的小框换取对小目标的位置覆盖。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-feature-map-centers",
+            "tb-three-scale-example"
+          ]
+        }
+      },
+      {
+        "id": "tb-multiscale-prediction",
+        "moduleId": "detection-mapping",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "多尺度检测的预测形式",
+        "markdown": "设当前尺度上有 $c$ 张形状为 $h \\times w$ 的特征图，按上面的方法生成 $hw$ 组锚框，每组包含 $a$ 个中心相同的锚框。每个锚框都要依据真实边界框标注类别和偏移量，模型则要预测这 $hw$ 组锚框的类别和偏移量。教材给出的例子是：10 个通道的 $4 \\times 4$ 特征图产生 16 组、每组 3 个中心相同的锚框。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-receptive-field-scales",
+        "moduleId": "detection-mapping",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "感受野决定哪一层负责多大的目标",
+        "markdown": "同一空间位置上的 $c$ 个特征图单元在输入图像上具有相同的感受野，表征的是同一区域内的输入信息，因此可以把这些单元变换为该位置生成的 $a$ 个锚框的类别与偏移量。本质上，模型用某个感受野区域内的信息，预测输入图像上与该区域位置相近的锚框。不同层的特征图在输入图像上具有不同大小的感受野：靠近输出层的单元感受野更宽，因而可以从输入图像中检测到较大的目标；较浅的层感受野较小，更适合小目标。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-level-comparison",
+        "moduleId": "detection-mapping",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "层级配置的对照",
+        "markdown": "把两段教材内容合成一张对照表，便于检查配置是否自洽：\n\n| 层级位置 | 特征图分辨率 | 感受野 | 锚框尺度 | 主要目标 |\n|---|---|---|---|---|\n| 浅层 | 高 | 小 | 小 | 小目标 |\n| 深层 | 低 | 大 | 大 | 大目标 |\n\n若把大锚框放在高分辨率浅层，会同时增加锚框数量并让预测依赖过小的感受野；若把小锚框放在低分辨率深层，中心太稀又缺少足够位置分辨率。尺度、分辨率、感受野三者必须一起匹配，这也是练习中要求在不同尺度的特征图上分别生成锚框的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-multiscale-prediction",
+            "tb-receptive-field-scales"
+          ]
+        }
+      },
+      {
+        "id": "tb-section-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "- 在多个尺度下可以生成不同尺寸的锚框，用来检测不同尺寸的目标。\n- 通过定义特征图的形状，可以决定任何图像上均匀采样的锚框中心。\n- 模型用输入图像在某个感受野区域内的信息，预测与该区域位置相近的锚框的类别和偏移量。\n- 通过深层网络在多个层次上的分层表示，可以实现多尺度目标检测。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000108"
+              ],
+              "headingPath": [
+                "计算机视觉",
+                "多尺度目标检测"
+              ],
+              "lineStart": 24183,
+              "lineEnd": 24313,
+              "assetRefs": [
+                "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+                "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+                "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+              ],
+              "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "检查：把尺度设置换成可验证的数量",
+        "markdown": "设某一尺度上有 $c=10$ 张 $8 \\times 8$ 的特征图，每个中心生成 $a=3$ 个锚框。\n\n1. 这一尺度一共需要预测多少个锚框？\n2. 若把特征图高宽都减半为 $4 \\times 4$，锚框数量变为多少？相对上一问减少了多少倍？\n3. 在这个更粗的层级上，应该增大还是减小锚框尺度？请结合感受野和覆盖范围说明理由。\n\n参考答案要点：第一问为 $8 \\times 8 \\times 3 = 192$ 个；第二问为 $4 \\times 4 \\times 3 = 48$ 个，减少到四分之一；第三问应增大尺度，因为该层感受野更大、中心更稀疏，需要用大锚框覆盖大目标，避免漏检。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-anchor-count-formula",
+            "tb-section-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "multiscale-anchor-check",
+        "type": "formative-check",
+        "title": "多尺度锚框配置检查",
+        "anchorBlockId": "model-check",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "outcomeRefs": [
+          "apply-feature-map-anchors",
+          "explain-scale-tradeoff"
+        ],
+        "learningPurpose": "检查学习者能否由特征图形状与每中心锚框数计算锚框总量，并把尺度变化与目标大小对应起来。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "model-anchor-count-formula",
+            "model-anchor-count-by-scale"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "prompts": [
+            "8×8 特征图、每中心 3 个锚框共有多少个锚框？",
+            "特征图减半后为什么应增大锚框尺度？"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请计算 $8 \\times 8$ 特征图、每中心 3 个锚框的锚框总数，并说明特征图减半后为何要增大锚框尺度。可回到“算例：逐级统计锚框数量”核对计算过程。"
+        }
+      }
+    ]
+  },
+  "subtitle": "计算机视觉",
+  "clusterId": "chapter-13",
+  "clusterIds": [
+    "chapter-13"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000108"
+      ],
+      "headingPath": [
+        "计算机视觉",
+        "多尺度目标检测"
+      ],
+      "lineStart": 24183,
+      "lineEnd": 24313,
+      "assetRefs": [
+        "parts/part-0006/images/2b7a63e6954ae97a9ef36f44d583a49668d466e909915bb245d2bc301dba9a27.jpg",
+        "parts/part-0006/images/122ab53f9e3866fe11ca79c3017eb13b20ad2e6a86f0ae0d53982167415493f1.jpg",
+        "parts/part-0007/images/375a663558fe02cfb75abeab3e1c82d7c5bb37e9858c9aaaa7b6eb6e4a9ab447.jpg"
+      ],
+      "excerptSha256": "02ec4d2e28b7175d5700a0e23af6cad900caa164ac69a3f909e08a297aaf5d9e"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3466,
+    521
+  ],
+  "scale": 0.92
+}

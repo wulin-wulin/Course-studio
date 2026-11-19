@@ -1,0 +1,500 @@
+{
+  "id": "point-4-2",
+  "title": "多层感知机的从零开始实现",
+  "shortSummary": "手工实现含隐藏层的网络、ReLU 激活、参数初始化和反向传播训练过程。",
+  "keyTerms": [
+    "隐藏层",
+    "ReLU",
+    "参数初始化",
+    "反向传播"
+  ],
+  "animationType": "mlpForwardBackward",
+  "animationSuggestion": "先展示 784 维输入按 W1 映射到 256 个隐藏单元并经过 ReLU 截断，再展示 256 维隐藏表示经 W2 得到 10 类 logits；随后高亮梯度的反传路径与参数更新。允许重播同一批数据以观察相同的形状流转。",
+  "difficulty": "中等",
+  "importance": 0.78,
+  "prerequisites": [
+    "point-4-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-code-walkthrough",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的参数形状、初始化尺度、代码与 10 轮/0.1 学习率的默认设置，按“定形状、初始化、写前向、接训练、做评估”的实现顺序重组讲解，并补充形状追踪、检查表与超参数实验。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "plan-implementation",
+          "text": "说清从零实现单隐藏层多层感知机需要准备哪些张量参数、它们的形状来源，以及为何要显式登记梯度。"
+        },
+        {
+          "id": "write-forward",
+          "text": "独立写出 ReLU 与单隐藏层前向函数，并能逐段核对中间张量的形状。"
+        },
+        {
+          "id": "run-training",
+          "text": "配置交叉熵损失、SGD 优化器与训练循环，说明它与 softmax 回归训练流程一致的原因。"
+        },
+        {
+          "id": "debug-and-tune",
+          "text": "用形状与参数登记清单定位常见实现错误，并按超参数实验调整隐藏单元、学习率与迭代周期。"
+        }
+      ],
+      "misconceptions": [
+        "把隐藏层宽度 256 当成模型定义的一部分，忘记它只是可以更换的超参数。",
+        "以为 torch.randn 生成的张量会自动参与训练；若不包成 nn.Parameter 且不设置 requires_grad，它不会累积梯度。",
+        "以为多层感知机需要一套全新的训练循环；教材的实现直接复用 softmax 回归的训练函数，只有前向网络不同。",
+        "在损失函数上做了一次归约又在训练函数里再次取平均，导致损失尺度与梯度大小被重复缩放。"
+      ],
+      "modules": [
+        {
+          "id": "impl-overview",
+          "title": "任务情境与实现路线",
+          "role": "orientation",
+          "description": "交代数据集、单隐藏层结构与超参数选择，把本节要实现的网络和 softmax 回归对照起来。",
+          "outcomeRefs": [
+            "plan-implementation"
+          ],
+          "order": 0
+        },
+        {
+          "id": "parameter-setup",
+          "title": "参数初始化与形状",
+          "role": "setup",
+          "description": "逐个登记四个参数张量的形状、初始化方式与梯度登记要求。",
+          "outcomeRefs": [
+            "plan-implementation"
+          ],
+          "order": 1
+        },
+        {
+          "id": "forward-model",
+          "title": "ReLU 与模型前向",
+          "role": "mechanism",
+          "description": "手写 ReLU，把展平、隐藏层仿射变换、激活和输出层组合成前向函数，并追踪形状。",
+          "outcomeRefs": [
+            "write-forward",
+            "plan-implementation"
+          ],
+          "order": 2
+        },
+        {
+          "id": "loss-training",
+          "title": "损失与训练循环",
+          "role": "procedure",
+          "description": "选择内置交叉熵损失与 SGD，并按步骤展开复用训练函数内部的每轮动作。",
+          "outcomeRefs": [
+            "run-training"
+          ],
+          "order": 3
+        },
+        {
+          "id": "evaluation-check",
+          "title": "评估、检查表与调参",
+          "role": "assessment",
+          "description": "在测试集上评估，整理实现检查表，并用教材练习做超参数实验和迁移检查。",
+          "outcomeRefs": [
+            "debug-and-tune",
+            "run-training"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "plan-implementation",
+          "write-forward",
+          "run-training",
+          "debug-and-tune"
+        ],
+        "method": "完成一次超参数实验并提交记录：改变隐藏单元数或学习率，说明准确率的变化，并用形状与训练步骤解释原因。",
+        "successCriteria": [
+          "能写出四个参数张量的形状并说明偏置为何初始化为零",
+          "能解释 ReLU 在前向函数中的位置以及去掉它的后果",
+          "能说清训练循环中前向、损失、反向、更新与清梯度的顺序",
+          "能按检查表定位至少两类常见实现错误"
+        ],
+        "exerciseBlockId": "model-exercises",
+        "summaryBlockId": "model-summary-bridge",
+        "nextPointId": "point-4-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-task-context",
+        "moduleId": "impl-overview",
+        "depth": "support",
+        "kind": "note",
+        "title": "教材情境：在 Fashion-MNIST 上实现单隐藏层网络",
+        "markdown": "教材把本节定位为动手验证 4.1 节的结构：在 Fashion-MNIST 上实现一个单隐藏层的多层感知机，以便和前面 softmax 回归的结果对比。\n\n数据集共 10 个类别，每张图像是 $28 \\times 28 = 784$ 个灰度像素。教材明确要求**忽略像素之间的空间结构**，把每张图当作有 784 个输入特征的普通分类样本，因此后续只需要处理一维向量。\n\n实现的规模先定下来：隐藏层 256 个单元、输出 10 类。教材把输入维度和隐藏单元数都称为**超参数**，并建议层宽取 2 的若干次幂——这是内存分配与寻址方式带来的计算效率考虑，不是模型正确性的要求。\n\n```python\nimport torch\nfrom torch import nn\nfrom d2l import torch as d2l\n\nbatch_size = 256\ntrain_iter, test_iter = d2l.load_data_fashion_mnist(batch_size)\n```",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-parameter-init",
+        "moduleId": "parameter-setup",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：参数初始化",
+        "markdown": "教材要求每一层都记录一个权重矩阵和一个偏置向量，并强调要**为损失关于这些参数的梯度分配内存**。下面是它的参数初始化：\n\n```python\nnum_inputs, num_outputs, num_hiddens = 784, 10, 256\nW1 = nn.Parameter(torch.randn(num_inputs, num_hiddens, requires_grad=True) * 0.01)\nb1 = nn.Parameter(torch.zeros(num_hiddens, requires_grad=True))\nW2 = nn.Parameter(torch.randn(num_hiddens, num_outputs, requires_grad=True) * 0.01)\nb2 = nn.Parameter(torch.zeros(num_outputs, requires_grad=True))\nparams = [W1, b1, W2, b2]\n```\n\n三处细节值得注意：权重用很小的随机数打破对称，偏置初始化为零；`nn.Parameter` 让张量成为可训练参数；`params` 列表把四个张量集中起来，供优化器统一更新。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-parameter-shapes",
+        "moduleId": "parameter-setup",
+        "depth": "core",
+        "kind": "table",
+        "title": "模型补充：参数形状与初始化直觉",
+        "markdown": "把教材的初始化整理成一张形状表，可以提前发现绝大多数维度错误：\n\n| 张量 | 形状 | 含义 | 初始化 |\n|---|---|---|---|\n| $\\mathbf{X}$ | $(n, 784)$ | 一个批量的展平图像 | 由数据迭代器提供 |\n| $\\mathbf{W}_1$ | $(784, 256)$ | 输入到隐藏层的权重 | $\\operatorname{randn} \\times 0.01$ |\n| $\\mathbf{b}_1$ | $(256,)$ | 隐藏层偏置 | 全零 |\n| $\\mathbf{W}_2$ | $(256, 10)$ | 隐藏层到输出层的权重 | $\\operatorname{randn} \\times 0.01$ |\n| $\\mathbf{b}_2$ | $(10,)$ | 输出层偏置 | 全零 |\n\n两点直觉：偏置可以全零，因为随机权重已经打破隐藏单元之间的对称；若权重也全零，所有隐藏单元的梯度相同，永远无法分化。权重乘 $0.01$ 让 $\\mathbf{X}\\mathbf{W}_1$ 的数值保持较小，避免 ReLU 一开始就大面积落在负区间或因数值过大而不稳定。`nn.Parameter` 的作用是把张量注册为叶子参数，`requires_grad=True` 使反向传播为它们累积梯度，这正是教材所说“为梯度分配内存”的落地方式。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parameter-init"
+          ]
+        }
+      },
+      {
+        "id": "tb-relu",
+        "moduleId": "forward-model",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：手写 ReLU",
+        "markdown": "教材坚持自己写 ReLU，而不是直接调用内置函数，目的是把激活函数的行为看清楚：\n\n```python\ndef relu(X):\n    a = torch.zeros_like(X)\n    return torch.max(X, a)\n```\n\n`torch.zeros_like(X)` 生成与输入同形状的全零张量，`torch.max(X, a)` 逐元素取较大者，效果等价于 $\\max(x, 0)$：正数原样通过，负数被压成 0。它不改变形状，因此可以无摩擦地插在任意仿射变换之后。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-model-forward",
+        "moduleId": "forward-model",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：模型前向",
+        "markdown": "ReLU 就位后，模型本身只需要三行。教材用 `reshape` 把二维图像拉平，再依次执行隐藏层仿射变换、激活和输出层仿射变换：\n\n```python\ndef net(X):\n    X = X.reshape((-1, num_inputs))\n    H = relu(X@W1 + b1)  # 这里 “@” 代表矩阵乘法\n    return (H@W2 + b2)\n```\n\n用公式写就是\n\n$$\n\\mathbf{H} = \\operatorname{ReLU}(\\mathbf{X}\\mathbf{W}_1 + \\mathbf{b}_1), \\qquad \\mathbf{O} = \\mathbf{H}\\mathbf{W}_2 + \\mathbf{b}_2.\n$$\n\n`reshape((-1, num_inputs))` 中的 `-1` 让框架按批量大小自动推断第一维，因此无论一次送入多少张图，都会被整理成 $(n, 784)$。输出 $\\mathbf{O}$ 是未归一化的 logits，softmax 与交叉熵会在损失函数内部处理。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-forward-trace",
+        "moduleId": "forward-model",
+        "depth": "advanced",
+        "kind": "worked-example",
+        "title": "模型补充：用 batch_size=256 走一遍形状链",
+        "markdown": "拿一个批量逐步核对形状，可以同时验证代码与理解：\n\n1. 输入 `X` 形状为 $(256, 1, 28, 28)$，`reshape` 后变成 $(256, 784)$。\n2. `X@W1` 得到 $(256, 256)$；加上形状为 $(256,)$ 的 `b1` 时按最后一维广播，仍是 $(256, 256)$。\n3. `relu` 逐元素截断负值、不改变形状，得到隐藏表示 $\\mathbf{H}$。\n4. `H@W2` 得到 $(256, 10)$，加上 `b2` 后输出 $(256, 10)$ 的 logits。\n\n这里出现的两个 256 只是巧合：一个是批量大小，一个是隐藏单元数，彼此没有关系。把这条形状链记住，遇到“矩阵乘法维度不匹配”或“输出类别数不对”时就能逐段定位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parameter-init",
+            "tb-relu",
+            "tb-model-forward"
+          ]
+        }
+      },
+      {
+        "id": "tb-loss",
+        "moduleId": "loss-training",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：损失函数",
+        "markdown": "教材没有从零实现 softmax 和交叉熵，而是直接调用框架的内置损失，理由是这个组合的数值细节较复杂，已在 3.7.2 节讨论过：\n\n```python\nloss = nn.CrossEntropyLoss(reduction='none')\n```\n\n`reduction='none'` 表示**不做归约**，返回每个样本各自的损失，而不是一个标量。教材的训练函数需要逐样本损失来计算梯度和统计量，因此保留这个维度，平均或求和等聚合操作交给训练循环。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "tb-training",
+        "moduleId": "loss-training",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材代码：训练",
+        "markdown": "训练部分与 softmax 回归完全一致，教材直接复用 `d2l.train_ch3`：\n\n```python\nnum_epochs, lr = 10, 0.1\nupdater = torch.optim.SGD(params, lr=lr)\nd2l.train_ch3(net, train_iter, test_iter, loss, num_epochs, updater)\n```\n\n三个要点：优化器接收的是 `params` 这个包含四个张量的列表；学习率 $0.1$、迭代 10 个周期是与 softmax 回归对照的默认设置；因为训练闭环没有变，改变的只是 `net` 的内部结构。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-loop",
+        "moduleId": "loss-training",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "模型补充：训练循环内部的动作清单",
+        "markdown": "`train_ch3` 对每个迭代周期重复同一套动作，把它展开成步骤更容易排查问题：\n\n1. **切换模式**：把模型置为训练状态，遍历 `train_iter` 的每个小批量。\n2. **前向**：调用 `net(X)` 得到 logits。\n3. **算损失**：把 logits 与标签送入 `CrossEntropyLoss`，得到逐样本损失，再取均值或求和作为本批目标。\n4. **反向**：调用 `backward()`，梯度按链式法则累积到 `W1`、`b1`、`W2`、`b2` 的 `.grad`。\n5. **更新**：`updater.step()` 用 SGD 修改参数，随后 `updater.zero_grad()` 清空梯度，避免下一批累加。\n6. **评估**：每个周期结束后在测试集上计算准确率并记录。\n\n与 softmax 版本相比，唯一的差别在第 2 步：`net` 多了一次隐藏层仿射变换和 ReLU。第 3 至 5 步完全复用，这正是教材说“训练过程相同”的含义。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-loss",
+            "tb-training"
+          ]
+        }
+      },
+      {
+        "id": "tb-evaluation",
+        "moduleId": "evaluation-check",
+        "depth": "support",
+        "kind": "code",
+        "title": "教材代码：评估与小结",
+        "markdown": "训练结束后，教材在测试数据上评估模型：\n\n```python\nd2l.predict_ch3(net, test_iter)\n```\n\n随后给出小结：手动实现一个简单的多层感知机很容易；但层数一多，从零实现就会变得麻烦——要命名和记录每一层的参数，还要保证它们都进入优化器。这句话点出了下一个知识点的动机：用高层 API 自动管理层的参数与组合。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000027"
+              ],
+              "headingPath": [
+                "多层感知机",
+                "多层感知机的从零开始实现"
+              ],
+              "lineStart": 5202,
+              "lineEnd": 5356,
+              "assetRefs": [
+                "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+                "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+              ],
+              "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-debug-checklist",
+        "moduleId": "evaluation-check",
+        "depth": "core",
+        "kind": "warning",
+        "title": "模型补充：从零实现检查表",
+        "markdown": "把教材的实现拆成检查清单，可以覆盖最常见的失败点：\n\n| 检查项 | 正确做法 | 常见错误与症状 |\n|---|---|---|\n| 展平 | `X.reshape((-1, num_inputs))` | 忘记展平，矩阵乘法维度不匹配 |\n| 权重形状 | `W1` 为 $(784, 256)$、`W2` 为 $(256, 10)$ | 两个矩阵写反，或隐藏维写成 10 |\n| 参数注册 | 四个张量都用 `nn.Parameter` 并放进 `params` | 漏传偏置给优化器，偏置永不更新 |\n| 激活位置 | ReLU 作用在 $\\mathbf{X}\\mathbf{W}_1 + \\mathbf{b}_1$ 之后 | 漏掉 ReLU，网络退化为线性模型 |\n| 损失归约 | `reduction='none'`，聚合交给训练函数 | 手动取平均后重复归约，损失尺度异常 |\n| 梯度清理 | 每次更新后 `zero_grad()` | 梯度跨批累积，训练发散 |\n\n排查顺序建议从形状开始：形状对上后再确认参数是否进入优化器，最后才调整学习率与初始化尺度。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-parameter-init",
+            "tb-relu",
+            "tb-model-forward",
+            "tb-training",
+            "tb-evaluation"
+          ]
+        }
+      },
+      {
+        "id": "model-exercises",
+        "moduleId": "evaluation-check",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "模型补充：超参数实验与迁移检查",
+        "markdown": "教材的练习本质上是超参数实验，可以按下面的方式各做一轮并记录结果：\n\n1. 只改 `num_hiddens`，取 32、256、1024 等 2 的幂，观察测试准确率，找出该数据集上的较优宽度。\n2. 在隐藏层后再加一层，其他超参数保持不变，比较加深是否带来收益。\n3. 只改学习率，取 0.01、0.1、0.5 等值，观察收敛速度与是否震荡。\n4. 对学习率、迭代周期、隐藏层数、每层单元数做联合搜索，记录最佳组合。\n5. 解释为什么同时调多个超参数更难：搜索空间随维度快速增长，而且不同超参数的效果会相互掩盖。\n\n每轮实验都要固定其他变量并控制随机性来源，否则无法把结果差异归因到具体超参数。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-evaluation",
+            "tb-training",
+            "model-debug-checklist"
+          ]
+        }
+      },
+      {
+        "id": "model-summary-bridge",
+        "moduleId": "evaluation-check",
+        "depth": "support",
+        "kind": "summary",
+        "title": "模型补充：实现流水线小结与下一点桥接",
+        "markdown": "本点的实现可以压缩成一条流水线：**确定形状 → 初始化参数 → 写 ReLU → 写前向 → 选损失与优化器 → 复用训练循环 → 评估**。真正属于多层感知机的新内容，是中间的隐藏层仿射变换加 ReLU，其余部分沿用 softmax 回归的框架。\n\n这套手写实现的价值在于暴露每个张量和每条梯度，代价也同样明显：层数一多，参数命名、注册和优化器收集都会变得冗长易错。下一个知识点会用高层 API 把同样的网络压缩到几行，届时可以用本点的形状链与训练步骤对照检查高层实现的行为。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-evaluation",
+            "model-exercises"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "mlp-scratch-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-exercises",
+        "moduleId": "evaluation-check",
+        "depth": "core",
+        "title": "从零实现诊断检查",
+        "outcomeRefs": [
+          "run-training",
+          "debug-and-tune"
+        ],
+        "learningPurpose": "检查学习者能否把形状、参数登记与训练顺序的知识用于定位真实的实现错误。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-parameter-init",
+            "tb-model-forward",
+            "tb-training"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "showHints": true
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "给出“前向是 H = relu(X@W1 + b1)，但优化器只收到 [W1, W2]”的代码片段，请指出两个会导致训练失败的问题并写出修正。"
+        }
+      }
+    ]
+  },
+  "subtitle": "多层感知机",
+  "clusterId": "chapter-4",
+  "clusterIds": [
+    "chapter-4"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000027"
+      ],
+      "headingPath": [
+        "多层感知机",
+        "多层感知机的从零开始实现"
+      ],
+      "lineStart": 5202,
+      "lineEnd": 5356,
+      "assetRefs": [
+        "parts/part-0002/images/5239c29e1386a048175ec45c85bfc78b74f96fc2d7e7dcff764917d6e716fd0b.jpg",
+        "parts/part-0002/images/3c4d531597c85c55c05d55ef913d796fe2a6ac77c8bfae0de894c57bd82797fa.jpg"
+      ],
+      "excerptSha256": "cbcb2bcffd1b2b44db354e0e6b303dca98aee0f4abcdae094b0291c780d84fae"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3535,
+    2839
+  ],
+  "scale": 0.95
+}

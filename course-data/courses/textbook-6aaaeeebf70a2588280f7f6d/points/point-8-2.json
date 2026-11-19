@@ -1,0 +1,578 @@
+{
+  "id": "point-8-2",
+  "title": "BP神经网络及其学习算法",
+  "shortSummary": "说明误差反向传播的链式求导、权重更新与训练流程，分析局部极小、学习率与过拟合问题。",
+  "keyTerms": [
+    "BP神经网络",
+    "反向传播",
+    "梯度下降",
+    "权重更新"
+  ],
+  "animationType": "backpropagationTraining",
+  "animationSuggestion": "逐步显示一次前向激活、输出层误差的产生、误差信号沿连接反向逐层传递、以及对应权值按负梯度方向更新；允许暂停查看某条连接的 w、y 与 d 数值，并用损失曲线对比学习步长过大与过小时的收敛差异。",
+  "difficulty": "进阶",
+  "importance": 0.95,
+  "prerequisites": [
+    "point-8-1"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "quantitative-mechanism",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "按结构、前向计算、误差目标、反向推导、实现与诊断的顺序重排教材讲解，保留全部公式、符号与数值边界，补充数值算例、训练循环和排障清单。",
+      "estimatedMinutes": 20,
+      "outcomes": [
+        {
+          "id": "explain-structure",
+          "text": "说明 BP 网络的分层结构、偏置节点作用以及前向计算中各变量之间的关系。"
+        },
+        {
+          "id": "derive-backprop",
+          "text": "用链式求导推出输出层与隐层的误差信号，并写出权值修正公式。"
+        },
+        {
+          "id": "apply-training",
+          "text": "按前向计算、误差反传、权值更新的顺序组织一次完整训练，并处理预处理与初始权值设置。"
+        },
+        {
+          "id": "diagnose-training",
+          "text": "针对损失不下降、震荡或权值不动等现象提出可检验的原因假设与处理办法。"
+        }
+      ],
+      "misconceptions": [
+        "认为反向传播只是把误差原样逐层传回、不需要求导；实际上每层误差信号都由激活函数导数与下一层权值共同决定。",
+        "认为初始权值全部设为 0 最自然；实际上这会使反向传播的误差信号恒为 0，输出层之前的权值不再改变。",
+        "认为 BP 定理保证三层网络一定能轻松训练成功；实际上它只保证存在性，逼近可能需要大量隐层神经元。"
+      ],
+      "modules": [
+        {
+          "id": "forward-structure",
+          "title": "结构与前向计算",
+          "role": "concept-model",
+          "description": "从分层结构、偏置节点和式 (8.9) 出发，建立 BP 网络作为非线性映射的认识。",
+          "outcomeRefs": [
+            "explain-structure"
+          ],
+          "order": 0
+        },
+        {
+          "id": "error-backprop",
+          "title": "误差目标与链式求导",
+          "role": "derivation",
+          "description": "以误差平方和为目标，沿负梯度更新，并用链式法则反推各层误差信号。",
+          "outcomeRefs": [
+            "derive-backprop"
+          ],
+          "order": 1
+        },
+        {
+          "id": "implementation",
+          "title": "学习算法的实现要点",
+          "role": "procedure",
+          "description": "把公式组织成训练循环，处理数据预处理、后处理和初始权值。",
+          "outcomeRefs": [
+            "apply-training"
+          ],
+          "order": 2
+        },
+        {
+          "id": "training-diagnostics",
+          "title": "训练问题诊断",
+          "role": "troubleshooting",
+          "description": "按现象、假设、证据、处理的顺序排查学习步长、初始权值与泛化问题。",
+          "outcomeRefs": [
+            "diagnose-training",
+            "apply-training"
+          ],
+          "order": 3
+        },
+        {
+          "id": "check-transfer",
+          "title": "达成检查与迁移",
+          "role": "formative-check",
+          "description": "用推导复述、数值计算和故障诊断检查学习结果，并桥接下一知识点。",
+          "outcomeRefs": [
+            "derive-backprop",
+            "diagnose-training"
+          ],
+          "order": 4
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-structure",
+          "derive-backprop",
+          "apply-training",
+          "diagnose-training"
+        ],
+        "method": "完成推导复述、数值更新计算与训练异常诊断三项检查。",
+        "successCriteria": [
+          "能写出输出层与隐层误差信号的递推式并解释为何从输出层开始",
+          "能算出给定样本的误差信号与权值修正方向",
+          "能针对损失不下降提出可验证的假设与处理办法"
+        ],
+        "exerciseBlockId": "check-exercise",
+        "summaryBlockId": "summary-and-bridge",
+        "nextPointId": "point-8-3"
+      }
+    },
+    "blocks": [
+      {
+        "id": "network-structure",
+        "moduleId": "forward-structure",
+        "depth": "core",
+        "kind": "definition",
+        "title": "BP 网络的分层结构与前向关系",
+        "markdown": "BP 神经网络（back-propagation neural network）就是多层前向网络。设网络共有 $m$ 层：第一层为输入层，最后一层为输出层，中间各层为隐层。标有“+1”的圆圈是偏置节点，它没有任何输入，输出恒为 $+1$；输入层起缓冲存储器的作用，其神经元的输入与输出关系一般为线性函数，隐层中神经元的输入与输出关系一般为非线性函数，隐层与输出层的非线性关系记为 $f_k\\ (k=2,\\dots,m)$。\n\n由第 $k-1$ 层第 $j$ 个神经元到第 $k$ 层第 $i$ 个神经元的连接权值记为 $w_{ij}^{k}$。设第 $k$ 层第 $i$ 个神经元输入的总和为 $u_i^k$、输出为 $y_i^k$，则各变量之间的关系为\n\n$$y_i^k=f_k(u_i^k),\\qquad u_i^k=\\sum_j w_{ij}^{k-1}y_j^{k-1}\\quad(k=2,\\dots,m)$$",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "forward-mapping-theorem",
+        "moduleId": "forward-structure",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "非线性映射、学习问题与 BP 定理",
+        "markdown": "当输入数据为 $X=[x_1,x_2,\\dots,x_{p_1}]^{T}$（输入层有 $p_1$ 个神经元）、输出数据为 $Y=[y_1^m,y_2^m,\\dots,y_{p_m}^m]^{T}$（输出层有 $p_m$ 个神经元）时，数据从输入层依次经过各隐层到达输出层，因此可以把 BP 网络看成一个从输入到输出的非线性映射。\n\n给定 $N$ 组输入输出样本 $\\{X_{si},Y_{si}\\}$，调整网络权值使得输入为 $X_{si}$ 时输出接近 $Y_{si}$，这就是 BP 网络的学习问题，它是一种有教师学习算法。\n\nBP 定理给出存在性保证：给定任意 $\\varepsilon>0$，对任意连续函数 $f$，存在一个三层前向神经网络，可以在任意 $\\varepsilon$ 平方误差精度内逼近 $f$。但定理本身不保证容易训练：逼近可能需要大量隐层神经元；采用多层结构可以减少神经元个数，而隐层数与每层神经元个数如何合理选取，目前尚无有效的理论和方法。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-forward-intuition",
+        "moduleId": "forward-structure",
+        "depth": "support",
+        "kind": "note",
+        "title": "把前向计算看成复合函数",
+        "markdown": "前向计算不是查表，而是一串复合函数的逐层求值：每层先用权值对上一层输出做加权求和得到 $u_i^k$，再经激活函数得到 $y_i^k$，这一层的输出又成为下一层的输入。正因为整条链路可微，后面才能用链式法则把输出端误差一路追溯回每一个权值。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "network-structure",
+            "forward-mapping-theorem"
+          ]
+        }
+      },
+      {
+        "id": "training-objective",
+        "moduleId": "error-backprop",
+        "depth": "core",
+        "kind": "formula",
+        "title": "误差目标函数与最快下降法",
+        "markdown": "BP 学习算法通过反向学习过程使误差最小，因此选择目标函数为\n\n$$\\min J=\\frac{1}{2}\\sum_{j=1}^{p_m}\\left(y_j^m-y_{sj}\\right)^2$$\n\n即选择网络权值使期望输出 $y_{sj}$ 与实际输出 $y_j^m$ 之差的平方和最小。该问题以式 (8.9) 为约束，可利用非线性规划中的“最快下降法”，让权值沿目标函数的负梯度方向改变，于是权值修正量为\n\n$$\\Delta w_{ij}^{k-1}=-\\varepsilon\\frac{\\partial J}{\\partial w_{ij}^{k-1}}\\quad(\\varepsilon>0)$$\n\n式中 $\\varepsilon$ 为学习步长，一般小于 $0.5$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "delta-chain-rule",
+        "moduleId": "error-backprop",
+        "depth": "core",
+        "kind": "formula",
+        "title": "链式求导与误差信号",
+        "markdown": "由复合函数的链式求导法则，\n\n$$\\frac{\\partial J}{\\partial w_{ij}^{k-1}}=\\frac{\\partial J}{\\partial u_i^k}\\frac{\\partial u_i^k}{\\partial w_{ij}^{k-1}}=\\frac{\\partial J}{\\partial u_i^k}\\,y_j^{k-1}$$\n\n记误差信号 $d_i^k=\\dfrac{\\partial J}{\\partial u_i^k}\\ (k=2,\\dots,m)$，则\n\n$$\\Delta w_{ij}^{k-1}=-\\varepsilon\\,d_i^k\\,y_j^{k-1}$$\n\n这说明一条连接上的修正量由三部分决定：学习步长 $\\varepsilon$、该连接指向神经元的误差信号 $d_i^k$、以及该连接在上一层的输入 $y_j^{k-1}$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-update-example",
+        "moduleId": "error-backprop",
+        "depth": "support",
+        "kind": "worked-example",
+        "title": "算例：一次输出层权值更新",
+        "markdown": "取单个输出层神经元演示一次更新。设当前输出 $y_i^m=0.8$，样本期望输出 $y_{si}=1.0$，激活函数为 S 型函数，则 $f_m'(u_i^m)=y_i^m(1-y_i^m)=0.8\\times0.2=0.16$，于是\n\n$$d_i^m=(y_i^m-y_{si})f_m'(u_i^m)=(0.8-1.0)\\times0.16=-0.032$$\n\n若学习步长 $\\varepsilon=0.5$，上一层输出 $y_j^{m-1}=0.5$，则\n\n$$\\Delta w_{ij}^{m-1}=-0.5\\times(-0.032)\\times0.5=0.008$$\n\n权值增大。直观上，$y_i^m<y_{si}$ 说明输出偏小，而 $y_j^{m-1}>0$，增大这条连接的权值会把输出推高，与减小误差的方向一致。若上一层输出为负，同样的误差信号会使权值减小，可见修正方向还取决于输入符号。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "training-objective",
+            "delta-chain-rule"
+          ]
+        }
+      },
+      {
+        "id": "layer-delta-recursion",
+        "moduleId": "error-backprop",
+        "depth": "core",
+        "kind": "formula",
+        "title": "输出层与隐层的误差信号递推",
+        "markdown": "下面分两种情况求 $\\dfrac{\\partial J}{\\partial y_i^k}$。\n\n对输出层（第 $m$ 层）的神经元，由误差定义式得\n\n$$\\frac{\\partial J}{\\partial y_i^m}=y_i^m-y_{si},\\qquad d_i^m=(y_i^m-y_{si})f_m'(u_i^m)$$\n\n对隐层的神经元，其输出影响下一层所有神经元，故\n\n$$\\frac{\\partial J}{\\partial y_i^k}=\\sum_l\\frac{\\partial J}{\\partial u_l^{k+1}}\\frac{\\partial u_l^{k+1}}{\\partial y_i^k}=\\sum_l d_l^{k+1}w_{li}^{k}$$\n\n$$d_i^k=f_k'(u_i^k)\\sum_l d_l^{k+1}w_{li}^{k}$$\n\n可见求第 $k$ 层的误差信号 $d_i^k$ 需要第 $k+1$ 层的 $d_l^{k+1}$。误差函数的求取是始于输出层的反向递推过程，这正是“反向传播”名称的来源。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "sigmoid-formulas",
+        "moduleId": "error-backprop",
+        "depth": "core",
+        "kind": "formula",
+        "title": "S 型函数代入后的算法形式",
+        "markdown": "若取 $f_k(\\cdot)$ 为 S 型函数，即\n\n$$y_i^k=f_k(u_i^k)=\\frac{1}{1+\\mathrm{e}^{-u_i^k}}$$\n\n则\n\n$$f_k'(u_i^k)=\\frac{\\mathrm{e}^{-u_i^k}}{\\left(1+\\mathrm{e}^{-u_i^k}\\right)^2}=y_i^k\\left(1-y_i^k\\right)$$\n\n于是 BP 学习算法可归纳为\n\n$$\\Delta w_{ij}^{k-1}=-\\varepsilon d_i^k y_j^{k-1}$$\n\n$$d_i^m=y_i^m\\left(1-y_i^m\\right)\\left(y_i^m-y_{si}\\right)$$\n\n$$d_i^k=y_i^k\\left(1-y_i^k\\right)\\sum_l d_l^{k+1}w_{li}^{k}\\quad(k=m-1,\\dots,2)$$\n\n通过多个样本的学习、修改权值，偏差不断减少，最后达到满意的结果。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-responsibility-intuition",
+        "moduleId": "error-backprop",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "误差信号在做什么",
+        "markdown": "可以把 $d_i^k$ 读作“这个神经元应当为当前误差负多大责任”。输出层直接由预测值与期望值之差确定责任，并经 $f'$ 按激活函数当前的敏感程度缩放；隐层没有直接的目标值，于是按下一层各条连接的权值把责任分摊回来——连接权重大、下一层责任大的连接，分摊到的责任也大。所以更新时每条连接只需按“上一层输入 × 目标神经元责任 × 步长”改变，不必为每条连接单独推导。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "layer-delta-recursion",
+            "sigmoid-formulas"
+          ]
+        }
+      },
+      {
+        "id": "data-preprocessing",
+        "moduleId": "implementation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练数据的预处理与后处理",
+        "markdown": "实现 BP 算法时要处理两类数据变换。\n\n① 训练数据预处理：预处理包含一系列线性的特征比例变换，把所有特征变换到 $[0,1]$ 或 $[-1,1]$ 区间内，使每个训练集上每个特征的均值为 0，并具有相同的方差。该过程也称为尺度变换（scaling）或规格化（normalization）。\n\n② 后处理：用于分类时，通常把输出值编码成名义变量，具体值对应类别标号。两类问题可以只用一个输出，编码成二值变量（例如 $+1$、$-1$）；类别更多时应为每个类别分配一个代表类别决策的名义输出。例如三类问题可设置三个名义输出，取值为 $\\{+1,-1\\}$，对应的类别决策为 $\\{+1,-1,-1\\}$、$\\{-1,+1,-1\\}$、$\\{-1,-1,+1\\}$；利用阈值把网络输出变换为合适的名义输出值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "initial-weights",
+        "moduleId": "implementation",
+        "depth": "core",
+        "kind": "warning",
+        "title": "初始权值为什么不能全取 0",
+        "markdown": "③ 初始权值的影响及设置：和所有梯度下降算法一样，初始权值对 BP 神经网络的最终解有很大影响。虽然全部设置为 0 显得比较自然，但从误差信号递推式可以看出这将导致很不理想的结果：如果输出层的权值全部为 0，则反向传播误差也将为 0，输出层前面的权值将不会改变。因此，一般以一个均值为 0 的随机分布设置 BP 神经网络的初始权值。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+              "blockIds": [
+                "block-000056"
+              ],
+              "headingPath": [
+                "人工神经网络及其应用",
+                "BP神经网络及其学习算法"
+              ],
+              "lineStart": 9159,
+              "lineEnd": 9370,
+              "assetRefs": [
+                "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+                "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+                "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+                "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+              ],
+              "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-training-loop",
+        "moduleId": "implementation",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "训练循环的执行顺序",
+        "markdown": "把前述公式组织成一次完整训练：\n\n1. 用训练数据做预处理，把各特征缩放到 $[0,1]$ 或 $[-1,1]$。\n2. 以均值为 0 的随机分布初始化各层权值。\n3. 取一个样本，按 $u_i^k=\\sum_j w_{ij}^{k-1}y_j^{k-1}$、$y_i^k=f_k(u_i^k)$ 逐层前向计算，得到输出 $y^m$。\n4. 按目标函数算出当前误差，再从输出层开始用 $d_i^m$ 与 $d_i^k$ 的递推式反向求出各层误差信号。\n5. 按 $\\Delta w_{ij}^{k-1}=-\\varepsilon d_i^k y_j^{k-1}$ 更新全部权值。\n6. 遍历所有样本构成一个 epoch，重复若干轮，直到误差足够小或达到迭代预算。\n7. 分类任务最后做后处理，用阈值把输出映射为类别。\n\n顺序上不能颠倒：没有前向输出就无从计算误差，没有输出层误差就无法向隐层递推。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "training-objective",
+            "sigmoid-formulas",
+            "data-preprocessing",
+            "initial-weights"
+          ]
+        }
+      },
+      {
+        "id": "model-generalization-note",
+        "moduleId": "training-diagnostics",
+        "depth": "advanced",
+        "kind": "misconception",
+        "title": "训练误差小不等于学得好",
+        "markdown": "教材在本节强调用样本训练权值，未展开泛化问题。作为补充：当样本少而网络容量大、训练轮数过多时，网络可能把训练样本的细节也拟合进去，表现为训练误差很低而新样本误差明显升高，即过拟合。常见对策是划分训练集与验证集、按验证误差早停，或减少隐层神经元个数；这些做法不改变本节的前向与反向公式，只是在训练流程外增加模型选择环节。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "forward-mapping-theorem",
+            "data-preprocessing",
+            "model-training-loop"
+          ]
+        }
+      },
+      {
+        "id": "model-training-diagnostics",
+        "moduleId": "training-diagnostics",
+        "depth": "support",
+        "kind": "warning",
+        "title": "训练异常的排查清单",
+        "markdown": "训练异常可按“现象—假设—证据—处理”排查：\n\n- 损失剧烈震荡甚至增大：先怀疑学习步长 $\\varepsilon$ 过大，检查更新后 $J$ 是否反而上升；按教材建议把 $\\varepsilon$ 控制在小于 $0.5$ 后再适当调小。\n- 损失下降极慢：怀疑步长过小或特征未规格化；先确认预处理是否把特征变换到 $[0,1]$ 或 $[-1,1]$，再适度调整步长。\n- 误差长期停在某一水平：梯度下降只沿负梯度方向做局部下降，初始权值不同会到达不同解，可能停在局部极小或平坦区域；可换几组均值为 0 的随机初始权值重新训练。\n- 各层权值几乎不动：检查初始权值是否被设为全 0，尤其是输出层；全 0 会使误差信号恒为 0，学习不会发生。\n\n每次只改一个因素并记录损失曲线，才能把现象与原因对应起来。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "training-objective",
+            "layer-delta-recursion",
+            "initial-weights"
+          ]
+        }
+      },
+      {
+        "id": "check-exercise",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "达成检查",
+        "markdown": "请完成以下检查：\n\n1. 写出输出层与隐层的误差信号公式 $d_i^m$、$d_i^k$，并说明为什么必须先计算输出层。\n2. 设某输出神经元 $y_i^m=0.6$，期望输出 $y_{si}=1.0$，激活函数为 S 型函数，学习步长 $\\varepsilon=0.4$，上一层输出 $y_j^{m-1}=0.5$。求 $d_i^m$ 与该连接权值的修正量，并判断权值增大还是减小。\n3. 训练中损失长时间不下降，请列出两个可能原因，并各给出一种验证方法。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "sigmoid-formulas",
+            "model-training-loop",
+            "model-training-diagnostics"
+          ]
+        }
+      },
+      {
+        "id": "summary-and-bridge",
+        "moduleId": "check-transfer",
+        "depth": "support",
+        "kind": "summary",
+        "title": "小结与下一点桥接",
+        "markdown": "本点的推理链条是：多层前向结构给出前向映射与式 (8.9)；以误差平方和为目标、沿负梯度方向更新权值；用链式法则把输出层误差逐层反传，得到 $d_i^m$ 与 $d_i^k$；实现时再处理预处理、随机初始化和后处理。把这些步骤用于实际分类任务的数据组织、网络结构设计与性能评估，就是下一个知识点讨论的 BP 网络在模式识别中的应用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "network-structure",
+            "training-objective",
+            "model-training-loop"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "backprop-check",
+        "type": "formative-check",
+        "title": "误差反传与权值更新自检",
+        "anchorBlockId": "check-exercise",
+        "moduleId": "check-transfer",
+        "depth": "core",
+        "outcomeRefs": [
+          "derive-backprop",
+          "apply-training"
+        ],
+        "learningPurpose": "检查学习者能否独立写出误差信号递推并完成一次权值修正计算。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "layer-delta-recursion",
+            "sigmoid-formulas"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "items": 3
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请手写输出层与隐层的误差信号公式，并用一组给定数值完成一次权值修正计算，说明权值变化方向。"
+        }
+      }
+    ]
+  },
+  "subtitle": "人工神经网络及其应用",
+  "clusterId": "chapter-8",
+  "clusterIds": [
+    "chapter-8"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-6aaaeeebf70a2588280f7f6d",
+      "blockIds": [
+        "block-000056"
+      ],
+      "headingPath": [
+        "人工神经网络及其应用",
+        "BP神经网络及其学习算法"
+      ],
+      "lineStart": 9159,
+      "lineEnd": 9370,
+      "assetRefs": [
+        "parts/part-0003/images/1337e18d9e8fa7edb74bdec50ea7cc95e859201f4406b2992709f250e50d5c38.jpg",
+        "parts/part-0003/images/15614ce5da8eaf4c1d5966dc3f66d614789d4357d3358202eac92fc6487ff975.jpg",
+        "parts/part-0003/images/7ccb053d024f39bae39b5aa1e81e10701f787d27ada06c427002dc21c325d806.jpg",
+        "parts/part-0003/images/cd1f81a680d13a56ff7d37e69f1a74352546306e86d47c198cabfa3154c7297d.jpg"
+      ],
+      "excerptSha256": "cb186f64745a18612b370cfed012ae2775ca2383fec09b58d8416ffe2e298ac0"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    573,
+    1280
+  ],
+  "scale": 1.24
+}

@@ -1,0 +1,429 @@
+{
+  "id": "point-5-5",
+  "title": "读写文件",
+  "shortSummary": "介绍张量与模型参数的保存和加载格式，说明状态字典与跨设备恢复的实践要点。",
+  "keyTerms": [
+    "状态字典",
+    "保存",
+    "加载",
+    "模型恢复"
+  ],
+  "animationType": "parameterSaveLoad",
+  "animationSuggestion": "分步展示参数从内存写入文件、架构由代码重建、参数按名称装入槽位、再用同一输入比较输出是否全为 True；并提供架构不一致时键匹配失败的分支。",
+  "difficulty": "中等",
+  "importance": 0.66,
+  "prerequisites": [
+    "point-5-2"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "operation-procedure",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保持教材的保存与加载代码、参数文件只存参数的结论，围绕恢复流程重排为可执行步骤，补足动机、检查清单与练习。",
+      "estimatedMinutes": 15,
+      "outcomes": [
+        {
+          "id": "explain-tensor-io",
+          "text": "说明 torch.save 与 torch.load 如何读写单个张量、张量列表和字符串到张量的字典。"
+        },
+        {
+          "id": "restore-model-params",
+          "text": "用 state_dict 保存网络参数，并在用代码重建的同构模型上装入参数完成恢复。"
+        },
+        {
+          "id": "verify-architecture-constraint",
+          "text": "解释为何架构必须由代码重建，并用相同输入的输出比较验证恢复是否成功。"
+        }
+      ],
+      "misconceptions": [
+        "认为保存 state_dict 的文件里包含网络架构，打开文件就能得到可运行的模型。",
+        "认为新实例化一个同类型模型后无需加载参数即可得到与训练模型相同的预测。"
+      ],
+      "modules": [
+        {
+          "id": "why-save-load",
+          "title": "为什么要读写文件",
+          "role": "motivation",
+          "description": "从部署复用与训练中断恢复两个场景引出保存需求。",
+          "outcomeRefs": [
+            "explain-tensor-io"
+          ],
+          "order": 0
+        },
+        {
+          "id": "tensor-file-io",
+          "title": "张量的保存与加载",
+          "role": "procedure",
+          "description": "给出 save/load 的最小可用写法并澄清读回的是副本而非原对象。",
+          "outcomeRefs": [
+            "explain-tensor-io"
+          ],
+          "order": 1
+        },
+        {
+          "id": "container-and-state-dict",
+          "title": "列表与字典：迈向参数字典",
+          "role": "bridge",
+          "description": "说明列表与字典的保存，并指出名字到张量的映射正是状态字典的雏形。",
+          "outcomeRefs": [
+            "explain-tensor-io",
+            "restore-model-params"
+          ],
+          "order": 2
+        },
+        {
+          "id": "model-param-roundtrip",
+          "title": "保存与恢复模型参数",
+          "role": "worked-example",
+          "description": "以多层感知机为例走通保存参数、重建架构、装入参数的完整往返。",
+          "outcomeRefs": [
+            "restore-model-params"
+          ],
+          "order": 3
+        },
+        {
+          "id": "verify-and-boundaries",
+          "title": "一致性验证与边界",
+          "role": "check",
+          "description": "用检查清单和练习核对恢复结果，暴露架构不匹配与漏装参数两类错误。",
+          "outcomeRefs": [
+            "restore-model-params",
+            "verify-architecture-constraint"
+          ],
+          "order": 4
+        },
+        {
+          "id": "summary-and-next",
+          "title": "小结与下一步",
+          "role": "summary",
+          "description": "收束三条结论并桥接到下一节 GPU 的使用。",
+          "outcomeRefs": [
+            "verify-architecture-constraint"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-tensor-io",
+          "restore-model-params",
+          "verify-architecture-constraint"
+        ],
+        "method": "完成参数字典保存与同构模型恢复的练习，并写出恢复后的输出比较方案。",
+        "successCriteria": [
+          "能写出 save/load 与 state_dict 的正确调用顺序",
+          "能说明架构为何必须由代码重建",
+          "能判断恢复失败时是键不匹配还是参数未装入"
+        ],
+        "exerciseBlockId": "model-exercise",
+        "summaryBlockId": "model-summary",
+        "nextPointId": "point-5-6"
+      }
+    },
+    "blocks": [
+      {
+        "id": "tb-motivation",
+        "moduleId": "why-save-load",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：保存模型的现实动机",
+        "markdown": "训练一个模型往往需要数小时甚至数天。教材指出，有时我们希望保存训练好的模型，以备将来在各种环境中使用（比如在部署中进行预测）；此外，当运行一个耗时较长的训练过程时，最佳做法是定期保存中间结果，以确保服务器电源被不小心断掉时不会损失几天的计算结果。本节要解决的就是这个工程问题：如何加载和存储权重向量乃至整个模型的参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000041"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "读写文件"
+              ],
+              "lineStart": 8450,
+              "lineEnd": 8629,
+              "assetRefs": [],
+              "excerptSha256": "b98d46cb251582976053037b1a9d8f47739809d799c89d539f98b00026093729"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-motivation-analogy",
+        "moduleId": "why-save-load",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充类比：参数是快照，架构是房间",
+        "markdown": "可以把参数文件想成给训练现场拍的一张“数值快照”：它记录的是此刻每个参数的取值，而不是产生这些数值的程序结构。恢复时要先按原样搭好房间（用代码构建相同的模型架构），再把快照里的数值摆回对应位置。这个类比解释了后文那句关键结论——保存的是参数而不是整个模型。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-motivation"
+          ]
+        }
+      },
+      {
+        "id": "tb-tensor-save-load",
+        "moduleId": "tensor-file-io",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：单个张量的读写",
+        "markdown": "对于单个张量，可以直接调用 `torch.save` 和 `torch.load` 分别读写。两个函数都需要提供一个文件名，`torch.save` 还要求把将要保存的变量作为输入。\n\n```python\nx = torch.arange(4)\ntorch.save(x, 'x-file')\nx2 = torch.load('x-file')\n```\n\n教材给出的读回结果是 `tensor([0, 1, 2, 3])`，与保存前的 `x` 一致。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000041"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "读写文件"
+              ],
+              "lineStart": 8450,
+              "lineEnd": 8629,
+              "assetRefs": [],
+              "excerptSha256": "b98d46cb251582976053037b1a9d8f47739809d799c89d539f98b00026093729"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-tensor-copy-note",
+        "moduleId": "tensor-file-io",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：读回的是新对象",
+        "markdown": "文件名只是磁盘上的定位符，与内存中的变量名没有关系。`torch.load` 会依据文件内容重新构造张量，所以教材把结果赋给新变量 `x2`。由此可以推出一条实用习惯：读回后显式接收返回值并核对形状与数值，不要指望原来的变量被自动改写。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-tensor-save-load"
+          ]
+        }
+      },
+      {
+        "id": "tb-container-save",
+        "moduleId": "container-and-state-dict",
+        "depth": "core",
+        "kind": "code",
+        "title": "教材：列表与字典的读写",
+        "markdown": "`torch.save` 不只接受单个张量。教材先把一个张量列表整体保存，再按顺序解包读回：\n\n```python\ny = torch.zeros(4)\ntorch.save([x, y], 'x-files')\nx2, y2 = torch.load('x-files')\n```\n\n还可以写入和读取从字符串映射到张量的字典，例如 `mydict = {'x': x, 'y': y}`，保存后用 `mydict2 = torch.load('mydict')` 读回。教材明确指出，当我们要读取或写入模型中的所有权重时，字典形式很方便。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000041"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "读写文件"
+              ],
+              "lineStart": 8450,
+              "lineEnd": 8629,
+              "assetRefs": [],
+              "excerptSha256": "b98d46cb251582976053037b1a9d8f47739809d799c89d539f98b00026093729"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-dict-to-state-dict",
+        "moduleId": "container-and-state-dict",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么字典形式是关键",
+        "markdown": "列表按位置读取，一旦参数顺序改变就容易错位；字典把“名字 → 张量”的对应关系一并保存，读回后仍能按参数名取用。模型的参数集合正是这样一个从参数名映射到张量的有序字典，于是保存参数自然就写成“保存一个字典”。这也解释了后文为什么装入参数时能按名称逐个匹配槽位。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-container-save"
+          ]
+        }
+      },
+      {
+        "id": "tb-model-state-dict",
+        "moduleId": "model-param-roundtrip",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "教材：保存整个网络的参数",
+        "markdown": "保存单个权重向量确实有用，但如果想保存整个模型并以后加载，逐个保存每个向量会很麻烦——一个模型可能有数百个参数散布在各处。框架因此提供保存和加载整个网络的内置函数，但需要注意一个重要细节：这将保存模型的参数，而不是保存整个模型。教材以含隐藏层和输出层的多层感知机为例：\n\n```python\nclass MLP(nn.Module):\n    def __init__(self):\n        super().__init__()\n        self.hidden = nn.Linear(20, 256)\n        self.output = nn.Linear(256, 10)\n\n    def forward(self, x):\n        return self.output(F.relu(self.hidden(x)))\n\nnet = MLP()\nX = torch.randn(size=(2, 20))\nY = net(X)\ntorch.save(net.state_dict(), 'mlp.params')\n```\n\n教材解释：因为模型本身可以包含任意代码，所以模型本身难以序列化；为了恢复模型，我们需要用代码生成架构，然后从磁盘加载参数。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000041"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "读写文件"
+              ],
+              "lineStart": 8450,
+              "lineEnd": 8629,
+              "assetRefs": [],
+              "excerptSha256": "b98d46cb251582976053037b1a9d8f47739809d799c89d539f98b00026093729"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-architecture-why",
+        "moduleId": "model-param-roundtrip",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：文件里只有数值，没有计算图",
+        "markdown": "可以把 `state_dict` 理解为“参数名到张量”的平铺映射：它包含 `hidden` 与 `output` 两层各自的权重和偏置，却不包含层的前后连接方式。因此恢复时必须先用代码重建同样的结构（隐藏层 20→256、输出层 256→10，前向为 `self.output(F.relu(self.hidden(x)))`），参数才有槽位可装。若层数、维度或参数命名不同，按名称匹配就会失败，这属于架构问题而非文件损坏。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-state-dict"
+          ]
+        }
+      },
+      {
+        "id": "tb-load-and-verify",
+        "moduleId": "verify-and-boundaries",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：实例化备份并装入参数",
+        "markdown": "恢复时，教材实例化了原始多层感知机模型的一个备份，不需要随机初始化参数，而是直接读取文件中存储的参数：\n\n```python\nclone = MLP()\nclone.load_state_dict(torch.load('mlp.params'))\nclone.eval()\n```\n\n由于两个实例具有相同的模型参数，在输入相同的 `X`（形状为 $2 \\times 20$）时，两个实例的计算结果应该相同。教材用 `Y_clone = clone(X)` 后 `Y_clone == Y` 验证，输出全部为 `True`。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000041"
+              ],
+              "headingPath": [
+                "深度学习计算",
+                "读写文件"
+              ],
+              "lineStart": 8450,
+              "lineEnd": 8629,
+              "assetRefs": [],
+              "excerptSha256": "b98d46cb251582976053037b1a9d8f47739809d799c89d539f98b00026093729"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-restore-checklist",
+        "moduleId": "verify-and-boundaries",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "补充：恢复流程检查清单",
+        "markdown": "把教材的往返过程整理成可操作的清单：\n\n1. 用与训练时相同的代码构建模型架构；\n2. 调用 `load_state_dict` 装入参数字典，并留意是否报告缺失键或多余键；\n3. 切换到推理模式 `eval()`；\n4. 用同一输入比较恢复模型与原模型的输出是否一致。\n\n第 2 步报键不匹配时，先核对架构定义；第 4 步结果不一致时，优先检查是否漏装参数或两次输入本身不同。只有第 4 步通过，才能认为“参数已正确恢复”。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-model-state-dict",
+            "tb-load-and-verify"
+          ]
+        }
+      },
+      {
+        "id": "model-exercise",
+        "moduleId": "verify-and-boundaries",
+        "depth": "support",
+        "kind": "exercise",
+        "title": "练习：只有参数文件时怎么办",
+        "markdown": "假设你只拿到了 `mlp.params`，手头却没有 `MLP` 的类定义。请说明为什么无法直接“打开”这个文件得到可运行的模型，并给出两种让恢复可行的做法（提示：保留训练代码，或显式记录架构配置）。再思考教材练习中的问题：若只想复用原网络的前两层，应如何把这些参数装入一个结构不同的新网络？",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-architecture-why",
+            "model-restore-checklist"
+          ]
+        }
+      },
+      {
+        "id": "model-summary",
+        "moduleId": "summary-and-next",
+        "depth": "core",
+        "kind": "summary",
+        "title": "小结与下一步",
+        "markdown": "本节三条结论：`save` 和 `load` 函数可用于张量对象的文件读写；可以通过参数字典（`state_dict`）保存和加载网络的全部参数；保存架构必须在代码中完成，而不是在参数中完成。下一节将讨论 GPU，届时模型与张量还需要被移动到目标设备上，本节得到的参数文件正是这种迁移的起点。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "tb-load-and-verify",
+            "model-restore-checklist",
+            "model-architecture-why"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "restore-flow-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-restore-checklist",
+        "moduleId": "verify-and-boundaries",
+        "depth": "core",
+        "outcomeRefs": [
+          "restore-model-params",
+          "verify-architecture-constraint"
+        ],
+        "learningPurpose": "检查学习者能否按正确顺序完成保存-重建-装入-验证的往返，并在失败时定位原因。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "tb-model-state-dict",
+            "tb-load-and-verify"
+          ]
+        },
+        "config": {
+          "attempts": 2,
+          "steps": 4
+        },
+        "fallback": {
+          "type": "markdown",
+          "mode": "static",
+          "markdown": "请写出用 state_dict 保存参数并在新实例上恢复的四个步骤，并说明若 `load_state_dict` 报告键不匹配应先检查什么。"
+        }
+      }
+    ]
+  },
+  "subtitle": "深度学习计算",
+  "clusterId": "chapter-5",
+  "clusterIds": [
+    "chapter-5"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000041"
+      ],
+      "headingPath": [
+        "深度学习计算",
+        "读写文件"
+      ],
+      "lineStart": 8450,
+      "lineEnd": 8629,
+      "assetRefs": [],
+      "excerptSha256": "b98d46cb251582976053037b1a9d8f47739809d799c89d539f98b00026093729"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    3032,
+    1878
+  ],
+  "scale": 0.92
+}

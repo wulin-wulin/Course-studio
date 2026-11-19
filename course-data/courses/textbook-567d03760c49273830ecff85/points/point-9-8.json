@@ -1,0 +1,612 @@
+{
+  "id": "point-9-8",
+  "title": "束搜索",
+  "shortSummary": "解释束搜索如何在解码时保留多个候选序列，并分析束宽对质量与计算成本的影响。",
+  "keyTerms": [
+    "束搜索",
+    "候选序列",
+    "束宽",
+    "解码策略"
+  ],
+  "animationType": "beamSearch",
+  "animationSuggestion": "以束宽 2、五个词元的词表为例，逐步展开时间步 1 到 3，显示每个候选的累计概率、每步保留的 k 条前缀和被剪掉的分支，最后比较长度惩罚后的得分并给出最终输出。",
+  "difficulty": "进阶",
+  "importance": 0.72,
+  "prerequisites": [
+    "point-9-7"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "comparison-decision",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的搜索问题设定、三种策略定义和公式，围绕“选哪种策略、束宽取多大”重排讲解顺序，并补充代价对比、逐步推演和练习。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "explain-greedy-gap",
+          "text": "说明贪心搜索为什么不能保证得到条件概率最大的输出序列。"
+        },
+        {
+          "id": "trace-beam-search",
+          "text": "按给定束宽逐步展开候选序列，并执行保留与剪枝。"
+        },
+        {
+          "id": "score-candidates",
+          "text": "用长度惩罚的对数概率对候选序列打分并选出最终输出。"
+        },
+        {
+          "id": "compare-search-cost",
+          "text": "比较贪心搜索、穷举搜索与束搜索的计算量级。"
+        },
+        {
+          "id": "choose-strategy",
+          "text": "根据正确率需求与计算预算选择搜索策略和束宽。"
+        }
+      ],
+      "misconceptions": [
+        "把束搜索当成每步独立贪心，忽略它在时间步之间保留 k 条前缀。",
+        "认为束宽越大就一定能得到全局最优序列。",
+        "直接比较候选序列的概率连乘或对数总分，忽略长序列需要长度惩罚。"
+      ],
+      "modules": [
+        {
+          "id": "search-problem",
+          "title": "问题导入：从逐步预测到整序列搜索",
+          "role": "motivation",
+          "description": "用最优序列的目标和候选空间规模引出搜索策略的必要性。",
+          "outcomeRefs": [
+            "explain-greedy-gap"
+          ],
+          "order": 0
+        },
+        {
+          "id": "greedy-and-exhaustive",
+          "title": "两个极端：贪心与穷举",
+          "role": "comparison",
+          "description": "用教材反例说明贪心不保证最优，并对比穷举搜索的指数级代价。",
+          "outcomeRefs": [
+            "explain-greedy-gap",
+            "compare-search-cost"
+          ],
+          "order": 1
+        },
+        {
+          "id": "beam-mechanism",
+          "title": "核心理解：束搜索的展开与剪枝",
+          "role": "concept",
+          "description": "定义束宽，按时间步讲解候选扩展、评分与保留前 k 个的过程。",
+          "outcomeRefs": [
+            "trace-beam-search",
+            "score-candidates"
+          ],
+          "order": 2
+        },
+        {
+          "id": "scoring-and-selection",
+          "title": "最终选择：对数概率与长度惩罚",
+          "role": "formula",
+          "description": "解释教材的最终打分公式以及 alpha 的归一化作用。",
+          "outcomeRefs": [
+            "score-candidates"
+          ],
+          "order": 3
+        },
+        {
+          "id": "cost-and-decision",
+          "title": "应用活动：策略与束宽的取舍",
+          "role": "application",
+          "description": "把三种策略放回实际解码场景，给出选择依据和调参方法。",
+          "outcomeRefs": [
+            "compare-search-cost",
+            "choose-strategy"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-bridge",
+          "title": "达成检查与下一点桥接",
+          "role": "assessment",
+          "description": "用小结、练习和注意力机制预告收束本点。",
+          "outcomeRefs": [
+            "trace-beam-search",
+            "choose-strategy"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "explain-greedy-gap",
+          "trace-beam-search",
+          "score-candidates",
+          "compare-search-cost",
+          "choose-strategy"
+        ],
+        "method": "完成束搜索推演与成本估算练习，并说明所选策略的依据。",
+        "successCriteria": [
+          "能按束宽列出每步保留的候选序列",
+          "能用计算量公式比较三种策略",
+          "能给出一条有依据的策略选择结论"
+        ],
+        "exerciseBlockId": "model-practice",
+        "summaryBlockId": "textbook-summary",
+        "nextPointId": "point-10-1"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-search-setting",
+        "moduleId": "search-problem",
+        "depth": "core",
+        "kind": "definition",
+        "title": "搜索问题：最大化整条序列的条件概率",
+        "markdown": "在序列生成中，解码器在时间步 $t'$ 输出词元 $y_{t'}$ 的条件概率，取决于此前的输出子序列 $y_1, \\dots, y_{t'-1}$ 和由输入序列编码得到的上下文变量 $\\mathbf{c}$。设输出词表为 $\\mathcal{Y}$，其中包含结束词元“<eos>”，最大词元数为 $T'$，那么最优序列就是使下式最大的输出序列：\n\n$$\n\\prod_{t'=1}^{T'} P(y_{t'} \\mid y_1, \\dots, y_{t'-1}, \\mathbf{c})\n$$\n\n所有可能的候选序列共有 $\\mathcal{O}(|\\mathcal{Y}|^{T'})$ 个；实际输出会丢弃“<eos>”之后的部分。搜索策略要解决的正是如何在这个指数级空间中高效地找到好序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-local-vs-global",
+        "moduleId": "search-problem",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：逐步最优不等于整体最优",
+        "markdown": "贪心搜索在每一步只保留一个前缀，因此它优化的是“在当前前缀下选哪个词元”，而不是“整条序列的条件概率”。当前步的最大条件概率只说明这个局部选择好，并不保证把它接在后面能得到全局最好的序列。一旦某个较早的词元被选定，后续所有条件概率都建立在这个前缀之上，模型无法回到被放弃的分支。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-search-setting"
+          ]
+        }
+      },
+      {
+        "id": "textbook-greedy",
+        "moduleId": "greedy-and-exhaustive",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "贪心搜索：每步取条件概率最高的词元",
+        "markdown": "贪心搜索在每个时间步 $t'$ 都从词表 $\\mathcal{Y}$ 中选出条件概率最高的词元：\n\n$$\ny_{t'} = \\underset{y \\in \\mathcal{Y}}{\\operatorname{argmax}} P(y \\mid y_1, \\dots, y_{t'-1}, \\mathbf{c})\n$$\n\n一旦序列中出现“<eos>”或达到最大长度 $T'$，解码就结束。它每一步只评估 $|\\mathcal{Y}|$ 个词元，因此总计算量为 $\\mathcal{O}(|\\mathcal{Y}|T')$。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-greedy-counterexample",
+        "moduleId": "greedy-and-exhaustive",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材反例：第二高的词元带来更高总概率",
+        "markdown": "教材用两个对照例子说明贪心搜索不保证最优。图 9.8.1 中每步都取条件概率最高的词元，得到序列“A”“B”“C”“<eos>”，其条件概率为 $0.5 \\times 0.4 \\times 0.4 \\times 0.6 = 0.048$。图 9.8.2 在第 2 步改选第二高的词元“C”，此后前缀从“A”“B”变为“A”“C”，第 3、4 步的条件概率也随之改变；最终序列“A”“C”“B”“<eos>”的概率为 $0.5 \\times 0.3 \\times 0.6 \\times 0.6 = 0.054$，反而更大。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-counterexample-reading",
+        "moduleId": "greedy-and-exhaustive",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：反例的关键是过早剪枝",
+        "markdown": "这个反例的关键不是“第二高的词元总是更好”，而是较早的局部选择会改变后续条件概率表。贪心搜索在第 2 步就永久丢弃了“C”开头的分支，因此即使“A”“C”前缀在后面能取得更高总概率，也没有机会被重新纳入。要避免这种过早剪枝，就需要在每一步同时保留多个前缀。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-greedy",
+            "textbook-greedy-counterexample"
+          ]
+        }
+      },
+      {
+        "id": "textbook-exhaustive",
+        "moduleId": "greedy-and-exhaustive",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "穷举搜索：最优但代价惊人",
+        "markdown": "穷举搜索列举所有可能的输出序列及其条件概率，再选出条件概率最高的一个，因此一定能得到最优序列。但它的计算量为 $\\mathcal{O}(|\\mathcal{Y}|^{T'})$：当 $|\\mathcal{Y}| = 10000$、$T' = 10$ 时需要评估 $10000^{10} = 10^{40}$ 个序列，现有计算机几乎不可能完成；相比之下，贪心搜索只需评估 $10000 \\times 10 = 10^5$ 个序列。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-cost-table",
+        "moduleId": "greedy-and-exhaustive",
+        "depth": "support",
+        "kind": "table",
+        "title": "补充：三种策略的计算量对照",
+        "markdown": "把三种策略放在同一组符号下对比：\n\n| 策略 | 每步保留的候选 | 计算量 | 结果保证 |\n| --- | --- | --- | --- |\n| 贪心搜索 | 1 个前缀 | $\\mathcal{O}(\\lvert\\mathcal{Y}\\rvert T')$ | 不保证最优 |\n| 穷举搜索 | 全部前缀 | $\\mathcal{O}(\\lvert\\mathcal{Y}\\rvert^{T'})$ | 一定最优 |\n| 束搜索 | $k$ 个前缀 | $\\mathcal{O}(k\\lvert\\mathcal{Y}\\rvert T')$ | 介于两者之间 |\n\n表中的 $k$ 是束宽。束搜索的代价随 $k$ 线性增长，而穷举搜索随序列长度指数增长，这正是束搜索能用于实际解码的原因。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-greedy",
+            "textbook-exhaustive"
+          ]
+        }
+      },
+      {
+        "id": "textbook-beam-definition",
+        "moduleId": "beam-mechanism",
+        "depth": "core",
+        "kind": "mechanism",
+        "title": "束搜索：每步保留 k 个候选前缀",
+        "markdown": "束搜索是贪心搜索的改进版本，它引入超参数束宽 $k$。在时间步 1，从词表中选出条件概率最高的 $k$ 个词元，分别作为 $k$ 个候选输出序列的第一个词元。在随后的每个时间步，基于上一时间步保留的 $k$ 个候选前缀，从 $k|\\mathcal{Y}|$ 个可能扩展中再挑出条件概率最高的 $k$ 个候选序列。因此束搜索始终保存 $k$ 条前缀，而不是只保存一条。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-beam-trace",
+        "moduleId": "beam-mechanism",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "教材例子：束宽为 2 的展开过程",
+        "markdown": "教材用 $\\mathcal{Y}=\\{A,B,C,D,E\\}$（其中一个为“<eos>”）、束宽 $k=2$、最大长度 $T'=3$ 演示束搜索。时间步 1 保留概率最高的 A 和 C；时间步 2 对两个前缀分别扩展全部词元，共得到 10 个候选，保留 $P(A,B \\mid \\mathbf{c})$ 和 $P(C,E \\mid \\mathbf{c})$；时间步 3 再扩展并保留 $P(A,B,D \\mid \\mathbf{c})$ 和 $P(C,E,D \\mid \\mathbf{c})$。最终候选序列为：A、C、AB、CE、ABD、CED（丢弃“<eos>”及其后部分后得到最终集合）。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-trace-reading",
+        "moduleId": "beam-mechanism",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：从例子读出三个要点",
+        "markdown": "这个例子说明束搜索的三个要点。第一，候选不只来自最后一个时间步，之前保留的较短前缀（如 A、C、AB、CE）同样可能成为最终输出，因为序列可能在更早的位置结束。第二，剪枝发生在每个时间步：每一层只保留分数最高的 $k$ 个前缀，其余 $k|\\mathcal{Y}|-k$ 个分支被丢弃。第三，束宽 $k$ 控制保留的广度：$k=1$ 时退化为贪心搜索，$k$ 增大时覆盖更多前缀，但每步计算量也随之线性增加。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-beam-definition",
+            "textbook-beam-trace"
+          ]
+        }
+      },
+      {
+        "id": "textbook-beam-expansion",
+        "moduleId": "beam-mechanism",
+        "depth": "support",
+        "kind": "formula",
+        "title": "逐步累计前缀的条件概率",
+        "markdown": "候选序列的分数由各步条件概率累乘得到。例如对两个保留前缀分别扩展时：\n\n$$\n\\begin{array}{l}\nP(A, y_2 \\mid \\mathbf{c}) = P(A \\mid \\mathbf{c})P(y_2 \\mid A, \\mathbf{c}), \\\\\nP(C, y_2 \\mid \\mathbf{c}) = P(C \\mid \\mathbf{c})P(y_2 \\mid C, \\mathbf{c}),\n\\end{array}\n$$\n\n到时间步 3 继续用同样方式累计：\n\n$$\n\\begin{array}{l}\nP(A, B, y_3 \\mid \\mathbf{c}) = P(A, B \\mid \\mathbf{c})P(y_3 \\mid A, B, \\mathbf{c}), \\\\\nP(C, E, y_3 \\mid \\mathbf{c}) = P(C, E \\mid \\mathbf{c})P(y_3 \\mid C, E, \\mathbf{c}).\n\\end{array}\n$$",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "textbook-final-scoring",
+        "moduleId": "scoring-and-selection",
+        "depth": "core",
+        "kind": "formula",
+        "title": "最终选择：长度惩罚后的对数概率",
+        "markdown": "由于候选序列长度不同，教材用长度惩罚后的对数概率作为最终选择标准：\n\n$$\n\\frac{1}{L^{\\alpha}} \\log P(y_1, \\dots, y_L \\mid \\mathbf{c}) = \\frac{1}{L^{\\alpha}} \\sum_{t'=1}^{L} \\log P(y_{t'} \\mid y_1, \\dots, y_{t'-1}, \\mathbf{c}),\n$$\n\n其中 $L$ 是候选序列长度，$\\alpha$ 通常取 0.75。较长的序列在对数求和中有更多项，分母 $L^{\\alpha}$ 用来惩罚长序列。束搜索的总计算量为 $\\mathcal{O}(k|\\mathcal{Y}|T')$，介于贪心搜索和穷举搜索之间。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-penalty-intuition",
+        "moduleId": "scoring-and-selection",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "补充：为什么要取对数并做长度归一化",
+        "markdown": "取对数把连乘变成连加，既避免许多小于 1 的概率相乘后下溢，也便于逐项累加分数。但连加会让长序列天然拥有更多负项，如果直接比较总分，长度不同的候选并不可比。除以 $L^{\\alpha}$ 提供了可调的归一化：$\\alpha = 0$ 时不做长度归一化，$\\alpha = 1$ 时得到每个词元的平均对数概率，教材默认的 0.75 位于两者之间。下例仅示意计算方式：若某长度 3 的候选对数概率之和为 $-2.4$，则 $\\alpha = 0.75$ 时得分为 $-2.4 / 3^{0.75} \\approx -1.05$；另一长度 1 的候选对数概率为 $-0.8$，得分为 $-0.8$，于是后者排名更高。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-final-scoring"
+          ]
+        }
+      },
+      {
+        "id": "model-strategy-decision",
+        "moduleId": "cost-and-decision",
+        "depth": "core",
+        "kind": "comparison",
+        "title": "补充：如何选择策略与束宽",
+        "markdown": "选择策略时可以按约束排序：若候选空间很小、精度是唯一目标，穷举搜索才可行；若计算预算极紧，贪心搜索最便宜，它等价于 $k=1$ 的束搜索；实际系统通常选束搜索，用束宽在正确率和代价之间折中。束宽增大能降低过早剪枝的风险，但它仍然只保留 $k$ 条前缀，不保证找到全局最优序列。工程上应把 $k$ 当作需要验证的超参数：在验证集上比较不同 $k$ 的翻译或生成质量，同时测量延迟和显存占用。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-cost-table",
+            "textbook-beam-definition",
+            "textbook-final-scoring"
+          ]
+        }
+      },
+      {
+        "id": "textbook-summary",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "summary",
+        "title": "教材小结",
+        "markdown": "序列搜索策略包括贪心搜索、穷举搜索和束搜索。贪心搜索计算量最小，但精度相对较低；穷举搜索精度最高，但计算量最大；束搜索通过灵活选择束宽，在正确率和计算代价之间进行权衡。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-567d03760c49273830ecff85",
+              "blockIds": [
+                "block-000074"
+              ],
+              "headingPath": [
+                "现代循环神经网络",
+                "束搜索"
+              ],
+              "lineStart": 15849,
+              "lineEnd": 15966,
+              "assetRefs": [
+                "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+                "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+                "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+              ],
+              "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-practice",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "kind": "exercise",
+        "title": "补充：判断与计算练习",
+        "markdown": "1. 设词表大小 $|\\mathcal{Y}| = 100$、最大长度 $T' = 8$、束宽 $k = 5$，按公式估算束搜索每步要评估多少扩展、整段解码的计算量级是多少，并与贪心搜索比较。\n\n2. 有观点说“束宽越大越好”。请结合计算量 $\\mathcal{O}(k|\\mathcal{Y}|T')$ 和束搜索的剪枝方式，说明这个说法在什么条件下不成立。\n\n3. 教材练习问：能否把穷举搜索看作一种特殊的束搜索？请给出你的判断和理由。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-beam-definition",
+            "textbook-exhaustive",
+            "textbook-summary"
+          ]
+        }
+      },
+      {
+        "id": "model-bridge",
+        "moduleId": "check-and-bridge",
+        "depth": "support",
+        "kind": "note",
+        "title": "补充：与注意力机制的关系",
+        "markdown": "束搜索改善的是“在给定解码器概率的前提下如何选序列”，它并不能修正此前 seq2seq 解码器只依赖固定上下文 $\\mathbf{c}$ 的局限。下一章转向注意力机制：让解码器在每一步动态关注源序列的不同位置，从表示层面提升长句翻译等任务的质量。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-search-setting",
+            "textbook-summary"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "beam-search-check",
+        "type": "formative-check",
+        "anchorBlockId": "model-practice",
+        "moduleId": "check-and-bridge",
+        "depth": "core",
+        "outcomeRefs": [
+          "trace-beam-search",
+          "compare-search-cost",
+          "choose-strategy"
+        ],
+        "learningPurpose": "检查学习者能否用计算量公式估算成本、说明束宽的边界，并解释束搜索与穷举搜索的关系。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-beam-definition",
+            "textbook-exhaustive",
+            "textbook-final-scoring"
+          ]
+        },
+        "config": {
+          "attempts": 2
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "参考答案要点：第 1 题每步从 $k|\\mathcal{Y}| = 5 \\times 100 = 500$ 个扩展中保留 5 个，整段计算量为 $\\mathcal{O}(k|\\mathcal{Y}|T') = 5 \\times 100 \\times 8 = 4000$，而贪心搜索为 $100 \\times 8 = 800$。第 2 题：$k$ 增大使计算量线性增长，且束搜索仍然剪枝，只能提高找到高概率序列的机会，不能保证全局最优，因此在延迟或显存受限、以及质量已饱和时“越大越好”不成立。第 3 题：当束宽大到每步不丢弃任何前缀时，束搜索退化为穷举搜索，因此可以把穷举搜索看成不做剪枝的极端束搜索。"
+        }
+      }
+    ]
+  },
+  "subtitle": "现代循环神经网络",
+  "clusterId": "chapter-9",
+  "clusterIds": [
+    "chapter-9"
+  ],
+  "role": "branch",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-567d03760c49273830ecff85",
+      "blockIds": [
+        "block-000074"
+      ],
+      "headingPath": [
+        "现代循环神经网络",
+        "束搜索"
+      ],
+      "lineStart": 15849,
+      "lineEnd": 15966,
+      "assetRefs": [
+        "parts/part-0004/images/75499ea676c8ac4239933cf190db1bd94237bf51c552a6d76be49d7528a32d41.jpg",
+        "parts/part-0004/images/cfc6dd97551d93bca5012425850fd22af082be76e1f92170ec97f2b5c3c5ca22.jpg",
+        "parts/part-0004/images/2d3c8a43b7c1724ab550c42c369564f5c7b816a9dd467e173cc2f8d57019124b.jpg"
+      ],
+      "excerptSha256": "5ae00a1d55577f6101e6364145d8bda6f302a7111df3fb5ab7e6ad095484260f"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    460,
+    1242
+  ],
+  "scale": 0.95
+}

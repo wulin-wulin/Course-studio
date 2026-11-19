@@ -1,0 +1,520 @@
+{
+  "id": "point-3-10",
+  "title": "知识库+LLM 智能问答系统的构建流程",
+  "shortSummary": "拆解知识库加 LLM 智能问答系统的构建流程，包括文档处理、向量化、检索与生成。",
+  "keyTerms": [
+    "知识库",
+    "智能问答",
+    "向量检索",
+    "生成"
+  ],
+  "animationType": "ragPipeline",
+  "animationSuggestion": "分两段播放：先展示离线端的文档切片与向量入库，再展示在线端的问题校验、向量化、相似度排序、topK 高亮与其拼入 prompt 的过程，最后显示答案及其对应的原文片段，允许重播。",
+  "difficulty": "中等",
+  "importance": 0.92,
+  "prerequisites": [
+    "point-3-5",
+    "point-3-9"
+  ],
+  "origin": "textbook",
+  "content": {
+    "schema_version": "textbook-content/2.0",
+    "learningDesign": {
+      "primaryPattern": "procedure-pipeline",
+      "adaptationLevel": "balanced",
+      "editorialPolicy": "保留教材的十三步流程、三项关键因素与上线能力清单，按「离线加工 / 在线问答」两段重排讲解，并补充分割取舍、场景走查与上线检查表。",
+      "estimatedMinutes": 18,
+      "outcomes": [
+        {
+          "id": "describe-pipeline",
+          "text": "按顺序说明知识库加 LLM 问答系统的十三个构建步骤，并指出哪些属于离线加工、哪些属于在线问答。"
+        },
+        {
+          "id": "evaluate-retrieval",
+          "text": "解释文本转换、文本分割与 embedding 如何影响检索命中率与最终答案质量，并判断一次检索失败的可能原因。"
+        },
+        {
+          "id": "plan-production",
+          "text": "判断一个原型要上线生产还需要补齐哪些能力，并说明缺少它们时的后果。"
+        }
+      ],
+      "misconceptions": [
+        "以为把文档丢进向量数据库、把问题直接交给大模型就能得到准确答案，忽略文本分割与 embedding 质量对检索的直接影响。",
+        "以为流程走到「LLM 返回答案」就已经完成，忽略合规校验、增量更新、多路召回、监控与反馈等生产化能力。"
+      ],
+      "modules": [
+        {
+          "id": "overview-and-paths",
+          "title": "流程总览：源数据与两条链路",
+          "role": "orientation",
+          "description": "先看清输入数据的形态，再把十三步拆成离线加工与在线问答两条链路。",
+          "outcomeRefs": [
+            "describe-pipeline"
+          ],
+          "order": 0
+        },
+        {
+          "id": "pipeline-steps",
+          "title": "十三步流水线逐步走查",
+          "role": "procedure",
+          "description": "按教材顺序执行加工与问答，明确每步的输入、输出与可能的断点。",
+          "outcomeRefs": [
+            "describe-pipeline"
+          ],
+          "order": 1
+        },
+        {
+          "id": "retrieval-quality",
+          "title": "检索质量：三个关键因素",
+          "role": "quality-analysis",
+          "description": "分析文本转换、文本分割与 embedding 如何决定检索是否命中相关内容。",
+          "outcomeRefs": [
+            "evaluate-retrieval"
+          ],
+          "order": 2
+        },
+        {
+          "id": "production-hardening",
+          "title": "从原型到生产：需要补齐的能力",
+          "role": "production-checklist",
+          "description": "把教材列出的上线能力归位到流程各阶段，并说明缺失时的后果。",
+          "outcomeRefs": [
+            "plan-production"
+          ],
+          "order": 3
+        },
+        {
+          "id": "challenges-and-boundaries",
+          "title": "挑战与边界：知识库不是万能",
+          "role": "boundary",
+          "description": "识别单一知识库无法覆盖的提问类型与前置分类需求。",
+          "outcomeRefs": [
+            "evaluate-retrieval",
+            "plan-production"
+          ],
+          "order": 4
+        },
+        {
+          "id": "check-and-next",
+          "title": "上线检查表与下一步",
+          "role": "summary",
+          "description": "用检查表自评方案完整性，并桥接到统一的流程编排框架。",
+          "outcomeRefs": [
+            "describe-pipeline",
+            "evaluate-retrieval",
+            "plan-production"
+          ],
+          "order": 5
+        }
+      ],
+      "completion": {
+        "outcomeRefs": [
+          "describe-pipeline",
+          "evaluate-retrieval",
+          "plan-production"
+        ],
+        "method": "先按离线、在线两段复述十三步，再针对一个检索失败案例给出原因与修复方向，最后补齐上线检查表。",
+        "successCriteria": [
+          "能正确划分离线加工与在线问答的步骤边界",
+          "能说出至少两个影响检索质量的因素及其后果",
+          "能指出原型缺少的三项以上生产化能力"
+        ],
+        "exerciseBlockId": "model-scenario-walkthrough",
+        "summaryBlockId": "model-checklist-and-bridge",
+        "nextPointId": "point-3-11"
+      }
+    },
+    "blocks": [
+      {
+        "id": "textbook-source-to-kb",
+        "moduleId": "overview-and-paths",
+        "depth": "core",
+        "kind": "definition",
+        "title": "教材：从原始资料到企业知识库",
+        "markdown": "教材指出，企业的原始数据通常以 PDF、docx、文本、网页等格式存在。把这些数据加工成企业知识库并不是一次格式转换，而是一条连续流水线：先统一成文本，再切成片段、转成向量、存入向量数据库；用户提问时再检索相关片段，连同问题一起交给大模型作答。\n\n围绕这条流水线，本文依次回答三个问题：要经过哪些步骤、哪些步骤决定检索质量、上线生产还缺什么。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "知识库+LLM 智能问答系统的构建流程"
+              ],
+              "lineStart": 874,
+              "lineEnd": 903,
+              "assetRefs": [],
+              "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-offline-vs-online",
+        "moduleId": "overview-and-paths",
+        "depth": "support",
+        "kind": "explanation",
+        "title": "模型补充：把十三步切成两条链路",
+        "markdown": "教材的十三个步骤可以按「谁在什么时候执行」切成两条链路：\n\n- **离线加工链路（第 1–6 步）**：准备源数据、转文本、切分、向量化、入库与维护向量库。这条链路可以批处理、反复重跑，正确性优先于速度。\n- **在线问答链路（第 7–13 步）**：接收问题、合规校验、问题向量化、语义检索、取 topK、拼装 prompt、调用 LLM 生成答案。这条链路每次提问都要跑一遍，因此对延迟、成本与稳定性更敏感。\n\n这样切分的价值在于定位问题：答案不准时，先判断是离线链路灌进去的内容不对，还是在线链路的检索与拼装出了偏差，而不是一上来就归咎于模型能力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-source-to-kb"
+          ]
+        }
+      },
+      {
+        "id": "textbook-offline-steps",
+        "moduleId": "pipeline-steps",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：离线加工的前六步",
+        "markdown": "教材把知识库的加工过程写成如下步骤：\n\n1. 数据工程师准备私域源数据（文档、图片、JSON、SQL 等）。\n2. 对源数据做预处理，统一转换成文本格式。\n3. 引入或开发文本分割算法，把文本按句段切成大量 text chunk。\n4. 引入或开发文本转向量算法，把每个 text chunk 转换成对应的向量，即文本转向量的 embedding 过程。\n5. 把转换后的各个向量及对应的数据信息存放到向量数据库。\n6. 部署和维护一套向量数据库。\n\n第 2 步是整条链路的前置条件：只要还有图片、表格、数据库记录没被转成文本，后续分割与向量化就覆盖不到这部分知识。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "知识库+LLM 智能问答系统的构建流程"
+              ],
+              "lineStart": 874,
+              "lineEnd": 903,
+              "assetRefs": [],
+              "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-offline-io-table",
+        "moduleId": "pipeline-steps",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：离线各步的输入与输出",
+        "markdown": "把前六步写成输入输出对照，更容易发现断点：\n\n| 步骤 | 输入 | 输出 | 出错的典型表现 |\n|---|---|---|---|\n| 1 准备源数据 | 业务系统、文件目录 | 原始文件集合 | 知识覆盖不全 |\n| 2 转成文本 | PDF、docx、网页、数据库记录 | 纯文本 | 图片与表格信息丢失 |\n| 3 文本分割 | 长文本 | 大量 text chunk | 片段语义被截断 |\n| 4 向量化 | 每个 chunk | 向量与原文 | 语义相近却向量不近 |\n| 5 写入向量库 | 向量与元数据 | 可检索索引 | 缺少元数据无法溯源 |\n| 6 维护向量库 | 索引与容量 | 可用服务 | 更新滞后、查询超时 |\n\n表中「向量与原文」是刻意保留的：只存向量会让答案无法给出出处。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-offline-steps"
+          ]
+        }
+      },
+      {
+        "id": "textbook-online-steps",
+        "moduleId": "pipeline-steps",
+        "depth": "core",
+        "kind": "procedure",
+        "title": "教材：在线问答的后七步",
+        "markdown": "用户侧的处理流程是：\n\n7. 用户输入查询问题。\n8. 引入或开发合法合规校验系统，校验用户问题的合规性。\n9. 将查询问题转换成向量。\n10. 调用向量数据库查询接口，做语义检索（向量相似查询）。\n11. 返回检索到的 topK（比如选 top5、top10 等）关联内容。\n12. 用户将 topK 内容以及用户问题，填入到 prompt 模板。\n13. 输入 prompt 给 LLM，LLM 返回答案。\n\n这条链路的终点不是「检索到内容」，而是「生成有理有据的答案」：第 12 步把检索结果转成提示词，第 13 步才由 LLM 完成概括与表达。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "quote",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "知识库+LLM 智能问答系统的构建流程"
+              ],
+              "lineStart": 874,
+              "lineEnd": 903,
+              "assetRefs": [],
+              "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-scenario-walkthrough",
+        "moduleId": "pipeline-steps",
+        "depth": "core",
+        "kind": "worked-example",
+        "title": "模型补充：以产品文档问答走一遍",
+        "markdown": "设某团队只把一份云数据库产品简介加工成知识库：\n\n1. 源数据是这份产品文档，第 2 步转成纯文本，第 3 步按小节切成若干 chunk。\n2. 每个 chunk 经 embedding 得到向量，连同原文一起写入向量库。\n3. 用户问「这个数据库支持哪些引擎」，问题先做合规校验，再转成向量。\n4. 向量检索返回最相近的 top5 片段，可能分别来自「产品特性」和「支持的引擎」两个小节。\n5. 这 5 段内容与原始问题一起填入 prompt，LLM 归纳出引擎清单并给出出处。\n\n这个例子说明两点：单一文档也能构成知识库；答案的准确性来自「检索到的片段是否真的相关」，而不是来自模型自身的记忆。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-offline-steps",
+            "textbook-online-steps"
+          ]
+        }
+      },
+      {
+        "id": "model-compliance-gate",
+        "moduleId": "pipeline-steps",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：合规校验为什么放在最前面",
+        "markdown": "教材把合规校验放在第 8 步，也就是问题向量化之前，位置本身就是设计：不合规的问题在这里被拦下，不必再消耗一次向量检索和一次 LLM 生成。\n\n它只决定「是否继续」，不改变检索到的内容，因此不能指望它提升答案准确性。若把它挪到生成之后，代价是先把检索与推理开销付完，才把结果丢掉。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-online-steps"
+          ]
+        }
+      },
+      {
+        "id": "textbook-quality-factors",
+        "moduleId": "retrieval-quality",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：决定问答质量的三大关键因素",
+        "markdown": "教材强调，除了 LLM 本身的能力，问答质量还取决于三个环节：\n\n- **数据格式转换成文本**：原始语料格式多样，除 PDF、docx、文本外还有数据库记录和经常变动的网页；部分 PDF 中还有大量图片、图表，语料转文本这一步就很有挑战。\n- **文本分割算法**：分割效果会直接影响分割后的文本转向量以及后续相似检索，并最终影响问答质量。\n- **文本转向量 embedding 算法**：它尤为关键，因为知识库的核心就是用向量相似检索来获取与问题相关的内容，而很难有一个适用于全部场景的 embedding 模型。\n\n教材还给出一个实际观察：很多用户的原始数据是各种文档，而不是整齐的一问一答。这种情况下会时不时出现相似匹配失效——用户问题与检索出的关联内容并不相干，原因之一在于问题与关联内容转成向量后丢失了相似性，关联内容中可能没有与问题直接对应的文字描述。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "知识库+LLM 智能问答系统的构建流程"
+              ],
+              "lineStart": 874,
+              "lineEnd": 903,
+              "assetRefs": [],
+              "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-chunking-tradeoff",
+        "moduleId": "retrieval-quality",
+        "depth": "support",
+        "kind": "comparison",
+        "title": "模型补充：分割粒度的取舍",
+        "markdown": "同样是切分，粒度不同会换来不同的失败模式：\n\n| 切分方式 | 好处 | 代价 |\n|---|---|---|\n| 切得过粗（整章一段） | 上下文完整 | 向量被多个主题平均掉，检索不聚焦，prompt 塞入大量无关文字 |\n| 切得过细（一句一段） | 语义集中，命中精度高 | 缺少上下文，答案碎片化，可能拼不出完整结论 |\n| 按语义边界切分并保留小节标题 | 兼顾聚焦与上下文 | 需要额外规则或模型判断，工程成本更高 |\n\n教材把分割列为关键因素，正是因为它同时影响第 4 步的向量质量和第 12 步 prompt 的信息密度，一处取舍会传导到整条链路。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-quality-factors"
+          ]
+        }
+      },
+      {
+        "id": "model-retrieval-failure",
+        "moduleId": "retrieval-quality",
+        "depth": "core",
+        "kind": "warning",
+        "title": "模型补充：检索到不相干内容时怎么查",
+        "markdown": "面对「检索结果与问题无关」，可以沿链路从后往前排查：\n\n1. **先看原文**：关联内容里是否真的存在与问题对应的描述。若原文确实没写，任何检索算法都补不出来，这属于第 2、3 步的覆盖问题。\n2. **再看切分**：答案被切到不同 chunk，或关键上下文被截断，会让命中的片段失去可读性。\n3. **最后看 embedding**：若问题与原文表述差异很大，向量可能不接近，可以换用更适合本领域的模型，或在检索前先做问题改写。\n\n顺序很重要：先确认知识库里有答案，再讨论检索算法。否则会陷入反复调参却始终缺料的状态。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-quality-factors",
+            "model-chunking-tradeoff"
+          ]
+        }
+      },
+      {
+        "id": "textbook-production-capabilities",
+        "moduleId": "production-hardening",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：上线生产还需补齐的能力",
+        "markdown": "教材提醒，上面十三个步骤只是「使用和构建过程」的大致列举。若要上线生产，还需结合场景补充：\n\n- 知识库数据的新增与更新处理，需要数据订阅与流处理能力，支持全量、增量与数据更新的持续加工。\n- 文本预处理、文本分割、embedding 等算法的开发和引入，并结合业务迭代优化。\n- 为提高检索准确率，往往需要结合向量检索与传统关键词检索，构建多路召回能力。\n- LLM 的选用、部署与维护；CPU/GPU 机器的资源管理与扩缩容。\n- 监控告警、系统 HA、灾备、权限管理、数据加密与安全审计。\n\n此外还需要数据存储系统存放原始语料、用户信息、对话记录、配置与行为数据，支持结构化与非结构化数据；线上系统为提高性能和并发还可能引入数据缓存，并设计用户对答案满意度的反馈机制来持续提升问答质量。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "知识库+LLM 智能问答系统的构建流程"
+              ],
+              "lineStart": 874,
+              "lineEnd": 903,
+              "assetRefs": [],
+              "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-capability-table",
+        "moduleId": "production-hardening",
+        "depth": "support",
+        "kind": "table",
+        "title": "模型补充：生产能力的归位与缺失后果",
+        "markdown": "把教材列出的能力对应回流程阶段，更容易判断先补哪一块：\n\n| 能力 | 对应阶段 | 缺失后果 |\n|---|---|---|\n| 增量订阅与流处理 | 第 1–5 步 | 知识库越用越旧 |\n| 多路召回（向量加关键词） | 第 9–11 步 | 专有名词、型号类问题检索不到 |\n| 资源管理与扩缩容 | 第 6、13 步 | 高峰期超时或成本失控 |\n| 监控、权限、审计 | 全链路 | 故障无法定位，数据暴露风险 |\n| 满意度反馈 | 生成之后 | 质量问题无法闭环改进 |\n\n这张表也回答了一个常见疑问：为什么原型跑得通却不敢上线——缺的通常不是模型，而是稳定的数据更新与运维能力。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-production-capabilities"
+          ]
+        }
+      },
+      {
+        "id": "textbook-challenges-and-orchestration",
+        "moduleId": "challenges-and-boundaries",
+        "depth": "core",
+        "kind": "explanation",
+        "title": "教材：现实挑战与统一编排",
+        "markdown": "教材指出，即便有知识库加持，仍面临诸多挑战：实际使用中用户的问题五花八门，一个问题的答案可能不仅涉及知识库，还涉及查询公司数据库系统或网上公开信息，因此可能需要设计一个前置系统，先对问题分类，再按类型构建不同处理方式。\n\n同时，还需要开发一套系统，把这一系列数据加工与使用流程做统一编排，对外提供标准接口，供应用开发者便捷使用；业界使用较广的开源框架如 Langchain。",
+        "provenance": {
+          "origin": "textbook",
+          "representation": "paraphrase",
+          "sourceSpans": [
+            {
+              "materialId": "doc-599faa9206264b85d535687b",
+              "blockIds": [
+                "block-000030"
+              ],
+              "headingPath": [
+                "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+                "知识库+LLM 智能问答系统的构建流程"
+              ],
+              "lineStart": 874,
+              "lineEnd": 903,
+              "assetRefs": [],
+              "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+            }
+          ]
+        }
+      },
+      {
+        "id": "model-orchestration-value",
+        "moduleId": "challenges-and-boundaries",
+        "depth": "support",
+        "kind": "note",
+        "title": "模型补充：编排层解决什么问题",
+        "markdown": "把流程串起来的那一层，价值不在算法本身，而在三件事：\n\n- **一致性**：所有应用走同一套分割、embedding 与检索参数，避免各团队各搭一套。\n- **可替换**：换 embedding 模型或换 LLM 时，只改编排层配置，不必改动每个上层应用。\n- **可观测**：在编排层统一记录检索命中、生成耗时与失败原因，才有条件做反馈优化。\n\n这也解释了为什么教材在讲完流程后紧接着介绍 LangChain：它承担的正是这一层的工程职责。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "textbook-challenges-and-orchestration",
+            "textbook-production-capabilities"
+          ]
+        }
+      },
+      {
+        "id": "model-checklist-and-bridge",
+        "moduleId": "check-and-next",
+        "depth": "core",
+        "kind": "summary",
+        "title": "模型补充：上线前自评清单",
+        "markdown": "对照本点内容，可以用五个问题自评方案是否完整：\n\n1. 源数据里哪些格式还没被转成文本？\n2. 切分粒度是否与问题类型匹配，答案会不会被切断？\n3. embedding 模型是否适合本领域，是否做过检索命中验证？\n4. 知识库能否增量更新，检索是否有多路召回？\n5. 是否具备监控、权限、审计与满意度反馈？\n\n任意一项答案为「否」，就说明系统还停在原型阶段。这些问题分布在加工、检索与运维各处，需要由同一层统一串起来，下一步要看的正是把这些步骤封装成服务的编排框架。",
+        "provenance": {
+          "origin": "model",
+          "basedOnBlockIds": [
+            "model-scenario-walkthrough",
+            "model-retrieval-failure",
+            "model-capability-table",
+            "textbook-challenges-and-orchestration",
+            "model-orchestration-value"
+          ]
+        }
+      }
+    ],
+    "learningAssets": [
+      {
+        "id": "pipeline-order-check",
+        "type": "sequence-check",
+        "anchorBlockId": "model-scenario-walkthrough",
+        "moduleId": "pipeline-steps",
+        "depth": "core",
+        "title": "排序：用户提问之后系统做了什么",
+        "outcomeRefs": [
+          "describe-pipeline"
+        ],
+        "learningPurpose": "检查学习者能否把在线链路的步骤排成正确顺序，并识别合规校验的位置。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-online-steps"
+          ]
+        },
+        "config": {
+          "items": [
+            "调用 LLM 生成答案",
+            "用户输入问题",
+            "把问题转成向量",
+            "检索返回 topK 关联内容",
+            "合规校验",
+            "把 topK 与问题填入 prompt"
+          ]
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "请把下列步骤排成正确顺序：用户输入问题、合规校验、问题转成向量、语义检索返回 topK、拼装 prompt、调用 LLM 生成答案。"
+        }
+      },
+      {
+        "id": "retrieval-diagnosis",
+        "type": "diagnosis-check",
+        "anchorBlockId": "model-retrieval-failure",
+        "moduleId": "retrieval-quality",
+        "depth": "core",
+        "title": "诊断：为什么检索到了不相干内容",
+        "outcomeRefs": [
+          "evaluate-retrieval",
+          "plan-production"
+        ],
+        "learningPurpose": "检查学习者能否按原文覆盖、切分、embedding 的顺序定位检索失败原因，而不是直接归咎于模型。",
+        "grounding": {
+          "basedOnBlockIds": [
+            "textbook-quality-factors",
+            "model-retrieval-failure"
+          ]
+        },
+        "config": {
+          "case": "用户询问产品是否支持某种部署方式，检索返回的三个片段都在讲计费，原文中确有该部署方式的描述但分散在两节。"
+        },
+        "fallback": {
+          "type": "markdown",
+          "markdown": "某问题检索到的片段与问题无关，但原文中确实写有答案且分散在两节。请按原文覆盖、文本分割、embedding 三个环节给出最可能的原因与改进方向。"
+        }
+      }
+    ]
+  },
+  "subtitle": "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+  "clusterId": "chapter-3",
+  "clusterIds": [
+    "chapter-3"
+  ],
+  "role": "trunk",
+  "related": [],
+  "kind": "concept",
+  "sourceSpans": [
+    {
+      "materialId": "doc-599faa9206264b85d535687b",
+      "blockIds": [
+        "block-000030"
+      ],
+      "headingPath": [
+        "AIGC 及大模型：文本向量、RAG、知识库问答与系列动手实践",
+        "知识库+LLM 智能问答系统的构建流程"
+      ],
+      "lineStart": 874,
+      "lineEnd": 903,
+      "assetRefs": [],
+      "excerptSha256": "858adadf3c44399734f8b2b4176b49818b72cee8f6c63feae8ace8bf3942428b"
+    }
+  ],
+  "modelEnriched": true,
+  "pos": [
+    1610,
+    1014
+  ],
+  "scale": 1.25
+}
